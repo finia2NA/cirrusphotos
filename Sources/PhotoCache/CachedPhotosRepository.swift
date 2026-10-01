@@ -6,6 +6,13 @@ public enum ResourceEvent<Value: Sendable>: Sendable {
     case failure(String)
 }
 
+public enum AuthenticationStatus: Sendable, Equatable {
+    case notStarted
+    case loggingIn
+    case signedIn
+    case failed(String)
+}
+
 private struct SharedJob<Value: Sendable> {
     let id: UUID
     let task: Task<Value, Error>
@@ -24,7 +31,10 @@ public actor CachedPhotosRepository {
     private let runID = UUID().uuidString
     private let gate = NetworkGate()
     private var loginTask: Task<Void, Error>?
+    private var loginAttempt: UUID?
     private var connected = false
+    private var authenticationStatus: AuthenticationStatus = .notStarted
+    private var authenticationObservers: [UUID: AsyncStream<AuthenticationStatus>.Continuation] = [:]
     private var timelineJob: SharedJob<TimelineSnapshot>?
     private var initialSubscribers: Set<UUID> = []
     private var pageJobs: [String: SharedJob<[PhotoItem]>] = [:]
@@ -62,7 +72,7 @@ public actor CachedPhotosRepository {
                 let snapshot = cached.flatMap { try? JSONDecoder().decode(TimelineSnapshot.self, from: $0.data) }
                 if let snapshot { continuation.yield(.value(snapshot, verified: cached?.validatedRun == runID)) }
                 if cached?.validatedRun == runID, snapshot != nil { continuation.finish(); return }
-                var phase = "Signing in"
+                var phase = "Initial timeline"
                 do {
                     if snapshot == nil {
                         let initial = try await initialTimeline(id: subscriber)
@@ -161,6 +171,36 @@ public actor CachedPhotosRepository {
     public func usage() async throws -> Int64 { try await store.usage() }
     public func clearCache() async throws { try await store.clear() }
 
+    /// Each observer receives the latest status immediately, including a previous failure.
+    public func authentication() -> AsyncStream<AuthenticationStatus> {
+        let id = UUID()
+        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            authenticationObservers[id] = continuation
+            continuation.yield(authenticationStatus)
+            continuation.onTermination = { @Sendable _ in
+                Task { await self.removeAuthenticationObserver(id) }
+            }
+        }
+    }
+
+    /// A failed sign-in is sticky until the user explicitly retries it.
+    public func retryAuthentication() {
+        guard case .failed = authenticationStatus else { return }
+        loginTask = nil
+        loginAttempt = nil
+        setAuthenticationStatus(.notStarted)
+    }
+
+    private func removeAuthenticationObserver(_ id: UUID) {
+        authenticationObservers.removeValue(forKey: id)
+    }
+
+    private func setAuthenticationStatus(_ status: AuthenticationStatus) {
+        guard authenticationStatus != status else { return }
+        authenticationStatus = status
+        for observer in authenticationObservers.values { observer.yield(status) }
+    }
+
     public func promotePage(_ section: TimelineSection) async {
         guard let key = CacheKey.page(namespace: namespace, section: section) else { return }
         if let job = pageJobs[key] {
@@ -172,13 +212,29 @@ public actor CachedPhotosRepository {
     }
 
     private func connect() async throws {
-        if loginTask == nil { loginTask = Task { try await client.login(credentials: credentials) } }
+        try Task.checkCancellation()
+        if connected { return }
+        if case .failed(let message) = authenticationStatus {
+            throw AuthenticationAttemptError.previousFailure(message)
+        }
+        if loginTask == nil {
+            setAuthenticationStatus(.loggingIn)
+            loginAttempt = UUID()
+            loginTask = Task { try await client.login(credentials: credentials) }
+        }
+        guard let loginTask, let attempt = loginAttempt else { throw CancellationError() }
         do {
-            try await loginTask!.value
+            try await loginTask.value
             try Task.checkCancellation()
+            guard loginAttempt == attempt else { throw CancellationError() }
             connected = true
+            setAuthenticationStatus(.signedIn)
         } catch {
-            if !(error is CancellationError) { loginTask = nil }
+            if !Task.isCancelled && !(error is CancellationError) && loginAttempt == attempt && !connected {
+                self.loginTask = nil
+                loginAttempt = nil
+                setAuthenticationStatus(.failed(error.localizedDescription))
+            }
             throw error
         }
     }
@@ -308,6 +364,16 @@ public actor CachedPhotosRepository {
             pageJobs.isEmpty && imageJobs.isEmpty {
             loginTask?.cancel()
             loginTask = nil
+            loginAttempt = nil
+            if case .loggingIn = authenticationStatus { setAuthenticationStatus(.notStarted) }
         }
+    }
+}
+
+private enum AuthenticationAttemptError: LocalizedError {
+    case previousFailure(String)
+    var errorDescription: String? {
+        if case .previousFailure(let message) = self { return message }
+        return nil
     }
 }

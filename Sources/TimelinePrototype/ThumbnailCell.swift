@@ -24,9 +24,9 @@ struct ThumbnailCell: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.06))
-            if let image {
+            if let image, displayedRendition == renditionIdentity {
                 Image(nsImage: image).resizable().scaledToFit()
-            } else if failed {
+            } else if failed, displayedRendition == renditionIdentity {
                 Image(systemName: "photo.badge.exclamationmark").foregroundStyle(.secondary)
             } else {
                 Image(systemName: "photo").foregroundStyle(.tertiary)

@@ -6,6 +6,10 @@ import SynologyAPI
 private actor FakeTransport: PhotosTransport {
     var loginBlocked = false
     var itemBlocked = false
+    var loginFailure: String?
+    var timelineFailure: String?
+    var itemFailure: String?
+    var timelineSnapshot = TimelineSnapshot(sections: [])
     var pageItems: [PhotoItem] = []
     var loginCalls = 0
     var itemCalls = 0
@@ -13,23 +17,34 @@ private actor FakeTransport: PhotosTransport {
     private var itemWaiters: [CheckedContinuation<Void, Never>] = []
     private var startedWaiters: [CheckedContinuation<Void, Never>] = []
 
-    func configure(loginBlocked: Bool = false, itemBlocked: Bool = false, items: [PhotoItem] = []) {
+    func configure(loginBlocked: Bool = false, itemBlocked: Bool = false, items: [PhotoItem] = [],
+                   loginFailure: String? = nil, timelineFailure: String? = nil, itemFailure: String? = nil,
+                   timelineSnapshot: TimelineSnapshot = TimelineSnapshot(sections: [])) {
         self.loginBlocked = loginBlocked
         self.itemBlocked = itemBlocked
         pageItems = items
+        self.loginFailure = loginFailure
+        self.timelineFailure = timelineFailure
+        self.itemFailure = itemFailure
+        self.timelineSnapshot = timelineSnapshot
     }
     func login(credentials: SynologyCredentials) async throws {
         loginCalls += 1
         if loginBlocked { await withCheckedContinuation { loginWaiters.append($0) } }
         try Task.checkCancellation()
+        if let loginFailure { throw FakeFailure(message: loginFailure) }
     }
-    func timeline(initial: Bool) async throws -> TimelineSnapshot { TimelineSnapshot(sections: []) }
+    func timeline(initial: Bool) async throws -> TimelineSnapshot {
+        if let timelineFailure { throw FakeFailure(message: timelineFailure) }
+        return timelineSnapshot
+    }
     func items(in section: TimelineSection) async throws -> [PhotoItem] {
         itemCalls += 1
         for waiter in startedWaiters { waiter.resume() }
         startedWaiters.removeAll()
         if itemBlocked { await withCheckedContinuation { itemWaiters.append($0) } }
         try Task.checkCancellation()
+        if let itemFailure { throw FakeFailure(message: itemFailure) }
         return pageItems
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
@@ -50,6 +65,11 @@ private actor FakeTransport: PhotosTransport {
         for waiter in loginWaiters { waiter.resume() }
         loginWaiters.removeAll()
     }
+}
+
+private struct FakeFailure: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
 }
 
 final class LibraryBrowserTests: XCTestCase {
@@ -73,6 +93,11 @@ final class LibraryBrowserTests: XCTestCase {
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
         let key = try XCTUnwrap(CacheKey.page(namespace: namespace, section: section))
         try await repository.store.put(key, kind: .page, data: JSONEncoder().encode(items), validatedRun: nil)
+    }
+    private func seedTimeline(_ snapshot: TimelineSnapshot, repository: CachedPhotosRepository) async throws {
+        let namespace = CacheKey.namespace(server: server, account: credentials.username)
+        try await repository.store.put(CacheKey.timeline(namespace: namespace), kind: .timeline,
+                                       data: JSONEncoder().encode(snapshot), validatedRun: nil)
     }
     private func waitUntil(_ condition: () async -> Bool) async -> Bool {
         for _ in 0..<200 {
@@ -258,6 +283,38 @@ final class LibraryBrowserTests: XCTestCase {
         await window.cancelAll()
     }
 
+    func testWindowRetryReopensFailedPageWithoutDroppingCachedPage() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let fake = FakeTransport()
+        await fake.configure(itemFailure: "Page unavailable")
+        let repository = try repository(root: root, transport: fake)
+        let descriptor = section(2)
+        try await seed([try item(8)], section: descriptor, repository: repository)
+        let window = LibraryPageWindow(repository: repository)
+        let index = LibraryIndex(snapshot: TimelineSnapshot(sections: [descriptor]))
+        var events = await window.events().makeAsyncIterator()
+        await window.update(index: index, allowNetwork: true, visible: [0], prefetch: [])
+        var sawFailure = false
+        while let event = await events.next() {
+            if case .failure(0, _) = event { sawFailure = true; break }
+        }
+        XCTAssertTrue(sawFailure)
+        let before = await window.retainedPages()
+        XCTAssertEqual(before.first?.items.map(\.id), [8])
+        XCTAssertEqual(before.first?.verified, false)
+
+        await fake.configure(items: [try item(9)])
+        await window.update(index: index, allowNetwork: true, visible: [0], prefetch: [], retryRevision: 1)
+        let replaced = await waitUntil {
+            let pages = await window.retainedPages()
+            return pages.first?.verified == true && pages.first?.items.map(\.id) == [9]
+        }
+        XCTAssertTrue(replaced)
+        let calls = await fake.itemCalls
+        XCTAssertEqual(calls, 2)
+        await window.cancelAll()
+    }
+
     func testCancelledGateWaiterReleasesQueueSlot() async throws {
         let gate = NetworkGate(metadata: 1, thumbnails: 1, metadataQueue: 1, thumbnailQueue: 1)
         try await gate.acquire(.metadata, priority: .visible, id: UUID())
@@ -273,5 +330,93 @@ final class LibraryBrowserTests: XCTestCase {
         await gate.release(.metadata)
         try await replacement.value
         await gate.release(.metadata)
+    }
+
+    func testAuthenticationStatusReplaysAndCachedTimelineSurvivesFailedLoginUntilRetry() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let fake = FakeTransport()
+        let snapshot = TimelineSnapshot(sections: [section(2)])
+        await fake.configure(loginBlocked: true, loginFailure: "Invalid sign in", timelineSnapshot: snapshot)
+        let repository = try repository(root: root, transport: fake)
+        try await seedTimeline(snapshot, repository: repository)
+        try await seed([try item(12)], section: snapshot.sections[0], repository: repository)
+
+        var firstStatus = await repository.authentication().makeAsyncIterator()
+        let initialStatus = await firstStatus.next()
+        XCTAssertEqual(initialStatus, .notStarted)
+        var timeline = await repository.timeline().makeAsyncIterator()
+        if case .value(let cached, false) = await timeline.next() {
+            XCTAssertEqual(cached.sections, snapshot.sections)
+        } else { XCTFail("Cached full index did not arrive before login") }
+        let loginStarted = await waitUntil { await fake.loginCalls == 1 }
+        XCTAssertTrue(loginStarted)
+        let loggingIn = await firstStatus.next()
+        XCTAssertEqual(loggingIn, .loggingIn)
+        var page = await repository.page(snapshot.sections[0], allowNetwork: false).makeAsyncIterator()
+        if case .value(let items, false) = await page.next() { XCTAssertEqual(items.map(\.id), [12]) }
+        else { XCTFail("Cached page unavailable during login") }
+
+        await fake.releaseLogin()
+        if case .failure = await timeline.next() {} else { XCTFail("Expected login failure") }
+        let failed = await firstStatus.next()
+        if case .failed(let message) = failed { XCTAssertEqual(message, "Invalid sign in") }
+        else { XCTFail("Expected failed status") }
+        var replay = await repository.authentication().makeAsyncIterator()
+        let replayed = await replay.next()
+        XCTAssertEqual(replayed, failed)
+
+        for _ in 0..<3 {
+            for await _ in await repository.page(snapshot.sections[0]) {}
+        }
+        let failedAttemptCalls = await fake.loginCalls
+        XCTAssertEqual(failedAttemptCalls, 1)
+
+        await fake.configure(loginBlocked: true, timelineSnapshot: snapshot)
+        await repository.retryAuthentication()
+        let resetStatus = await firstStatus.next()
+        XCTAssertEqual(resetStatus, .notStarted)
+        let retry = Task { () -> TimelineSnapshot? in
+            for await event in await repository.timeline() {
+                if case .value(let current, true) = event { return current }
+            }
+            return nil
+        }
+        let retryStarted = await waitUntil { await fake.loginCalls == 2 }
+        XCTAssertTrue(retryStarted)
+        let secondLoggingIn = await firstStatus.next()
+        XCTAssertEqual(secondLoggingIn, .loggingIn)
+        await fake.releaseLogin()
+        let current = await retry.value
+        XCTAssertEqual(current?.sections, snapshot.sections)
+        let connected = await firstStatus.next()
+        XCTAssertEqual(connected, .signedIn)
+        let retryCalls = await fake.loginCalls
+        XCTAssertEqual(retryCalls, 2)
+        var signedInStream = await repository.authentication().makeAsyncIterator()
+        let signedIn = await signedInStream.next()
+        XCTAssertEqual(signedIn, .signedIn)
+    }
+
+    func testMetadataFailureDoesNotBecomeLoginFailureOrDiscardSession() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let fake = FakeTransport()
+        let snapshot = TimelineSnapshot(sections: [section(2)])
+        await fake.configure(timelineFailure: "Timeline unavailable", timelineSnapshot: snapshot)
+        let repository = try repository(root: root, transport: fake)
+        try await seedTimeline(snapshot, repository: repository)
+        var timeline = await repository.timeline().makeAsyncIterator()
+        if case .value(_, false) = await timeline.next() {} else { XCTFail("Missing cached timeline") }
+        if case .failure(let message) = await timeline.next() {
+            XCTAssertTrue(message.contains("Timeline unavailable"))
+        } else { XCTFail("Expected metadata failure") }
+        var status = await repository.authentication().makeAsyncIterator()
+        let authenticated = await status.next()
+        XCTAssertEqual(authenticated, .signedIn)
+        await fake.configure(items: [try item(21)])
+        for await event in await repository.page(snapshot.sections[0]) {
+            if case .value(let items, true) = event { XCTAssertEqual(items.map(\.id), [21]) }
+        }
+        let loginCalls = await fake.loginCalls
+        XCTAssertEqual(loginCalls, 1)
     }
 }

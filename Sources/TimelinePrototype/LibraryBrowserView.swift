@@ -2,38 +2,98 @@ import AppKit
 import PhotoCache
 import SwiftUI
 import SynologyAPI
+import TimelineCore
 
 struct LibraryBrowserView: View {
+    let isActive: Bool
     @EnvironmentObject private var library: LibraryModel
-    @State private var visibleDay: String?
-    @State private var requestedDay: String?
+    @State private var selectedDay: String?
+    @State private var jumpRequest: DayJumpRequest?
+
+    private var selection: Binding<Int> {
+        Binding(
+            get: { library.snapshot?.timeline.index(keeping: selectedDay) ?? 0 },
+            set: { index in
+                guard let days = library.snapshot?.timeline.days, days.indices.contains(index) else { return }
+                let day = days[index].id
+                selectedDay = day
+                jumpRequest = DayJumpRequest(dayID: day)
+            }
+        )
+    }
 
     var body: some View {
         Group {
-            if let snapshot = library.snapshot, !snapshot.timeline.days.isEmpty,
+            if !isActive {
+                Color.clear
+            } else if let snapshot = library.snapshot, !snapshot.timeline.days.isEmpty,
                let repository = library.repository {
-                LibraryBrowserScrollView(snapshot: snapshot, revision: library.snapshotRevision,
-                                         repository: repository, allowNetwork: library.timelineVerified,
-                                         thumbnailSize: library.thumbnailSize, jumpToDay: requestedDay) {
-                    visibleDay = $0
-                }
-                .overlay(alignment: .topLeading) {
-                    if let visibleDay {
-                        Text(visibleDay).font(.caption.monospacedDigit())
-                            .padding(8).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
-                            .padding(10)
+                HStack(spacing: 0) {
+                    LibraryBrowserScrollView(snapshot: snapshot,
+                                             revision: library.snapshotRevision,
+                                             retryRevision: library.retryRevision,
+                                             repository: repository, allowNetwork: library.timelineVerified,
+                                             thumbnailSize: library.thumbnailSize, jumpToDay: jumpRequest,
+                                             unavailableOffline: library.error != nil || library.authenticationFailed,
+                                             onRetry: { Task { await library.reload() } }) { day in
+                        if snapshot.timeline.days.contains(where: { $0.id == day }) { selectedDay = day }
                     }
+                    TimelineNavigator(timeline: snapshot.timeline, selected: selection)
+                        .frame(width: 190).padding(.vertical, 24).padding(.trailing, 16)
                 }
-            } else if library.timelineVerified, library.snapshot?.timeline.days.isEmpty == true {
-                ContentUnavailableView("No photos", systemImage: "photo", description: Text("Personal Space is empty."))
+            } else if library.snapshot?.timeline.days.isEmpty == true {
+                ContentUnavailableView("No photos", systemImage: "photo",
+                    description: Text(library.error != nil ? "Cached library is empty. Connection unavailable." :
+                        (library.timelineVerified ? "Personal Space is empty." : "Cached library is empty. Checking Cirrus…")))
             } else if let error = library.error, library.snapshot == nil {
-                ContentUnavailableView("Library unavailable", systemImage: "photo.badge.exclamationmark",
-                                       description: Text(error))
+                ContentUnavailableView {
+                    Label("Library unavailable", systemImage: "photo.badge.exclamationmark")
+                } description: {
+                    Text(error)
+                } actions: {
+                    Button("Try Again") { Task { await library.reload() } }.disabled(library.isLoading)
+                }
             } else {
                 ProgressView("Opening library…")
             }
         }
         .background(Color(red: 0.065, green: 0.065, blue: 0.07))
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            HStack { Spacer(); connectionIndicator.padding(.trailing, 16).padding(.vertical, 5) }
+                .background(Color(red: 0.065, green: 0.065, blue: 0.07))
+        }
+        .onChange(of: library.snapshotRevision) { _, _ in
+            guard let timeline = library.snapshot?.timeline,
+                  let index = timeline.index(keeping: selectedDay) else { selectedDay = nil; return }
+            selectedDay = timeline.days[index].id
+        }
+        .onChange(of: isActive) { _, active in
+            if !active, let selectedDay { jumpRequest = DayJumpRequest(dayID: selectedDay) }
+        }
+    }
+
+    @ViewBuilder private var connectionIndicator: some View {
+        HStack(spacing: 6) {
+            switch library.authenticationStatus {
+            case .notStarted:
+                Text(library.error == nil ? "Opening library…" : "Library unavailable")
+            case .loggingIn:
+                ProgressView().controlSize(.mini)
+                Text("Logging in…")
+            case .signedIn:
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Text(library.error == nil ? "Connected" : "Connected · Metadata unavailable")
+                    .help(library.error ?? "Signed in")
+            case .failed(let message):
+                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+                Text("Login failed").help(message)
+            }
+            Button("Retry") { Task { await library.reload() } }
+                .controlSize(.small).disabled(library.isLoading)
+        }
+        .font(.caption)
+        .padding(.horizontal, 9).padding(.vertical, 6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
     }
 }
 
@@ -73,10 +133,13 @@ private struct HostedPlaceholder: View {
 struct LibraryBrowserScrollView: NSViewRepresentable {
     let snapshot: TimelineSnapshot
     let revision: Int
+    let retryRevision: Int
     let repository: CachedPhotosRepository
     let allowNetwork: Bool
     let thumbnailSize: ThumbnailSize
-    let jumpToDay: String?
+    let jumpToDay: DayJumpRequest?
+    let unavailableOffline: Bool
+    let onRetry: () -> Void
     let onVisibleDay: (String) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -126,12 +189,15 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var eventTask: Task<Void, Never>?
         private var demandTask: Task<Void, Never>?
         private var revision = -1
+        private var retryRevision = 0
         private var allowNetwork = false
         private var thumbnailSize: ThumbnailSize = .m
         private var repository: CachedPhotosRepository?
         private var onVisibleDay: ((String) -> Void)?
         private var lastVisibleDay: String?
-        private var lastJump: String?
+        private var lastJump: UUID?
+        private var unavailableOffline = false
+        private var onRetry: (() -> Void)?
         private var demandedVisible: [Int] = []
         private var demandedPrefetch: [Int] = []
         private var suppressFeedback = false
@@ -142,6 +208,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         func configure(_ input: LibraryBrowserScrollView) {
             guard let scroll else { return }
             onVisibleDay = input.onVisibleDay
+            onRetry = input.onRetry
             repository = input.repository
             if thumbnailSize != input.thumbnailSize { viewRevision += 1 }
             thumbnailSize = input.thumbnailSize
@@ -179,9 +246,20 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 }
             }
             updateDocumentHeight()
-            if let day = input.jumpToDay, day != lastJump {
-                lastJump = day
-                jump(to: day)
+            if unavailableOffline != input.unavailableOffline {
+                unavailableOffline = input.unavailableOffline
+                viewRevision += 1
+            }
+            if retryRevision != input.retryRevision {
+                retryRevision = input.retryRevision
+                errors.removeAll()
+                demandedVisible = []
+                demandedPrefetch = []
+                viewRevision += 1
+            }
+            if let request = input.jumpToDay, request.id != lastJump {
+                lastJump = request.id
+                jump(to: request.dayID)
             }
             viewportChanged()
         }
@@ -310,11 +388,14 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                                 wanted: &wanted, document: document)
                     }
                 } else {
-                    let message = errors[section] ?? "Loading photos…"
+                    let message = errors[section] ?? (unavailableOffline ? "Unavailable offline" : "Loading photos…")
                     addHost("p:\(position)",
                             frame: CGRect(x: 0, y: slice.y + (slice.heading ? 38 : 0),
                                           width: geometry.width, height: 28),
-                            content: AnyView(HostedPlaceholder(message: message)),
+                            content: AnyView(HStack {
+                                HostedPlaceholder(message: message)
+                                if errors[section] != nil { Button("Retry", action: onRetry ?? {}) }
+                            }),
                             revision: (viewRevision, rowRevisions[section] ?? 0),
                             wanted: &wanted, document: document)
                 }
@@ -346,12 +427,14 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 demandTask?.cancel()
                 if let window {
                     let network = allowNetwork
+                    let retry = retryRevision
                     let preceding = demandTask
                     demandTask = Task {
                         _ = await preceding?.value
                         guard !Task.isCancelled else { return }
                         await window.update(index: index, allowNetwork: network,
-                                            visible: visibleSections, prefetch: prefetch)
+                                            visible: visibleSections, prefetch: prefetch,
+                                            retryRevision: retry)
                     }
                 }
             }

@@ -1,5 +1,15 @@
 import Foundation
 
+public struct DayJumpRequest: Equatable, Sendable {
+    public let id: UUID
+    public let dayID: String
+
+    public init(dayID: String) {
+        id = UUID()
+        self.dayID = dayID
+    }
+}
+
 public struct LibraryDay: Identifiable, Sendable {
     public let year: Int
     public let month: Int
@@ -43,5 +53,12 @@ public struct Timeline: Sendable {
     public func fraction(at index: Int) -> Double {
         guard !days.isEmpty else { return 0 }
         return (Double(index) + 0.5) / Double(days.count)
+    }
+
+    /// Keep a selected calendar day across a changed index. Dates are newest first.
+    public func index(keeping dayID: String?) -> Int? {
+        guard !days.isEmpty else { return nil }
+        guard let dayID else { return 0 }
+        return days.firstIndex(where: { $0.id <= dayID }) ?? days.count - 1
     }
 }

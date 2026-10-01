@@ -8,12 +8,15 @@ import TimelineCore
 struct TimelinePrototypeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var model = LibraryModel()
+    @State private var selectedTab: PrototypeTab = .photos
     var body: some Scene {
         WindowGroup("Cirrus · Timeline") {
-            TabView {
-                PrototypeView().tabItem { Label("Timeline", systemImage: "calendar") }
+            TabView(selection: $selectedTab) {
+                LibraryBrowserView(isActive: selectedTab == .photos)
+                    .tabItem { Label("Photos", systemImage: "photo.on.rectangle") }.tag(PrototypeTab.photos)
+                PrototypeView().tabItem { Label("Timeline", systemImage: "calendar") }.tag(PrototypeTab.timeline)
                 SectionExperimentView().tabItem { Label("Section 207", systemImage: "square.grid.3x3") }
-                LibraryBrowserView().tabItem { Label("Photos", systemImage: "photo.on.rectangle") }
+                    .tag(PrototypeTab.section)
             }
                 .environmentObject(model)
                 .frame(minWidth: 560, minHeight: 420)
@@ -24,6 +27,8 @@ struct TimelinePrototypeApp: App {
         Settings { CacheSettingsView().environmentObject(model) }
     }
 }
+
+private enum PrototypeTab: Hashable { case photos, timeline, section }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -49,8 +54,8 @@ struct PrototypeView: View {
                         }
                         Spacer()
                         Text("SELECTED DATE").font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                        Text(timeline.days[selected].id).font(.system(size: 36, weight: .medium, design: .rounded)).monospacedDigit()
-                        Text("\(timeline.days[selected].count) items · Section \(timeline.days[selected].section)")
+                        Text(timeline.days[safe: selected]?.id ?? timeline.days[0].id).font(.system(size: 36, weight: .medium, design: .rounded)).monospacedDigit()
+                        Text("\(timeline.days[safe: selected]?.count ?? timeline.days[0].count) items · Section \(timeline.days[safe: selected]?.section ?? timeline.days[0].section)")
                             .foregroundStyle(.secondary)
                         Text("Day \(selected + 1) of \(timeline.days.count)").font(.callout).foregroundStyle(.secondary)
                         Spacer()
@@ -63,6 +68,9 @@ struct PrototypeView: View {
                     TimelineNavigator(timeline: timeline, selected: $selected)
                         .frame(width: 190).padding(.vertical, 24).padding(.trailing, 16)
                 }
+            } else if loader.snapshot?.timeline.days.isEmpty == true, loader.timelineVerified {
+                ContentUnavailableView("No dates", systemImage: "calendar",
+                                       description: Text("Personal Space is empty."))
             } else if let error = loader.error {
                 ContentUnavailableView {
                     Label("Could not load Cirrus", systemImage: "externaldrive.badge.exclamationmark")
@@ -86,9 +94,7 @@ struct PrototypeView: View {
         }
         .onChange(of: loader.snapshot?.timeline.days.map(\.id)) { _, ids in
             guard let ids, !ids.isEmpty else { return }
-            if let selectedDate, let index = ids.firstIndex(of: selectedDate) { selected = index }
-            else if let selectedDate { selected = ids.firstIndex(where: { $0 < selectedDate }) ?? ids.count - 1 }
-            else { selected = min(selected, ids.count - 1) }
+            selected = loader.snapshot?.timeline.index(keeping: selectedDate) ?? 0
             selectedDate = ids[selected]
         }
     }
@@ -102,6 +108,12 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var status = "Opening library…"
     @Published private(set) var error: String?
     @Published private(set) var isLoading = true
+    @Published private(set) var authenticationStatus: AuthenticationStatus = .notStarted
+    @Published private(set) var retryRevision = 0
+    var authenticationFailed: Bool {
+        if case .failed = authenticationStatus { return true }
+        return false
+    }
     @Published var thumbnailSize: ThumbnailSize = ThumbnailSize(rawValue: UserDefaults.standard.string(forKey: "thumbnailSize") ?? "m") ?? .m {
         didSet { UserDefaults.standard.set(thumbnailSize.rawValue, forKey: "thumbnailSize") }
     }
@@ -115,6 +127,7 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var cacheUsage: Int64 = 0
     private(set) var repository: CachedPhotosRepository?
     private var started = false
+    private var authenticationTask: Task<Void, Never>?
 
     func load() async {
         guard !started else { return }
@@ -128,27 +141,42 @@ final class LibraryModel: ObservableObject {
                     budget: CacheBudget.bytes(at: budgetFraction))
             }
             guard let repository else { return }
+            if authenticationTask == nil {
+                authenticationTask = Task { [weak self] in
+                    for await status in await repository.authentication() {
+                        guard !Task.isCancelled else { return }
+                        self?.authenticationStatus = status
+                    }
+                }
+            }
             for await event in await repository.timeline() {
                 switch event {
                 case .value(let snapshot, let verified):
-                    self.snapshot = snapshot
-                    snapshotRevision += 1
+                    if self.snapshot?.sections != snapshot.sections {
+                        self.snapshot = snapshot
+                        snapshotRevision += 1
+                    }
                     timelineVerified = verified
+                    if verified { error = nil }
                     status = verified ? "Personal Space · Current" : "Personal Space · Cached or initial"
                 case .failure(let message):
                     error = message
-                    status = snapshot == nil ? "Connection failed" : "Personal Space · Offline copy"
+                    status = snapshot == nil ? "Library unavailable" : "Personal Space · Offline copy"
                 }
             }
             await refreshUsage()
         } catch {
             self.error = error.localizedDescription
-            status = "Connection failed"
+            status = "Library unavailable"
         }
         isLoading = false
     }
 
     func reload() async {
+        guard !isLoading else { return }
+        isLoading = true
+        if let repository { await repository.retryAuthentication() }
+        retryRevision += 1
         started = false
         status = "Checking Cirrus…"
         await load()
@@ -167,10 +195,15 @@ final class LibraryModel: ObservableObject {
     }
 }
 
+private extension Collection {
+    subscript(safe index: Index) -> Element? { indices.contains(index) ? self[index] : nil }
+}
+
 struct TimelineNavigator: View {
     let timeline: Timeline
     @Binding var selected: Int
     @State private var hovered: Int?
+    @State private var lastDragIndex: Int?
     @FocusState private var focused: Bool
     private let inset: CGFloat = 14
 
@@ -202,13 +235,16 @@ struct TimelineNavigator: View {
                     lastLabelY = position
                 }
                 var selection = Path()
-                selection.move(to: CGPoint(x: rail - 7, y: y(selected)))
-                selection.addLine(to: CGPoint(x: rail + 6, y: y(selected)))
+                if !timeline.days.isEmpty {
+                    let safeSelection = min(max(0, selected), timeline.days.count - 1)
+                    selection.move(to: CGPoint(x: rail - 7, y: y(safeSelection)))
+                    selection.addLine(to: CGPoint(x: rail + 6, y: y(safeSelection)))
+                }
                 context.stroke(selection, with: .color(.pink), lineWidth: 2)
             }
             .allowsHitTesting(false)
 
-            if let hovered {
+            if let hovered, timeline.days.indices.contains(hovered) {
                 let markerY = y(hovered)
                 Rectangle().fill(.pink.opacity(0.7)).frame(width: width - 8, height: 1)
                     .position(x: width / 2, y: markerY).allowsHitTesting(false)
@@ -232,20 +268,27 @@ struct TimelineNavigator: View {
                 .gesture(DragGesture(minimumDistance: 0).onChanged { value in
                     focused = true
                     if let index = timeline.index(at: (value.location.y - inset) / height) {
-                        selected = index; hovered = index
+                        if lastDragIndex != index { selected = index; lastDragIndex = index }
+                        hovered = index
                     }
-                })
+                }.onEnded { _ in lastDragIndex = nil })
                 .focusable().focused($focused).focusEffectDisabled()
-                .onKeyPress(.upArrow) { selected = max(0, selected - 1); hovered = selected; return .handled }
-                .onKeyPress(.downArrow) { selected = min(timeline.days.count - 1, selected + 1); hovered = selected; return .handled }
+                .onKeyPress(.upArrow) {
+                    guard !timeline.days.isEmpty else { return .handled }
+                    selected = max(0, min(selected, timeline.days.count - 1) - 1); hovered = selected; return .handled
+                }
+                .onKeyPress(.downArrow) {
+                    guard !timeline.days.isEmpty else { return .handled }
+                    selected = min(timeline.days.count - 1, max(0, selected) + 1); hovered = selected; return .handled
+                }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Library timeline")
-                .accessibilityValue(timeline.days[selected].id)
+                .accessibilityValue(timeline.days[safe: selected]?.id ?? "No dates")
                 .accessibilityHint("Use up and down arrows to select adjacent populated days.")
                 .accessibilityAdjustableAction { direction in
                     switch direction {
-                    case .increment: selected = min(timeline.days.count - 1, selected + 1)
-                    case .decrement: selected = max(0, selected - 1)
+                    case .increment: if !timeline.days.isEmpty { selected = min(timeline.days.count - 1, max(0, selected) + 1) }
+                    case .decrement: if !timeline.days.isEmpty { selected = max(0, min(selected, timeline.days.count - 1) - 1) }
                     @unknown default: break
                     }
                 }

@@ -32,6 +32,8 @@ public actor LibraryPageWindow {
     private var pages: [Int: LibraryPage] = [:]
     private var requests: [Int: Request] = [:]
     private var completed: [Int: Completion] = [:]
+    private var failedSections: Set<Int> = []
+    private var retryRevision = 0
     private var observers: [UUID: AsyncStream<LibraryPageEvent>.Continuation] = [:]
 
     public init(repository: CachedPhotosRepository, maximumPages: Int = 8) {
@@ -64,11 +66,20 @@ public actor LibraryPageWindow {
 
     /// Reuse a prebuilt index while the viewport changes; hashing the full timeline is unnecessary.
     public func update(index: LibraryIndex, allowNetwork: Bool,
-                       visible: [Int], prefetch: [Int]) {
+                       visible: [Int], prefetch: [Int], retryRevision: Int = 0) {
+        if self.retryRevision != retryRevision {
+            self.retryRevision = retryRevision
+            for section in failedSections {
+                completed.removeValue(forKey: section)
+                requests.removeValue(forKey: section)?.task.cancel()
+            }
+            failedSections.removeAll()
+        }
         if fingerprint != index.fingerprint {
             for request in requests.values { request.task.cancel() }
             requests.removeAll()
             completed.removeAll()
+            failedSections.removeAll()
             for section in pages.keys { publish(.removed(sectionIndex: section)) }
             pages.removeAll()
             fingerprint = index.fingerprint
@@ -90,6 +101,7 @@ public actor LibraryPageWindow {
             requests.removeValue(forKey: section)?.task.cancel()
         }
         completed = completed.filter { retained.contains($0.key) }
+        failedSections = failedSections.intersection(retained)
         for section in pages.keys where !retained.contains(section) {
             pages.removeValue(forKey: section)
             publish(.removed(sectionIndex: section))
@@ -130,6 +142,7 @@ public actor LibraryPageWindow {
         for request in requests.values { request.task.cancel() }
         requests.removeAll()
         completed.removeAll()
+        failedSections.removeAll()
         for section in pages.keys { publish(.removed(sectionIndex: section)) }
         pages.removeAll()
     }
@@ -139,10 +152,12 @@ public actor LibraryPageWindow {
         guard fingerprint == identity, requests[section]?.id == id else { return }
         switch event {
         case .value(let items, let verified):
+            failedSections.remove(section)
             let page = LibraryPage(sectionIndex: section, items: items, verified: verified)
             pages[section] = page
             publish(.page(page, fingerprint: identity))
         case .failure(let message):
+            failedSections.insert(section)
             publish(.failure(sectionIndex: section, message: message))
         }
     }
