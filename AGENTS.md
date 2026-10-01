@@ -4,10 +4,16 @@
 - **User-facing purpose:** Browse a very large remote photo library responsively.
 - **Product and engineering context:** The project is starting with a deliberately narrow MVP. The first priority is validating Synology Photos API access and designing performant, paginated photo-library loading before building UI.
 - **Core domain concepts:** Synology Photos Personal Space and Shared Space, photo/video items, timelines, albums, thumbnails, and authenticated DSM sessions.
+- **Initial UI scope:** Begin with the right-side library timeline navigator: proportional date positions, hover feedback, and click-to-jump selection. It may remain always visible for the MVP. Location labels are deferred.
+- **Prototype:** A macOS SwiftUI executable built with SwiftPM (`swift run SynoTimeline`). The navigator uses equal space per distinct populated day and bundled date/count/section data extracted from the HAR. NAS data is assumed static for an app session; live change reconciliation is out of scope.
 - **Sources of truth:** The Synology Photos service on `cirrus`; Synology's DSM Login Web API documentation; and observed/reverse-engineered Synology Photos endpoints.
 - **Major architectural characteristics:** Native SwiftUI client with a two-level library model: load the compact server timeline index, then lazily fetch section-sized item pages and demand-driven thumbnails. Remote-first data access, bounded concurrency, cancellation, and memory/disk thumbnail caching are key performance constraints.
 
 # Rules for agents
+
+Keep the amount of marketing-sounding, excessive copy in the application and its documentation to a minimum. Focus on clarity in both.
+
+## Top Level Documentation
 
 Maintain the "Project overview" section in the repository's root `AGENTS.md`.
 
