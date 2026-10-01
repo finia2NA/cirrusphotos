@@ -1,6 +1,15 @@
-# Cache design proposal
+# Cache design and implementation status
 
-Status: proposed, not implemented. Research date: 2026-10-02.
+Status: first vertical slice implemented on 2026-10-02; broader library caching remains planned. Research date: 2026-10-02.
+
+## Implemented slice
+
+- `PhotoCache` stores the full Personal Space timeline and exact item pages as JSON in SQLite, with compressed thumbnail files alongside the index. The development cache lives in the repository's Git-ignored `.cache/` directory, separated by a server/account hash. Keys include server/account namespace, request shape, unit ID, opaque thumbnail key, and size where applicable. The app displays cached values before validation and retains current-run markers on disk.
+- The first tab remains the timeline navigator. A second tab loads only current section 207. Cached thumbnails can paint from provisional item metadata; requests wait until current page metadata arrives. Thumbnail GETs use ETag or Last-Modified validators, accept 304 with retained local bytes, reject JSON error bodies, and use bounded six-request transfers. ImageIO downsamples off the main actor; `NSCache` holds decoded images.
+- A standard macOS Settings scene exposes `sm`/`m`/`xl`, a logarithmic 200 MB–100 GB budget, indexed payload usage, and clear-cache. Eviction prioritizes thumbnails before item pages and protects the active complete timeline.
+- `swift test` passes without NAS access. An opt-in test (`RUN_LIVE_SYNOLOGY_TEST=1 swift test --filter PhotoCacheTests/testLiveSectionAndWarmCacheWhenEnabled`) passed against Cirrus: full timeline, current section 207, one thumbnail, cached-first reopen, and later validation. DSM rejected immediate reuse of a TOTP between the two test sessions; login now retries once after the next code window only for login errors 403/404.
+
+Current limitations: the experiment has no cross-section scrolling, prefetch, full-photo viewer, albums, maps, or coordinated session renewal after expiry. Eviction uses SQLite indexed LRU over stored payload bytes; its displayed/budgeted size excludes SQLite/WAL overhead, filesystem allocation, and temporary writes. In-flight tasks coalesce, but cancellation of all subscribers does not yet cancel an already running shared transfer. The current one-section UI shows errors and cached fallback but has no dedicated retry action for each thumbnail. The repository-local cache is intended to persist until the app or user evicts it, but it is still reproducible data rather than a backup. This file's later sections describe the broader design and acceptance criteria, not all shipped behavior.
 
 ## Recommendation
 
@@ -161,7 +170,9 @@ Recommended implementation tools:
 
 ### On-disk bookkeeping and eviction
 
-Use the app-specific Caches directory. This is disposable acceleration, not a backup or guaranteed offline download. An OS/user purge must recover as a cold cache.
+For the current development build, use the repository's `.cache/` directory. It is ignored by Git and is not in macOS's system-managed Caches directory. Resolve the repository rather than trusting the process working directory, which is unstable when launching a `.app`. A best-effort one-time migration preserves the earlier account-scoped cache. See [decision 001](decisions/001-development-cache-location.md).
+
+This location makes cache persistence follow the project checkout. It is a prototype choice, not a distribution layout. If the app later returns to `~/Library/Caches`, it must treat partial or complete purging as normal: rebuild a missing/corrupt SQLite index, remove rows for missing images, remove orphan files not represented by the index, and make clear-cache remove the entire namespace. A separate user-requested offline library would belong in a non-purgeable location with an explicit lifecycle.
 
 A cache entry needs: key/namespace/kind, schema version, payload or relative file path, byte cost, content digest, fetched time, last access, validated run ID, optional ETag/Last-Modified, and dependency fingerprint. Index eviction fields. Query small candidate batches rather than loading the entire index or scanning every file on a miss. Batch access-time writes; never block scrolling on an LRU timestamp update.
 

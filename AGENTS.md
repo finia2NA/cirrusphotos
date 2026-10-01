@@ -2,13 +2,13 @@
 
 - **Purpose:** A SwiftUI client for Synology Photos hosted on the remote Synology NAS `cirrus`.
 - **User-facing purpose:** Browse a very large remote photo library responsively.
-- **Product and engineering context:** The project is starting with a deliberately narrow MVP. The first priority is validating Synology Photos API access and designing performant, paginated photo-library loading before building UI.
+- **Product and engineering context:** The project advances through narrow, testable slices: API access and the timeline navigator are established; the current slice validates persistent caching and one real photo section before endless scrolling.
 - **Core domain concepts:** Synology Photos Personal Space and Shared Space, photo/video items, timelines, albums, thumbnails, and authenticated DSM sessions.
-- **Initial UI scope:** Begin with the right-side library timeline navigator: proportional date positions, hover feedback, and click-to-jump selection. It may remain always visible for the MVP. Location labels are deferred.
-- **Prototype:** A macOS SwiftUI executable built with SwiftPM (`swift run SynoTimeline`). It authenticates to Cirrus at launch, fetches the Personal Space timeline, and uses equal space per distinct populated day. NAS data is assumed static for an app session; live change reconciliation is out of scope.
-- **Cache requirements:** Show cached data first, then validate demanded resources once per app run because the NAS may change between runs. Persistent caching is not implemented yet; the proposed design is in `docs/CACHING_PLAN.md`.
+- **Initial UI scope:** The first tab has the right-side proportional day navigator. A second tab experiments with one current Personal Space section and its thumbnails. Location labels, endless scrolling, and full-photo viewing are deferred.
+- **Prototype:** A macOS SwiftUI executable built with SwiftPM (`swift run SynoTimeline`). It authenticates to Cirrus, fetches the Personal Space timeline, and uses equal space per distinct populated day. NAS data is assumed static for an app session; live change reconciliation is out of scope.
+- **Cache behavior:** Show cached full timeline, exact item page, and thumbnail data first, then validate demanded resources once per app run because the NAS may change between runs. SQLite indexes metadata and LRU records; compressed thumbnails are disk files, and decoded images have a bounded memory cache. The development cache is stored in the repository's ignored `.cache/` directory so macOS does not treat it as purgeable. Settings control rendition size and a 200 MB–100 GB disk budget; see `docs/CACHING_PLAN.md` for current limits.
 - **Sources of truth:** The Synology Photos service on `cirrus`; Synology's DSM Login Web API documentation; and observed/reverse-engineered Synology Photos endpoints.
-- **Major architectural characteristics:** Native SwiftUI client with a two-level library model: load the compact server timeline index, then lazily fetch section-sized item pages and demand-driven thumbnails. Remote-first data access, bounded concurrency, cancellation, and memory/disk thumbnail caching are key performance constraints.
+- **Major architectural characteristics:** Native SwiftUI client with a compact server timeline index, section-sized item pages, and demand-driven thumbnails. One process-shared repository coordinates authenticated requests and cached-first updates. Image work has bounded concurrency and memory; large-library viewport scheduling remains future work.
 
 # Rules for agents
 

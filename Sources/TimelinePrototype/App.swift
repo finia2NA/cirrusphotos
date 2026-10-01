@@ -1,4 +1,5 @@
 import AppKit
+import PhotoCache
 import SwiftUI
 import SynologyAPI
 import TimelineCore
@@ -6,12 +7,20 @@ import TimelineCore
 @main
 struct TimelinePrototypeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
+    @StateObject private var model = LibraryModel()
     var body: some Scene {
         WindowGroup("Cirrus · Timeline") {
-            PrototypeView().frame(minWidth: 560, minHeight: 420)
+            TabView {
+                PrototypeView().tabItem { Label("Timeline", systemImage: "calendar") }
+                SectionExperimentView().tabItem { Label("Section 207", systemImage: "square.grid.3x3") }
+            }
+                .environmentObject(model)
+                .frame(minWidth: 560, minHeight: 420)
                 .preferredColorScheme(.dark)
+                .task { await model.load() }
         }
         .defaultSize(width: 860, height: 820)
+        Settings { CacheSettingsView().environmentObject(model) }
     }
 }
 
@@ -23,12 +32,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 struct PrototypeView: View {
-    @StateObject private var loader = TimelineLoader()
+    @EnvironmentObject private var loader: LibraryModel
     @State private var selected = 0
+    @State private var selectedDate: String?
 
     var body: some View {
         Group {
-            if let timeline = loader.timeline, !timeline.days.isEmpty {
+            if let timeline = loader.snapshot?.timeline, !timeline.days.isEmpty {
                 HStack(spacing: 0) {
                     VStack(alignment: .leading, spacing: 20) {
                         Label("Cirrus", systemImage: "photo.stack").font(.title2.weight(.semibold))
@@ -45,7 +55,7 @@ struct PrototypeView: View {
                         Spacer()
                         Text("Move over the timeline to explore. Click or drag to select a date.")
                             .font(.callout).foregroundStyle(.secondary)
-                        Text("\(timeline.days.count) populated days · \(loader.sectionCount) sections\nEach day occupies the same amount of space.")
+                        Text("\(timeline.days.count) populated days · \(loader.snapshot?.sectionCount ?? 0) sections\nEach day occupies the same amount of space.")
                             .font(.caption).foregroundStyle(.tertiary)
                     }
                     .padding(36).frame(maxWidth: .infinity, alignment: .leading)
@@ -68,23 +78,41 @@ struct PrototypeView: View {
             }
         }
         .background(Color(red: 0.065, green: 0.065, blue: 0.07))
-        .task { await loader.load() }
-        .onChange(of: loader.timeline?.days.count) { _, count in
-            guard let count, count > 0 else { return }
-            selected = min(selected, count - 1)
+        .onChange(of: selected) { _, newValue in
+            if let days = loader.snapshot?.timeline.days, days.indices.contains(newValue) {
+                selectedDate = days[newValue].id
+            }
+        }
+        .onChange(of: loader.snapshot?.timeline.days.map(\.id)) { _, ids in
+            guard let ids, !ids.isEmpty else { return }
+            if let selectedDate, let index = ids.firstIndex(of: selectedDate) { selected = index }
+            else if let selectedDate { selected = ids.firstIndex(where: { $0 < selectedDate }) ?? ids.count - 1 }
+            else { selected = min(selected, ids.count - 1) }
+            selectedDate = ids[selected]
         }
     }
 }
 
 @MainActor
-final class TimelineLoader: ObservableObject {
-    @Published private(set) var timeline: Timeline?
-    @Published private(set) var sectionCount = 0
-    @Published private(set) var status = "Connecting to Cirrus…"
+final class LibraryModel: ObservableObject {
+    @Published private(set) var snapshot: TimelineSnapshot?
+    @Published private(set) var timelineVerified = false
+    @Published private(set) var status = "Opening library…"
     @Published private(set) var error: String?
     @Published private(set) var isLoading = true
+    @Published var thumbnailSize: ThumbnailSize = ThumbnailSize(rawValue: UserDefaults.standard.string(forKey: "thumbnailSize") ?? "m") ?? .m {
+        didSet { UserDefaults.standard.set(thumbnailSize.rawValue, forKey: "thumbnailSize") }
+    }
+    @Published var budgetFraction: Double = CacheBudget.fraction(for: Int64(UserDefaults.standard.object(forKey: "cacheBudget") as? Int ?? Int(CacheBudget.bytes(at: 0.5)))) {
+        didSet {
+            let bytes = CacheBudget.bytes(at: budgetFraction)
+            UserDefaults.standard.set(Int(bytes), forKey: "cacheBudget")
+            if let repository { Task { try? await repository.setBudget(bytes) } }
+        }
+    }
+    @Published private(set) var cacheUsage: Int64 = 0
+    private(set) var repository: CachedPhotosRepository?
     private var started = false
-    private var client: SynologyClient?
 
     func load() async {
         guard !started else { return }
@@ -93,26 +121,23 @@ final class TimelineLoader: ObservableObject {
         error = nil
         do {
             let credentials = try CredentialStore.load()
-            let client = SynologyClient()
-            self.client = client
-            status = "Signing in to Cirrus…"
-            try await client.login(credentials: credentials)
-
-            status = "Loading Personal Space…"
-            let initial = try await client.timeline(initial: true)
-            timeline = initial.timeline
-            sectionCount = initial.sectionCount
-
-            status = "Loading full timeline…"
-            do {
-                let full = try await client.timeline(initial: false)
-                timeline = full.timeline
-                sectionCount = full.sectionCount
-                status = "Personal Space · Live from Cirrus"
-            } catch {
-                status = "Personal Space · Initial timeline only"
-                self.error = error.localizedDescription
+            if repository == nil {
+                repository = try CachedPhotosRepository(credentials: credentials,
+                    budget: CacheBudget.bytes(at: budgetFraction))
             }
+            guard let repository else { return }
+            for await event in await repository.timeline() {
+                switch event {
+                case .value(let snapshot, let verified):
+                    self.snapshot = snapshot
+                    timelineVerified = verified
+                    status = verified ? "Personal Space · Current" : "Personal Space · Cached or initial"
+                case .failure(let message):
+                    error = message
+                    status = snapshot == nil ? "Connection failed" : "Personal Space · Offline copy"
+                }
+            }
+            await refreshUsage()
         } catch {
             self.error = error.localizedDescription
             status = "Connection failed"
@@ -122,10 +147,20 @@ final class TimelineLoader: ObservableObject {
 
     func reload() async {
         started = false
-        timeline = nil
-        sectionCount = 0
-        status = "Connecting to Cirrus…"
+        status = "Checking Cirrus…"
         await load()
+    }
+
+    func refreshUsage() async {
+        if let repository { cacheUsage = (try? await repository.usage()) ?? 0 }
+    }
+
+    func clearCache() async {
+        if let repository {
+            try? await repository.clearCache()
+            DecodedImages.shared.clear()
+            await refreshUsage()
+        }
     }
 }
 
