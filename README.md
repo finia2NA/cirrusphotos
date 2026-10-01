@@ -16,7 +16,9 @@ swift run SynoTimeline
 
 Open `Package.swift` in Xcode to build and run there instead. Run model tests with `swift test`.
 
-The prototype uses a bundled snapshot of 2,192 populated days from Personal Space. It does not require a NAS connection or credentials. Move over the right-hand timeline to see a date, click or drag to select it, and use up/down arrows after focusing the timeline to step one day at a time. The central readout shows the selected date, item count, and zero-based API section. This selection is the future integration point for the photo grid.
+The prototype reads `USER`, `PW`, and `OTP` from the ignored `.env`, signs in to Cirrus, and loads the Personal Space timeline at startup. It first displays Synology's initial 500-item timeline, then replaces it with the full timeline. Data remains fixed until the next app launch.
+
+Move over the right-hand timeline to see a date, click or drag to select it, and use up/down arrows after focusing the timeline to step one day at a time. The central readout shows the selected date, item count, and zero-based API section. This selection is the future integration point for the photo grid.
 
 Each populated day has equal vertical weight. Month marks and year labels follow that distribution. Labels that would overlap are omitted, but their dates remain selectable. The pink line indicates the selection; the floating label indicates the hovered date. The window is resizable.
 

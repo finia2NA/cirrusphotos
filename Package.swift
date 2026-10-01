@@ -7,8 +7,9 @@ let package = Package(
     products: [.executable(name: "SynoTimeline", targets: ["TimelinePrototype"])],
     targets: [
         .target(name: "TimelineCore"),
-        .executableTarget(name: "TimelinePrototype", dependencies: ["TimelineCore"],
-                          resources: [.process("Resources")]),
-        .testTarget(name: "TimelineCoreTests", dependencies: ["TimelineCore"])
+        .target(name: "SynologyAPI", dependencies: ["TimelineCore"]),
+        .executableTarget(name: "TimelinePrototype", dependencies: ["TimelineCore", "SynologyAPI"]),
+        .testTarget(name: "TimelineCoreTests", dependencies: ["TimelineCore"]),
+        .testTarget(name: "SynologyAPITests", dependencies: ["SynologyAPI"])
     ]
 )

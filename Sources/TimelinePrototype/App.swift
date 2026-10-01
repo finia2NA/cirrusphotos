@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SynologyAPI
 import TimelineCore
 
 @main
@@ -22,27 +23,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 struct PrototypeView: View {
-    private let timeline: Timeline?
+    @StateObject private var loader = TimelineLoader()
     @State private var selected = 0
-
-    init() {
-        if let url = Bundle.module.url(forResource: "days", withExtension: "json"),
-           let data = try? Data(contentsOf: url),
-           let rows = try? JSONDecoder().decode([[Int]].self, from: data),
-           rows.allSatisfy({ $0.count == 5 }) {
-            timeline = Timeline(days: rows.map {
-                LibraryDay(year: $0[0], month: $0[1], day: $0[2], count: $0[3], section: $0[4])
-            })
-        } else { timeline = nil }
-    }
 
     var body: some View {
         Group {
-            if let timeline, !timeline.days.isEmpty {
+            if let timeline = loader.timeline, !timeline.days.isEmpty {
                 HStack(spacing: 0) {
                     VStack(alignment: .leading, spacing: 20) {
                         Label("Cirrus", systemImage: "photo.stack").font(.title2.weight(.semibold))
-                        Text("Personal Space").foregroundStyle(.secondary)
+                        HStack(spacing: 7) {
+                            if loader.isLoading { ProgressView().controlSize(.small) }
+                            Text(loader.status).foregroundStyle(.secondary)
+                        }
                         Spacer()
                         Text("SELECTED DATE").font(.caption.weight(.medium)).foregroundStyle(.secondary)
                         Text(timeline.days[selected].id).font(.system(size: 36, weight: .medium, design: .rounded)).monospacedDigit()
@@ -52,18 +45,87 @@ struct PrototypeView: View {
                         Spacer()
                         Text("Move over the timeline to explore. Click or drag to select a date.")
                             .font(.callout).foregroundStyle(.secondary)
-                        Text("Recorded library · \(timeline.days.count) populated days\nEach day occupies the same amount of space.")
+                        Text("\(timeline.days.count) populated days · \(loader.sectionCount) sections\nEach day occupies the same amount of space.")
                             .font(.caption).foregroundStyle(.tertiary)
                     }
                     .padding(36).frame(maxWidth: .infinity, alignment: .leading)
                     TimelineNavigator(timeline: timeline, selected: $selected)
                         .frame(width: 190).padding(.vertical, 24).padding(.trailing, 16)
                 }
+            } else if let error = loader.error {
+                ContentUnavailableView {
+                    Label("Could not load Cirrus", systemImage: "externaldrive.badge.exclamationmark")
+                } description: {
+                    Text(error)
+                } actions: {
+                    Button("Try Again") { Task { await loader.reload() } }
+                }
             } else {
-                ContentUnavailableView("Timeline unavailable", systemImage: "calendar.badge.exclamationmark",
-                                       description: Text("The recorded timeline could not be loaded."))
+                VStack(spacing: 14) {
+                    ProgressView().controlSize(.large)
+                    Text(loader.status).foregroundStyle(.secondary)
+                }
             }
-        }.background(Color(red: 0.065, green: 0.065, blue: 0.07))
+        }
+        .background(Color(red: 0.065, green: 0.065, blue: 0.07))
+        .task { await loader.load() }
+        .onChange(of: loader.timeline?.days.count) { _, count in
+            guard let count, count > 0 else { return }
+            selected = min(selected, count - 1)
+        }
+    }
+}
+
+@MainActor
+final class TimelineLoader: ObservableObject {
+    @Published private(set) var timeline: Timeline?
+    @Published private(set) var sectionCount = 0
+    @Published private(set) var status = "Connecting to Cirrus…"
+    @Published private(set) var error: String?
+    @Published private(set) var isLoading = true
+    private var started = false
+    private var client: SynologyClient?
+
+    func load() async {
+        guard !started else { return }
+        started = true
+        isLoading = true
+        error = nil
+        do {
+            let credentials = try CredentialStore.load()
+            let client = SynologyClient()
+            self.client = client
+            status = "Signing in to Cirrus…"
+            try await client.login(credentials: credentials)
+
+            status = "Loading Personal Space…"
+            let initial = try await client.timeline(initial: true)
+            timeline = initial.timeline
+            sectionCount = initial.sectionCount
+
+            status = "Loading full timeline…"
+            do {
+                let full = try await client.timeline(initial: false)
+                timeline = full.timeline
+                sectionCount = full.sectionCount
+                status = "Personal Space · Live from Cirrus"
+            } catch {
+                status = "Personal Space · Initial timeline only"
+                self.error = error.localizedDescription
+            }
+        } catch {
+            self.error = error.localizedDescription
+            status = "Connection failed"
+        }
+        isLoading = false
+    }
+
+    func reload() async {
+        started = false
+        timeline = nil
+        sectionCount = 0
+        status = "Connecting to Cirrus…"
+        await load()
     }
 }
 
