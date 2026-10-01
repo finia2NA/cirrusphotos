@@ -85,10 +85,31 @@ public struct PhotoItem: Codable, Sendable, Identifiable {
     public struct Additional: Codable, Sendable {
         public let thumbnail: ThumbnailInfo?
         public let resolution: Resolution?
+        public let orientation: Int?
     }
     public struct Resolution: Codable, Sendable {
         public let width: Int
         public let height: Int
+    }
+
+    /// Display dimensions account for EXIF rotation before image bytes are available.
+    public var displayAspectRatio: Double {
+        guard let resolution = additional?.resolution,
+              resolution.width > 0, resolution.height > 0 else { return 1 }
+        let rotated = (5...8).contains(additional?.orientation ?? 1)
+        let width = Double(rotated ? resolution.height : resolution.width)
+        let height = Double(rotated ? resolution.width : resolution.height)
+        let ratio = width / height
+        return ratio.isFinite && ratio > 0 ? ratio : 1
+    }
+
+    /// Matches the UTC calendar boundaries used by timeline section requests.
+    public var utcDayID: String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let parts = calendar.dateComponents([.year, .month, .day],
+                                            from: Date(timeIntervalSince1970: TimeInterval(time)))
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
 }
 
@@ -113,9 +134,20 @@ public struct ThumbnailResponse: Sendable {
     public let etag: String?
     public let lastModified: String?
     public var notModified: Bool { data == nil }
+    public init(data: Data?, etag: String?, lastModified: String?) {
+        self.data = data; self.etag = etag; self.lastModified = lastModified
+    }
 }
 
-public actor SynologyClient {
+public protocol PhotosTransport: Sendable {
+    func login(credentials: SynologyCredentials) async throws
+    func timeline(initial: Bool) async throws -> TimelineSnapshot
+    func items(in section: TimelineSection) async throws -> [PhotoItem]
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
+                   etag: String?, lastModified: String?) async throws -> ThumbnailResponse
+}
+
+public actor SynologyClient: PhotosTransport {
     public static let defaultBaseURL = URL(string: "https://nas.example.com:5001")!
 
     private let baseURL: URL

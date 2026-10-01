@@ -1,9 +1,7 @@
-import AppKit
-import CryptoKit
-import ImageIO
 import PhotoCache
 import SwiftUI
 import SynologyAPI
+import TimelineCore
 
 struct SectionExperimentView: View {
     @EnvironmentObject private var library: LibraryModel
@@ -34,15 +32,8 @@ struct SectionExperimentView: View {
                     }
                     Text("\(items.count) of \(section.limit) items · \(library.thumbnailSize.rawValue.uppercased()) thumbnails")
                         .font(.caption).foregroundStyle(.secondary)
-                    ScrollView {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 230), spacing: 6)], spacing: 6) {
-                            ForEach(items) { item in
-                                ThumbnailCell(item: item, repository: library.repository,
-                                              size: library.thumbnailSize, allowNetwork: pageVerified)
-                            }
-                        }
-                        .padding(.bottom, 20)
-                    }
+                    JustifiedPhotoGrid(items: items, repository: library.repository,
+                                       size: library.thumbnailSize, allowNetwork: pageVerified)
                     if let error, items.isEmpty { Text(error).foregroundStyle(.secondary) }
                 }
                 .padding(20)
@@ -85,85 +76,82 @@ struct SectionExperimentView: View {
     }
 }
 
-private struct ThumbnailCell: View {
-    let item: PhotoItem
+/// A reusable, day-grouped row grid. Only visible rows create thumbnail views.
+struct JustifiedPhotoGrid: View {
+    let items: [PhotoItem]
     let repository: CachedPhotosRepository?
     let size: ThumbnailSize
     let allowNetwork: Bool
-    @State private var image: NSImage?
-    @State private var failed = false
-
-    private var descriptor: ThumbnailInfo? { item.additional?.thumbnail }
-    private var identity: String {
-        "\(descriptor?.unitID ?? 0):\(descriptor?.cacheKey ?? "missing"):\(size.rawValue):\(allowNetwork)"
-    }
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.06))
-            if let image {
-                Image(nsImage: image).resizable().scaledToFill()
-            } else if failed {
-                Image(systemName: "photo.badge.exclamationmark").foregroundStyle(.secondary)
-            } else {
-                Image(systemName: "photo").foregroundStyle(.tertiary)
-            }
-        }
-        .frame(height: 170)
-        .clipped()
-        .task(id: identity) { await load() }
-    }
-
-    private func load() async {
-        guard let descriptor, descriptor.isReady(size), let repository else {
-            failed = true; return
-        }
-        failed = false
-        for await event in await repository.thumbnail(descriptor, size: size, allowNetwork: allowNetwork) {
-            guard !Task.isCancelled else { return }
-            switch event {
-            case .value(let data, _):
-                if let decoded = await DecodedImages.shared.image(from: data, maxPixel: 520) {
-                    image = decoded
-                } else { failed = true }
-            case .failure:
-                if image == nil { failed = true }
+        GeometryReader { geometry in
+            let entries = rowEntries(width: Double(geometry.size.width))
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    ForEach(entries) { entry in
+                        switch entry.content {
+                        case .heading(let date):
+                            Text(date)
+                                .font(.headline)
+                                .padding(.top, 12)
+                                .padding(.bottom, 4)
+                        case .row(let row, let rowItems):
+                            HStack(alignment: .top, spacing: row.gap) {
+                                ForEach(row.cells.indices, id: \.self) { index in
+                                    let cell = row.cells[index]
+                                    ThumbnailCell(item: rowItems[index], repository: repository,
+                                                  size: size, allowNetwork: allowNetwork)
+                                        .frame(width: cell.width, height: row.height)
+                                }
+                            }
+                            .frame(height: row.height)
+                        }
+                    }
+                }
+                .padding(.bottom, 20)
             }
         }
     }
-}
 
-private final class CGImageBox: @unchecked Sendable {
-    let image: CGImage
-    init(_ image: CGImage) { self.image = image }
-}
+    private func rowEntries(width: Double) -> [RowEntry] {
+        guard width.isFinite, width > 0 else { return [] }
+        var entries: [RowEntry] = []
+        var group: [PhotoItem] = []
+        var currentDay: String?
+        var groupIndex = 0
+        func appendGroup() {
+            guard let currentDay, !group.isEmpty else { return }
+            entries.append(RowEntry(id: "\(groupIndex)-heading", content: .heading(currentDay)))
+            let rows = JustifiedRows.layout(aspectRatios: group.map(\.displayAspectRatio),
+                                            availableWidth: width)
+            for row in rows {
+                entries.append(RowEntry(id: "\(groupIndex)-\(row.cells[0].index)",
+                                        content: .row(row, row.cells.map { group[$0.index] })))
+            }
+            groupIndex += 1
+        }
 
-@MainActor
-final class DecodedImages {
-    static let shared = DecodedImages()
-    private let cache = NSCache<NSString, NSImage>()
-    private init() { cache.totalCostLimit = 100 * 1_000_000 }
-
-    func clear() { cache.removeAllObjects() }
-
-    func image(from data: Data, maxPixel: Int) async -> NSImage? {
-        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let key = "\(digest):\(maxPixel)" as NSString
-        if let image = cache.object(forKey: key) { return image }
-        let box = await Task.detached(priority: .utility) { () -> CGImageBox? in
-            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                  let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceThumbnailMaxPixelSize: maxPixel
-                  ] as CFDictionary) else { return nil }
-            return CGImageBox(cg)
-        }.value
-        guard let box else { return nil }
-        let image = NSImage(cgImage: box.image, size: NSSize(width: box.image.width, height: box.image.height))
-        cache.setObject(image, forKey: key, cost: box.image.bytesPerRow * box.image.height)
-        return image
+        for item in items {
+            let day = item.utcDayID
+            if currentDay != day {
+                appendGroup()
+                group = []
+                currentDay = day
+            }
+            group.append(item)
+        }
+        appendGroup()
+        return entries
     }
+}
+
+private struct RowEntry: Identifiable {
+    enum Content {
+        case heading(String)
+        case row(JustifiedRows.Row, [PhotoItem])
+    }
+    let id: String
+    let content: Content
 }
 
 struct CacheSettingsView: View {
