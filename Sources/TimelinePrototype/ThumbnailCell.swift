@@ -50,7 +50,7 @@ struct ThumbnailCell: View {
             switch event {
             case .value(let data, _):
                 if let decoded = await DecodedImages.shared.image(from: data, maxPixel: 520) {
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled, displayedRendition == renditionIdentity else { return }
                     image = decoded
                 } else if !Task.isCancelled { failed = true }
             case .failure:
@@ -69,6 +69,7 @@ private final class CGImageBox: @unchecked Sendable {
 final class DecodedImages {
     static let shared = DecodedImages()
     private let cache = NSCache<NSString, NSImage>()
+    private let gate = DecodeGate()
     private init() { cache.totalCostLimit = 100 * 1_000_000 }
 
     func clear() { cache.removeAllObjects() }
@@ -77,6 +78,9 @@ final class DecodedImages {
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         let key = "\(digest):\(maxPixel)" as NSString
         if let image = cache.object(forKey: key) { return image }
+        do { try await gate.acquire() } catch { return nil }
+        defer { Task { await gate.release() } }
+        guard !Task.isCancelled else { return nil }
         let box = await Task.detached(priority: .utility) { () -> CGImageBox? in
             guard let source = CGImageSourceCreateWithData(data as CFData, nil),
                   let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
@@ -86,9 +90,41 @@ final class DecodedImages {
                   ] as CFDictionary) else { return nil }
             return CGImageBox(cg)
         }.value
-        guard let box else { return nil }
+        guard let box, !Task.isCancelled else { return nil }
         let image = NSImage(cgImage: box.image, size: NSSize(width: box.image.width, height: box.image.height))
         cache.setObject(image, forKey: key, cost: box.image.bytesPerRow * box.image.height)
         return image
+    }
+}
+
+private actor DecodeGate {
+    private var active = 0
+    private var waiting: [(UUID, CheckedContinuation<Void, Error>)] = []
+
+    func acquire() async throws {
+        try Task.checkCancellation()
+        if active < 2 { active += 1; return }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                waiting.append((id, continuation))
+            }
+        } onCancel: {
+            Task { await self.cancel(id) }
+        }
+        if Task.isCancelled { release(); throw CancellationError() }
+    }
+
+    func release() {
+        if !waiting.isEmpty {
+            let (_, continuation) = waiting.removeFirst()
+            continuation.resume()
+        } else { active = max(0, active - 1) }
+    }
+
+    private func cancel(_ id: UUID) {
+        if let position = waiting.firstIndex(where: { $0.0 == id }) {
+            waiting.remove(at: position).1.resume(throwing: CancellationError())
+        }
     }
 }

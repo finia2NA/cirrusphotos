@@ -8,7 +8,7 @@ let package = Package(
     targets: [
         .target(name: "TimelineCore"),
         .target(name: "SynologyAPI", dependencies: ["TimelineCore"]),
-        .target(name: "PhotoCache", dependencies: ["SynologyAPI"], linkerSettings: [.linkedLibrary("sqlite3")]),
+        .target(name: "PhotoCache", dependencies: ["SynologyAPI", "TimelineCore"], linkerSettings: [.linkedLibrary("sqlite3")]),
         .executableTarget(name: "TimelinePrototype", dependencies: ["TimelineCore", "SynologyAPI", "PhotoCache"]),
         .testTarget(name: "TimelineCoreTests", dependencies: ["TimelineCore"]),
         .testTarget(name: "SynologyAPITests", dependencies: ["SynologyAPI"]),

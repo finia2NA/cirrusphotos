@@ -13,6 +13,7 @@ struct TimelinePrototypeApp: App {
             TabView {
                 PrototypeView().tabItem { Label("Timeline", systemImage: "calendar") }
                 SectionExperimentView().tabItem { Label("Section 207", systemImage: "square.grid.3x3") }
+                LibraryBrowserView().tabItem { Label("Photos", systemImage: "photo.on.rectangle") }
             }
                 .environmentObject(model)
                 .frame(minWidth: 560, minHeight: 420)
@@ -96,6 +97,7 @@ struct PrototypeView: View {
 @MainActor
 final class LibraryModel: ObservableObject {
     @Published private(set) var snapshot: TimelineSnapshot?
+    @Published private(set) var snapshotRevision = 0
     @Published private(set) var timelineVerified = false
     @Published private(set) var status = "Opening library…"
     @Published private(set) var error: String?
@@ -130,6 +132,7 @@ final class LibraryModel: ObservableObject {
                 switch event {
                 case .value(let snapshot, let verified):
                     self.snapshot = snapshot
+                    snapshotRevision += 1
                     timelineVerified = verified
                     status = verified ? "Personal Space · Current" : "Personal Space · Cached or initial"
                 case .failure(let message):

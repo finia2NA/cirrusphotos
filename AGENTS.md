@@ -2,13 +2,13 @@
 
 - **Purpose:** A SwiftUI client for Synology Photos hosted on the remote Synology NAS `cirrus`.
 - **User-facing purpose:** Browse a very large remote photo library responsively.
-- **Product and engineering context:** The project advances through narrow, testable slices: API access and the timeline navigator are established; the current slice validates persistent caching and one real photo section before endless scrolling.
+- **Product and engineering context:** The project advances through narrow, testable slices. API access, persistent caching, the timeline navigator, and a bounded continuous Personal Space viewport are implemented; navigator integration and login status follow.
 - **Core domain concepts:** Synology Photos Personal Space and Shared Space, photo/video items, timelines, albums, thumbnails, and authenticated DSM sessions.
-- **Initial UI scope:** The first tab has the right-side proportional day navigator. A second tab shows one current Personal Space section in day-grouped, aspect-preserving rows. Location labels, endless scrolling, and full-photo viewing are deferred.
+- **Initial UI scope:** The first tab has the right-side proportional day navigator. A second tab shows one current section. A temporary Photos tab scrolls the full Personal Space library in day-grouped, aspect-preserving rows. Location labels and full-photo viewing are deferred.
 - **Prototype:** A macOS SwiftUI executable built with SwiftPM (`swift run SynoTimeline`). It authenticates to Cirrus, fetches the Personal Space timeline, and uses equal space per distinct populated day. NAS data is assumed static for an app session; live change reconciliation is out of scope.
 - **Cache behavior:** Show cached full timeline, exact item page, and thumbnail data first, then validate demanded resources once per app run because the NAS may change between runs. SQLite indexes metadata and LRU records; compressed thumbnails are disk files, and decoded images have a bounded memory cache. The development cache is stored in the repository's ignored `.cache/` directory so macOS does not treat it as purgeable. Settings control rendition size and a 200 MB–100 GB disk budget; see `docs/CACHING_PLAN.md` for current limits.
 - **Sources of truth:** The Synology Photos service on `cirrus`; Synology's DSM Login Web API documentation; and observed/reverse-engineered Synology Photos endpoints.
-- **Major architectural characteristics:** Native SwiftUI client with a compact server timeline index, section-sized item pages, pure justified-row geometry, and demand-driven thumbnails. One process-shared repository coordinates authenticated requests and cached-first updates. An immutable day-to-section index and bounded page-window model prepare for future viewport integration; metadata, image, and decoded-image work have bounded concurrency or memory.
+- **Major architectural characteristics:** SwiftUI shell with a native AppKit virtualized photo viewport, compact server timeline and slice geometry indexes, section-sized item pages, pure justified-row geometry, and demand-driven thumbnails. One process-shared repository coordinates authenticated cached-first requests. The viewport retains at most eight pages and hosts only nearby rows; metadata, image, and decode work have bounded concurrency or memory.
 
 # Rules for agents
 
