@@ -352,24 +352,30 @@ These concurrency numbers are implementation starting points, not values discove
 
 ## Thumbnail caching
 
-Every thumbnail response included an `ETag`; 337 of 338 included `Last-Modified`. No response included `Cache-Control` or `Expires`. Because DevTools forced `no-cache` on every request, the capture cannot establish how the normal web app reuses its browser cache.
+Every thumbnail response included an `ETag`; the 337 successful responses included `Last-Modified`. No thumbnail response included `Cache-Control` or `Expires`. Every request carried `no-cache`, likely because caching was disabled in DevTools; the capture cannot establish how the normal web app reuses its browser cache.
+
+Timeline and item-list responses, unlike thumbnails, explicitly carry `Cache-Control: max-age=0, no-cache, no-store, must-revalidate` and no observed HTTP validators. Offline metadata storage therefore needs an explicit application-data policy, not just automatic HTTP response caching.
 
 The strongest application cache key available is:
 
 ```text
-(space, thumbnail.unit_id, thumbnail.cache_key, requested_size)
+(server/account namespace, space, thumbnail.unit_id, thumbnail.cache_key, requested_size)
 ```
 
-`cache_key` should be treated as the server-provided rendition version. If it changes, the URL and local cache key change naturally. Do not key only by item ID or filename.
+`cache_key` is a server-provided rendition-version hint. If it changes, the URL and local cache key change naturally. The capture does not prove that it changes for every possible content edit. Do not key only by item ID or filename, or parse the key as a freshness timestamp.
 
 Recommended native cache layers:
 
 1. An `NSCache` of decoded display images with a total-cost limit based on decoded bytes (`width × height × 4`), not compressed JPEG size.
 2. A disk cache of compressed JPEG data keyed by a hash of the tuple above.
 3. In-flight request coalescing so multiple cells asking for the same key share one task.
-4. Optional HTTP revalidation using `ETag`/`Last-Modified`, especially after a disk entry ages out of the application's freshness window.
+4. Demand-driven validation once per app run, using `ETag`/`Last-Modified` for cached thumbnails until reliable rendition-version semantics have been established.
 
 The disk cache should have an explicit size limit and LRU eviction. Avoid storing session tokens in cache filenames or metadata.
+
+The [cache design proposal](CACHING_PLAN.md) refines these recommendations with cached-first startup, category priorities, semantic request keys, and bounded UI state. Its freshness policy supersedes a generic time-based expiration policy.
+
+A subsequent read-only Cirrus probe confirmed both ETag and Last-Modified conditional requests return HTTP 304 with no body for an unchanged `sm` thumbnail. See the proposal for the probe's authentication details and limits; edit-driven invalidation remains unverified.
 
 ## Recommended client architecture
 
@@ -408,7 +414,7 @@ The full timeline descriptor list is small enough to retain. Loaded item pages s
 
 ### Viewport algorithm
 
-1. Authenticate and request `get_init_timeline`.
+1. On a cold cache, authenticate and request `get_init_timeline`. With a cached full timeline, show it immediately and fetch the full map directly; see the cache proposal for that path.
 2. Publish its sections immediately and start the first visible `Item.list` request.
 3. In parallel, request the full timeline with `get`.
 4. Replace/merge the initial section map with the full map using section identities.
@@ -468,7 +474,7 @@ Before hardening the production data layer, record or directly test:
 1. Timeline behavior when the user setting groups by month instead of day.
 2. Normal browser caching with DevTools cache disabling turned off.
 3. Thumbnail responses while Synology is still generating a rendition.
-4. Library changes during a session and whether `SYNO.Foto.Browse.Diff` can update the timeline incrementally.
+4. Library changes during a session and whether `SYNO.Foto.Browse.Diff` can update the timeline incrementally (deferred beyond the current static-session scope).
 5. Sort stability for multiple items with identical `time` values.
 6. Session expiry and reauthentication error codes on the Photos endpoints.
 7. Whether `m` is preferable to `sm` on high-density displays at the intended grid cell size.

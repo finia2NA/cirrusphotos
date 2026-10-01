@@ -6,6 +6,7 @@
 - **Core domain concepts:** Synology Photos Personal Space and Shared Space, photo/video items, timelines, albums, thumbnails, and authenticated DSM sessions.
 - **Initial UI scope:** Begin with the right-side library timeline navigator: proportional date positions, hover feedback, and click-to-jump selection. It may remain always visible for the MVP. Location labels are deferred.
 - **Prototype:** A macOS SwiftUI executable built with SwiftPM (`swift run SynoTimeline`). It authenticates to Cirrus at launch, fetches the Personal Space timeline, and uses equal space per distinct populated day. NAS data is assumed static for an app session; live change reconciliation is out of scope.
+- **Cache requirements:** Show cached data first, then validate demanded resources once per app run because the NAS may change between runs. Persistent caching is not implemented yet; the proposed design is in `docs/CACHING_PLAN.md`.
 - **Sources of truth:** The Synology Photos service on `cirrus`; Synology's DSM Login Web API documentation; and observed/reverse-engineered Synology Photos endpoints.
 - **Major architectural characteristics:** Native SwiftUI client with a two-level library model: load the compact server timeline index, then lazily fetch section-sized item pages and demand-driven thumbnails. Remote-first data access, bounded concurrency, cancellation, and memory/disk thumbnail caching are key performance constraints.
 

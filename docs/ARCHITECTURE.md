@@ -6,7 +6,7 @@
 
 At startup the app reads `USER`, `PW`, and the TOTP secret `OTP` from the ignored `.env`, authenticates to Cirrus, requests `get_init_timeline`, then requests the full `get` timeline. The initial response allows the navigator to appear while the full response is loading. The completed timeline is not refreshed during the session.
 
-The model deduplicates calendar dates, retains the earliest section index for split days, and sorts newest first. It precomputes year/month boundaries once. Handling additions, deletions, or index reconciliation is deferred.
+The model deduplicates calendar dates, retains the earliest section index for split days, and sorts newest first. It precomputes year/month boundaries once. The current prototype has no persistent cache. Between-run reconciliation will be necessary when cached snapshots are introduced; live changes during a run remain out of scope.
 
 The current certificate mismatch is accepted only for the configured Cirrus host. The prototype app's transport-security exception and the URL session trust override are both scoped to that hostname. The URL session uses ephemeral cookie storage, and credentials, OTP values, session IDs, and tokens are never logged. `.env` is a development credential source; a distributable app should move credentials to Keychain.
 
@@ -31,6 +31,10 @@ More populated days than screen pixels necessarily means some days cannot be ind
 `TimelineNavigator` exposes a selected day index through a binding. The prototype reads the corresponding `LibraryDay` and displays the date/count/first section. A future parent can use that callback/binding to fetch the full section descriptor and scroll to the selected day. A section can contain several days, so merely fetching the section is not sufficient to align the eventual grid to the day.
 
 The selected-date readout stands in for the future photo grid. Location labels, thumbnail loading, and production cache management are outside this prototype.
+
+## Cache direction (not implemented)
+
+The requirement is cached-first display followed by demand-driven validation once per resource per app run. See [cache design proposal](CACHING_PLAN.md) for protocol evidence, finite load-state streams, storage/eviction, settings, and staged implementation. The NAS remains authoritative; cached metadata is provisional until validated. The proposal also requires retaining full timeline section descriptors, which the current flattened snapshot discards.
 
 ## Verification
 
