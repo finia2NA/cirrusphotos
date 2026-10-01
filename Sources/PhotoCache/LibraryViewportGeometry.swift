@@ -4,10 +4,15 @@ import TimelineCore
 
 /// Compact vertical map. Only the current page window contributes row/item geometry.
 public struct LibraryViewportGeometry {
+    public struct RowItem {
+        public let photo: PhotoItem
+        public let verified: Bool
+    }
     public struct Row {
         public let y: Double
         public let layout: JustifiedRows.Row
-        public let itemIDs: [Int64]
+        public let items: [RowItem]
+        public var itemIDs: [Int64] { items.map { $0.photo.id } }
     }
     public struct Slice {
         public let source: LibraryIndex.Slice
@@ -29,6 +34,10 @@ public struct LibraryViewportGeometry {
     public private(set) var width: Double
     private var measuredHeights: [Int: Double] = [:]
     private var rows: [Int: [Row]] = [:]
+    /// Incomplete rows at API boundaries. Entries are kept only around retained pages,
+    /// letting an evicted look-behind page keep the next page stable without library-wide growth.
+    private var boundaryCarry: [Int: [RowItem]] = [:]
+    private var sectionSignatures: [Int: Int] = [:]
     private var sectionToSlices: [Int: [Int]] = [:]
     private var dayToFirstSlice: [String: Int] = [:]
     private let gap = 6.0
@@ -53,14 +62,26 @@ public struct LibraryViewportGeometry {
         width = newWidth
         measuredHeights.removeAll()
         rows.removeAll()
-        for page in pages.values { measure(page) }
+        boundaryCarry.removeAll()
+        sectionSignatures.removeAll()
+        measure(pages)
         recalculate()
     }
 
     public mutating func reconcile(pages: [Int: LibraryPage]) {
-        let retained = Set(pages.keys)
-        rows = rows.filter { retained.contains(slices[$0.key].source.sectionIndex) }
-        for page in pages.values { measure(page) }
+        let signatures = Dictionary(uniqueKeysWithValues: pages.map { section, page in
+            (section, Self.signature(page))
+        })
+        let changedPositions = signatures.compactMap { section, signature -> Int? in
+            guard sectionSignatures[section] != nil, sectionSignatures[section] != signature else { return nil }
+            return sectionToSlices[section]?.first
+        }
+        if let earliest = changedPositions.min() {
+            boundaryCarry = boundaryCarry.filter { $0.key <= earliest }
+        }
+        sectionSignatures = signatures
+        rows.removeAll(keepingCapacity: true)
+        measure(pages)
         recalculate()
     }
 
@@ -125,23 +146,88 @@ public struct LibraryViewportGeometry {
         return nil
     }
 
-    private mutating func measure(_ page: LibraryPage) {
-        for position in sectionToSlices[page.sectionIndex] ?? [] {
-            let slice = slices[position]
-            let items = Array(page.items.dropFirst(slice.source.pageRange.lowerBound)
-                .prefix(slice.source.pageRange.count))
-            let layouts = JustifiedRows.layout(aspectRatios: items.map(\.displayAspectRatio),
-                                               availableWidth: width)
-            var y = slice.heading ? headingHeight : 0
-            var measuredRows: [Row] = []
-            for layout in layouts {
-                measuredRows.append(Row(y: y, layout: layout,
-                                        itemIDs: layout.cells.map { items[$0.index].id }))
-                y += layout.height + gap
+    private mutating func measure(_ pages: [Int: LibraryPage]) {
+        let loaded = slices.indices.filter { pages[slices[$0].source.sectionIndex] != nil }
+        var cursor = 0
+        while cursor < loaded.count {
+            let start = loaded[cursor]
+            var end = cursor + 1
+            while end < loaded.count,
+                  loaded[end] == loaded[end - 1] + 1,
+                  slices[loaded[end]].source.dayID == slices[start].source.dayID {
+                end += 1
             }
-            rows[position] = measuredRows
-            measuredHeights[position] = max(y, slice.heading ? headingHeight : 20)
+            measureRun(Array(loaded[cursor..<end]), pages: pages)
+            cursor = end
         }
+        // Full PhotoItem values are retained only for boundaries touching the bounded
+        // page window. Distant slices keep scalar heights, not item metadata.
+        let allowedCarry = Set(loaded + loaded.map { $0 + 1 }.filter { $0 < slices.count })
+        boundaryCarry = boundaryCarry.filter { allowedCarry.contains($0.key) }
+    }
+
+    private mutating func measureRun(_ positions: [Int], pages: [Int: LibraryPage]) {
+        guard let first = positions.first, let last = positions.last else { return }
+        var pending = boundaryCarry[first] ?? []
+        for position in positions {
+            let slice = slices[position]
+            guard let page = pages[slice.source.sectionIndex] else { continue }
+            let pageItems = page.items.dropFirst(slice.source.pageRange.lowerBound)
+                .prefix(slice.source.pageRange.count)
+                .map { RowItem(photo: $0, verified: page.verified) }
+            let candidates = pending + pageItems
+            let isDayEnd = position + 1 >= slices.count ||
+                slices[position + 1].source.dayID != slice.source.dayID
+            let result = JustifiedRows.layoutPrefix(
+                aspectRatios: candidates.map { $0.photo.displayAspectRatio },
+                availableWidth: width, finalize: isDayEnd
+            )
+            append(result.rows, from: candidates, completingAt: position)
+            pending = result.pendingRange.map { candidates[$0] }
+            if position + 1 < slices.count { boundaryCarry[position + 1] = pending }
+        }
+
+        // The next page is not retained yet. Paint the bounded pending row provisionally;
+        // it will be replaced with a justified cross-page row when that page arrives.
+        let reachesDayEnd = last + 1 >= slices.count ||
+            slices[last + 1].source.dayID != slices[last].source.dayID
+        if !reachesDayEnd, !pending.isEmpty {
+            let provisional = JustifiedRows.layout(
+                aspectRatios: pending.map { $0.photo.displayAspectRatio }, availableWidth: width
+            )
+            append(provisional, from: pending, completingAt: last)
+        }
+
+        for position in positions {
+            var y = slices[position].heading ? headingHeight : 0
+            let measuredRows = rows[position] ?? []
+            var relocated: [Row] = []
+            for row in measuredRows {
+                relocated.append(Row(y: y, layout: row.layout, items: row.items))
+                y += row.layout.height + gap
+            }
+            rows[position] = relocated
+            measuredHeights[position] = max(y, slices[position].heading ? headingHeight : 0)
+        }
+    }
+
+    private mutating func append(_ layouts: [JustifiedRows.Row], from candidates: [RowItem],
+                                 completingAt position: Int) {
+        for layout in layouts {
+            let selected = layout.cells.map { candidates[$0.index] }
+            rows[position, default: []].append(Row(y: 0, layout: layout,
+                                                   items: selected))
+        }
+    }
+
+    private static func signature(_ page: LibraryPage) -> Int {
+        var hash = Hasher()
+        hash.combine(page.verified)
+        for item in page.items {
+            hash.combine(item.id)
+            hash.combine(item.displayAspectRatio)
+        }
+        return hash.finalize()
     }
 
     private mutating func recalculate() {

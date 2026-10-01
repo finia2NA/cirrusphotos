@@ -19,6 +19,17 @@ private struct SharedJob<Value: Sendable> {
     var subscribers: Set<UUID>
 }
 
+private struct ImageResolution: Sendable {
+    let data: Data
+    let outcome: ThumbnailCacheOutcome
+}
+
+public enum ThumbnailCacheOutcome: Sendable, Equatable {
+    case fetched
+    case reused
+    case cacheWriteFailed
+}
+
 private final class StreamProducer: @unchecked Sendable {
     var task: Task<Void, Never>?
 }
@@ -38,7 +49,7 @@ public actor CachedPhotosRepository {
     private var timelineJob: SharedJob<TimelineSnapshot>?
     private var initialSubscribers: Set<UUID> = []
     private var pageJobs: [String: SharedJob<[PhotoItem]>] = [:]
-    private var imageJobs: [String: SharedJob<Data>] = [:]
+    private var imageJobs: [String: SharedJob<ImageResolution>] = [:]
     private var pendingPagePromotions: [String] = []
 
     public init(credentials: SynologyCredentials, baseURL: URL = SynologyClient.defaultBaseURL,
@@ -151,7 +162,7 @@ public actor CachedPhotosRepository {
                                              subscriber: subscriber, priority: priority)
                     let current = try await task.value
                     guard !Task.isCancelled else { continuation.finish(); return }
-                    continuation.yield(.value(current, verified: true))
+                    continuation.yield(.value(current.data, verified: true))
                 } catch {
                     if !Task.isCancelled && !(error is CancellationError) &&
                         !(error is NetworkGateError && priority == .prefetch) {
@@ -170,6 +181,32 @@ public actor CachedPhotosRepository {
     public func setBudget(_ bytes: Int64) async throws { try await store.setBudget(bytes) }
     public func usage() async throws -> Int64 { try await store.usage() }
     public func clearCache() async throws { try await store.clear() }
+
+    /// Resolves one thumbnail through the normal shared cache pipeline without retaining bytes.
+    /// Bulk callers must use `.prefetch` so visible browsing can move ahead in the gate.
+    public func cacheThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
+                               priority: RequestPriority = .prefetch) async throws -> ThumbnailCacheOutcome {
+        try Task.checkCancellation()
+        let key = CacheKey.thumbnail(namespace: namespace, descriptor: descriptor, size: size)
+        if let cached = try? await store.get(key), cached.validatedRun == runID { return .reused }
+        try Task.checkCancellation()
+        let subscriber = UUID()
+        let task = registerImage(descriptor, size: size, key: key,
+                                 subscriber: subscriber, priority: priority)
+        return try await withTaskCancellationHandler {
+            do {
+                let resolution = try await task.value
+                try Task.checkCancellation()
+                releaseImage(key: key, subscriber: subscriber)
+                return resolution.outcome
+            } catch {
+                releaseImage(key: key, subscriber: subscriber)
+                throw error
+            }
+        } onCancel: {
+            Task { await self.releaseImage(key: key, subscriber: subscriber) }
+        }
+    }
 
     /// Each observer receives the latest status immediately, including a previous failure.
     public func authentication() -> AsyncStream<AuthenticationStatus> {
@@ -305,7 +342,7 @@ public actor CachedPhotosRepository {
     }
 
     private func registerImage(_ descriptor: ThumbnailInfo, size: ThumbnailSize, key: String,
-                               subscriber: UUID, priority: RequestPriority) -> Task<Data, Error> {
+                               subscriber: UUID, priority: RequestPriority) -> Task<ImageResolution, Error> {
         if var job = imageJobs[key] {
             job.subscribers.insert(subscriber)
             imageJobs[key] = job
@@ -313,7 +350,7 @@ public actor CachedPhotosRepository {
             return job.task
         }
         let id = UUID()
-        let task = Task<Data, Error> {
+        let task = Task<ImageResolution, Error> {
             let generation = await store.currentGeneration()
             try await gate.acquire(.thumbnail, priority: priority, id: id)
             defer { Task { await gate.release(.thumbnail) } }
@@ -327,14 +364,22 @@ public actor CachedPhotosRepository {
             }
             try Task.checkCancellation()
             if response.notModified, let prior {
-                try? await store.markValidated(key, run: runID, expectedGeneration: generation)
-                return prior.data
+                do {
+                    try await store.markValidated(key, run: runID, expectedGeneration: generation)
+                    return ImageResolution(data: prior.data, outcome: .reused)
+                } catch {
+                    return ImageResolution(data: prior.data, outcome: .cacheWriteFailed)
+                }
             }
             guard let data = response.data else { throw SynologyAPIError.invalidResponse }
-            try? await store.put(key, kind: .thumbnail, data: data, validatedRun: runID,
-                                 etag: response.etag, lastModified: response.lastModified,
-                                 expectedGeneration: generation)
-            return data
+            do {
+                try await store.put(key, kind: .thumbnail, data: data, validatedRun: runID,
+                                    etag: response.etag, lastModified: response.lastModified,
+                                    expectedGeneration: generation)
+                return ImageResolution(data: data, outcome: .fetched)
+            } catch {
+                return ImageResolution(data: data, outcome: .cacheWriteFailed)
+            }
         }
         imageJobs[key] = SharedJob(id: id, task: task, subscribers: [subscriber])
         return task

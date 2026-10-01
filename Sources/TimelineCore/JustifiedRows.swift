@@ -2,6 +2,14 @@ import Foundation
 
 /// Geometry for a sequence of images in their existing order. The caller owns day boundaries.
 public enum JustifiedRows {
+    /// Prevents corrupt/extreme metadata from growing a pending boundary row without limit.
+    private static let maximumCellsPerRow = 32
+    public struct LayoutResult: Equatable, Sendable {
+        public let rows: [Row]
+        /// Items not yet wide enough to complete a row when `finalize` is false.
+        public let pendingRange: Range<Int>
+    }
+
     public struct Cell: Equatable, Sendable {
         public let index: Int
         public let x: Double
@@ -23,7 +31,19 @@ public enum JustifiedRows {
         aspectRatios: [Double], availableWidth: Double,
         targetHeight: Double = 180, gap: Double = 6
     ) -> [Row] {
-        guard availableWidth.isFinite, availableWidth > 0, !aspectRatios.isEmpty else { return [] }
+        layoutPrefix(aspectRatios: aspectRatios, availableWidth: availableWidth,
+                     targetHeight: targetHeight, gap: gap, finalize: true).rows
+    }
+
+    /// Lays out every complete row and optionally finalizes the trailing partial row.
+    /// Callers can prepend `pendingRange` to the next bounded chunk to preserve flow.
+    public static func layoutPrefix(
+        aspectRatios: [Double], availableWidth: Double,
+        targetHeight: Double = 180, gap: Double = 6, finalize: Bool
+    ) -> LayoutResult {
+        guard availableWidth.isFinite, availableWidth > 0, !aspectRatios.isEmpty else {
+            return LayoutResult(rows: [], pendingRange: 0..<0)
+        }
         let target = targetHeight.isFinite && targetHeight > 0 ? targetHeight : 180
         let spacing = gap.isFinite ? min(max(0, gap), availableWidth / 4) : 0
         var rows: [Row] = []
@@ -34,20 +54,24 @@ public enum JustifiedRows {
             let ratio = validRatio(aspectRatios[index])
             ratioSum += ratio
             let count = index - start + 1
-            if ratioSum * target + Double(count - 1) * spacing >= availableWidth {
+            let reachesWidth = ratioSum * target + Double(count - 1) * spacing >= availableWidth
+            let reachesLimit = count >= maximumCellsPerRow
+            if reachesWidth || reachesLimit {
                 rows.append(makeRow(aspectRatios, start: start, end: index + 1,
                                     ratioSum: ratioSum, width: availableWidth,
-                                    target: target, gap: spacing, final: false))
+                                    target: target, gap: spacing,
+                                    final: reachesLimit && !reachesWidth))
                 start = index + 1
                 ratioSum = 0
             }
         }
-        if start < aspectRatios.count {
+        if finalize, start < aspectRatios.count {
             rows.append(makeRow(aspectRatios, start: start, end: aspectRatios.count,
                                 ratioSum: ratioSum, width: availableWidth,
                                 target: target, gap: spacing, final: true))
+            start = aspectRatios.count
         }
-        return rows
+        return LayoutResult(rows: rows, pendingRange: start..<aspectRatios.count)
     }
 
     private static func validRatio(_ ratio: Double) -> Double {

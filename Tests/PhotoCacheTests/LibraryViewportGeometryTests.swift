@@ -95,4 +95,65 @@ final class LibraryViewportGeometryTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(geometry.y(for: anchor)),
                        try XCTUnwrap(geometry.y(forDay: "2024-04-02")), accuracy: 0.001)
     }
+
+    func testSplitDayFlowsLikeUnsplitAndKeepsBoundaryCarry() throws {
+        let splitSnapshot = TimelineSnapshot(sections: [
+            section(day: 3, offset: 0, limit: 2, count: 4),
+            section(day: 3, offset: 2, limit: 2, count: 4)
+        ])
+        let splitPages = [
+            0: LibraryPage(sectionIndex: 0, items: [try item(1), try item(2)], verified: true),
+            1: LibraryPage(sectionIndex: 1, items: [try item(3), try item(4)], verified: true)
+        ]
+        var split = LibraryViewportGeometry(index: LibraryIndex(snapshot: splitSnapshot), width: 500)
+        split.reconcile(pages: splitPages)
+
+        let unsplitSnapshot = TimelineSnapshot(sections: [section(day: 3, limit: 4, count: 4)])
+        var unsplit = LibraryViewportGeometry(index: LibraryIndex(snapshot: unsplitSnapshot), width: 500)
+        unsplit.reconcile(pages: [
+            0: LibraryPage(sectionIndex: 0,
+                           items: [try item(1), try item(2), try item(3), try item(4)], verified: true)
+        ])
+
+        let splitRows = split.slices.indices.flatMap { split.rows(in: $0) }
+        let unsplitRows = unsplit.slices.indices.flatMap { unsplit.rows(in: $0) }
+        XCTAssertEqual(splitRows.map(\.layout), unsplitRows.map(\.layout))
+        XCTAssertEqual(splitRows.flatMap(\.itemIDs), [1, 2, 3, 4])
+        XCTAssertEqual(splitRows.last?.layout.cells.first?.x, 0)
+        XCTAssertEqual(try XCTUnwrap(splitRows.last?.layout.width), 180, accuracy: 0.001)
+
+        // Dropping the look-behind page retains only its incomplete boundary row,
+        // so the still-loaded page neither reshuffles nor duplicates its first items.
+        split.reconcile(pages: [1: splitPages[1]!])
+        let carriedRows = split.slices.indices.flatMap { split.rows(in: $0) }
+        XCTAssertEqual(carriedRows.map(\.layout), unsplitRows.map(\.layout))
+        XCTAssertEqual(carriedRows.flatMap(\.itemIDs), [1, 2, 3, 4])
+    }
+
+    func testThreePageFlowKeepsLoadedSuffixStableAsPrefixPagesEvict() throws {
+        let snapshot = TimelineSnapshot(sections: [
+            section(day: 3, offset: 0, limit: 2, count: 6),
+            section(day: 3, offset: 2, limit: 2, count: 6),
+            section(day: 3, offset: 4, limit: 2, count: 6)
+        ])
+        let pages = Dictionary(uniqueKeysWithValues: try (0..<3).map { sectionIndex in
+            let firstID = Int64(sectionIndex * 2 + 1)
+            return (sectionIndex, LibraryPage(sectionIndex: sectionIndex,
+                items: [try item(firstID), try item(firstID + 1)], verified: true))
+        })
+        var geometry = LibraryViewportGeometry(index: LibraryIndex(snapshot: snapshot), width: 500)
+        geometry.reconcile(pages: pages)
+        let finalSliceY = geometry.slices[2].y
+        XCTAssertEqual(geometry.slices.indices.flatMap { geometry.rows(in: $0) }
+            .flatMap(\.itemIDs), [1, 2, 3, 4, 5, 6])
+
+        geometry.reconcile(pages: [1: pages[1]!, 2: pages[2]!])
+        XCTAssertEqual(geometry.slices[2].y, finalSliceY, accuracy: 0.001)
+        XCTAssertEqual(geometry.slices.indices.flatMap { geometry.rows(in: $0) }
+            .flatMap(\.itemIDs), [1, 2, 3, 4, 5, 6])
+
+        geometry.reconcile(pages: [2: pages[2]!])
+        XCTAssertEqual(geometry.slices[2].y, finalSliceY, accuracy: 0.001)
+        XCTAssertEqual(geometry.rows(in: 2).flatMap(\.itemIDs), [4, 5, 6])
+    }
 }

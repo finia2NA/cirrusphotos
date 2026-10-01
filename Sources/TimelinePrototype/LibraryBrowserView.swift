@@ -103,22 +103,21 @@ fileprivate final class FlippedDocumentView: NSView {
 
 private struct HostedRow: View {
     let row: LibraryViewportGeometry.Row
-    let items: [PhotoItem]
-    let start: Int
     let repository: CachedPhotosRepository
     let size: ThumbnailSize
-    let allowNetwork: Bool
 
     var body: some View {
         HStack(alignment: .top, spacing: row.layout.gap) {
             ForEach(row.layout.cells.indices, id: \.self) { position in
                 let cell = row.layout.cells[position]
-                ThumbnailCell(item: items[start + cell.index], repository: repository,
-                              size: size, allowNetwork: allowNetwork)
+                let item = row.items[position]
+                ThumbnailCell(item: item.photo, repository: repository,
+                              size: size, allowNetwork: item.verified)
                     .frame(width: cell.width, height: row.layout.height)
             }
         }
         .frame(width: row.layout.width, height: row.layout.height, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -318,6 +317,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     self.pageSignatures = newSignatures
                     self.errors = self.errors.filter { self.demandedVisible.contains($0.key) }
                     self.geometry?.reconcile(pages: self.pages)
+                    self.viewRevision += 1
                     self.updateDocumentHeight()
                     if let pending = self.pendingAnchor, let itemID = pending.itemID,
                        let exact = self.geometry?.y(forItem: itemID, offset: pending.localOffset) {
@@ -374,19 +374,6 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                                 revision: (viewRevision, rowRevisions[section] ?? 0),
                                 wanted: &wanted, document: document)
                     }
-                    for (rowIndex, row) in geometry.rows(in: position).enumerated() {
-                        let rowY = slice.y + row.y
-                        guard rowY + row.layout.height >= y - overscan,
-                              rowY <= y + height + overscan else { continue }
-                        addHost("r:\(position):\(rowIndex)",
-                                frame: CGRect(x: 0, y: rowY, width: geometry.width, height: row.layout.height),
-                                content: AnyView(HostedRow(row: row, items: page.items,
-                                                           start: slice.source.pageRange.lowerBound,
-                                                           repository: repository,
-                                                           size: thumbnailSize, allowNetwork: page.verified)),
-                                revision: (viewRevision, rowRevisions[section] ?? 0),
-                                wanted: &wanted, document: document)
-                    }
                 } else {
                     let message = errors[section] ?? (unavailableOffline ? "Unavailable offline" : "Loading photos…")
                     addHost("p:\(position)",
@@ -396,6 +383,17 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                                 HostedPlaceholder(message: message)
                                 if errors[section] != nil { Button("Retry", action: onRetry ?? {}) }
                             }),
+                            revision: (viewRevision, rowRevisions[section] ?? 0),
+                            wanted: &wanted, document: document)
+                }
+                for (rowIndex, row) in geometry.rows(in: position).enumerated() {
+                    let rowY = slice.y + row.y
+                    guard rowY + row.layout.height >= y - overscan,
+                          rowY <= y + height + overscan else { continue }
+                    addHost("r:\(position):\(rowIndex)",
+                            frame: CGRect(x: 0, y: rowY, width: geometry.width, height: row.layout.height),
+                            content: AnyView(HostedRow(row: row, repository: repository,
+                                                       size: thumbnailSize)),
                             revision: (viewRevision, rowRevisions[section] ?? 0),
                             wanted: &wanted, document: document)
                 }

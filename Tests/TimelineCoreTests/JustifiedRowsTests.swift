@@ -25,6 +25,27 @@ final class JustifiedRowsTests: XCTestCase {
         XCTAssertEqual(rows[1].width, 180)
     }
 
+    func testIncompletePrefixCanFlowIntoNextChunk() {
+        let first = JustifiedRows.layoutPrefix(aspectRatios: [1, 1], availableWidth: 500,
+                                                targetHeight: 180, gap: 6, finalize: false)
+        XCTAssertTrue(first.rows.isEmpty)
+        XCTAssertEqual(first.pendingRange, 0..<2)
+
+        let continued = JustifiedRows.layoutPrefix(aspectRatios: [1, 1, 1, 1], availableWidth: 500,
+                                                    targetHeight: 180, gap: 6, finalize: true)
+        XCTAssertEqual(continued.rows, JustifiedRows.layout(aspectRatios: [1, 1, 1, 1],
+                                                             availableWidth: 500))
+        XCTAssertTrue(continued.pendingRange.isEmpty)
+    }
+
+    func testPendingBoundaryRowIsBoundedForExtremeRatios() {
+        let result = JustifiedRows.layoutPrefix(aspectRatios: Array(repeating: 1e-20, count: 100),
+                                                availableWidth: 500, finalize: false)
+        XCTAssertEqual(result.rows.flatMap { $0.cells }.count, 96)
+        XCTAssertEqual(result.pendingRange.count, 4)
+        XCTAssertTrue(result.rows.allSatisfy { $0.cells.count <= 32 })
+    }
+
     func testNarrowWidthAndPanoramaRemainContainedAndFinite() {
         for width in [0.5, 20.0, 90.0] {
             let rows = JustifiedRows.layout(aspectRatios: [100, 0.01, 1, 2, .greatestFiniteMagnitude], availableWidth: width)

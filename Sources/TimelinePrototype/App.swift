@@ -25,6 +25,24 @@ struct TimelinePrototypeApp: App {
         }
         .defaultSize(width: 860, height: 820)
         Settings { CacheSettingsView().environmentObject(model) }
+        Window("Download Thumbnails", id: "thumbnail-download") {
+            ThumbnailRangeDownloadView().environmentObject(model)
+        }
+        .defaultSize(width: 540, height: 500)
+        .commands { LibraryCommands(model: model) }
+    }
+}
+
+private struct LibraryCommands: Commands {
+    @ObservedObject var model: LibraryModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandMenu("Library") {
+            Button("Download Thumbnails…") { openWindow(id: "thumbnail-download") }
+                .disabled(model.snapshot?.timeline.days.isEmpty != false || model.repository == nil ||
+                          !model.timelineVerified)
+        }
     }
 }
 

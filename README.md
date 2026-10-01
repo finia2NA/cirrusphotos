@@ -24,6 +24,8 @@ Each populated day has equal vertical weight. Month marks and year labels follow
 
 The **Section 207** tab loads one current Personal Space section and demonstrates cached-first page and image loading. Full-photo viewing remains deferred.
 
+Use **Library → Download Thumbnails…** after the timeline is current to choose an inclusive date range with two slider handles. The window shows an upper-bound thumbnail count and downloads the rendition selected in Settings. Browsing can continue while the batch runs; Cancel or closing its window stops it. Normal cache-budget eviction still applies, so this is cache warming, not pinned offline storage.
+
 Open Settings from the app menu or with Command-, to select small, medium, or large thumbnails; set the total cache limit from 200 MB to 100 GB; view current stored payload usage; or clear the cache. The prototype stores its persistent cache under `.cache/` in this repository; that directory is ignored by Git. Offline data remains visible until Cirrus validates it. Entries are scoped to the server and account.
 
 See [architecture](docs/ARCHITECTURE.md), [cache plan and implementation status](docs/CACHING_PLAN.md), [cache-location decision](docs/decisions/001-development-cache-location.md), and [API research](docs/SYNOLOGY_PHOTOS_API.md).
