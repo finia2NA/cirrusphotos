@@ -1,0 +1,29 @@
+# Local secrets and captured traffic
+.env
+*.har
+
+# macOS
+.DS_Store
+
+# Python tooling
+*.pyc
+__pycache__/
+
+# Swift Package Manager
+.build/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+.swiftpm/xcode/xcuserdata/
+
+# Xcode build products and per-user state
+DerivedData/
+build/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# Swift playground state
+timeline.xctimeline
+playground.xcworkspace/
