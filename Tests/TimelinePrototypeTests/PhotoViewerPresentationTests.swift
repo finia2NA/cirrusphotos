@@ -35,18 +35,22 @@ private actor PresentationTransport: PhotosTransport {
 }
 
 private actor ProgressivePresentationTransport: PhotosTransport {
+    let configuredThumbnail: Data
     let preview: Data
     let original: Data
+    private var configuredReleased = false
     private var previewReleased = false
     private var originalReleased = false
     private(set) var thumbnailSizes: [ThumbnailSize] = []
     private(set) var fullCalls = 0
 
-    init(preview: Data, original: Data) {
+    init(configuredThumbnail: Data, preview: Data, original: Data) {
+        self.configuredThumbnail = configuredThumbnail
         self.preview = preview
         self.original = original
     }
 
+    func releaseConfiguredThumbnail() { configuredReleased = true }
     func releasePreview() { previewReleased = true }
     func releaseOriginal() { originalReleased = true }
     func login(credentials: SynologyCredentials) async throws {}
@@ -58,8 +62,12 @@ private actor ProgressivePresentationTransport: PhotosTransport {
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         thumbnailSizes.append(size)
-        while !previewReleased { try await Task.sleep(for: .milliseconds(2)) }
-        return ThumbnailResponse(data: preview, etag: nil, lastModified: nil)
+        if size == .xl {
+            while !previewReleased { try await Task.sleep(for: .milliseconds(2)) }
+            return ThumbnailResponse(data: preview, etag: nil, lastModified: nil)
+        }
+        while !configuredReleased { try await Task.sleep(for: .milliseconds(2)) }
+        return ThumbnailResponse(data: configuredThumbnail, etag: nil, lastModified: nil)
     }
     func fullImage(_ resource: FullImageResource,
                    etag: String?, lastModified: String?) async throws -> FullImageResponse {
@@ -132,24 +140,24 @@ final class PhotoViewerPresentationTests: XCTestCase {
         await viewer.session.close()
     }
 
-    func testLargePreviewUpgradesClickedThumbnailBeforeOriginal() async throws {
+    func testConfiguredThumbnailThenLargePreviewThenOriginal() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoPresentation-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let clicked = try previewData(width: 6, height: 4)
         let preview = try previewData(width: 12, height: 8)
         let original = try previewData(width: 30, height: 20)
-        let transport = ProgressivePresentationTransport(preview: preview, original: original)
+        let transport = ProgressivePresentationTransport(
+            configuredThumbnail: clicked, preview: preview, original: original
+        )
         let repository = try CachedPhotosRepository(
             credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
             baseURL: URL(string: "https://progressive.example.invalid")!, cacheRoot: root, transport: transport)
         let selected = try item(1)
         let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 1,
             list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)])])
-        let source = PhotoViewerSourceAnchor()
-        source.update(itemID: 1, image: try XCTUnwrap(NSImage(data: clicked)))
         let viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
             request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
-                item: selected, page: [selected], pageVerified: true), source: source),
+                item: selected, page: [selected], pageVerified: true), source: PhotoViewerSourceAnchor()),
             thumbnailSize: .m, loadsLargePreviews: true,
             allowNetwork: true, snapshotRevision: 1)
 
@@ -157,10 +165,13 @@ final class PhotoViewerPresentationTests: XCTestCase {
         for _ in 0..<500 {
             let sizes = await transport.thumbnailSizes
             let fullCalls = await transport.fullCalls
-            if !sizes.isEmpty, fullCalls > 0 { bothStarted = true; break }
+            if sizes.contains(.m), sizes.contains(.xl), fullCalls > 0 { bothStarted = true; break }
             try await Task.sleep(for: .milliseconds(2))
         }
         XCTAssertTrue(bothStarted)
+        await transport.releaseConfiguredThumbnail()
+        let configuredDisplayed = await waitUntil { viewer.image?.size.width == 6 }
+        XCTAssertTrue(configuredDisplayed)
         await transport.releasePreview()
         let previewDisplayed = await waitUntil { viewer.image?.size.width == 12 }
         XCTAssertTrue(previewDisplayed)
@@ -174,10 +185,48 @@ final class PhotoViewerPresentationTests: XCTestCase {
         await viewer.session.close()
     }
 
+    func testLargePreviewRejectsLateConfiguredThumbnail() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoPresentation-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = ProgressivePresentationTransport(
+            configuredThumbnail: try previewData(width: 6, height: 4),
+            preview: try previewData(width: 12, height: 8),
+            original: try previewData(width: 30, height: 20))
+        let repository = try CachedPhotosRepository(
+            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            baseURL: URL(string: "https://late-configured.example.invalid")!, cacheRoot: root,
+            transport: transport)
+        let selected = try item(1)
+        let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 1,
+            list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)])])
+        let viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+            request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                item: selected, page: [selected], pageVerified: true), source: PhotoViewerSourceAnchor()),
+            thumbnailSize: .m, loadsLargePreviews: true,
+            allowNetwork: true, snapshotRevision: 1)
+
+        var bothStarted = false
+        for _ in 0..<500 {
+            let sizes = await transport.thumbnailSizes
+            if sizes.contains(.m), sizes.contains(.xl) { bothStarted = true; break }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertTrue(bothStarted)
+        await transport.releasePreview()
+        let previewDisplayed = await waitUntil { viewer.image?.size.width == 12 }
+        XCTAssertTrue(previewDisplayed)
+        await transport.releaseConfiguredThumbnail()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(viewer.image?.size.width, 12)
+        XCTAssertTrue(viewer.close())
+        await viewer.session.close()
+    }
+
     func testDecodedOriginalRejectsLateLargePreview() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoPresentation-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = ProgressivePresentationTransport(
+            configuredThumbnail: try previewData(width: 6, height: 4),
             preview: try previewData(width: 12, height: 8),
             original: try previewData(width: 30, height: 20))
         let repository = try CachedPhotosRepository(
@@ -196,13 +245,14 @@ final class PhotoViewerPresentationTests: XCTestCase {
         for _ in 0..<500 {
             let sizes = await transport.thumbnailSizes
             let fullCalls = await transport.fullCalls
-            if !sizes.isEmpty, fullCalls > 0 { bothStarted = true; break }
+            if sizes.contains(.m), sizes.contains(.xl), fullCalls > 0 { bothStarted = true; break }
             try await Task.sleep(for: .milliseconds(2))
         }
         XCTAssertTrue(bothStarted)
         await transport.releaseOriginal()
         let originalDisplayed = await waitUntil { viewer.image?.size.width == 30 }
         XCTAssertTrue(originalDisplayed)
+        await transport.releaseConfiguredThumbnail()
         await transport.releasePreview()
         try await Task.sleep(for: .milliseconds(30))
         XCTAssertEqual(viewer.image?.size.width, 30)

@@ -104,6 +104,20 @@ public actor PhotoViewerSession {
         let allowNetwork: Bool
         let task: Task<Void, Never>
     }
+    private enum ThumbnailTier: Int, Hashable, Sendable {
+        case configured
+        case largePreview
+    }
+    private struct ThumbnailRequest: Sendable {
+        let tier: ThumbnailTier
+        let size: ThumbnailSize
+        let purpose: ThumbnailCachePurpose
+    }
+    private struct CurrentThumbnailJob {
+        let id: UUID
+        let allowNetwork: Bool
+        let task: Task<Void, Never>
+    }
 
     private let repository: CachedPhotosRepository
     private let collection: PhotoCollectionDescriptor
@@ -121,6 +135,8 @@ public actor PhotoViewerSession {
     private var currentIdentity: String?
     private var metadataVerified = false
     private var thumbnailData: Data?
+    private var bestThumbnailTier: ThumbnailTier?
+    private var thumbnailFailures: [ThumbnailTier: String] = [:]
     private var fullImageData: Data?
     private var metadataStatus: PhotoViewerResourceStatus = .loading
     private var thumbnailStatus: PhotoViewerResourceStatus = .idle
@@ -135,9 +151,7 @@ public actor PhotoViewerSession {
 
     private var pages: [Int: PageEntry] = [:]
     private var pageJobs: [Int: PageJob] = [:]
-    private var thumbnailTask: Task<Void, Never>?
-    private var thumbnailAttempt: UUID?
-    private var thumbnailTaskAllowsNetwork = false
+    private var thumbnailJobs: [ThumbnailTier: CurrentThumbnailJob] = [:]
     private var thumbnailPrefetchJobs: [String: ThumbnailPrefetchJob] = [:]
     private var fullTask: Task<Void, Never>?
     private var fullAttempt: UUID?
@@ -269,12 +283,12 @@ public actor PhotoViewerSession {
     public func close() {
         guard !closed else { return }
         closed = true
-        thumbnailTask?.cancel()
+        for job in thumbnailJobs.values { job.task.cancel() }
         for job in thumbnailPrefetchJobs.values { job.task.cancel() }
         fullTask?.cancel()
         for job in pageJobs.values { job.task.cancel() }
         for job in fullJobs.values { job.task.cancel() }
-        thumbnailTask = nil
+        thumbnailJobs.removeAll()
         thumbnailPrefetchJobs.removeAll()
         fullTask = nil
         pageJobs.removeAll()
@@ -316,15 +330,15 @@ public actor PhotoViewerSession {
         currentIdentity = nil
         metadataVerified = false
         thumbnailData = nil
+        bestThumbnailTier = nil
+        thumbnailFailures.removeAll()
         fullImageData = nil
         metadataStatus = .loading
         thumbnailStatus = .idle
         fullImageStatus = .idle
         prefetchEnabledGeneration = nil
-        thumbnailTask?.cancel()
-        thumbnailTask = nil
-        thumbnailAttempt = nil
-        thumbnailTaskAllowsNetwork = false
+        for job in thumbnailJobs.values { job.task.cancel() }
+        thumbnailJobs.removeAll()
         fullTask?.cancel()
         fullTask = nil
         fullAttempt = nil
@@ -432,14 +446,14 @@ public actor PhotoViewerSession {
             currentItem = item
             currentIdentity = identity
             thumbnailData = nil
+            bestThumbnailTier = nil
+            thumbnailFailures.removeAll()
             fullImageData = nil
-            thumbnailTask?.cancel()
+            for job in thumbnailJobs.values { job.task.cancel() }
             fullTask?.cancel()
-            thumbnailTask = nil
+            thumbnailJobs.removeAll()
             fullTask = nil
-            thumbnailAttempt = nil
             fullAttempt = nil
-            thumbnailTaskAllowsNetwork = false
             fullTaskAllowsNetwork = false
             prefetchEnabledGeneration = nil
             cancelFullJobsExcept(resource: item.fullImageResource)
@@ -458,17 +472,17 @@ public actor PhotoViewerSession {
         currentIdentity = nil
         metadataVerified = true
         thumbnailData = nil
+        bestThumbnailTier = nil
+        thumbnailFailures.removeAll()
         fullImageData = nil
         metadataStatus = .failure(message)
         thumbnailStatus = .idle
         fullImageStatus = .failure(message)
-        thumbnailTask?.cancel()
+        for job in thumbnailJobs.values { job.task.cancel() }
         fullTask?.cancel()
-        thumbnailTask = nil
+        thumbnailJobs.removeAll()
         fullTask = nil
-        thumbnailAttempt = nil
         fullAttempt = nil
-        thumbnailTaskAllowsNetwork = false
         fullTaskAllowsNetwork = false
         prefetchEnabledGeneration = nil
         cancelFullJobsExcept(resource: nil)
@@ -476,13 +490,12 @@ public actor PhotoViewerSession {
     }
 
     private func restartCurrentAssets() {
-        thumbnailTask?.cancel()
+        for job in thumbnailJobs.values { job.task.cancel() }
         fullTask?.cancel()
-        thumbnailTask = nil
+        thumbnailJobs.removeAll()
         fullTask = nil
-        thumbnailAttempt = nil
         fullAttempt = nil
-        thumbnailTaskAllowsNetwork = false
+        thumbnailFailures.removeAll()
         fullTaskAllowsNetwork = false
         prefetchEnabledGeneration = nil
         cancelFullJobsExceptCurrentCandidate()
@@ -492,7 +505,7 @@ public actor PhotoViewerSession {
     private func startAssetsForCurrentMetadata() {
         guard !closed, let item = currentItem else { return }
         let network = allowNetwork && metadataVerified
-        startThumbnail(item: item, allowNetwork: network)
+        startThumbnails(item: item, allowNetwork: network)
         if item.isVideo {
             fullImageStatus = .unsupported("Video playback is not supported.")
             return
@@ -504,64 +517,82 @@ public actor PhotoViewerSession {
         startFullImage(resource: resource, allowNetwork: network)
     }
 
-    private func startThumbnail(item: PhotoItem, allowNetwork: Bool) {
-        if let task = thumbnailTask, allowNetwork && !thumbnailTaskAllowsNetwork {
-            task.cancel()
-            thumbnailTask = nil
-            thumbnailAttempt = nil
-        }
-        guard thumbnailTask == nil, let descriptor = item.additional?.thumbnail else {
+    private func startThumbnails(item: PhotoItem, allowNetwork: Bool) {
+        guard let descriptor = item.additional?.thumbnail else {
             if item.additional?.thumbnail == nil { thumbnailStatus = .unsupported("A preview is unavailable for this item.") }
             return
         }
+        let requests = thumbnailRequests(for: descriptor)
+        let wantedTiers = Set(requests.map(\.tier))
+        for (tier, job) in thumbnailJobs where !wantedTiers.contains(tier) {
+            job.task.cancel()
+            thumbnailJobs.removeValue(forKey: tier)
+        }
+        for request in requests {
+            startThumbnail(descriptor: descriptor, itemID: item.id,
+                           request: request, allowNetwork: allowNetwork)
+        }
+    }
+
+    private func startThumbnail(descriptor: ThumbnailInfo, itemID: Int64,
+                                request: ThumbnailRequest, allowNetwork: Bool) {
+        if let job = thumbnailJobs[request.tier], allowNetwork && !job.allowNetwork {
+            job.task.cancel()
+            thumbnailJobs.removeValue(forKey: request.tier)
+        }
+        guard thumbnailJobs[request.tier] == nil else { return }
         let attempt = UUID()
         let expectedGeneration = generation
-        let expectedID = item.id
         let repository = repository
-        let request = thumbnailRequest(for: descriptor)
-        thumbnailAttempt = attempt
-        thumbnailTaskAllowsNetwork = allowNetwork
+        let key = Self.thumbnailKey(descriptor, size: request.size)
         if thumbnailData == nil { thumbnailStatus = .loading }
-        thumbnailTask = Task { [weak self] in
+        let task = Task { [weak self] in
             for await event in await repository.thumbnail(descriptor, size: request.size,
                                                            allowNetwork: allowNetwork, priority: .visible,
                                                            cachePurpose: request.purpose) {
                 guard !Task.isCancelled else { break }
                 await self?.receiveThumbnail(event, attempt: attempt,
-                                             generation: expectedGeneration, itemID: expectedID)
+                                             tier: request.tier,
+                                             generation: expectedGeneration, itemID: itemID)
             }
-            await self?.finishThumbnail(attempt)
+            await self?.finishThumbnail(attempt, tier: request.tier, key: key)
         }
+        thumbnailJobs[request.tier] = CurrentThumbnailJob(
+            id: attempt, allowNetwork: allowNetwork, task: task
+        )
     }
 
     private func receiveThumbnail(_ event: ResourceEvent<Data>, attempt: UUID,
+                                  tier: ThumbnailTier,
                                   generation expectedGeneration: UInt64, itemID: Int64) {
-        guard !closed, thumbnailAttempt == attempt, generation == expectedGeneration,
+        guard !closed, thumbnailJobs[tier]?.id == attempt, generation == expectedGeneration,
               currentItem?.id == itemID else { return }
         switch event {
         case .value(let data, let verified):
-            thumbnailData = data
-            thumbnailStatus = .ready(verified: verified, validationFailure: nil)
+            thumbnailFailures.removeValue(forKey: tier)
+            if bestThumbnailTier == nil || tier.rawValue >= bestThumbnailTier!.rawValue {
+                bestThumbnailTier = tier
+                thumbnailData = data
+                thumbnailStatus = .ready(verified: verified, validationFailure: nil)
+            }
         case .failure(let message):
+            thumbnailFailures[tier] = message
             if thumbnailData != nil {
                 thumbnailStatus = .ready(verified: false, validationFailure: message)
-            } else {
+            } else if thumbnailJobs.count == 1 {
                 thumbnailStatus = .failure(message)
             }
         }
         publish()
     }
 
-    private func finishThumbnail(_ attempt: UUID) {
-        if thumbnailAttempt == attempt {
-            if thumbnailData == nil, thumbnailStatus == .loading {
-                thumbnailStatus = .failure("The preview is not cached.")
-                publish()
-            }
-            thumbnailAttempt = nil
-            thumbnailTask = nil
-            thumbnailTaskAllowsNetwork = false
-            cancelPrefetchSubscriberForCurrentThumbnail()
+    private func finishThumbnail(_ attempt: UUID, tier: ThumbnailTier, key: String) {
+        guard thumbnailJobs[tier]?.id == attempt else { return }
+        thumbnailJobs.removeValue(forKey: tier)
+        thumbnailPrefetchJobs.removeValue(forKey: key)?.task.cancel()
+        if thumbnailData == nil, thumbnailJobs.isEmpty {
+            thumbnailStatus = .failure(thumbnailFailures[tier] ?? "The preview is not cached.")
+            publish()
         }
     }
 
@@ -661,8 +692,9 @@ public actor PhotoViewerSession {
         scheduleLoadedNeighbors()
     }
 
-    /// Preview fetching is intentionally independent of original-image prefetch. It
-    /// gives arrow navigation a low-resolution image while the next original loads.
+    /// Thumbnail fetching is intentionally independent of original-image prefetch. It
+    /// gives arrow navigation the configured rendition and, when enabled, an XL upgrade
+    /// while the next original loads.
     private func scheduleThumbnailNeighbors() {
         guard !closed else { return }
         let locations = [-1, 1].compactMap { location(for: desired.ordinal + $0) }
@@ -672,28 +704,30 @@ public actor PhotoViewerSession {
         }
 
         var wantedKeys: Set<String> = []
-        // Keep an adjacent prefetch subscriber alive until the newly selected visible
-        // subscriber has joined the shared repository job. Cancelling it here can race
-        // task startup and needlessly restart the same transfer.
+        // Keep adjacent prefetch subscribers alive until the newly selected visible
+        // subscribers have joined the shared repository jobs. Cancelling them here can
+        // race task startup and needlessly restart the same transfers.
         if let descriptor = currentItem?.additional?.thumbnail {
-            let request = thumbnailRequest(for: descriptor)
-            let currentKey = Self.thumbnailKey(descriptor, size: request.size)
-            if thumbnailPrefetchJobs[currentKey] != nil { wantedKeys.insert(currentKey) }
+            for request in thumbnailRequests(for: descriptor) {
+                let currentKey = Self.thumbnailKey(descriptor, size: request.size)
+                if thumbnailPrefetchJobs[currentKey] != nil { wantedKeys.insert(currentKey) }
+            }
         }
         for location in locations {
             guard let page = pages[location.sectionIndex],
                   page.items.indices.contains(location.pageOffset),
                   let descriptor = page.items[location.pageOffset].additional?.thumbnail else { continue }
-            let request = thumbnailRequest(for: descriptor)
-            let key = Self.thumbnailKey(descriptor, size: request.size)
-            wantedKeys.insert(key)
-            let network = allowNetwork && page.verified
-            if let job = thumbnailPrefetchJobs[key], network && !job.allowNetwork {
-                job.task.cancel()
-                thumbnailPrefetchJobs.removeValue(forKey: key)
-                startThumbnailPrefetch(descriptor, request: request, key: key, allowNetwork: true)
-            } else if thumbnailPrefetchJobs[key] == nil {
-                startThumbnailPrefetch(descriptor, request: request, key: key, allowNetwork: network)
+            for request in thumbnailRequests(for: descriptor) {
+                let key = Self.thumbnailKey(descriptor, size: request.size)
+                wantedKeys.insert(key)
+                let network = allowNetwork && page.verified
+                if let job = thumbnailPrefetchJobs[key], network && !job.allowNetwork {
+                    job.task.cancel()
+                    thumbnailPrefetchJobs.removeValue(forKey: key)
+                    startThumbnailPrefetch(descriptor, request: request, key: key, allowNetwork: true)
+                } else if thumbnailPrefetchJobs[key] == nil {
+                    startThumbnailPrefetch(descriptor, request: request, key: key, allowNetwork: network)
+                }
             }
         }
         for (key, job) in thumbnailPrefetchJobs where !wantedKeys.contains(key) {
@@ -703,7 +737,7 @@ public actor PhotoViewerSession {
     }
 
     private func startThumbnailPrefetch(_ descriptor: ThumbnailInfo,
-                                        request: (size: ThumbnailSize, purpose: ThumbnailCachePurpose),
+                                        request: ThumbnailRequest,
                                         key: String, allowNetwork: Bool) {
         let id = UUID()
         let repository = repository
@@ -723,19 +757,12 @@ public actor PhotoViewerSession {
         thumbnailPrefetchJobs.removeValue(forKey: key)
     }
 
-    private func cancelPrefetchSubscriberForCurrentThumbnail() {
-        guard let descriptor = currentItem?.additional?.thumbnail else { return }
-        let request = thumbnailRequest(for: descriptor)
-        let key = Self.thumbnailKey(descriptor, size: request.size)
-        thumbnailPrefetchJobs.removeValue(forKey: key)?.task.cancel()
-    }
-
-    private func thumbnailRequest(for descriptor: ThumbnailInfo)
-        -> (size: ThumbnailSize, purpose: ThumbnailCachePurpose) {
+    private func thumbnailRequests(for descriptor: ThumbnailInfo) -> [ThumbnailRequest] {
+        var requests = [ThumbnailRequest(tier: .configured, size: thumbnailSize, purpose: .library)]
         if loadsLargePreviews, thumbnailSize != .xl, descriptor.isReady(.xl) {
-            return (.xl, .viewerPreview)
+            requests.append(ThumbnailRequest(tier: .largePreview, size: .xl, purpose: .viewerPreview))
         }
-        return (thumbnailSize, .library)
+        return requests
     }
 
     private func scheduleLoadedNeighbors() {

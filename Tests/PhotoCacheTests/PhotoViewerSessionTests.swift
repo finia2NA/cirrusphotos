@@ -300,7 +300,8 @@ final class PhotoViewerSessionTests: XCTestCase {
             let thumbnails = await transport.thumbnailRequests
             let originals = await transport.fullImageCalls
             return [1, 2, 3].allSatisfy { id in
-                thumbnails.contains { $0.0 == Int64(id) && $0.1 == .xl }
+                thumbnails.contains { $0.0 == Int64(id) && $0.1 == .sm } &&
+                    thumbnails.contains { $0.0 == Int64(id) && $0.1 == .xl }
             } && originals.contains(2)
         }
         XCTAssertTrue(concurrent)
@@ -404,7 +405,7 @@ final class PhotoViewerSessionTests: XCTestCase {
         }
         XCTAssertTrue(neighborsStarted)
         let speculativeCount = await session.speculativeThumbnailCount()
-        XCTAssertLessThanOrEqual(speculativeCount, 2)
+        XCTAssertLessThanOrEqual(speculativeCount, 4)
 
         await session.navigatePrevious()
         await transport.releaseThumbnail(1)
@@ -413,9 +414,11 @@ final class PhotoViewerSessionTests: XCTestCase {
             return state.item?.id == 1 && state.thumbnailData == Data([1, 0x54])
         }
         XCTAssertTrue(selectedLoaded)
-        let calls = await transport.thumbnailCalls
-        XCTAssertEqual(calls.filter { $0 == 1 }.count, 1,
-                       "Selecting a prefetched preview must reuse its shared transfer")
+        let requests = await transport.thumbnailRequests
+        XCTAssertEqual(requests.filter { $0.0 == 1 && $0.1 == .sm }.count, 1,
+                       "Selecting a prefetched configured thumbnail must reuse its shared transfer")
+        XCTAssertEqual(requests.filter { $0.0 == 1 && $0.1 == .xl }.count, 1,
+                       "Selecting a prefetched large preview must reuse its shared transfer")
         let obsoleteCancelled = await waitUntil { await transport.cancelledThumbnails.contains(3) }
         XCTAssertTrue(obsoleteCancelled)
         await session.close()
