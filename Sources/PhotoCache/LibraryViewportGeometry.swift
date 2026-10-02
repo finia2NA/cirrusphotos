@@ -29,6 +29,15 @@ public struct LibraryViewportGeometry {
         public let itemID: Int64?
         public let localOffset: Double
         public let fraction: Double
+
+        public init(dayID: String, sectionIndex: Int, itemID: Int64?,
+                    localOffset: Double, fraction: Double) {
+            self.dayID = dayID
+            self.sectionIndex = sectionIndex
+            self.itemID = itemID
+            self.localOffset = localOffset
+            self.fraction = fraction
+        }
     }
 
     public private(set) var slices: [Slice] = []

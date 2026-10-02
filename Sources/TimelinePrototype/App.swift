@@ -8,10 +8,11 @@ import TimelineCore
 struct TimelinePrototypeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var model = LibraryModel()
+    @StateObject private var navigationRestoration = NavigationRestorationStore()
 
     var body: some Scene {
         WindowGroup("Cirrus Photos") {
-            AppShellView()
+            AppShellView(navigationRestoration: navigationRestoration)
                 .environmentObject(model)
                 .frame(minWidth: 560, minHeight: 420)
                 .task { await model.load() }
@@ -30,20 +31,30 @@ struct TimelinePrototypeApp: App {
 private struct AppShellView: View {
     @EnvironmentObject private var model: LibraryModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject var navigationRestoration: NavigationRestorationStore
     @State private var sidebarVisible = true
     @State private var viewer: PhotoViewerPresentation?
-    @State private var selectedCollection: PhotoCollectionDescriptor = .personalLibrary
+    @State private var selectedCollection: PhotoCollectionDescriptor
     @State private var chrome = WindowChromeMetrics()
     private let sidebarWidth: CGFloat = 210
+
+    init(navigationRestoration: NavigationRestorationStore) {
+        self.navigationRestoration = navigationRestoration
+        _selectedCollection = State(initialValue: navigationRestoration.selectedCollection)
+    }
 
     var body: some View {
         GeometryReader { geometry in
             let topInset = max(chrome.top, geometry.safeAreaInsets.top)
             ZStack(alignment: .topLeading) {
                 LibraryBrowserView(collection: selectedCollection,
+                                   restorationAnchor: navigationRestoration.timelineAnchor(for: selectedCollection),
                                    contentLeadingInset: sidebarVisible ? sidebarWidth : 0,
                                    contentTopInset: topInset,
-                                   onOpenPhoto: openPhoto)
+                                   onOpenPhoto: openPhoto,
+                                   onRestorationAnchorChanged: { anchor in
+                                       navigationRestoration.setTimelineAnchor(anchor, for: selectedCollection)
+                                   })
                     .id(selectedCollection)
                     .allowsHitTesting(viewer == nil)
                     .ignoresSafeArea(.container, edges: .top)
@@ -129,6 +140,7 @@ private struct AppShellView: View {
 
     private func select(_ collection: PhotoCollectionDescriptor) {
         if viewer != nil { closeViewer() }
+        navigationRestoration.select(collection)
         selectedCollection = collection
     }
 
