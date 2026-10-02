@@ -486,3 +486,9 @@ Before hardening the production data layer, record or directly test:
 - Synology, DSM Login Web API Guide: <https://kb.synology.com/en-us/DG/DSM_Login_Web_API_Guide/2>
 - Unofficial Synology Photos API documentation: <https://github.com/zeichensatz/SynologyPhotosAPI>
 - Additional reverse-engineered examples: <https://github.com/N4S4/synology-photos-api>
+
+## Full-size photo transport
+
+A bounded read-only probe on 2026-10-02 confirmed that Cirrus advertises `SYNO.Foto.Download` versions 1–2 at `entry.cgi`. The viewer uses an authenticated GET with `api=SYNO.Foto.Download`, `version=2`, `method=download`, `unit_id=[<thumbnail.unit_id>]`, and the opaque `cache_key`, plus the existing session authentication. The sampled PNG decoded to 1170 × 2532 pixels, matching the item's full-resolution metadata; this is independent of the `sm`/`m`/`xl` thumbnail renditions. A request targets one photo, not an archive of several items.
+
+Keep authentication out of persistent identity and logs. Use unit ID plus cache revision and endpoint version for the full-image cache key. Treat non-image/error responses as failures; never label an enlarged thumbnail as full resolution. The initial viewer preview continues to use the already displayed thumbnail while the full-image resource is fetched and decoded.

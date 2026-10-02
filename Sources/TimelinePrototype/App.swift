@@ -28,50 +28,181 @@ struct TimelinePrototypeApp: App {
 }
 
 private struct AppShellView: View {
-    private enum Destination: Hashable { case personalLibrary }
-
     @EnvironmentObject private var model: LibraryModel
-    @State private var destination: Destination? = .personalLibrary
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var sidebarVisible = true
+    @State private var viewer: PhotoViewerPresentation?
+    @State private var chrome = WindowChromeMetrics()
+    private let sidebarWidth: CGFloat = 210
 
     var body: some View {
-        NavigationSplitView {
-            List(selection: $destination) {
-                Label("Personal Library", systemImage: "photo.on.rectangle.angled")
-                    .tag(Destination.personalLibrary)
+        GeometryReader { geometry in
+            let topInset = max(chrome.top, geometry.safeAreaInsets.top)
+            ZStack(alignment: .topLeading) {
+                LibraryBrowserView(contentLeadingInset: sidebarVisible ? sidebarWidth : 0,
+                                   contentTopInset: topInset,
+                                   onOpenPhoto: openPhoto)
+                    .allowsHitTesting(viewer == nil)
+                    .ignoresSafeArea(.container, edges: .top)
+
+                if let viewer {
+                    PhotoViewerView(viewer: viewer,
+                                    sidebarWidth: sidebarVisible ? sidebarWidth : 0,
+                                    toolbarInset: topInset,
+                                    reduceMotion: reduceMotion,
+                                    onClose: closeViewer)
+                        .ignoresSafeArea(.container, edges: .top)
+                }
+
+                if sidebarVisible {
+                    sidebar()
+                        .frame(width: sidebarWidth)
+                        .frame(maxHeight: .infinity)
+                        .glassEffect(.regular.interactive(), in: Rectangle())
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                }
+
+                WindowChromeMetricsReader { chrome = $0 }
+                    .allowsHitTesting(false)
             }
-            .navigationTitle("Cirrus")
-            .navigationSplitViewColumnWidth(min: 170, ideal: 210, max: 280)
-        } detail: {
-            LibraryBrowserView()
-                .navigationTitle("Personal Library")
-                .toolbar { applicationToolbar }
+            .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: sidebarVisible)
         }
-        .onChange(of: destination) { _, selection in
-            if selection == nil { destination = .personalLibrary }
+        .toolbar(removing: .title)
+        .toolbar { applicationToolbar }
+        .onExitCommand {
+            if viewer != nil { closeViewer() }
+        }
+        .onChange(of: model.timelineVerified) { _, verified in
+            viewer?.updateAllowNetwork(verified)
+        }
+        .onChange(of: model.retryRevision) { _, _ in
+            viewer?.retry()
+        }
+        .onChange(of: model.snapshotRevision) { _, revision in
+            if let viewer, viewer.snapshotRevision != revision { viewer.invalidateForNewIndex() }
+        }
+    }
+
+    private func sidebar() -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                if viewer != nil { closeViewer() }
+            } label: {
+                Label("Personal Library", systemImage: "photo.on.rectangle.angled")
+                    .font(.body.weight(.medium))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(.tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 9))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 10)
+            Spacer()
+        }
+        .padding(.top, 8)
+    }
+
+    private func openPhoto(_ request: PhotoViewerOpenRequest) {
+        guard viewer == nil, let repository = model.repository, let snapshot = model.snapshot else { return }
+        viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+                                         request: request, thumbnailSize: model.thumbnailSize,
+                                         allowNetwork: model.timelineVerified,
+                                         snapshotRevision: model.snapshotRevision)
+    }
+
+    private func closeViewer() {
+        guard let active = viewer else { return }
+        let canReturnToSource = active.state?.selection.itemID == active.originalItemID
+        let target = canReturnToSource ? active.source.rectInWindowContent() : nil
+        guard active.close() else { return }
+        active.canvasController.collapse(to: target, reduceMotion: reduceMotion) {
+            if viewer === active { viewer = nil }
         }
     }
 
     @ToolbarContentBuilder
     private var applicationToolbar: some ToolbarContent {
-        ToolbarItem(placement: .principal) {
-            HStack(spacing: 6) {
-                Image(systemName: "minus")
-                    .accessibilityHidden(true)
-                Slider(value: $model.displayRowHeight, in: 100...300)
-                    .controlSize(.small)
-                    .frame(width: 110)
-                    .accessibilityLabel("Photo size")
-                    .accessibilityValue("\(Int(model.displayRowHeight.rounded())) points")
-                Image(systemName: "plus")
-                    .accessibilityHidden(true)
+        ToolbarItem(placement: .navigation) {
+            HStack(spacing: 8) {
+                if viewer != nil {
+                    Button(action: closeViewer) {
+                        Label("Back to Library", systemImage: "chevron.left")
+                    }
+                    .help("Back to Library")
+                }
+                Button {
+                    sidebarVisible.toggle()
+                } label: {
+                    Label("Toggle Sidebar", systemImage: "sidebar.left")
+                }
+                .help(sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
             }
-            .imageScale(.small)
-            .help("Photo size")
         }
 
-        ToolbarItem(placement: .primaryAction) {
-            ConnectionToolbarItem()
+        if let viewer {
+            ToolbarItem(placement: .automatic) {
+                ViewerZoomControl(viewer: viewer)
+            }
+            ToolbarItem(placement: .principal) {
+                ViewerToolbarTitle(viewer: viewer)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                ConnectionToolbarItem()
+            }
+        } else {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 6) {
+                    Image(systemName: "minus").accessibilityHidden(true)
+                    Slider(value: $model.displayRowHeight, in: 100...300)
+                        .controlSize(.small)
+                        .frame(width: 110)
+                        .accessibilityLabel("Photo size")
+                        .accessibilityValue("\(Int(model.displayRowHeight.rounded())) points")
+                    Image(systemName: "plus").accessibilityHidden(true)
+                }
+                .imageScale(.small)
+                .help("Photo size")
+            }
+
+            ToolbarItem(placement: .primaryAction) {
+                ConnectionToolbarItem()
+            }
         }
+    }
+}
+
+private struct ViewerZoomControl: View {
+    @ObservedObject var viewer: PhotoViewerPresentation
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "minus.magnifyingglass").accessibilityHidden(true)
+            Slider(value: $viewer.zoom, in: 1...16)
+                .frame(width: 96)
+                .accessibilityLabel("Zoom")
+                .accessibilityValue("\(Int((viewer.zoom * 100).rounded())) percent of fit")
+            Image(systemName: "plus.magnifyingglass").accessibilityHidden(true)
+        }
+        .imageScale(.small)
+    }
+}
+
+private struct ViewerToolbarTitle: View {
+    @ObservedObject var viewer: PhotoViewerPresentation
+    var body: some View {
+        VStack(spacing: 0) {
+            Text(viewer.filename)
+                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text(viewer.detailLine)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .frame(minWidth: 100, idealWidth: 270, maxWidth: 360)
+        .help(viewer.detailLine)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -99,9 +230,11 @@ private struct ConnectionToolbarItem: View {
             }
             .foregroundStyle(.secondary)
 
-            Button("Retry") { Task { await library.reload() } }
-                .controlSize(.small)
-                .disabled(library.isLoading)
+            if library.authenticationStatus != .signedIn || library.error != nil {
+                Button("Retry") { Task { await library.reload() } }
+                    .controlSize(.small)
+                    .disabled(library.isLoading)
+            }
         }
         .font(.caption)
     }

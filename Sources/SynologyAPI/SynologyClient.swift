@@ -9,6 +9,7 @@ public enum SynologyAPIError: LocalizedError, Sendable {
     case invalidResponse
     case http(Int)
     case api(Int)
+    case unsupported(String)
 
     public var errorDescription: String? {
         switch self {
@@ -25,6 +26,7 @@ public enum SynologyAPIError: LocalizedError, Sendable {
             case 119: "The Synology session expired."
             default: "Synology API error \(code)."
             }
+        case .unsupported(let message): message
         }
     }
 }
@@ -78,6 +80,7 @@ public struct TimelineDay: Codable, Sendable, Equatable {
 
 public struct PhotoItem: Codable, Sendable, Identifiable {
     public let id: Int64
+    public let filename: String?
     public let time: Int64
     public let type: String
     public let additional: Additional?
@@ -108,6 +111,26 @@ public struct PhotoItem: Codable, Sendable, Identifiable {
                                             from: Date(timeIntervalSince1970: TimeInterval(time)))
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
+
+    public var fullImageResource: FullImageResource? { FullImageResource(self) }
+}
+
+/// The stable server identity and revision used to request and cache an original image.
+public struct FullImageResource: Hashable, Sendable {
+    public let unitID: Int64
+    public let cacheKey: String
+    public let filename: String?
+
+    public init(unitID: Int64, cacheKey: String, filename: String? = nil) {
+        self.unitID = unitID
+        self.cacheKey = cacheKey
+        self.filename = filename
+    }
+
+    public init?(_ item: PhotoItem) {
+        guard item.type == "photo", let thumbnail = item.additional?.thumbnail else { return nil }
+        self.init(unitID: thumbnail.unitID, cacheKey: thumbnail.cacheKey, filename: item.filename)
+    }
 }
 
 public struct ThumbnailInfo: Codable, Sendable {
@@ -136,12 +159,33 @@ public struct ThumbnailResponse: Sendable {
     }
 }
 
+public struct FullImageResponse: Sendable {
+    public let data: Data?
+    public let etag: String?
+    public let lastModified: String?
+    public var notModified: Bool { data == nil }
+    public init(data: Data?, etag: String?, lastModified: String?) {
+        self.data = data; self.etag = etag; self.lastModified = lastModified
+    }
+}
+
 public protocol PhotosTransport: Sendable {
     func login(credentials: SynologyCredentials) async throws
     func timeline(initial: Bool) async throws -> TimelineSnapshot
     func items(in section: TimelineSection) async throws -> [PhotoItem]
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse
+    func fullImage(_ resource: FullImageResource,
+                   etag: String?, lastModified: String?) async throws -> FullImageResponse
+}
+
+public extension PhotosTransport {
+    /// Keeps existing test and alternate transports source-compatible while making lack of
+    /// original-image support explicit when the new repository API is used.
+    func fullImage(_ resource: FullImageResource,
+                   etag: String?, lastModified: String?) async throws -> FullImageResponse {
+        throw SynologyAPIError.unsupported("This Photos transport does not support full-size images.")
+    }
 }
 
 public actor SynologyClient: PhotosTransport {
@@ -158,7 +202,7 @@ public actor SynologyClient: PhotosTransport {
         configuration.httpCookieStorage = HTTPCookieStorage()
         configuration.httpShouldSetCookies = true
         configuration.timeoutIntervalForRequest = 30
-        configuration.timeoutIntervalForResource = 60
+        configuration.timeoutIntervalForResource = 300
         let delegate = CirrusTrustDelegate(allowedHost: baseURL.host ?? "")
         self.session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
     }
@@ -259,6 +303,49 @@ public actor SynologyClient: PhotosTransport {
             throw SynologyAPIError.invalidResponse
         }
         return ThumbnailResponse(data: data, etag: http.value(forHTTPHeaderField: "ETag"),
+                                 lastModified: http.value(forHTTPHeaderField: "Last-Modified"))
+    }
+
+    public func fullImage(_ resource: FullImageResource,
+                          etag: String? = nil, lastModified: String? = nil) async throws -> FullImageResponse {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+        components.path = "/webapi/entry.cgi"
+        var parameters = [
+            URLQueryItem(name: "api", value: "SYNO.Foto.Download"),
+            URLQueryItem(name: "version", value: "2"),
+            URLQueryItem(name: "method", value: "download"),
+            URLQueryItem(name: "unit_id", value: "[\(resource.unitID)]"),
+            URLQueryItem(name: "cache_key", value: resource.cacheKey),
+            URLQueryItem(name: "_sid", value: sid)
+        ]
+        if let synoToken { parameters.append(URLQueryItem(name: "SynoToken", value: synoToken)) }
+        components.queryItems = parameters
+        guard let url = components.url else { throw SynologyAPIError.invalidResponse }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 300
+        request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
+        request.setValue("image/*", forHTTPHeaderField: "Accept")
+        if let etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+        else if let lastModified { request.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since") }
+        let data: Data
+        let response: URLResponse
+        do { (data, response) = try await session.data(for: request) }
+        catch is CancellationError { throw CancellationError() }
+        catch { throw SynologyAPIError.transport(error.localizedDescription) }
+        guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
+        if http.statusCode == 304 {
+            return FullImageResponse(data: nil, etag: http.value(forHTTPHeaderField: "ETag"),
+                                     lastModified: http.value(forHTTPHeaderField: "Last-Modified"))
+        }
+        guard http.statusCode == 200 else { throw SynologyAPIError.http(http.statusCode) }
+        guard !data.isEmpty, CGImageSourceCreateWithData(data as CFData, nil) != nil else {
+            if let envelope = try? JSONDecoder().decode(APIEnvelope<EmptyData>.self, from: data),
+               let error = envelope.error { throw SynologyAPIError.api(error.code) }
+            throw SynologyAPIError.invalidResponse
+        }
+        return FullImageResponse(data: data, etag: http.value(forHTTPHeaderField: "ETag"),
                                  lastModified: http.value(forHTTPHeaderField: "Last-Modified"))
     }
 

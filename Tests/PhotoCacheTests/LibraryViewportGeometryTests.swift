@@ -177,6 +177,8 @@ final class LibraryViewportGeometryTests: XCTestCase {
         let carriedRows = split.slices.indices.flatMap { split.rows(in: $0) }
         XCTAssertEqual(carriedRows.map(\.layout), unsplitRows.map(\.layout))
         XCTAssertEqual(carriedRows.flatMap(\.itemIDs), [1, 2, 3, 4])
+        XCTAssertEqual(carriedRows.flatMap(\.items).map(\.sectionIndex), [0, 0, 1, 1])
+        XCTAssertEqual(carriedRows.flatMap(\.items).map(\.pageOffset), [0, 1, 0, 1])
     }
 
     func testTargetHeightChangeRebuildsCrossPageCarry() throws {

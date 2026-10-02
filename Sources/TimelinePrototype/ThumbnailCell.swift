@@ -11,6 +11,7 @@ struct ThumbnailCell: View {
     let repository: CachedPhotosRepository?
     let size: ThumbnailSize
     let allowNetwork: Bool
+    var onActivate: ((PhotoViewerSourceAnchor) -> Void)? = nil
     @State private var image: NSImage?
     @State private var displayedRendition: String?
     @State private var failed = false
@@ -30,6 +31,11 @@ struct ThumbnailCell: View {
                 Image(systemName: "photo.badge.exclamationmark").foregroundStyle(.secondary)
             } else {
                 Image(systemName: "photo").foregroundStyle(.tertiary)
+            }
+            if let onActivate {
+                ThumbnailActivationSurface(itemID: item.id, image: image,
+                                           label: item.filename.map { "Open \($0)" } ?? "Open photo",
+                                           onActivate: onActivate)
             }
         }
         .clipped()
@@ -56,6 +62,65 @@ struct ThumbnailCell: View {
             case .failure:
                 if image == nil { failed = true }
             }
+        }
+    }
+}
+
+/// The AppKit surface supplies a source rectangle in window-content coordinates. A SwiftUI
+/// global frame is not reliable here because every virtualized row owns a detached hosting view.
+private struct ThumbnailActivationSurface: NSViewRepresentable {
+    let itemID: Int64
+    let image: NSImage?
+    let label: String
+    let onActivate: (PhotoViewerSourceAnchor) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> ActivationView {
+        let view = ActivationView()
+        context.coordinator.anchor.attach(view)
+        view.anchor = context.coordinator.anchor
+        return view
+    }
+
+    func updateNSView(_ view: ActivationView, context: Context) {
+        context.coordinator.anchor.update(itemID: itemID, image: image)
+        view.anchor = context.coordinator.anchor
+        view.onActivate = onActivate
+        view.accessibilityTitle = label
+    }
+
+    @MainActor
+    final class Coordinator {
+        let anchor = PhotoViewerSourceAnchor()
+    }
+
+    final class ActivationView: NSView, PhotoViewerSourceActivating {
+        weak var anchor: PhotoViewerSourceAnchor?
+        var onActivate: ((PhotoViewerSourceAnchor) -> Void)?
+        var accessibilityTitle = "Open photo"
+        override var acceptsFirstResponder: Bool { true }
+        override func mouseDown(with event: NSEvent) {
+            guard event.clickCount == 1 else { return }
+            window?.makeFirstResponder(self)
+            anchor?.activate()
+        }
+        override func keyDown(with event: NSEvent) {
+            if event.keyCode == 36 || event.keyCode == 49 { anchor?.activate() }
+            else { super.keyDown(with: event) }
+        }
+        override func isAccessibilityElement() -> Bool { true }
+        override func accessibilityRole() -> NSAccessibility.Role? { .button }
+        override func accessibilityLabel() -> String? { accessibilityTitle }
+        override func accessibilityPerformPress() -> Bool {
+            anchor?.activate()
+            return true
+        }
+        func activateViewerSource(_ anchor: PhotoViewerSourceAnchor) {
+            onActivate?(anchor)
+        }
+        override func resetCursorRects() {
+            addCursorRect(bounds, cursor: .pointingHand)
         }
     }
 }

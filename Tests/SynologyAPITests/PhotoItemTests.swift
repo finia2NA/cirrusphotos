@@ -29,10 +29,22 @@ final class PhotoItemTests: XCTestCase {
 
     func testOlderCachedRecordAndInvalidResolution() throws {
         let legacy = try decode(resolution: "{\"width\":4000,\"height\":2000}", orientation: "")
+        XCTAssertNil(legacy.filename)
         XCTAssertNil(legacy.additional?.orientation)
         XCTAssertEqual(legacy.displayAspectRatio, 2)
         XCTAssertEqual(try decode(resolution: "{\"width\":0,\"height\":2000}", orientation: "").displayAspectRatio, 1)
         XCTAssertEqual(try decode(resolution: "{\"width\":4000,\"height\":-1}", orientation: "").displayAspectRatio, 1)
+    }
+
+    func testFilenameAndFullImageResourceDecodeWithoutBreakingLegacyItems() throws {
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":7,"filename":"IMG_0007.HEIC","time":1700000000,"type":"photo","additional":{"thumbnail":{"unit_id":17,"cache_key":"17_revision","sm":"ready"}}}
+        """.utf8))
+        XCTAssertEqual(item.filename, "IMG_0007.HEIC")
+        let resource = try XCTUnwrap(item.fullImageResource)
+        XCTAssertEqual(resource.unitID, 17)
+        XCTAssertEqual(resource.cacheKey, "17_revision")
+        XCTAssertEqual(resource.filename, "IMG_0007.HEIC")
     }
 
     func testDayIDUsesUTCBoundary() throws {

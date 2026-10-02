@@ -49,6 +49,15 @@ final class PhotoCacheTests: XCTestCase {
         XCTAssertNotEqual(CacheKey.page(namespace: alice, section: section),
                           CacheKey.page(namespace: alice, section: changed))
         XCTAssertNotEqual(CacheKey.timeline(namespace: alice), CacheKey.timeline(namespace: bob))
+        let original = FullImageResource(unitID: 42, cacheKey: "revision-1", filename: "one.jpg")
+        let renamed = FullImageResource(unitID: 42, cacheKey: "revision-1", filename: "renamed.jpg")
+        let revised = FullImageResource(unitID: 42, cacheKey: "revision-2", filename: "one.jpg")
+        XCTAssertEqual(CacheKey.fullImage(namespace: alice, resource: original),
+                       CacheKey.fullImage(namespace: alice, resource: renamed))
+        XCTAssertNotEqual(CacheKey.fullImage(namespace: alice, resource: original),
+                          CacheKey.fullImage(namespace: alice, resource: revised))
+        XCTAssertNotEqual(CacheKey.fullImage(namespace: alice, resource: original),
+                          CacheKey.fullImage(namespace: bob, resource: original))
     }
 
     func testTimelineDescriptorRoundTrip() throws {
@@ -83,6 +92,41 @@ final class PhotoCacheTests: XCTestCase {
         XCTAssertNotNil(new)
         XCTAssertNotNil(timeline)
         XCTAssertEqual(usage, 12)
+    }
+
+    func testFullImagesEvictBeforeThumbnails() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SynoFullImageEvictionTest-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = try DiskCache(root: root, budget: 12, protectedTimelineKey: "timeline")
+        try await cache.put("timeline", kind: .timeline, data: Data(repeating: 1, count: 4), validatedRun: "run")
+        try await cache.put("thumbnail", kind: .thumbnail, data: Data(repeating: 2, count: 4), validatedRun: "run")
+        try await cache.put("original", kind: .fullImage, data: Data(repeating: 3, count: 4), validatedRun: "run")
+        try await cache.put("page", kind: .page, data: Data(repeating: 4, count: 4), validatedRun: "run")
+        let original = try await cache.get("original")
+        let thumbnail = try await cache.get("thumbnail")
+        let page = try await cache.get("page")
+        let timeline = try await cache.get("timeline")
+        XCTAssertNil(original)
+        XCTAssertNotNil(thumbnail)
+        XCTAssertNotNil(page)
+        XCTAssertNotNil(timeline)
+    }
+
+    func testOversizedFullImageSelfEvictsWithoutPurgingThumbnails() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SynoOversizedFullImageTest-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = try DiskCache(root: root, budget: 12, protectedTimelineKey: "timeline")
+        try await cache.put("timeline", kind: .timeline, data: Data(repeating: 1, count: 4), validatedRun: "run")
+        try await cache.put("thumbnail", kind: .thumbnail, data: Data(repeating: 2, count: 4), validatedRun: "run")
+        try await cache.put("oversized", kind: .fullImage, data: Data(repeating: 3, count: 20), validatedRun: "run")
+        let oversized = try await cache.get("oversized")
+        let thumbnail = try await cache.get("thumbnail")
+        let timeline = try await cache.get("timeline")
+        XCTAssertNil(oversized)
+        XCTAssertNotNil(thumbnail)
+        XCTAssertNotNil(timeline)
     }
 
     func testCorruptImageIsDiscarded() async throws {

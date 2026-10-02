@@ -7,6 +7,8 @@ public struct LibraryViewportGeometry {
     public struct RowItem {
         public let photo: PhotoItem
         public let verified: Bool
+        public let sectionIndex: Int
+        public let pageOffset: Int
     }
     public struct Row {
         public let y: Double
@@ -189,7 +191,11 @@ public struct LibraryViewportGeometry {
             guard let page = pages[slice.source.sectionIndex] else { continue }
             let pageItems = page.items.dropFirst(slice.source.pageRange.lowerBound)
                 .prefix(slice.source.pageRange.count)
-                .map { RowItem(photo: $0, verified: page.verified) }
+                .enumerated().map { offset, photo in
+                    RowItem(photo: photo, verified: page.verified,
+                            sectionIndex: slice.source.sectionIndex,
+                            pageOffset: slice.source.pageRange.lowerBound + offset)
+                }
             let candidates = pending + pageItems
             let isDayEnd = position + 1 >= slices.count ||
                 slices[position + 1].source.dayID != slice.source.dayID

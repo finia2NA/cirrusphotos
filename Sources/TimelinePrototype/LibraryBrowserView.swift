@@ -5,6 +5,9 @@ import SynologyAPI
 import TimelineCore
 
 struct LibraryBrowserView: View {
+    var contentLeadingInset: CGFloat = 0
+    var contentTopInset: CGFloat = 0
+    var onOpenPhoto: (PhotoViewerOpenRequest) -> Void = { _ in }
     @EnvironmentObject private var library: LibraryModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedDay: String?
@@ -36,6 +39,9 @@ struct LibraryBrowserView: View {
                                              jumpToDay: jumpRequest,
                                              unavailableOffline: library.error != nil || library.authenticationFailed,
                                              colorScheme: colorScheme,
+                                             contentLeadingInset: contentLeadingInset,
+                                             contentTopInset: contentTopInset,
+                                             onOpenPhoto: onOpenPhoto,
                                              onRetry: { Task { await library.reload() } }) { day in
                         if snapshot.timeline.days.contains(where: { $0.id == day }) { selectedDay = day }
                     }
@@ -77,14 +83,24 @@ private struct HostedRow: View {
     let row: LibraryViewportGeometry.Row
     let repository: CachedPhotosRepository
     let size: ThumbnailSize
+    let pages: [Int: LibraryPage]
+    let onOpenPhoto: (PhotoViewerOpenRequest) -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: row.layout.gap) {
             ForEach(row.layout.cells.indices, id: \.self) { position in
                 let cell = row.layout.cells[position]
                 let item = row.items[position]
+                let page = pages[item.sectionIndex]
                 ThumbnailCell(item: item.photo, repository: repository,
-                              size: size, allowNetwork: item.verified)
+                              size: size, allowNetwork: item.verified) { source in
+                    let seed = PhotoViewerSeed(sectionIndex: item.sectionIndex,
+                                               pageOffset: item.pageOffset,
+                                               item: item.photo,
+                                               page: page?.items,
+                                               pageVerified: page?.verified ?? item.verified)
+                    onOpenPhoto(PhotoViewerOpenRequest(seed: seed, source: source))
+                }
                     .frame(width: cell.width, height: row.layout.height)
             }
         }
@@ -112,6 +128,9 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let jumpToDay: DayJumpRequest?
     let unavailableOffline: Bool
     let colorScheme: ColorScheme
+    let contentLeadingInset: CGFloat
+    let contentTopInset: CGFloat
+    let onOpenPhoto: (PhotoViewerOpenRequest) -> Void
     let onRetry: () -> Void
     let onVisibleDay: (String) -> Void
 
@@ -123,6 +142,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         scroll.autohidesScrollers = true
         scroll.drawsBackground = true
         scroll.backgroundColor = .textBackgroundColor
+        scroll.automaticallyAdjustsContentInsets = false
         scroll.contentView.postsBoundsChangedNotifications = true
         let document = FlippedDocumentView()
         scroll.documentView = document
@@ -173,6 +193,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var unavailableOffline = false
         private var colorScheme: ColorScheme = .light
         private var onRetry: (() -> Void)?
+        private var onOpenPhoto: ((PhotoViewerOpenRequest) -> Void)?
         private var demandedVisible: [Int] = []
         private var demandedPrefetch: [Int] = []
         private var suppressFeedback = false
@@ -184,14 +205,22 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             guard let scroll else { return }
             onVisibleDay = input.onVisibleDay
             onRetry = input.onRetry
+            onOpenPhoto = input.onOpenPhoto
             repository = input.repository
+            let insetAnchor = geometry?.anchor(at: visibleTop(in: scroll))
+            let oldInsets = scroll.contentInsets
+            let insets = NSEdgeInsets(top: input.contentTopInset,
+                                      left: input.contentLeadingInset, bottom: 0, right: 0)
+            scroll.contentInsets = insets
+            let insetsChanged = abs(oldInsets.top - insets.top) > 0.5 ||
+                abs(oldInsets.left - insets.left) > 0.5
             if thumbnailSize != input.thumbnailSize { viewRevision += 1 }
             thumbnailSize = input.thumbnailSize
             if colorScheme != input.colorScheme { viewRevision += 1 }
             colorScheme = input.colorScheme
-            let width = max(1, Double(scroll.contentSize.width))
+            let width = availableWidth(in: scroll)
             if revision != input.revision {
-                let previous = geometry?.anchor(at: Double(scroll.contentView.bounds.minY))
+                let previous = geometry?.anchor(at: visibleTop(in: scroll))
                 stopWindow()
                 let newIndex = LibraryIndex(snapshot: input.snapshot)
                 index = newIndex
@@ -218,7 +247,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 if let current = geometry,
                    abs(current.width - width) > 0.5 ||
                     abs(current.targetRowHeight - input.displayRowHeight) > 0.5 {
-                    let anchor = current.anchor(at: Double(scroll.contentView.bounds.minY))
+                    let anchor = current.anchor(at: visibleTop(in: scroll))
                     geometry?.setLayout(width: width, targetRowHeight: input.displayRowHeight,
                                         pages: pages)
                     viewRevision += 1
@@ -241,6 +270,9 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             if let request = input.jumpToDay, request.id != lastJump {
                 lastJump = request.id
                 jump(to: request.dayID)
+            } else if insetsChanged {
+                let target = insetAnchor.flatMap { geometry?.y(for: $0) } ?? 0
+                scrollTo(target)
             }
             viewportChanged()
         }
@@ -288,7 +320,9 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     // Events use a bounded newest buffer, so reconcile against the authoritative window.
                     let retained = await window.retainedPages()
                     guard !Task.isCancelled, self.window === window else { break }
-                    let anchor = self.geometry?.anchor(at: Double(self.scroll?.contentView.bounds.minY ?? 0))
+                    let anchor = self.scroll.flatMap { scroll in
+                        self.geometry?.anchor(at: self.visibleTop(in: scroll))
+                    }
                     self.pages = Dictionary(uniqueKeysWithValues: retained.map { ($0.sectionIndex, $0) })
                     let newSignatures = Dictionary(uniqueKeysWithValues: retained.map {
                         ($0.sectionIndex, Self.signature($0))
@@ -316,9 +350,9 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         func viewportChanged() {
             guard let scroll, let document else { return }
             if let current = geometry {
-                let width = max(1, Double(scroll.contentSize.width))
+                let width = availableWidth(in: scroll)
                 if abs(current.width - width) > 0.5 {
-                    let anchor = current.anchor(at: Double(scroll.contentView.bounds.minY))
+                    let anchor = current.anchor(at: visibleTop(in: scroll))
                     geometry?.setLayout(width: width, targetRowHeight: current.targetRowHeight,
                                         pages: pages)
                     viewRevision += 1
@@ -329,8 +363,10 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             guard let geometry, let index,
                   let repository, !geometry.slices.isEmpty else { return }
             let visible = scroll.contentView.bounds
-            let y = Double(visible.minY), height = Double(visible.height)
-            if let programmaticY, abs(y - programmaticY) > 2 {
+            let y = visibleTop(in: scroll)
+            let height = visibleHeight(in: scroll)
+            let clipY = Double(visible.minY)
+            if let programmaticY, abs(clipY - programmaticY) > 2 {
                 pendingAnchor = nil
                 self.programmaticY = nil
             }
@@ -376,7 +412,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     addHost("r:\(position):\(rowIndex)",
                             frame: CGRect(x: 0, y: rowY, width: geometry.width, height: row.layout.height),
                             content: AnyView(HostedRow(row: row, repository: repository,
-                                                       size: thumbnailSize)),
+                                                       size: thumbnailSize, pages: pages,
+                                                       onOpenPhoto: onOpenPhoto ?? { _ in })),
                             revision: (viewRevision, rowRevisions[section] ?? 0),
                             wanted: &wanted, document: document)
                 }
@@ -441,7 +478,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
 
         private func updateDocumentHeight() {
             guard let scroll, let document, let geometry else { return }
-            let frame = CGRect(x: 0, y: 0, width: scroll.contentSize.width,
+            let frame = CGRect(x: 0, y: 0, width: CGFloat(availableWidth(in: scroll)),
                                height: max(CGFloat(geometry.totalHeight), scroll.contentSize.height))
             if document.frame != frame { document.frame = frame }
         }
@@ -449,10 +486,11 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private func scrollTo(_ y: Double) {
             guard let scroll, let geometry else { return }
             suppressFeedback = true
-            let maximum = max(0, geometry.totalHeight - Double(scroll.contentSize.height))
+            let maximum = max(0, geometry.totalHeight - visibleHeight(in: scroll))
             let target = min(max(0, y), maximum)
-            programmaticY = target
-            scroll.contentView.scroll(to: CGPoint(x: 0, y: target))
+            let clipTarget = target - Double(scroll.contentInsets.top)
+            programmaticY = clipTarget
+            scroll.contentView.scroll(to: CGPoint(x: -scroll.contentInsets.left, y: clipTarget))
             scroll.reflectScrolledClipView(scroll.contentView)
             suppressFeedback = false
         }
@@ -481,6 +519,18 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 hash.combine(thumbnail?.xl)
             }
             return hash.finalize()
+        }
+
+        private func availableWidth(in scroll: NSScrollView) -> Double {
+            max(1, Double(scroll.contentSize.width - scroll.contentInsets.left - scroll.contentInsets.right))
+        }
+
+        private func visibleTop(in scroll: NSScrollView) -> Double {
+            max(0, Double(scroll.contentView.bounds.minY + scroll.contentInsets.top))
+        }
+
+        private func visibleHeight(in scroll: NSScrollView) -> Double {
+            max(1, Double(scroll.contentView.bounds.height - scroll.contentInsets.top - scroll.contentInsets.bottom))
         }
     }
 }

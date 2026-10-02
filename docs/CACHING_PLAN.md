@@ -1,18 +1,18 @@
 # Cache design and implementation status
 
-Status: persistent cached-first browser and bounded viewport implemented on 2026-10-02; broader resource types remain planned. Research date: 2026-10-02.
+Status: persistent cached-first browser, bounded viewport, and full-size photo resources implemented on 2026-10-02; album/map resources remain planned. Research date: 2026-10-02.
 
 ## Implemented slice
 
 - The Library menu can warm the selected thumbnail rendition for an inclusive range of populated dates. The picker reports an upper bound from distinct-day item counts; actual readiness is checked per page. Batch work uses one metadata page and two prefetch-priority thumbnail workers at a time and can be cancelled without interrupting another consumer's shared request. It uses the existing total budget and may evict earlier downloads; it does not guarantee pinned offline availability.
 
-- `PhotoCache` stores the full Personal Space timeline and exact item pages as JSON in SQLite, with compressed thumbnail files alongside the index. The development cache lives in the repository's Git-ignored `.cache/` directory, separated by a server/account hash. Keys include server/account namespace, request shape, unit ID, opaque thumbnail key, and size where applicable. The app displays cached values before validation and retains current-run markers on disk.
+- `PhotoCache` stores the full Personal Space timeline and exact item pages as JSON in SQLite, with compressed thumbnail and original-photo files alongside the index. The development cache lives in the repository's Git-ignored `.cache/` directory, separated by a server/account hash. Keys include server/account namespace, request shape, unit ID, opaque thumbnail key, and size where applicable. The app displays cached values before validation and retains current-run markers on disk.
 - Personal Library combines the equal-day navigator with a virtualized Personal Space browser using an eight-page window, compact slice heights, visible-row hosting, and adjacent prefetch. Cached thumbnails can paint from provisional item metadata; requests wait until current page metadata arrives. Thumbnail GETs use ETag or Last-Modified validators, accept 304 with retained local bytes, reject JSON error bodies, and use bounded six-request transfers. ImageIO downsamples off the main actor with two concurrent decodes; `NSCache` holds decoded images.
 - Repository authentication status is independent of resource loading and replayed to the UI. Cached data remains usable during login and after failure. Failed sign-in is memoized until explicit retry, while metadata errors retain a valid session.
-- A standard macOS Settings scene exposes `sm`/`m`/`xl`, a logarithmic 200 MB–100 GB budget, indexed payload usage, and clear-cache. Eviction prioritizes thumbnails before item pages and protects the active complete timeline.
+- A standard macOS Settings scene exposes `sm`/`m`/`xl`, a logarithmic 200 MB–100 GB budget, indexed payload usage, and clear-cache. Eviction prioritizes originals before thumbnails and item pages and protects the active complete timeline.
 - `swift test` passes without NAS access. An opt-in test (`RUN_LIVE_SYNOLOGY_TEST=1 swift test --filter PhotoCacheTests/testLiveSectionAndWarmCacheWhenEnabled`) passed against Cirrus: full timeline, current section 207, one thumbnail, cached-first reopen, and later validation. DSM rejected immediate reuse of a TOTP between the two test sessions; login now retries once after the next code window only for login errors 403/404.
 
-Current limitations: full-photo viewer, albums, maps, and coordinated session renewal after expiry are pending. Eviction uses SQLite indexed LRU over stored payload bytes; its displayed/budgeted size excludes SQLite/WAL overhead, filesystem allocation, and temporary writes. Shared page/thumbnail transfers cancel when their last subscriber leaves. The one-section UI shows errors and cached fallback but has no dedicated retry action for each thumbnail. The repository-local cache is reproducible data rather than a backup. This file's later sections describe broader design and acceptance criteria, not all shipped behavior.
+Current limitations: albums, maps, video playback, and coordinated session renewal after expiry are pending. Eviction uses SQLite indexed LRU over stored payload bytes; its displayed/budgeted size excludes SQLite/WAL overhead, filesystem allocation, and temporary writes. Shared page/thumbnail/original transfers cancel when their last subscriber leaves. The browser shows errors and cached fallback but has no dedicated retry action for each thumbnail. The repository-local cache is reproducible data rather than a backup. This file's later sections describe broader design and acceptance criteria, not all shipped behavior.
 
 ## Recommendation
 
@@ -70,7 +70,8 @@ Create one process-wide `runID`, shared by windows. For each resource, record wh
 | Full timeline for a space/filter | Display the cached complete timeline immediately | Authenticate and fetch the full timeline once; atomically replace it if changed. |
 | Item page | Display an exactly matching cached page, marked provisional | Fetch that page once using the current timeline's descriptor, even if timeline counts did not change. |
 | Thumbnail | Display the cached rendition provisionally | After current item metadata is available, resolve its rendition key and conditionally validate/download the needed image. |
-| Future album/map/preview resources | Same two-stage interface | Define identity and validation rules per endpoint when implemented. Do not assume the timeline validates them. |
+| Full-size photo | Display cached original bytes after immediate thumbnail preview | After current metadata is verified, conditionally validate/download the original; prefetch only adjacent images after current success. |
+| Future album/map resources | Same two-stage interface | Define identity and validation rules per endpoint when implemented. Do not assume the timeline validates them. |
 
 After successful validation, reopening that resource in the same run uses cache without another freshness request. If its bytes were evicted, a download is still necessary; a validation marker is not a substitute for data. Store run markers with cache entries rather than retaining every payload in memory.
 
@@ -150,6 +151,7 @@ All keys begin with a stable local server/account namespace and space. Do not us
 | Timeline | API/schema version, initial versus full, grouping, filters, sort if applicable |
 | Item page | API/schema version, normalized date bounds, offset, limit, filters/sort, requested additional fields |
 | Compressed thumbnail | Thumbnail API version, unit ID, opaque cache key, type, requested `sm`/`m`/`xl` size |
+| Full-size photo | Download API version, unit ID, opaque cache revision |
 | Decoded image | Compressed rendition identity and payload digest, pixel-size bucket, processing/orientation policy |
 
 Persist a page's owning timeline fingerprint/generation as a dependency, not just its numeric section index. Unchanged request descriptors can reuse cached pages provisionally across timeline changes, but must still validate. Do not invent overlapping-page merging for the MVP: if a new descriptor has no exact cached match, fetch it. Old page records remain eviction candidates.
@@ -181,7 +183,7 @@ A cache entry needs: key/namespace/kind, schema version, payload or relative fil
 
 Keep priorities separate from request scheduling. Evict in this order, LRU within a class:
 
-1. Full-size previews/originals (future).
+1. Full-size photos (original image bytes).
 2. Compressed thumbnails.
 3. Item pages and future album/map metadata.
 4. Current complete timeline snapshots, protected during ordinary eviction.
@@ -211,7 +213,7 @@ Begin with a small metadata queue (for example two requests), at most six visibl
 1. **Timeline vertical slice.** Retain full descriptors; introduce typed keys, a testable transport/storage boundary, run freshness, cached-first finite results, and the SQLite cache. Connect the existing navigator. Test warm launch, offline launch, changed/empty timeline, partial initial response, and stable date anchoring. No grid yet.
 2. **Budget and settings.** Implement accounting/eviction with synthetic blobs and metadata, the log slider, rendition preference, clear-cache behavior, and crash recovery. Test the 200 MB limit and reduction from a larger limit without downloading a large real library.
 3. **One real photo section.** Add item-page caching and the image pipeline. Reproduce the conditional-request probe through the Swift transport; verify size variants, authentication, cached-first updates, failed refresh, and decoded-memory limits. Benchmark before generalizing the image-library integration.
-4. **Scrolling and jumps.** Expand to a virtualized bounded viewport, directional prefetch, cancellation, and measured request scheduling. Test large split days and rapid distant jumps. Full photo view, albums, and maps follow later using the same storage primitives but their own resource policies.
+4. **Scrolling and jumps.** Expand to a virtualized bounded viewport, directional prefetch, cancellation, and measured request scheduling. Test large split days and rapid distant jumps. Full photo view uses these storage primitives with a separate resource policy; albums and maps remain future work.
 
 Required automated cases include: identical counts with changed item IDs; reordered/shifted sections; a deleted selected date; key changed/unchanged with changed bytes; 304 with/without payload; HTTP 200 API error envelope; timeout/503; auth failure; corrupt cache; account/space isolation; token rotation not changing identity; cancellation of one of two subscribers; late obsolete results; and reopening an evicted memory page without redundant validation when its disk entry is current.
 
@@ -222,3 +224,9 @@ Measure time to cached first paint, time to validated data, network bytes/304 co
 Conditional headers alone cannot establish that validators change correctly after edits. Before removing per-run thumbnail validation, use an agreed test photo to compare key, ETag, and bytes across rotation, replacement, and thumbnail regeneration. Do not modify the user's library as part of passive research.
 
 An Android capture would be useful later for discovering a mobile-only bulk validation/change-token API, confirming prefetch patterns, or explaining a measured performance gap. A useful experiment would compare cold launch, warm same-run revisit, relaunch, and an agreed between-run edit with normal cache settings. It is not necessary to design or implement the conservative cache above, and traffic alone may not reveal internal disk eviction. Treat any capture as sensitive.
+
+## Full-size photo resources
+
+Full-size photos use the authenticated `SYNO.Foto.Download` v2 route, independently of grid rendition settings. Compressed originals are stored as files, with cache kind 0 so they are evicted before thumbnails, pages, and the protected current timeline. They share the configured total budget; an oversized original can be displayed from the response without remaining cached. Keys contain server/account namespace, endpoint version, unit ID, and opaque cache revision, never authentication parameters.
+
+The repository emits cached bytes immediately and conditionally validates once per run. A separate transfer gate has two slots, with at most one speculative transfer, so a newly selected photo has reserved admission capacity. Visible subscriptions coalesce with and promote matching speculative work, including promotion before admission. Leaving a resource cancels it when its final subscriber leaves. Full-image decoding uses one worker and one replaceable pending request, applies orientation at full pixel resolution, and explicitly rejects images exceeding a 384 MB estimated/decoded bitmap limit; it never silently calls a downsampled result full resolution.

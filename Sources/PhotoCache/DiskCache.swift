@@ -3,7 +3,7 @@ import Foundation
 import SQLite3
 import SynologyAPI
 
-public enum CacheKind: Int, Sendable { case thumbnail = 1, page = 2, timeline = 3 }
+public enum CacheKind: Int, Sendable { case fullImage = 0, thumbnail = 1, page = 2, timeline = 3 }
 
 public struct CacheEntry: Sendable {
     public let data: Data
@@ -25,6 +25,9 @@ public enum CacheKey {
     }
     public static func thumbnail(namespace: String, descriptor: ThumbnailInfo, size: ThumbnailSize) -> String {
         digest("\(namespace)|personal|thumbnail|v2|unit|\(descriptor.unitID)|\(descriptor.cacheKey)|\(size.rawValue)")
+    }
+    public static func fullImage(namespace: String, resource: FullImageResource) -> String {
+        digest("\(namespace)|personal|download|v2|unit|\(resource.unitID)|\(resource.cacheKey)")
     }
     private static func digest(_ value: String) -> String {
         SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -107,7 +110,7 @@ public actor DiskCache {
     public func put(_ key: String, kind: CacheKind, data: Data, validatedRun: String?,
                     etag: String? = nil, lastModified: String? = nil, expectedGeneration: Int? = nil) throws {
         if let expectedGeneration, expectedGeneration != generation { return }
-        let filename = kind == .thumbnail ? key + ".img" : nil
+        let filename = (kind == .thumbnail || kind == .fullImage) ? key + ".img" : nil
         if let filename {
             try data.write(to: images.appendingPathComponent(filename), options: .atomic)
         }
