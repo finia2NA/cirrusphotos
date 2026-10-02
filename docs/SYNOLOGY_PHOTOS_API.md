@@ -2,7 +2,7 @@
 
 ## Personal Space favorites
 
-The viewer and Favorites album captures in `docs/captures/favorites.har` and `favoritesAlbum.har` show that Personal Space item lists include `additional.favorite: true` for favorited items and omit the field for other items. The existing item-list request already asks for `favorite` in its `additional` array. The Favorites album filters normal timeline and item-list requests with `favorite_only=true`.
+The viewer and Favorites album captures in `docs/captures/favorites.har` and `favoritesAlbum.har` show that Personal Space item lists include `additional.favorite: true` for favorited items and omit the field for other items. The existing item-list request already asks for `favorite` in its `additional` array. The Favorites album filters normal `Browse.Timeline.get` and `Browse.Item.list` requests with `favorite_only=true`. The capture does not establish that `get_init_timeline` accepts this filter, so the client uses full `get` for Favorites.
 
 The web client toggles a single item with a form-encoded `POST /webapi/entry.cgi/SYNO.Foto.Browse.Item`: `api=SYNO.Foto.Browse.Item`, `version=7`, `method=set_favorite`, `id=[<item ID>]`, and `favorite=true` or `false`. Successful responses are `{"success":true}`. This endpoint is implemented for Personal Space favorites; the accompanying `SYNO.Foto.Udc.send_event` request is telemetry.
 

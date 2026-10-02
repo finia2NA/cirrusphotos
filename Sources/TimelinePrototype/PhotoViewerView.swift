@@ -132,14 +132,16 @@ final class PhotoViewerPresentation: ObservableObject {
     private var lastFullData: Data?
     private var hasDisplayedFullImage = false
 
-    init(repository: CachedPhotosRepository, index: LibraryIndex, request: PhotoViewerOpenRequest,
+    init(repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor = .personalLibrary,
+         index: LibraryIndex, request: PhotoViewerOpenRequest,
          thumbnailSize: ThumbnailSize, allowNetwork: Bool, snapshotRevision: Int) {
         source = request.source
         originalItemID = request.seed.item.id
         initialItem = request.seed.item
         self.snapshotRevision = snapshotRevision
         image = request.source.image
-        session = PhotoViewerSession(repository: repository, index: index, seed: request.seed,
+        session = PhotoViewerSession(repository: repository, collection: collection,
+                                     index: index, seed: request.seed,
                                      thumbnailSize: thumbnailSize, allowNetwork: allowNetwork,
                                      maximumPages: 3)
         let session = session

@@ -210,6 +210,16 @@ public struct ThumbnailInfo: Codable, Sendable {
 
 public enum ThumbnailSize: String, CaseIterable, Codable, Sendable { case sm, m, xl }
 
+/// A server-side item collection that shares the Photos timeline/item APIs.
+public enum PhotoCollectionDescriptor: String, CaseIterable, Codable, Hashable, Sendable {
+    /// Preserve the existing Personal Library cache namespace.
+    case personalLibrary = "personal"
+    case favorites
+
+    public var favoriteOnly: Bool { self == .favorites }
+    public var supportsInitialTimeline: Bool { self == .personalLibrary }
+}
+
 public struct ThumbnailResponse: Sendable {
     public let data: Data?
     public let etag: String?
@@ -232,8 +242,8 @@ public struct FullImageResponse: Sendable {
 
 public protocol PhotosTransport: Sendable {
     func login(credentials: SynologyCredentials) async throws
-    func timeline(initial: Bool) async throws -> TimelineSnapshot
-    func items(in section: TimelineSection) async throws -> [PhotoItem]
+    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot
+    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem]
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse
@@ -242,6 +252,12 @@ public protocol PhotosTransport: Sendable {
 }
 
 public extension PhotosTransport {
+    func timeline(initial: Bool) async throws -> TimelineSnapshot {
+        try await timeline(collection: .personalLibrary, initial: initial)
+    }
+    func items(in section: TimelineSection) async throws -> [PhotoItem] {
+        try await items(in: section, collection: .personalLibrary)
+    }
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
         throw SynologyAPIError.unsupported("This Photos transport does not support favorites.")
     }
@@ -298,32 +314,39 @@ public actor SynologyClient: PhotosTransport {
         }
     }
 
-    public func timeline(initial: Bool) async throws -> TimelineSnapshot {
+    public func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
         guard let sid else { throw SynologyAPIError.api(119) }
+        guard !initial || collection.supportsInitialTimeline else {
+            throw SynologyAPIError.unsupported("Favorites does not support the initial timeline endpoint.")
+        }
+        var parameters = [
+            "api": "SYNO.Foto.Browse.Timeline", "version": "6",
+            "method": initial ? "get_init_timeline" : "get",
+            "timeline_group_unit": "\"day\"", "_sid": sid
+        ]
+        if collection.favoriteOnly { parameters["favorite_only"] = "true" }
         let response: APIEnvelope<TimelineData> = try await post(
             path: "/webapi/entry.cgi/SYNO.Foto.Browse.Timeline",
-            parameters: [
-                "api": "SYNO.Foto.Browse.Timeline", "version": "6",
-                "method": initial ? "get_init_timeline" : "get",
-                "timeline_group_unit": "\"day\"", "_sid": sid
-            ], authenticated: true
+            parameters: parameters, authenticated: true
         )
         guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
         return TimelineSnapshot(sections: data.section)
     }
 
-    public func items(in section: TimelineSection) async throws -> [PhotoItem] {
+    public func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
         guard let sid else { throw SynologyAPIError.api(119) }
         guard let bounds = section.dateBounds else { throw SynologyAPIError.invalidResponse }
+        var parameters = [
+            "api": "SYNO.Foto.Browse.Item", "version": "7", "method": "list",
+            "offset": String(section.offset), "limit": String(section.limit),
+            "start_time": String(bounds.start), "end_time": String(bounds.end),
+            "additional": "[\"thumbnail\",\"resolution\",\"orientation\",\"video_convert\",\"video_meta\",\"address\",\"favorite\"]",
+            "_sid": sid
+        ]
+        if collection.favoriteOnly { parameters["favorite_only"] = "true" }
         let response: APIEnvelope<ItemData> = try await post(
             path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item",
-            parameters: [
-                "api": "SYNO.Foto.Browse.Item", "version": "7", "method": "list",
-                "offset": String(section.offset), "limit": String(section.limit),
-                "start_time": String(bounds.start), "end_time": String(bounds.end),
-                "additional": "[\"thumbnail\",\"resolution\",\"orientation\",\"video_convert\",\"video_meta\",\"address\",\"favorite\"]",
-                "_sid": sid
-            ], authenticated: true
+            parameters: parameters, authenticated: true
         )
         guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
         return data.list

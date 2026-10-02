@@ -106,6 +106,7 @@ public actor PhotoViewerSession {
     }
 
     private let repository: CachedPhotosRepository
+    private let collection: PhotoCollectionDescriptor
     private let index: LibraryIndex
     private let spans: [SectionSpan]
     private let totalCount: Int
@@ -144,10 +145,12 @@ public actor PhotoViewerSession {
     private var prefetchEnabledGeneration: UInt64?
     private var observers: [UUID: AsyncStream<PhotoViewerState>.Continuation] = [:]
 
-    public init(repository: CachedPhotosRepository, index: LibraryIndex,
+    public init(repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor = .personalLibrary,
+                index: LibraryIndex,
                 seed: PhotoViewerSeed, thumbnailSize: ThumbnailSize = .xl,
                 allowNetwork: Bool, maximumPages: Int = 3) {
         self.repository = repository
+        self.collection = collection
         self.index = index
         self.thumbnailSize = thumbnailSize
         self.allowNetwork = allowNetwork
@@ -212,10 +215,12 @@ public actor PhotoViewerSession {
         let itemID = item.id
         let section = index.sections[desired.sectionIndex]
         let target = !item.isFavorite
+        applyFavorite(itemID: itemID, value: target)
         do {
-            try await repository.setFavorite(itemID: itemID, in: section, to: target)
-            applyFavorite(itemID: itemID, value: target)
+            try await repository.setFavorite(itemID: itemID, item: item, in: section,
+                                              collection: collection, to: target)
         } catch {
+            applyFavorite(itemID: itemID, value: item.isFavorite)
             if currentItem?.id == itemID { favoriteFailure = error.localizedDescription }
         }
         favoriteUpdating = false
@@ -339,18 +344,20 @@ public actor PhotoViewerSession {
             return
         }
         if let job = pageJobs[sectionIndex], job.allowNetwork == allowNetwork {
-            if visible { Task { await repository.promotePage(index.sections[sectionIndex]) } }
+            if visible { Task { await repository.promotePage(index.sections[sectionIndex], collection: collection) } }
             return
         }
         pageJobs.removeValue(forKey: sectionIndex)?.task.cancel()
         let id = UUID()
         let descriptor = index.sections[sectionIndex]
         let network = allowNetwork
+        let collection = collection
         let revision = retryRevision
         let repository = repository
         let priority: RequestPriority = visible ? .visible : .prefetch
         let task = Task { [weak self] in
-            for await event in await repository.page(descriptor, allowNetwork: network, priority: priority) {
+            for await event in await repository.page(descriptor, collection: collection,
+                                                      allowNetwork: network, priority: priority) {
                 guard !Task.isCancelled else { break }
                 await self?.receivePage(event, sectionIndex: sectionIndex, id: id, retryRevision: revision)
             }

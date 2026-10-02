@@ -5,6 +5,7 @@ import SynologyAPI
 import TimelineCore
 
 struct LibraryBrowserView: View {
+    let collection: PhotoCollectionDescriptor
     var contentLeadingInset: CGFloat = 0
     var contentTopInset: CGFloat = 0
     var onOpenPhoto: (PhotoViewerOpenRequest) -> Void = { _ in }
@@ -15,9 +16,9 @@ struct LibraryBrowserView: View {
 
     private var selection: Binding<Int> {
         Binding(
-            get: { library.snapshot?.timeline.index(keeping: selectedDay) ?? 0 },
+            get: { library.snapshot(for: collection)?.timeline.index(keeping: selectedDay) ?? 0 },
             set: { index in
-                guard let days = library.snapshot?.timeline.days, days.indices.contains(index) else { return }
+                guard let days = library.snapshot(for: collection)?.timeline.days, days.indices.contains(index) else { return }
                 let day = days[index].id
                 selectedDay = day
                 jumpRequest = DayJumpRequest(dayID: day)
@@ -27,17 +28,18 @@ struct LibraryBrowserView: View {
 
     var body: some View {
         Group {
-            if let snapshot = library.snapshot, !snapshot.timeline.days.isEmpty,
+            if let snapshot = library.snapshot(for: collection), !snapshot.timeline.days.isEmpty,
                let repository = library.repository {
                 HStack(spacing: 0) {
                     LibraryBrowserScrollView(snapshot: snapshot,
-                                             revision: library.snapshotRevision,
+                                             collection: collection,
+                                             revision: library.snapshotRevision(for: collection),
                                              retryRevision: library.retryRevision,
-                                             repository: repository, allowNetwork: library.timelineVerified,
+                                             repository: repository, allowNetwork: library.timelineVerified(for: collection),
                                              thumbnailSize: library.thumbnailSize,
                                              displayRowHeight: library.displayRowHeight,
                                              jumpToDay: jumpRequest,
-                                             unavailableOffline: library.error != nil || library.authenticationFailed,
+                                             unavailableOffline: library.error(for: collection) != nil || library.authenticationFailed,
                                              colorScheme: colorScheme,
                                              contentLeadingInset: contentLeadingInset,
                                              contentTopInset: contentTopInset,
@@ -47,14 +49,18 @@ struct LibraryBrowserView: View {
                     }
                     TimelineNavigator(timeline: snapshot.timeline, selected: selection)
                         .frame(width: 72)
-                        .padding(.vertical, 16)
+                        .padding(.top, contentTopInset + 16)
+                        .padding(.bottom, 16)
                         .padding(.trailing, 6)
                 }
-            } else if library.snapshot?.timeline.days.isEmpty == true {
-                ContentUnavailableView("No photos", systemImage: "photo",
-                    description: Text(library.error != nil ? "Cached library is empty. Connection unavailable." :
-                        (library.timelineVerified ? "Personal Space is empty." : "Cached library is empty. Checking Cirrus…")))
-            } else if let error = library.error, library.snapshot == nil {
+            } else if library.snapshot(for: collection)?.timeline.days.isEmpty == true {
+                ContentUnavailableView(collection == .favorites ? "No favorites" : "No photos",
+                    systemImage: collection == .favorites ? "heart" : "photo",
+                    description: Text(library.error(for: collection) != nil ? "Cached collection is empty. Connection unavailable." :
+                        (library.timelineVerified(for: collection) ?
+                         (collection == .favorites ? "No photos are marked as favorites." : "Personal Space is empty.") :
+                         "Cached collection is empty. Checking Cirrus…")))
+            } else if let error = library.error(for: collection), library.snapshot(for: collection) == nil {
                 ContentUnavailableView {
                     Label("Library unavailable", systemImage: "photo.badge.exclamationmark")
                 } description: {
@@ -63,12 +69,12 @@ struct LibraryBrowserView: View {
                     Button("Try Again") { Task { await library.reload() } }.disabled(library.isLoading)
                 }
             } else {
-                ProgressView("Opening library…")
+                ProgressView(collection == .favorites ? "Opening favorites…" : "Opening library…")
             }
         }
         .background(Color(nsColor: .textBackgroundColor))
-        .onChange(of: library.snapshotRevision) { _, _ in
-            guard let timeline = library.snapshot?.timeline,
+        .onChange(of: library.snapshotRevision(for: collection)) { _, _ in
+            guard let timeline = library.snapshot(for: collection)?.timeline,
                   let index = timeline.index(keeping: selectedDay) else { selectedDay = nil; return }
             selectedDay = timeline.days[index].id
         }
@@ -150,6 +156,7 @@ private struct HostedPlaceholder: View {
 
 struct LibraryBrowserScrollView: NSViewRepresentable {
     let snapshot: TimelineSnapshot
+    let collection: PhotoCollectionDescriptor
     let revision: Int
     let retryRevision: Int
     let repository: CachedPhotosRepository
@@ -169,8 +176,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = TimelineScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
+        scroll.hasVerticalScroller = false
         scroll.drawsBackground = true
         scroll.backgroundColor = .textBackgroundColor
         scroll.automaticallyAdjustsContentInsets = false
@@ -259,7 +265,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                                                    targetRowHeight: input.displayRowHeight)
                 revision = input.revision
                 allowNetwork = input.allowNetwork
-                window = LibraryPageWindow(repository: input.repository, maximumPages: 8)
+                window = LibraryPageWindow(repository: input.repository,
+                                           collection: input.collection, maximumPages: 8)
                 pendingAnchor = previous
                 updateDocumentHeight()
                 if let previous, let geometry {

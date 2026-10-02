@@ -32,10 +32,17 @@ public struct Timeline: Sendable {
     public let monthStarts: [Int]
 
     public init(days: [LibraryDay]) {
-        // A split day can appear in several API sections. Retain its first section.
+        // A split day can appear in several API sections. Retain its first section
+        // and the largest aggregate count reported by any contributing section.
         var unique: [String: LibraryDay] = [:]
-        for day in days where unique[day.id] == nil || day.section < unique[day.id]!.section {
-            unique[day.id] = day
+        for day in days {
+            guard let current = unique[day.id] else {
+                unique[day.id] = day
+                continue
+            }
+            unique[day.id] = LibraryDay(year: day.year, month: day.month, day: day.day,
+                                        count: max(current.count, day.count),
+                                        section: min(current.section, day.section))
         }
         let sorted = unique.values.sorted { $0.id > $1.id }
         self.days = sorted

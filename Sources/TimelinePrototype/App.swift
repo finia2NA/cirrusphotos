@@ -32,6 +32,7 @@ private struct AppShellView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sidebarVisible = true
     @State private var viewer: PhotoViewerPresentation?
+    @State private var selectedCollection: PhotoCollectionDescriptor = .personalLibrary
     @State private var chrome = WindowChromeMetrics()
     private let sidebarWidth: CGFloat = 210
 
@@ -39,9 +40,11 @@ private struct AppShellView: View {
         GeometryReader { geometry in
             let topInset = max(chrome.top, geometry.safeAreaInsets.top)
             ZStack(alignment: .topLeading) {
-                LibraryBrowserView(contentLeadingInset: sidebarVisible ? sidebarWidth : 0,
+                LibraryBrowserView(collection: selectedCollection,
+                                   contentLeadingInset: sidebarVisible ? sidebarWidth : 0,
                                    contentTopInset: topInset,
                                    onOpenPhoto: openPhoto)
+                    .id(selectedCollection)
                     .allowsHitTesting(viewer == nil)
                     .ignoresSafeArea(.container, edges: .top)
 
@@ -80,13 +83,13 @@ private struct AppShellView: View {
         .onExitCommand {
             if viewer != nil { closeViewer() }
         }
-        .onChange(of: model.timelineVerified) { _, verified in
+        .onChange(of: model.timelineVerified(for: selectedCollection)) { _, verified in
             viewer?.updateAllowNetwork(verified)
         }
         .onChange(of: model.retryRevision) { _, _ in
             viewer?.retry()
         }
-        .onChange(of: model.snapshotRevision) { _, revision in
+        .onChange(of: model.viewerSnapshotRevision(for: selectedCollection)) { _, revision in
             if let viewer, viewer.snapshotRevision != revision { viewer.invalidateForNewIndex() }
         }
     }
@@ -94,14 +97,28 @@ private struct AppShellView: View {
     private func sidebar() -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
-                if viewer != nil { closeViewer() }
+                select(.personalLibrary)
             } label: {
                 Label("Personal Library", systemImage: "photo.on.rectangle.angled")
                     .font(.body.weight(.medium))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
-                    .background(.tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 9))
+                    .background(selectedCollection == .personalLibrary ? Color.accentColor.opacity(0.14) : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 9))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 10)
+            Text("Collections")
+                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                .padding(.horizontal, 24).padding(.top, 8)
+            Button { select(.favorites) } label: {
+                Label("Favorites", systemImage: "heart")
+                    .font(.body.weight(.medium))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .background(selectedCollection == .favorites ? Color.accentColor.opacity(0.14) : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 9))
             }
             .buttonStyle(.plain)
             .padding(.horizontal, 10)
@@ -110,12 +127,19 @@ private struct AppShellView: View {
         .padding(.top, 8)
     }
 
+    private func select(_ collection: PhotoCollectionDescriptor) {
+        if viewer != nil { closeViewer() }
+        selectedCollection = collection
+    }
+
     private func openPhoto(_ request: PhotoViewerOpenRequest) {
-        guard viewer == nil, let repository = model.repository, let snapshot = model.snapshot else { return }
-        viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+        guard viewer == nil, let repository = model.repository,
+              let snapshot = model.snapshot(for: selectedCollection) else { return }
+        viewer = PhotoViewerPresentation(repository: repository, collection: selectedCollection,
+                                         index: LibraryIndex(snapshot: snapshot),
                                          request: request, thumbnailSize: model.thumbnailSize,
-                                         allowNetwork: model.timelineVerified,
-                                         snapshotRevision: model.snapshotRevision)
+                                         allowNetwork: model.timelineVerified(for: selectedCollection),
+                                         snapshotRevision: model.viewerSnapshotRevision(for: selectedCollection))
     }
 
     private func closeViewer() {
@@ -326,11 +350,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 @MainActor
 final class LibraryModel: ObservableObject {
-    @Published private(set) var snapshot: TimelineSnapshot?
-    @Published private(set) var snapshotRevision = 0
-    @Published private(set) var timelineVerified = false
+    @Published private var snapshots: [PhotoCollectionDescriptor: TimelineSnapshot] = [:]
+    @Published private var snapshotRevisions: [PhotoCollectionDescriptor: Int] = [:]
+    @Published private var viewerSnapshotRevisions: [PhotoCollectionDescriptor: Int] = [:]
+    @Published private var timelineVerifications: [PhotoCollectionDescriptor: Bool] = [:]
     @Published private(set) var status = "Opening library…"
-    @Published private(set) var error: String?
+    @Published private var collectionErrors: [PhotoCollectionDescriptor: String] = [:]
     @Published private(set) var isLoading = true
     @Published private(set) var authenticationStatus: AuthenticationStatus = .notStarted
     @Published private(set) var retryRevision = 0
@@ -359,6 +384,24 @@ final class LibraryModel: ObservableObject {
     private(set) var repository: CachedPhotosRepository?
     private var started = false
     private var authenticationTask: Task<Void, Never>?
+    private var refreshTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
+
+    init(repository: CachedPhotosRepository? = nil) {
+        self.repository = repository
+    }
+
+    var snapshot: TimelineSnapshot? { snapshot(for: .personalLibrary) }
+    var snapshotRevision: Int { snapshotRevision(for: .personalLibrary) }
+    var timelineVerified: Bool { timelineVerified(for: .personalLibrary) }
+    var error: String? { error(for: .personalLibrary) }
+
+    func snapshot(for collection: PhotoCollectionDescriptor) -> TimelineSnapshot? { snapshots[collection] }
+    func snapshotRevision(for collection: PhotoCollectionDescriptor) -> Int { snapshotRevisions[collection, default: 0] }
+    func viewerSnapshotRevision(for collection: PhotoCollectionDescriptor) -> Int {
+        viewerSnapshotRevisions[collection, default: 0]
+    }
+    func timelineVerified(for collection: PhotoCollectionDescriptor) -> Bool { timelineVerifications[collection] == true }
+    func error(for collection: PhotoCollectionDescriptor) -> String? { collectionErrors[collection] }
 
     private static func persistedDisplayRowHeight() -> Double {
         guard let value = (UserDefaults.standard.object(forKey: "displayRowHeight") as? NSNumber)?.doubleValue else {
@@ -380,10 +423,10 @@ final class LibraryModel: ObservableObject {
         guard !started else { return }
         started = true
         isLoading = true
-        error = nil
+        collectionErrors.removeAll()
         do {
-            let credentials = try CredentialStore.load()
             if repository == nil {
+                let credentials = try CredentialStore.load()
                 repository = try CachedPhotosRepository(credentials: credentials,
                     budget: CacheBudget.bytes(at: budgetFraction))
             }
@@ -396,27 +439,55 @@ final class LibraryModel: ObservableObject {
                     }
                 }
             }
-            for await event in await repository.timeline() {
-                switch event {
-                case .value(let snapshot, let verified):
-                    if self.snapshot?.sections != snapshot.sections {
-                        self.snapshot = snapshot
-                        snapshotRevision += 1
+            for collection in PhotoCollectionDescriptor.allCases where refreshTasks[collection] == nil {
+                refreshTasks[collection] = Task { [weak self] in
+                    for await event in await repository.timelineRefreshes(collection: collection) {
+                        guard !Task.isCancelled else { return }
+                        self?.receive(event, collection: collection, forceRevision: true)
                     }
-                    timelineVerified = verified
-                    if verified { error = nil }
-                    status = verified ? "Personal Space · Current" : "Personal Space · Cached or initial"
-                case .failure(let message):
-                    error = message
-                    status = snapshot == nil ? "Library unavailable" : "Personal Space · Offline copy"
+                }
+            }
+            await withTaskGroup(of: Void.self) { group in
+                for collection in PhotoCollectionDescriptor.allCases {
+                    group.addTask { [weak self] in
+                        for await event in await repository.timeline(collection: collection) {
+                            guard !Task.isCancelled else { return }
+                            await self?.receive(event, collection: collection)
+                        }
+                    }
                 }
             }
             await refreshUsage()
         } catch {
-            self.error = error.localizedDescription
+            collectionErrors[.personalLibrary] = error.localizedDescription
             status = "Library unavailable"
         }
         isLoading = false
+    }
+
+    private func receive(_ event: ResourceEvent<TimelineSnapshot>, collection: PhotoCollectionDescriptor,
+                         forceRevision: Bool = false) {
+        switch event {
+        case .value(let snapshot, let verified):
+            let changed = snapshots[collection]?.sections != snapshot.sections
+            if forceRevision || changed {
+                snapshots[collection] = snapshot
+                snapshotRevisions[collection, default: 0] += 1
+                if changed, !forceRevision {
+                    viewerSnapshotRevisions[collection, default: 0] += 1
+                }
+            }
+            timelineVerifications[collection] = verified
+            if verified { collectionErrors.removeValue(forKey: collection) }
+            if collection == .personalLibrary {
+                status = verified ? "Personal Space · Current" : "Personal Space · Cached or initial"
+            }
+        case .failure(let message):
+            collectionErrors[collection] = message
+            if collection == .personalLibrary {
+                status = snapshots[collection] == nil ? "Library unavailable" : "Personal Space · Offline copy"
+            }
+        }
     }
 
     func reload() async {

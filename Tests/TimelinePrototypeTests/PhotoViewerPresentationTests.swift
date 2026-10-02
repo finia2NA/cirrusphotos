@@ -10,12 +10,17 @@ import XCTest
 private actor PresentationTransport: PhotosTransport {
     let preview: Data
     private var releasedThumbnails: Set<Int64> = [1]
+    private(set) var timelineCalls: [(PhotoCollectionDescriptor, Bool)] = []
 
     init(preview: Data) { self.preview = preview }
     func releaseThumbnail(_ id: Int64) { releasedThumbnails.insert(id) }
     func login(credentials: SynologyCredentials) async throws {}
-    func timeline(initial: Bool) async throws -> TimelineSnapshot { TimelineSnapshot(sections: []) }
-    func items(in section: TimelineSection) async throws -> [PhotoItem] { [] }
+    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {}
+    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
+        timelineCalls.append((collection, initial))
+        return TimelineSnapshot(sections: [])
+    }
+    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] { [] }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         while !releasedThumbnails.contains(descriptor.unitID) {
@@ -131,5 +136,49 @@ final class PhotoViewerPresentationTests: XCTestCase {
         XCTAssertTrue(hydratedFavorite)
         XCTAssertTrue(viewer.close())
         await viewer.session.close()
+    }
+
+    func testLibraryModelEagerlyLoadsBothCollectionTimelines() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoModel-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = PresentationTransport(preview: try previewData())
+        let repository = try CachedPhotosRepository(
+            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            baseURL: URL(string: "https://model.example.invalid")!, cacheRoot: root,
+            transport: transport)
+        let model = LibraryModel(repository: repository)
+
+        await model.load()
+
+        let calls = await transport.timelineCalls
+        XCTAssertTrue(calls.contains { $0.0 == .personalLibrary })
+        XCTAssertTrue(calls.contains { $0.0 == .favorites && !$0.1 })
+        XCTAssertFalse(calls.contains { $0.0 == .favorites && $0.1 })
+        XCTAssertNotNil(model.snapshot(for: .personalLibrary))
+        XCTAssertNotNil(model.snapshot(for: .favorites))
+    }
+
+    func testLocalFavoritesRefreshUpdatesBrowserWithoutInvalidatingViewerIndex() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoModel-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = PresentationTransport(preview: try previewData())
+        let repository = try CachedPhotosRepository(
+            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            baseURL: URL(string: "https://model.example.invalid")!, cacheRoot: root,
+            transport: transport)
+        let model = LibraryModel(repository: repository)
+        await model.load()
+        let browserRevision = model.snapshotRevision(for: .favorites)
+        let viewerRevision = model.viewerSnapshotRevision(for: .favorites)
+        let section = TimelineSection(offset: 0, limit: 1,
+            list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)])
+
+        try await repository.setFavorite(itemID: 77, item: try item(77), in: section, to: true)
+        let refreshed = await waitUntil {
+            model.snapshotRevision(for: .favorites) > browserRevision
+        }
+
+        XCTAssertTrue(refreshed)
+        XCTAssertEqual(model.viewerSnapshotRevision(for: .favorites), viewerRevision)
     }
 }

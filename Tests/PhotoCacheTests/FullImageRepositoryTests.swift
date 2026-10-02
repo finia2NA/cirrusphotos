@@ -29,8 +29,8 @@ private actor FullImageTransport: PhotosTransport {
 
     func release(_ unitID: Int64) { released.insert(unitID) }
     func login(credentials: SynologyCredentials) async throws {}
-    func timeline(initial: Bool) async throws -> TimelineSnapshot { TimelineSnapshot(sections: []) }
-    func items(in section: TimelineSection) async throws -> [PhotoItem] { [] }
+    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot { TimelineSnapshot(sections: []) }
+    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] { [] }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         ThumbnailResponse(data: Data([1]), etag: nil, lastModified: nil)

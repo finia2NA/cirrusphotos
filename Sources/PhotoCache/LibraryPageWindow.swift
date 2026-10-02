@@ -27,6 +27,7 @@ public actor LibraryPageWindow {
         let allowNetwork: Bool
     }
     private let repository: CachedPhotosRepository
+    private let collection: PhotoCollectionDescriptor
     public let maximumPages: Int
     private var fingerprint: String?
     private var pages: [Int: LibraryPage] = [:]
@@ -38,8 +39,11 @@ public actor LibraryPageWindow {
     private var favoriteTask: Task<Void, Never>?
     private var favoriteValues: [Int64: Bool] = [:]
 
-    public init(repository: CachedPhotosRepository, maximumPages: Int = 8) {
+    public init(repository: CachedPhotosRepository,
+                collection: PhotoCollectionDescriptor = .personalLibrary,
+                maximumPages: Int = 8) {
         self.repository = repository
+        self.collection = collection
         self.maximumPages = max(1, maximumPages)
     }
 
@@ -115,7 +119,7 @@ public actor LibraryPageWindow {
             if let request = requests[section] {
                 if request.descriptor == descriptor && request.allowNetwork == allowNetwork {
                     if position < visibleCount {
-                        Task { await repository.promotePage(descriptor) }
+                        Task { await repository.promotePage(descriptor, collection: collection) }
                     }
                     continue
                 }
@@ -131,7 +135,8 @@ public actor LibraryPageWindow {
             let identity = index.fingerprint
             let priority: RequestPriority = position < visibleCount ? .visible : .prefetch
             let task = Task {
-                for await event in await repository.page(descriptor, allowNetwork: allowNetwork, priority: priority) {
+                for await event in await repository.page(descriptor, collection: collection,
+                                                          allowNetwork: allowNetwork, priority: priority) {
                     if Task.isCancelled { break }
                     receive(event, section: section, fingerprint: identity, id: id)
                 }
@@ -195,9 +200,14 @@ public actor LibraryPageWindow {
         favoriteValues[change.itemID] = change.favorite
         guard let fingerprint else { return }
         for (section, page) in pages where page.items.contains(where: { $0.id == change.itemID }) {
+            let items: [PhotoItem]
+            if collection == .favorites, !change.favorite {
+                items = page.items.filter { $0.id != change.itemID }
+            } else {
+                items = page.items.map { $0.id == change.itemID ? $0.withFavorite(change.favorite) : $0 }
+            }
             let updated = LibraryPage(sectionIndex: section,
-                                      items: page.items.map { $0.id == change.itemID ? $0.withFavorite(change.favorite) : $0 },
-                                      verified: page.verified)
+                                      items: items, verified: page.verified)
             pages[section] = updated
             publish(.page(updated, fingerprint: fingerprint))
         }

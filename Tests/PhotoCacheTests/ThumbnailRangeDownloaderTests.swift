@@ -13,8 +13,8 @@ private actor RangeTransport: PhotosTransport {
         self.blockThumbnails = blockThumbnails
     }
     func login(credentials: SynologyCredentials) async throws {}
-    func timeline(initial: Bool) async throws -> TimelineSnapshot { TimelineSnapshot(sections: []) }
-    func items(in section: TimelineSection) async throws -> [PhotoItem] { pages[section.offset] ?? [] }
+    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot { TimelineSnapshot(sections: []) }
+    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] { pages[section.offset] ?? [] }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         thumbnailCalls += 1

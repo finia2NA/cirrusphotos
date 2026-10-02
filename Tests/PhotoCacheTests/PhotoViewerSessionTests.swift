@@ -16,12 +16,16 @@ private actor ViewerTransport: PhotosTransport {
     var releasedFullImages: Set<Int64> = []
     var failImages = false
     private(set) var pageCalls: [Int] = []
+    private(set) var pageCollections: [PhotoCollectionDescriptor] = []
     private(set) var thumbnailCalls: [Int64] = []
     private(set) var fullImageCalls: [Int64] = []
     private(set) var fullImageKeys: [String] = []
     private(set) var cancelledFullImages: Set<Int64> = []
+    private(set) var favoriteRequests: [(Int64, Bool)] = []
     private(set) var favoriteWrites: [(Int64, Bool)] = []
     var failFavorite = false
+    var blockFavorite = false
+    var releaseFavorite = false
 
     func configure(pages: [Int: [PhotoItem]], blockedPages: Set<Int> = [],
                    blockedFullImages: Set<Int64> = [], failImages: Bool = false) {
@@ -34,19 +38,32 @@ private actor ViewerTransport: PhotosTransport {
     func releasePage(_ offset: Int) { releasedPages.insert(offset) }
     func releaseFullImage(_ id: Int64) { releasedFullImages.insert(id) }
     func setFavoriteFailure(_ enabled: Bool) { failFavorite = enabled }
+    func setFavoriteBlocked(_ enabled: Bool) { blockFavorite = enabled }
+    func releaseFavoriteWrite() { releaseFavorite = true }
 
     func login(credentials: SynologyCredentials) async throws {}
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
+        favoriteRequests.append(contentsOf: itemIDs.map { ($0, favorite) })
+        while blockFavorite, !releaseFavorite {
+            try await Task.sleep(for: .milliseconds(2))
+        }
         if failFavorite { throw ViewerFailure(message: "Favorite write failed") }
         favoriteWrites.append(contentsOf: itemIDs.map { ($0, favorite) })
     }
     func timeline(initial: Bool) async throws -> TimelineSnapshot { TimelineSnapshot(sections: []) }
+    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
+        TimelineSnapshot(sections: [])
+    }
     func items(in section: TimelineSection) async throws -> [PhotoItem] {
         pageCalls.append(section.offset)
         while blockedPages.contains(section.offset), !releasedPages.contains(section.offset) {
             try await Task.sleep(for: .milliseconds(2))
         }
         return pages[section.offset] ?? []
+    }
+    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
+        pageCollections.append(collection)
+        return try await items(in: section)
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
@@ -621,5 +638,86 @@ final class PhotoViewerSessionTests: XCTestCase {
 
         XCTAssertEqual(replayed?.itemID, 51)
         XCTAssertEqual(replayed?.favorite, true)
+    }
+
+    func testFavoriteWriteSurvivesViewerCloseAndUpdatesTimeline() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let first = try item(61)
+        let section = TimelineSection(offset: 0, limit: 1,
+                                      list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: [first]])
+        await transport.setFavoriteBlocked(true)
+        let repo = try repository(root: cacheRoot, transport: transport)
+        for await _ in await repo.page(section) {}
+        let window = LibraryPageWindow(repository: repo)
+        await window.update(snapshot: TimelineSnapshot(sections: [section]), allowNetwork: true,
+                            visible: [0], prefetch: [])
+        let pageLoaded = await waitUntil { await window.retainedPages().first?.items.count == 1 }
+        XCTAssertTrue(pageLoaded)
+        let session = PhotoViewerSession(repository: repo,
+                                         index: LibraryIndex(snapshot: TimelineSnapshot(sections: [section])),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                                                               item: first, page: [first],
+                                                               pageVerified: true), allowNetwork: true)
+        _ = await session.state()
+
+        let toggle = Task { await session.toggleFavorite() }
+        let writeStarted = await waitUntil { await transport.favoriteRequests.count == 1 }
+        XCTAssertTrue(writeStarted)
+        let viewerUpdatedBeforeResponse = await waitUntil {
+            await session.state().item?.isFavorite == true
+        }
+        XCTAssertTrue(viewerUpdatedBeforeResponse)
+        let timelineUpdatedBeforeResponse = await waitUntil {
+            await window.retainedPages().first?.items.first?.isFavorite == true
+        }
+        XCTAssertTrue(timelineUpdatedBeforeResponse)
+        await session.close()
+        await transport.releaseFavoriteWrite()
+        await toggle.value
+
+        let completedWrites = await transport.favoriteWrites.count
+        XCTAssertEqual(completedWrites, 1)
+        let timelineUpdated = await waitUntil {
+            await window.retainedPages().first?.items.first?.isFavorite == true
+        }
+        XCTAssertTrue(timelineUpdated)
+        let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(server: server,
+                                                                           account: credentials.username),
+                                              section: section))
+        let store = await repo.store
+        let cachedEntry = try await store.get(key)
+        let cached = try XCTUnwrap(cachedEntry?.data)
+        XCTAssertTrue(try JSONDecoder().decode([PhotoItem].self, from: cached)[0].isFavorite)
+        await window.cancelAll()
+    }
+
+    func testFavoritesViewerNavigatesUsingFavoritesPages() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let first = try item(71).withFavorite(true)
+        let second = try item(72).withFavorite(true)
+        let sections = [
+            TimelineSection(offset: 0, limit: 1,
+                            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)]),
+            TimelineSection(offset: 1, limit: 1,
+                            list: [TimelineDay(year: 2024, month: 4, day: 2, itemCount: 1)])
+        ]
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: [first], 1: [second]])
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+                                         collection: .favorites,
+                                         index: LibraryIndex(snapshot: TimelineSnapshot(sections: sections)),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                                                               item: first, page: [first],
+                                                               pageVerified: true), allowNetwork: true)
+        _ = await session.state()
+        await session.navigateNext()
+        let reachedSecond = await waitUntil { await session.state().item?.id == second.id }
+        XCTAssertTrue(reachedSecond)
+        let collections = await transport.pageCollections
+        XCTAssertFalse(collections.isEmpty)
+        XCTAssertTrue(collections.allSatisfy { $0 == .favorites })
+        await session.close()
     }
 }

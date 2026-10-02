@@ -81,7 +81,8 @@ public struct ThumbnailRangeDownloader: Sendable {
             let descriptor = snapshot.sections[sectionIndex]
             var currentItems: [PhotoItem]?
             var pageFailed = false
-            for await event in await repository.page(descriptor, allowNetwork: true, priority: .prefetch) {
+            for await event in await repository.page(descriptor, collection: .personalLibrary,
+                                                      allowNetwork: true, priority: .prefetch) {
                 if Task.isCancelled { break }
                 switch event {
                 case .value(let items, let verified):
