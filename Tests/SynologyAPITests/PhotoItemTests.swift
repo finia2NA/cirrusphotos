@@ -47,6 +47,33 @@ final class PhotoItemTests: XCTestCase {
         XCTAssertEqual(resource.filename, "IMG_0007.HEIC")
     }
 
+    func testLivePhotoDecodesStillMemberAndProvidesFullImageResource() throws {
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":12,"filename":"IMG_0012.HEIC","time":1700000000,"type":"live","live_type":"photo","additional":{"thumbnail":{"unit_id":22,"cache_key":"22_revision","sm":"ready"}}}
+        """.utf8))
+
+        XCTAssertEqual(item.liveType, "photo")
+        XCTAssertTrue(item.hasDisplayableStillImage)
+        XCTAssertFalse(item.isVideo)
+        let resource = try XCTUnwrap(item.fullImageResource)
+        XCTAssertEqual(resource.unitID, 22)
+        XCTAssertEqual(resource.filename, "IMG_0012.HEIC")
+
+        let restored = try JSONDecoder().decode(PhotoItem.self, from: JSONEncoder().encode(item))
+        XCTAssertEqual(restored.liveType, "photo")
+        XCTAssertTrue(restored.hasDisplayableStillImage)
+    }
+
+    func testStandaloneVideoDoesNotProvideFullImageResource() throws {
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":13,"filename":"clip.mov","time":1700000000,"type":"video","additional":{"thumbnail":{"unit_id":23,"cache_key":"23_revision","sm":"ready"}}}
+        """.utf8))
+
+        XCTAssertTrue(item.isVideo)
+        XCTAssertFalse(item.hasDisplayableStillImage)
+        XCTAssertNil(item.fullImageResource)
+    }
+
     func testVideoDurationDecodesFromNumericAndStringMetadata() throws {
         let numeric = try JSONDecoder().decode(PhotoItem.self, from: Data("""
         {"id":8,"time":1700000000,"type":"video","additional":{"video_meta":{"duration":125500.5}}}

@@ -242,6 +242,11 @@ Requested `additional` fields may be absent when they do not apply or have no va
 
 Observed `additional.video_meta.duration` values are milliseconds (for example, `49000` represents 49 seconds). Keep this unit when serializing cached item responses and convert to seconds for display.
 
+Synology represents an iPhone Live Photo's still member with `type: "live"` and
+`live_type: "photo"`. Treat that item as a photo when requesting and displaying
+the original image; only items with `type: "video"` should enter the unsupported
+video-playback path.
+
 The section identity should include space plus the values supplied by the server, rather than only the array index:
 
 ```swift

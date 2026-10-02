@@ -506,4 +506,32 @@ final class PhotoViewerSessionTests: XCTestCase {
         XCTAssertTrue(fullCalls.isEmpty)
         await session.close()
     }
+
+    func testLivePhotoLoadsStillImageInsteadOfReportingUnsupportedVideo() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let livePhoto = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":15,"filename":"15.HEIC","time":1711929600,"type":"live","live_type":"photo","additional":{"thumbnail":{"unit_id":15,"cache_key":"key-15","sm":"ready","m":"ready","xl":"ready"}}}
+        """.utf8))
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: [livePhoto]])
+        let oneSection = TimelineSnapshot(sections: [
+            TimelineSection(offset: 0, limit: 1,
+                            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
+        ])
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+                                         index: LibraryIndex(snapshot: oneSection),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                                                               item: livePhoto, page: [livePhoto],
+                                                               pageVerified: true),
+                                         allowNetwork: true)
+
+        let loaded = await waitUntil { await session.state().fullImageData == Data([15, 0x46]) }
+        XCTAssertTrue(loaded)
+        if case .unsupported(let message) = await session.state().fullImageStatus {
+            XCTFail("Live Photo still image should load normally: \(message)")
+        }
+        let fullImageCalls = await transport.fullImageCalls
+        XCTAssertEqual(fullImageCalls, [15])
+        await session.close()
+    }
 }

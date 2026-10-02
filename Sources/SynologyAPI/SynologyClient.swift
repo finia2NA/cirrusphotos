@@ -83,7 +83,13 @@ public struct PhotoItem: Codable, Sendable, Identifiable {
     public let filename: String?
     public let time: Int64
     public let type: String
+    public let liveType: String?
     public let additional: Additional?
+
+    enum CodingKeys: String, CodingKey {
+        case id, filename, time, type, additional
+        case liveType = "live_type"
+    }
 
     public struct Additional: Codable, Sendable {
         public let thumbnail: ThumbnailInfo?
@@ -148,6 +154,16 @@ public struct PhotoItem: Codable, Sendable, Identifiable {
     }
 
     public var fullImageResource: FullImageResource? { FullImageResource(self) }
+
+    /// Live Photos are returned as `type: "live"`; `live_type` identifies the
+    /// still-image member that should use the normal original-photo path.
+    public var hasDisplayableStillImage: Bool {
+        type == "photo" || (type == "live" && liveType == "photo")
+    }
+
+    public var isVideo: Bool {
+        type == "video"
+    }
 }
 
 /// The stable server identity and revision used to request and cache an original image.
@@ -163,7 +179,8 @@ public struct FullImageResource: Hashable, Sendable {
     }
 
     public init?(_ item: PhotoItem) {
-        guard item.type == "photo", let thumbnail = item.additional?.thumbnail else { return nil }
+        guard item.hasDisplayableStillImage,
+              let thumbnail = item.additional?.thumbnail else { return nil }
         self.init(unitID: thumbnail.unitID, cacheKey: thumbnail.cacheKey, filename: item.filename)
     }
 }

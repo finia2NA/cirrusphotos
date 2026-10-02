@@ -203,7 +203,7 @@ final class PhotoViewerPresentation: ObservableObject {
         return false
     }
 
-    var showsUnsupportedVideo: Bool { state?.item?.type != nil && state?.item?.type != "photo" }
+    var showsUnsupportedVideo: Bool { state?.item?.isVideo == true }
 
     var emptyStateMessage: String? {
         guard image == nil, let state else { return nil }

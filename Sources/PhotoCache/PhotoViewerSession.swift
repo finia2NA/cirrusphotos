@@ -446,7 +446,7 @@ public actor PhotoViewerSession {
         guard !closed, let item = currentItem else { return }
         let network = allowNetwork && metadataVerified
         startThumbnail(item: item, allowNetwork: network)
-        if item.type != "photo" {
+        if item.isVideo {
             fullImageStatus = .unsupported("Video playback is not supported.")
             return
         }
@@ -824,7 +824,7 @@ public actor PhotoViewerSession {
 
     private static func identity(of item: PhotoItem) -> String {
         let thumbnail = item.additional?.thumbnail
-        return "\(item.id)|\(item.type)|\(thumbnail?.unitID ?? -1)|\(thumbnail?.cacheKey ?? "")"
+        return "\(item.id)|\(item.type)|\(item.liveType ?? "")|\(thumbnail?.unitID ?? -1)|\(thumbnail?.cacheKey ?? "")"
     }
 
     private static func resourceKey(_ resource: FullImageResource) -> String {
