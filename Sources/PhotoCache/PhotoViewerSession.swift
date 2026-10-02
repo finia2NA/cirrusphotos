@@ -145,8 +145,8 @@ public actor PhotoViewerSession {
     private var started = false
     private var closed = false
     private var retryRevision = 0
-    private var favoriteUpdating = false
-    private var favoriteFailure: String?
+    private var pendingFavoriteIDs: Set<Int64> = []
+    private var favoriteFailures: [Int64: String] = [:]
     private var favoriteValues: [Int64: Bool] = [:]
     private var favoriteTask: Task<Void, Never>?
 
@@ -225,12 +225,12 @@ public actor PhotoViewerSession {
     public func navigateNext() { navigate(by: 1) }
 
     public func toggleFavorite() async {
-        guard !closed, allowNetwork, metadataVerified, !favoriteUpdating,
-              let item = currentItem else { return }
-        favoriteUpdating = true
-        favoriteFailure = nil
-        publish()
+        guard !closed, allowNetwork, metadataVerified, let item = currentItem,
+              !pendingFavoriteIDs.contains(item.id) else { return }
         let itemID = item.id
+        pendingFavoriteIDs.insert(itemID)
+        favoriteFailures.removeValue(forKey: itemID)
+        publish()
         let section = index.sections[desired.sectionIndex]
         let target = !item.isFavorite
         applyFavorite(itemID: itemID, value: target)
@@ -239,9 +239,9 @@ public actor PhotoViewerSession {
                                               collection: collection, to: target)
         } catch {
             applyFavorite(itemID: itemID, value: item.isFavorite)
-            if currentItem?.id == itemID { favoriteFailure = error.localizedDescription }
+            favoriteFailures[itemID] = error.localizedDescription
         }
-        favoriteUpdating = false
+        pendingFavoriteIDs.remove(itemID)
         publish()
     }
 
@@ -326,7 +326,6 @@ public actor PhotoViewerSession {
             .fullImageResource
         generation &+= 1
         desired = location
-        favoriteFailure = nil
         currentItem = nil
         currentIdentity = nil
         metadataVerified = false
@@ -901,7 +900,8 @@ public actor PhotoViewerSession {
     }
 
     private func makeState() -> PhotoViewerState {
-        PhotoViewerState(
+        let currentItemID = currentItem?.id
+        return PhotoViewerState(
             selection: PhotoViewerSelection(generation: generation, itemID: currentItem?.id),
             desiredLocation: desired,
             item: currentItem,
@@ -916,8 +916,8 @@ public actor PhotoViewerSession {
             canNavigatePrevious: desired.ordinal > 0,
             canNavigateNext: desired.ordinal + 1 < totalCount,
             allowNetwork: allowNetwork,
-            favoriteUpdating: favoriteUpdating,
-            favoriteFailure: favoriteFailure,
+            favoriteUpdating: currentItemID.map(pendingFavoriteIDs.contains) ?? false,
+            favoriteFailure: currentItemID.flatMap { favoriteFailures[$0] },
             isClosed: closed
         )
     }
@@ -944,7 +944,6 @@ public actor PhotoViewerSession {
         }
         if currentItem?.id == itemID {
             currentItem = currentItem?.withFavorite(value)
-            favoriteFailure = nil
             publish()
         }
     }

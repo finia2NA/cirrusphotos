@@ -863,6 +863,57 @@ final class PhotoViewerSessionTests: XCTestCase {
         await window.cancelAll()
     }
 
+    func testFavoritePendingStateFollowsItsPhotoAcrossNavigation() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let first = try item(63)
+        let second = try item(64)
+        let section = TimelineSection(offset: 0, limit: 2,
+                                      list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 2)])
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: [first, second]])
+        await transport.setFavoriteBlocked(true)
+        let repo = try repository(root: cacheRoot, transport: transport)
+        let session = PhotoViewerSession(repository: repo,
+                                         index: LibraryIndex(snapshot: TimelineSnapshot(sections: [section])),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                                                               item: first, page: [first, second],
+                                                               pageVerified: true), allowNetwork: true)
+        _ = await session.state()
+
+        let firstToggle = Task { await session.toggleFavorite() }
+        let firstRequestStarted = await waitUntil { await transport.favoriteRequests.count == 1 }
+        XCTAssertTrue(firstRequestStarted)
+        await session.navigateNext()
+        let reachedSecond = await waitUntil {
+            let state = await session.state()
+            return state.item?.id == second.id && state.metadataVerified
+        }
+        XCTAssertTrue(reachedSecond)
+        var state = await session.state()
+        XCTAssertFalse(state.favoriteUpdating,
+                       "A write for the previous photo must not disable the new selection")
+
+        let secondToggle = Task { await session.toggleFavorite() }
+        let secondUpdated = await waitUntil {
+            let state = await session.state()
+            return state.item?.id == second.id && state.item?.isFavorite == true && state.favoriteUpdating
+        }
+        XCTAssertTrue(secondUpdated)
+        await session.navigatePrevious()
+        let returnedToFirst = await waitUntil { await session.state().item?.id == first.id }
+        XCTAssertTrue(returnedToFirst)
+        state = await session.state()
+        XCTAssertTrue(state.favoriteUpdating,
+                      "Returning to the photo whose write is pending should disable only that photo")
+
+        await transport.releaseFavoriteWrite()
+        await firstToggle.value
+        await secondToggle.value
+        let writes = await transport.favoriteWrites.count
+        XCTAssertEqual(writes, 2)
+        await session.close()
+    }
+
     func testFavoritesViewerNavigatesUsingFavoritesPages() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let first = try item(71).withFavorite(true)
