@@ -47,6 +47,7 @@ struct PhotoViewerOpenRequest {
 
 struct WindowChromeMetrics: Equatable {
     var top: CGFloat = 0
+    var trafficLightTrailing: CGFloat = 78
 }
 
 struct WindowChromeMetricsReader: NSViewRepresentable {
@@ -65,13 +66,15 @@ struct WindowChromeMetricsReader: NSViewRepresentable {
 
     final class MetricsView: NSView {
         var onChange: ((WindowChromeMetrics) -> Void)?
-        private var last = WindowChromeMetrics(top: -1)
+        private var last = WindowChromeMetrics(top: -1, trafficLightTrailing: -1)
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             guard let window else { return }
             window.styleMask.insert(.fullSizeContentView)
-            window.titlebarAppearsTransparent = true
+            // Keep the native toolbar material across the whole window. The content
+            // still extends behind it through fullSizeContentView.
+            window.titlebarAppearsTransparent = false
             reportSoon()
         }
 
@@ -91,8 +94,13 @@ struct WindowChromeMetricsReader: NSViewRepresentable {
             let top = isFlipped
                 ? max(0, layout.minY - contentBounds.minY)
                 : max(0, contentBounds.maxY - layout.maxY)
-            let metrics = WindowChromeMetrics(top: top)
-            guard abs(metrics.top - last.top) > 0.5 else { return }
+            let trafficLightTrailing = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
+                .compactMap { window.standardWindowButton($0) }
+                .map { $0.convert($0.bounds, to: content).maxX }
+                .max() ?? 0
+            let metrics = WindowChromeMetrics(top: top, trafficLightTrailing: trafficLightTrailing)
+            guard abs(metrics.top - last.top) > 0.5 ||
+                    abs(metrics.trafficLightTrailing - last.trafficLightTrailing) > 0.5 else { return }
             last = metrics
             onChange?(metrics)
         }
@@ -179,6 +187,13 @@ final class PhotoViewerPresentation: ObservableObject {
             }
         }
         return [date, status].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    var showsLoadingIndicator: Bool {
+        guard let state else { return true }
+        if isDecodingFullImage { return true }
+        if case .loading = state.fullImageStatus { return true }
+        return false
     }
 
     var canRetry: Bool {

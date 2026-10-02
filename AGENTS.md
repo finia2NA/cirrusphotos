@@ -14,6 +14,10 @@
 
 Keep the amount of marketing-sounding, excessive copy in the application and its documentation to a minimum. Focus on clarity in both.
 
+- Tell the user whenever you lack confidence that you can proceed with a clean implementation. Explain the uncertainty and what would resolve it.
+- Tell the user when a HAR capture from the Synology Photos web app would help, and identify the interaction or request that should be captured.
+- If the goal is unclear or more information is needed, tell the user and ask focused clarifying questions.
+
 ## Top Level Documentation
 
 Maintain the "Project overview" section in the repository's root `AGENTS.md`.

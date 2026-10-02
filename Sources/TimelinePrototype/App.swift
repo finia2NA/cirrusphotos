@@ -54,6 +54,13 @@ private struct AppShellView: View {
                         .ignoresSafeArea(.container, edges: .top)
                 }
 
+                Rectangle()
+                    .fill(.regularMaterial)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: topInset)
+                    .ignoresSafeArea(.container, edges: .top)
+                    .allowsHitTesting(false)
+
                 if sidebarVisible {
                     sidebar()
                         .frame(width: sidebarWidth)
@@ -68,6 +75,7 @@ private struct AppShellView: View {
             .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: sidebarVisible)
         }
         .toolbar(removing: .title)
+        .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         .toolbar { applicationToolbar }
         .onExitCommand {
             if viewer != nil { closeViewer() }
@@ -123,51 +131,72 @@ private struct AppShellView: View {
     @ToolbarContentBuilder
     private var applicationToolbar: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
-            HStack(spacing: 8) {
-                if viewer != nil {
-                    Button(action: closeViewer) {
-                        Label("Back to Library", systemImage: "chevron.left")
-                    }
-                    .help("Back to Library")
-                }
-                Button {
-                    sidebarVisible.toggle()
-                } label: {
-                    Label("Toggle Sidebar", systemImage: "sidebar.left")
-                }
-                .help(sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
+            Color.clear
+                .frame(width: toolbarLeadingAlignmentWidth, height: 1)
+                .accessibilityHidden(true)
+        }
+        .sharedBackgroundVisibility(.hidden)
+
+        ToolbarItem(placement: .navigation) {
+            Button {
+                sidebarVisible.toggle()
+            } label: {
+                Label("Toggle Sidebar", systemImage: "sidebar.left")
             }
+            .help(sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
         }
 
+        ToolbarSpacer(.fixed, placement: .navigation)
+
         if let viewer {
-            ToolbarItem(placement: .automatic) {
+            ToolbarItem(placement: .navigation) {
+                Button(action: closeViewer) {
+                    Label("Back to Library", systemImage: "chevron.left")
+                }
+                .help("Back to Library")
+            }
+            ToolbarSpacer(.fixed, placement: .navigation)
+            ToolbarItem(placement: .navigation) {
                 ViewerZoomControl(viewer: viewer)
             }
             ToolbarItem(placement: .principal) {
                 ViewerToolbarTitle(viewer: viewer)
             }
-            ToolbarItem(placement: .primaryAction) {
-                ConnectionToolbarItem()
-            }
+            .sharedBackgroundVisibility(.hidden)
         } else {
-            ToolbarItem(placement: .principal) {
-                HStack(spacing: 6) {
-                    Image(systemName: "minus").accessibilityHidden(true)
-                    Slider(value: $model.displayRowHeight, in: 100...300)
-                        .controlSize(.small)
-                        .frame(width: 110)
-                        .accessibilityLabel("Photo size")
-                        .accessibilityValue("\(Int(model.displayRowHeight.rounded())) points")
-                    Image(systemName: "plus").accessibilityHidden(true)
-                }
-                .imageScale(.small)
-                .help("Photo size")
-            }
-
-            ToolbarItem(placement: .primaryAction) {
-                ConnectionToolbarItem()
+            ToolbarItem(placement: .navigation) {
+                LibrarySizeControl(value: $model.displayRowHeight)
             }
         }
+
+        ToolbarSpacer(.flexible, placement: .primaryAction)
+        ToolbarItem(placement: .primaryAction) {
+            ConnectionToolbarItem()
+        }
+    }
+
+    /// Navigation toolbar content begins just after the traffic lights. This fills the
+    /// remaining portion of the sidebar so its toggle's trailing edge follows the divider.
+    private var toolbarLeadingAlignmentWidth: CGFloat {
+        max(0, sidebarWidth - chrome.trafficLightTrailing - 64)
+    }
+}
+
+private struct LibrarySizeControl: View {
+    @Binding var value: Double
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "minus").accessibilityHidden(true)
+            Slider(value: $value, in: 100...300)
+                .controlSize(.small)
+                .frame(width: 110)
+                .accessibilityLabel("Photo size")
+                .accessibilityValue("\(Int(value.rounded())) points")
+            Image(systemName: "plus").accessibilityHidden(true)
+        }
+        .imageScale(.small)
+        .help("Photo size")
     }
 }
 
@@ -194,11 +223,17 @@ private struct ViewerToolbarTitle: View {
                 .font(.headline)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Text(viewer.detailLine)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            HStack(spacing: 5) {
+                if viewer.showsLoadingIndicator {
+                    ProgressView().controlSize(.mini)
+                        .accessibilityHidden(true)
+                }
+                Text(viewer.detailLine)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
         .frame(minWidth: 100, idealWidth: 270, maxWidth: 360)
         .help(viewer.detailLine)
