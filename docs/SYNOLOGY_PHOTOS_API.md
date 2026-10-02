@@ -240,6 +240,8 @@ additional
 
 Requested `additional` fields may be absent when they do not apply or have no value. Models should therefore make nested additions optional and should tolerate future keys.
 
+Observed `additional.video_meta.duration` values are milliseconds (for example, `49000` represents 49 seconds). Keep this unit when serializing cached item responses and convert to seconds for display.
+
 The section identity should include space plus the values supplied by the server, rather than only the array index:
 
 ```swift

@@ -101,30 +101,32 @@ public struct PhotoItem: Codable, Sendable, Identifiable {
         public let height: Int
     }
 
-    /// Synology supplies video duration as seconds, but captures have represented it as
-    /// either an integer, a floating-point number, or a numeric string.
+    /// Synology supplies video duration in milliseconds, as an integer, a
+    /// floating-point number, or a numeric string. Keep the wire value intact
+    /// when caching and expose seconds to the UI.
     public struct VideoMetadata: Codable, Sendable {
-        public let duration: TimeInterval?
+        private let durationMilliseconds: Double?
+        public var duration: TimeInterval? { durationMilliseconds.map { $0 / 1_000 } }
 
         enum CodingKeys: String, CodingKey { case duration }
 
         public init(from decoder: Decoder) throws {
             guard let container = try? decoder.container(keyedBy: CodingKeys.self) else {
-                duration = nil
+                durationMilliseconds = nil
                 return
             }
             if let value = try? container.decode(Double.self, forKey: .duration) {
-                duration = value
+                durationMilliseconds = value
             } else if let value = try? container.decode(String.self, forKey: .duration) {
-                duration = Double(value)
+                durationMilliseconds = Double(value)
             } else {
-                duration = nil
+                durationMilliseconds = nil
             }
         }
 
         public func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encodeIfPresent(duration, forKey: .duration)
+            try container.encodeIfPresent(durationMilliseconds, forKey: .duration)
         }
     }
 

@@ -49,13 +49,22 @@ final class PhotoItemTests: XCTestCase {
 
     func testVideoDurationDecodesFromNumericAndStringMetadata() throws {
         let numeric = try JSONDecoder().decode(PhotoItem.self, from: Data("""
-        {"id":8,"time":1700000000,"type":"video","additional":{"video_meta":{"duration":125.5}}}
+        {"id":8,"time":1700000000,"type":"video","additional":{"video_meta":{"duration":125500.5}}}
         """.utf8))
         let string = try JSONDecoder().decode(PhotoItem.self, from: Data("""
-        {"id":9,"time":1700000000,"type":"video","additional":{"video_meta":{"duration":"61"}}}
+        {"id":9,"time":1700000000,"type":"video","additional":{"video_meta":{"duration":"61000"}}}
         """.utf8))
-        XCTAssertEqual(numeric.additional?.videoMeta?.duration, 125.5)
+        XCTAssertEqual(numeric.additional?.videoMeta?.duration, 125.5005)
         XCTAssertEqual(string.additional?.videoMeta?.duration, 61)
+        let restored = try JSONDecoder().decode(PhotoItem.self, from: JSONEncoder().encode(string))
+        XCTAssertEqual(restored.additional?.videoMeta?.duration, 61)
+    }
+
+    func testObservedMillisecondDurationDoesNotBecomeHours() throws {
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":11,"time":1700000000,"type":"video","additional":{"video_meta":{"duration":49000}}}
+        """.utf8))
+        XCTAssertEqual(item.additional?.videoMeta?.duration, 49)
     }
 
     func testUnexpectedVideoMetadataShapeDoesNotDiscardItem() throws {
