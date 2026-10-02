@@ -111,6 +111,23 @@ final class PhotoItemTests: XCTestCase {
         XCTAssertEqual(after.utcDayID, "2024-01-01")
     }
 
+    func testFavoriteDecodesAndOldCachedItemsRemainUnfavorited() throws {
+        let favored = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":1,"time":1700000000,"type":"photo","additional":{"favorite":true}}
+        """.utf8))
+        let legacy = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":2,"time":1700000000,"type":"photo","additional":{"resolution":{"width":4,"height":2}}}
+        """.utf8))
+        XCTAssertTrue(favored.isFavorite)
+        XCTAssertFalse(legacy.isFavorite)
+        let updated = legacy.withFavorite(true)
+        XCTAssertTrue(updated.isFavorite)
+        XCTAssertEqual(updated.displayAspectRatio, 2)
+        let roundTrip = try JSONDecoder().decode(PhotoItem.self, from: JSONEncoder().encode(updated))
+        XCTAssertTrue(roundTrip.isFavorite)
+        XCTAssertFalse(roundTrip.withFavorite(false).isFavorite)
+    }
+
     private func decode(id: Int = 1, resolution: String, orientation: String) throws -> PhotoItem {
         let json = "{\"id\":\(id),\"time\":1700000000,\"type\":\"photo\",\"additional\":{\"resolution\":\(resolution)\(orientation)}}"
         return try JSONDecoder().decode(PhotoItem.self, from: Data(json.utf8))

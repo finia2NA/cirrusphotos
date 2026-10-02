@@ -13,6 +13,12 @@ public enum AuthenticationStatus: Sendable, Equatable {
     case failed(String)
 }
 
+public struct FavoriteChange: Sendable {
+    public let itemID: Int64
+    public let section: TimelineSection
+    public let favorite: Bool
+}
+
 private struct SharedJob<Value: Sendable> {
     let id: UUID
     let task: Task<Value, Error>
@@ -57,6 +63,11 @@ public actor CachedPhotosRepository {
     private var imageJobs: [String: SharedJob<ImageResolution>] = [:]
     private var fullImageJobs: [String: SharedJob<FullImageResolution>] = [:]
     private var pendingPagePromotions: [String] = []
+    private var favoriteObservers: [UUID: AsyncStream<FavoriteChange>.Continuation] = [:]
+    private var favoriteOverrides: [Int64: Bool] = [:]
+    private var latestFavoriteChanges: [Int64: FavoriteChange] = [:]
+    private var pendingFavoriteIDs: Set<Int64> = []
+    private var favoriteWriteTail: Task<Void, Never>?
 
     public init(credentials: SynologyCredentials, baseURL: URL = SynologyClient.defaultBaseURL,
                 budget: Int64 = CacheBudget.bytes(at: 0.5), cacheRoot: URL? = nil,
@@ -127,6 +138,7 @@ public actor CachedPhotosRepository {
                 let cached = try? await store.get(key)
                 guard !Task.isCancelled else { continuation.finish(); return }
                 let items = cached.flatMap { try? JSONDecoder().decode([PhotoItem].self, from: $0.data) }
+                    .map(applyingFavoriteOverrides)
                 if let items { continuation.yield(.value(items, verified: cached?.validatedRun == runID)) }
                 guard allowNetwork && !(cached?.validatedRun == runID && items != nil) else {
                     continuation.finish(); return
@@ -135,7 +147,7 @@ public actor CachedPhotosRepository {
                     let task = registerPage(section, key: key, subscriber: subscriber, priority: priority)
                     let current = try await task.value
                     guard !Task.isCancelled else { continuation.finish(); return }
-                    continuation.yield(.value(current, verified: true))
+                    continuation.yield(.value(applyingFavoriteOverrides(current), verified: true))
                 } catch {
                     if !Task.isCancelled && !(error is CancellationError) &&
                         !(error is NetworkGateError && priority == .prefetch) {
@@ -226,6 +238,58 @@ public actor CachedPhotosRepository {
     public func setBudget(_ bytes: Int64) async throws { try await store.setBudget(bytes) }
     public func usage() async throws -> Int64 { try await store.usage() }
     public func clearCache() async throws { try await store.clear() }
+
+    public func favoriteChanges() -> AsyncStream<FavoriteChange> {
+        let id = UUID()
+        return AsyncStream(bufferingPolicy: .unbounded) { continuation in
+            favoriteObservers[id] = continuation
+            for change in latestFavoriteChanges.values { continuation.yield(change) }
+            continuation.onTermination = { @Sendable _ in
+                Task { await self.removeFavoriteObserver(id) }
+            }
+        }
+    }
+
+    /// The independent task survives a viewer closing after the request starts. Writes
+    /// are serialized so an older response cannot supersede a newer user action.
+    public func setFavorite(itemID: Int64, in section: TimelineSection, to favorite: Bool) async throws {
+        guard pendingFavoriteIDs.insert(itemID).inserted else {
+            throw SynologyAPIError.unsupported("A favorite change is already in progress.")
+        }
+        let previous = favoriteWriteTail
+        let operation = Task<Void, Error> {
+            defer { pendingFavoriteIDs.remove(itemID) }
+            await previous?.value
+            let generation = await store.currentGeneration()
+            try await connect()
+            try await client.setFavorite(itemIDs: [itemID], favorite: favorite)
+            favoriteOverrides[itemID] = favorite
+            if let key = CacheKey.page(namespace: namespace, section: section),
+               let cached = try? await store.get(key),
+               let items = try? JSONDecoder().decode([PhotoItem].self, from: cached.data),
+               items.contains(where: { $0.id == itemID }),
+               let bytes = try? JSONEncoder().encode(items.map { $0.id == itemID ? $0.withFavorite(favorite) : $0 }) {
+                try? await store.put(key, kind: .page, data: bytes,
+                                     validatedRun: cached.validatedRun,
+                                     etag: cached.etag, lastModified: cached.lastModified,
+                                     expectedGeneration: generation)
+            }
+            let change = FavoriteChange(itemID: itemID, section: section, favorite: favorite)
+            latestFavoriteChanges[itemID] = change
+            for observer in favoriteObservers.values { observer.yield(change) }
+        }
+        favoriteWriteTail = Task { _ = try? await operation.value }
+        try await operation.value
+    }
+
+    private func applyingFavoriteOverrides(_ items: [PhotoItem]) -> [PhotoItem] {
+        items.map { item in
+            guard let favorite = favoriteOverrides[item.id] else { return item }
+            return item.withFavorite(favorite)
+        }
+    }
+
+    private func removeFavoriteObserver(_ id: UUID) { favoriteObservers.removeValue(forKey: id) }
 
     /// Resolves one thumbnail through the normal shared cache pipeline without retaining bytes.
     /// Bulk callers must use `.prefetch` so visible browsing can move ahead in the gate.
@@ -381,11 +445,12 @@ public actor CachedPhotosRepository {
             try await connect()
             let items = try await client.items(in: section)
             try Task.checkCancellation()
-            if let bytes = try? JSONEncoder().encode(items) {
+            let current = applyingFavoriteOverrides(items)
+            if let bytes = try? JSONEncoder().encode(current) {
                 try? await store.put(key, kind: .page, data: bytes, validatedRun: runID,
                                      expectedGeneration: generation)
             }
-            return items
+            return applyingFavoriteOverrides(current)
         }
         pageJobs[key] = SharedJob(id: id, task: task, subscribers: [subscriber])
         return task

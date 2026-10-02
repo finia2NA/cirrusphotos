@@ -35,6 +35,8 @@ public actor LibraryPageWindow {
     private var failedSections: Set<Int> = []
     private var retryRevision = 0
     private var observers: [UUID: AsyncStream<LibraryPageEvent>.Continuation] = [:]
+    private var favoriteTask: Task<Void, Never>?
+    private var favoriteValues: [Int64: Bool] = [:]
 
     public init(repository: CachedPhotosRepository, maximumPages: Int = 8) {
         self.repository = repository
@@ -42,6 +44,7 @@ public actor LibraryPageWindow {
     }
 
     public func events() -> AsyncStream<LibraryPageEvent> {
+        observeFavoritesIfNeeded()
         let id = UUID()
         return AsyncStream(bufferingPolicy: .bufferingNewest(maximumPages * 2 + 4)) { continuation in
             observers[id] = continuation
@@ -67,6 +70,7 @@ public actor LibraryPageWindow {
     /// Reuse a prebuilt index while the viewport changes; hashing the full timeline is unnecessary.
     public func update(index: LibraryIndex, allowNetwork: Bool,
                        visible: [Int], prefetch: [Int], retryRevision: Int = 0) {
+        observeFavoritesIfNeeded()
         if self.retryRevision != retryRevision {
             self.retryRevision = retryRevision
             for section in failedSections {
@@ -145,6 +149,8 @@ public actor LibraryPageWindow {
         failedSections.removeAll()
         for section in pages.keys { publish(.removed(sectionIndex: section)) }
         pages.removeAll()
+        favoriteTask?.cancel()
+        favoriteTask = nil
     }
 
     private func receive(_ event: ResourceEvent<[PhotoItem]>, section: Int,
@@ -153,7 +159,11 @@ public actor LibraryPageWindow {
         switch event {
         case .value(let items, let verified):
             failedSections.remove(section)
-            let page = LibraryPage(sectionIndex: section, items: items, verified: verified)
+            let page = LibraryPage(sectionIndex: section,
+                                   items: items.map { item in
+                                       guard let value = favoriteValues[item.id] else { return item }
+                                       return item.withFavorite(value)
+                                   }, verified: verified)
             pages[section] = page
             publish(.page(page, fingerprint: identity))
         case .failure(let message):
@@ -170,6 +180,28 @@ public actor LibraryPageWindow {
         }
     }
     private func removeObserver(_ id: UUID) { observers.removeValue(forKey: id) }
+    private func observeFavoritesIfNeeded() {
+        guard favoriteTask == nil else { return }
+        let repository = repository
+        favoriteTask = Task { [weak self] in
+            for await change in await repository.favoriteChanges() {
+                guard !Task.isCancelled else { return }
+                await self?.receiveFavorite(change)
+            }
+        }
+    }
+
+    private func receiveFavorite(_ change: FavoriteChange) {
+        favoriteValues[change.itemID] = change.favorite
+        guard let fingerprint else { return }
+        for (section, page) in pages where page.items.contains(where: { $0.id == change.itemID }) {
+            let updated = LibraryPage(sectionIndex: section,
+                                      items: page.items.map { $0.id == change.itemID ? $0.withFavorite(change.favorite) : $0 },
+                                      verified: page.verified)
+            pages[section] = updated
+            publish(.page(updated, fingerprint: fingerprint))
+        }
+    }
     private func publish(_ event: LibraryPageEvent) {
         for observer in observers.values { observer.yield(event) }
     }

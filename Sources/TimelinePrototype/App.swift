@@ -159,6 +159,15 @@ private struct AppShellView: View {
             ToolbarItem(placement: .navigation) {
                 ViewerZoomControl(viewer: viewer)
             }
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: viewer.toggleFavorite) {
+                    Label(viewer.state?.item?.isFavorite == true ? "Remove from Favorites" : "Add to Favorites",
+                          systemImage: viewer.state?.item?.isFavorite == true ? "heart.fill" : "heart")
+                }
+                .disabled(!viewer.canToggleFavorite)
+                .keyboardShortcut(".", modifiers: [])
+                .help(viewer.state?.favoriteFailure ?? "Toggle Favorite (.)")
+            }
             ToolbarItem(placement: .principal) {
                 ViewerToolbarTitle(viewer: viewer)
             }

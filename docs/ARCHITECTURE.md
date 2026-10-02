@@ -28,6 +28,8 @@ The original-photo repository uses separately keyed compressed files and conditi
 
 Thumbnail activation supplies the displayed image and an AppKit window-coordinate source rectangle for the expansion transition. The viewer keeps its image and zoom state per window; arrows change the desired selection, Back/Escape closes it, and a changed timeline snapshot invalidates navigation with an explicit reopen message. Preview and original upgrades share the current transform.
 
+Personal Space item pages include optional `additional.favorite`; omission means the item is not favorited. The viewer requires verified item metadata before enabling its heart toolbar button or `.` shortcut. `SYNO.Foto.Browse.Item.set_favorite` writes are serialized by the shared repository and remain active if the viewer closes. On success, the repository patches the exact cached page and broadcasts the new state to retained viewer and library pages. The timeline shows a heart badge for favorites. A failed write keeps the previous state and reports the error in the viewer toolbar status.
+
 `FullImageDecoder` performs orientation-aware ImageIO decoding away from the main actor. It preserves original pixel dimensions, admits one decode and one replaceable waiting request, and rejects images above a 384 MB decoded-image limit with an explicit error. Neighbor prefetch retains compressed data only. `PhotoViewportTransform` computes fit, pointer-anchored magnification, and bounded pan in canvas coordinates, independently of the interface.
 
 ## Geometry and input

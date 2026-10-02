@@ -20,6 +20,8 @@ private actor ViewerTransport: PhotosTransport {
     private(set) var fullImageCalls: [Int64] = []
     private(set) var fullImageKeys: [String] = []
     private(set) var cancelledFullImages: Set<Int64> = []
+    private(set) var favoriteWrites: [(Int64, Bool)] = []
+    var failFavorite = false
 
     func configure(pages: [Int: [PhotoItem]], blockedPages: Set<Int> = [],
                    blockedFullImages: Set<Int64> = [], failImages: Bool = false) {
@@ -31,8 +33,13 @@ private actor ViewerTransport: PhotosTransport {
 
     func releasePage(_ offset: Int) { releasedPages.insert(offset) }
     func releaseFullImage(_ id: Int64) { releasedFullImages.insert(id) }
+    func setFavoriteFailure(_ enabled: Bool) { failFavorite = enabled }
 
     func login(credentials: SynologyCredentials) async throws {}
+    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
+        if failFavorite { throw ViewerFailure(message: "Favorite write failed") }
+        favoriteWrites.append(contentsOf: itemIDs.map { ($0, favorite) })
+    }
     func timeline(initial: Bool) async throws -> TimelineSnapshot { TimelineSnapshot(sections: []) }
     func items(in section: TimelineSection) async throws -> [PhotoItem] {
         pageCalls.append(section.offset)
@@ -533,5 +540,86 @@ final class PhotoViewerSessionTests: XCTestCase {
         let fullImageCalls = await transport.fullImageCalls
         XCTAssertEqual(fullImageCalls, [15])
         await session.close()
+    }
+
+    func testFavoriteWriteUpdatesViewerRetainedPageAndDiskCache() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let first = try item(31)
+        let second = try item(32)
+        let section = TimelineSection(offset: 0, limit: 2,
+                                      list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 2)])
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: [first, second]])
+        let repo = try repository(root: cacheRoot, transport: transport)
+        for await _ in await repo.page(section) {}
+        let window = LibraryPageWindow(repository: repo)
+        await window.update(snapshot: TimelineSnapshot(sections: [section]), allowNetwork: true,
+                            visible: [0], prefetch: [])
+        let pageLoaded = await waitUntil { await window.retainedPages().first?.items.count == 2 }
+        XCTAssertTrue(pageLoaded)
+        let session = PhotoViewerSession(repository: repo,
+                                         index: LibraryIndex(snapshot: TimelineSnapshot(sections: [section])),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                                                               item: first, page: [first, second],
+                                                               pageVerified: true), allowNetwork: true)
+        _ = await session.state()
+        await session.toggleFavorite()
+        let favoredState = await session.state()
+        XCTAssertTrue(favoredState.item?.isFavorite == true)
+        let writes = await transport.favoriteWrites
+        XCTAssertEqual(writes.count, 1)
+        let badgeUpdated = await waitUntil { await window.retainedPages().first?.items.first?.isFavorite == true }
+        XCTAssertTrue(badgeUpdated)
+        let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(server: server, account: credentials.username),
+                                              section: section))
+        let cachedBytes = try await repo.store.get(key)?.data
+        let bytes = try XCTUnwrap(cachedBytes)
+        let stored = try JSONDecoder().decode([PhotoItem].self, from: bytes)
+        XCTAssertTrue(stored[0].isFavorite)
+        await session.toggleFavorite()
+        let unfavoredState = await session.state()
+        XCTAssertFalse(unfavoredState.item?.isFavorite == true)
+        let badgeCleared = await waitUntil { await window.retainedPages().first?.items.first?.isFavorite == false }
+        XCTAssertTrue(badgeCleared)
+        await session.close()
+        await window.cancelAll()
+    }
+
+    func testFavoriteFailurePreservesPreviousState() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let first = try item(41)
+        let section = TimelineSection(offset: 0, limit: 1,
+                                      list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: [first]])
+        await transport.setFavoriteFailure(true)
+        let repo = try repository(root: cacheRoot, transport: transport)
+        let session = PhotoViewerSession(repository: repo,
+                                         index: LibraryIndex(snapshot: TimelineSnapshot(sections: [section])),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                                                               item: first, page: [first], pageVerified: true),
+                                         allowNetwork: true)
+        _ = await session.state()
+        await session.toggleFavorite()
+        let state = await session.state()
+        XCTAssertFalse(state.item?.isFavorite == true)
+        XCTAssertFalse(state.favoriteUpdating)
+        XCTAssertTrue(state.favoriteFailure?.contains("Favorite write failed") == true)
+        await session.close()
+    }
+
+    func testFavoriteChangesReplayToLateSubscribers() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let section = TimelineSection(offset: 0, limit: 1,
+                                      list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
+        let transport = ViewerTransport()
+        let repo = try repository(root: cacheRoot, transport: transport)
+
+        try await repo.setFavorite(itemID: 51, in: section, to: true)
+        var changes = await repo.favoriteChanges().makeAsyncIterator()
+        let replayed = await changes.next()
+
+        XCTAssertEqual(replayed?.itemID, 51)
+        XCTAssertEqual(replayed?.favorite, true)
     }
 }

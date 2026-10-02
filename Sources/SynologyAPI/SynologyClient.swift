@@ -84,7 +84,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable {
     public let time: Int64
     public let type: String
     public let liveType: String?
-    public let additional: Additional?
+    public var additional: Additional?
 
     enum CodingKeys: String, CodingKey {
         case id, filename, time, type, additional
@@ -96,11 +96,20 @@ public struct PhotoItem: Codable, Sendable, Identifiable {
         public let resolution: Resolution?
         public let orientation: Int?
         public let videoMeta: VideoMetadata?
+        public var favorite: Bool?
 
         enum CodingKeys: String, CodingKey {
-            case thumbnail, resolution, orientation
+            case thumbnail, resolution, orientation, favorite
             case videoMeta = "video_meta"
         }
+    }
+    public var isFavorite: Bool { additional?.favorite == true }
+
+    public func withFavorite(_ favorite: Bool) -> PhotoItem {
+        var copy = self
+        if copy.additional == nil { copy.additional = Additional(thumbnail: nil, resolution: nil, orientation: nil, videoMeta: nil, favorite: favorite) }
+        else { copy.additional?.favorite = favorite }
+        return copy
     }
     public struct Resolution: Codable, Sendable {
         public let width: Int
@@ -225,6 +234,7 @@ public protocol PhotosTransport: Sendable {
     func login(credentials: SynologyCredentials) async throws
     func timeline(initial: Bool) async throws -> TimelineSnapshot
     func items(in section: TimelineSection) async throws -> [PhotoItem]
+    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse
     func fullImage(_ resource: FullImageResource,
@@ -232,6 +242,9 @@ public protocol PhotosTransport: Sendable {
 }
 
 public extension PhotosTransport {
+    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
+        throw SynologyAPIError.unsupported("This Photos transport does not support favorites.")
+    }
     /// Keeps existing test and alternate transports source-compatible while making lack of
     /// original-image support explicit when the new repository API is used.
     func fullImage(_ resource: FullImageResource,
@@ -314,6 +327,20 @@ public actor SynologyClient: PhotosTransport {
         )
         guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
         return data.list
+    }
+
+    public func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        guard !itemIDs.isEmpty else { return }
+        let ids = "[" + itemIDs.map(String.init).joined(separator: ",") + "]"
+        let response: APIEnvelope<EmptyData> = try await post(
+            path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item",
+            parameters: ["api": "SYNO.Foto.Browse.Item", "version": "7",
+                         "method": "set_favorite", "id": ids,
+                         "favorite": favorite ? "true" : "false", "_sid": sid],
+            authenticated: true
+        )
+        guard response.success else { throw SynologyAPIError.api(response.error?.code ?? -1) }
     }
 
     public func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,

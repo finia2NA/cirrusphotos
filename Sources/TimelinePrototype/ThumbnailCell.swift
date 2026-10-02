@@ -45,9 +45,21 @@ struct ThumbnailCell: View {
                            alignment: .bottomTrailing)
                     .accessibilityLabel("Video duration \(Self.formattedDuration(duration))")
             }
+            if item.isFavorite {
+                Image(systemName: "heart.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(5)
+                    .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 4))
+                    .padding(5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity,
+                           alignment: .bottomLeading)
+                    .accessibilityLabel("Favorite")
+            }
             if let onActivate {
                 ThumbnailActivationSurface(itemID: item.id, image: image,
-                                           label: item.filename.map { "Open \($0)" } ?? "Open photo",
+                                           label: (item.filename.map { "Open \($0)" } ?? "Open photo") +
+                                               (item.isFavorite ? ", favorite" : ""),
                                            onActivate: onActivate)
             }
         }

@@ -63,6 +63,8 @@ public struct PhotoViewerState: Sendable {
     public let canNavigatePrevious: Bool
     public let canNavigateNext: Bool
     public let allowNetwork: Bool
+    public let favoriteUpdating: Bool
+    public let favoriteFailure: String?
     public let isClosed: Bool
 }
 
@@ -124,6 +126,10 @@ public actor PhotoViewerSession {
     private var started = false
     private var closed = false
     private var retryRevision = 0
+    private var favoriteUpdating = false
+    private var favoriteFailure: String?
+    private var favoriteValues: [Int64: Bool] = [:]
+    private var favoriteTask: Task<Void, Never>?
 
     private var pages: [Int: PageEntry] = [:]
     private var pageJobs: [Int: PageJob] = [:]
@@ -197,6 +203,25 @@ public actor PhotoViewerSession {
     public func navigatePrevious() { navigate(by: -1) }
     public func navigateNext() { navigate(by: 1) }
 
+    public func toggleFavorite() async {
+        guard !closed, allowNetwork, metadataVerified, !favoriteUpdating,
+              let item = currentItem else { return }
+        favoriteUpdating = true
+        favoriteFailure = nil
+        publish()
+        let itemID = item.id
+        let section = index.sections[desired.sectionIndex]
+        let target = !item.isFavorite
+        do {
+            try await repository.setFavorite(itemID: itemID, in: section, to: target)
+            applyFavorite(itemID: itemID, value: target)
+        } catch {
+            if currentItem?.id == itemID { favoriteFailure = error.localizedDescription }
+        }
+        favoriteUpdating = false
+        publish()
+    }
+
     public func navigate(by delta: Int) {
         guard !closed, totalCount > 0, delta != 0 else { return }
         startIfNeeded()
@@ -246,6 +271,7 @@ public actor PhotoViewerSession {
         fullTask = nil
         pageJobs.removeAll()
         fullJobs.removeAll()
+        favoriteTask?.cancel()
         publish()
         for observer in observers.values { observer.finish() }
         observers.removeAll()
@@ -257,6 +283,13 @@ public actor PhotoViewerSession {
     private func startIfNeeded() {
         guard !started, !closed else { return }
         started = true
+        let repository = repository
+        favoriteTask = Task { [weak self] in
+            for await change in await repository.favoriteChanges() {
+                guard !Task.isCancelled else { return }
+                await self?.applyFavorite(itemID: change.itemID, value: change.favorite)
+            }
+        }
         startAssetsForCurrentMetadata()
         ensurePage(desired.sectionIndex, visible: true)
         scheduleThumbnailNeighbors()
@@ -269,6 +302,7 @@ public actor PhotoViewerSession {
             .fullImageResource
         generation &+= 1
         desired = location
+        favoriteFailure = nil
         currentItem = nil
         currentIdentity = nil
         metadataVerified = false
@@ -332,6 +366,7 @@ public actor PhotoViewerSession {
         case .value(let items, let verified):
             if pages[sectionIndex]?.verified == true && !verified { return }
             if sectionIndex == desired.sectionIndex && metadataVerified && !verified { return }
+            let items = applyingFavorites(items)
             pages[sectionIndex] = PageEntry(items: items, verified: verified)
             trimPages(around: desired)
             if sectionIndex == desired.sectionIndex {
@@ -354,7 +389,7 @@ public actor PhotoViewerSession {
 
     private func applyCurrentPage(_ page: PageEntry, at location: PhotoViewerLocation) {
         guard desired == location else { return }
-        let item: PhotoItem
+        var item: PhotoItem
         if let selected = currentItem, page.verified {
             if let shiftedOffset = page.items.firstIndex(where: { $0.id == selected.id }) {
                 let spanStart = spans[location.sectionIndex].start
@@ -379,6 +414,7 @@ public actor PhotoViewerSession {
                 return
             }
         }
+        item = applyingFavorite(item)
         let identity = Self.identity(of: item)
         if currentIdentity != identity {
             generation &+= 1
@@ -811,6 +847,8 @@ public actor PhotoViewerSession {
             canNavigatePrevious: desired.ordinal > 0,
             canNavigateNext: desired.ordinal + 1 < totalCount,
             allowNetwork: allowNetwork,
+            favoriteUpdating: favoriteUpdating,
+            favoriteFailure: favoriteFailure,
             isClosed: closed
         )
     }
@@ -821,6 +859,26 @@ public actor PhotoViewerSession {
     }
 
     private func removeObserver(_ id: UUID) { observers.removeValue(forKey: id) }
+
+    private func applyingFavorite(_ item: PhotoItem) -> PhotoItem {
+        guard let value = favoriteValues[item.id] else { return item }
+        return item.withFavorite(value)
+    }
+
+    private func applyingFavorites(_ items: [PhotoItem]) -> [PhotoItem] { items.map(applyingFavorite) }
+
+    private func applyFavorite(itemID: Int64, value: Bool) {
+        favoriteValues[itemID] = value
+        for (section, page) in pages where page.items.contains(where: { $0.id == itemID }) {
+            pages[section] = PageEntry(items: page.items.map { $0.id == itemID ? $0.withFavorite(value) : $0 },
+                                       verified: page.verified)
+        }
+        if currentItem?.id == itemID {
+            currentItem = currentItem?.withFavorite(value)
+            favoriteFailure = nil
+            publish()
+        }
+    }
 
     private static func identity(of item: PhotoItem) -> String {
         let thumbnail = item.additional?.thumbnail

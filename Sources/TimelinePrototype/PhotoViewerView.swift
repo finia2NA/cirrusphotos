@@ -172,6 +172,8 @@ final class PhotoViewerPresentation: ObservableObject {
         let date = state.item.map { Self.dateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval($0.time))) }
         let status: String
         if let invalidationMessage { status = invalidationMessage }
+        else if let failure = state.favoriteFailure { status = "Favorite change failed: \(failure)" }
+        else if state.favoriteUpdating { status = "Updating favorite…" }
         else if let decodeFailure { status = decodeFailure }
         else if state.item == nil, case .failure(let message) = state.metadataStatus { status = message }
         else {
@@ -204,6 +206,17 @@ final class PhotoViewerPresentation: ObservableObject {
     }
 
     var showsUnsupportedVideo: Bool { state?.item?.isVideo == true }
+
+    var canToggleFavorite: Bool {
+        invalidationMessage == nil && !isClosing && state?.item != nil &&
+            state?.metadataVerified == true && state?.allowNetwork == true &&
+            state?.favoriteUpdating == false
+    }
+
+    func toggleFavorite() {
+        guard canToggleFavorite else { return }
+        Task { await session.toggleFavorite() }
+    }
 
     var emptyStateMessage: String? {
         guard image == nil, let state else { return nil }
@@ -348,6 +361,7 @@ struct PhotoViewerView: View {
                               controller: viewer.canvasController,
                               onPrevious: viewer.navigatePrevious,
                               onNext: viewer.navigateNext,
+                              onToggleFavorite: viewer.toggleFavorite,
                               onClose: onClose) { viewer.zoom = Double($0) }
                 .accessibilityLabel(viewer.filename)
 
@@ -423,6 +437,7 @@ private struct PhotoViewerCanvas: NSViewRepresentable {
     let controller: PhotoViewerCanvasController
     let onPrevious: () -> Void
     let onNext: () -> Void
+    let onToggleFavorite: () -> Void
     let onClose: () -> Void
     let onZoomChanged: (CGFloat) -> Void
 
@@ -431,6 +446,7 @@ private struct PhotoViewerCanvas: NSViewRepresentable {
         view.onZoomChanged = onZoomChanged
         view.onPrevious = onPrevious
         view.onNext = onNext
+        view.onToggleFavorite = onToggleFavorite
         view.onClose = onClose
         controller.attach(view)
         return view
@@ -440,6 +456,7 @@ private struct PhotoViewerCanvas: NSViewRepresentable {
         view.onZoomChanged = onZoomChanged
         view.onPrevious = onPrevious
         view.onNext = onNext
+        view.onToggleFavorite = onToggleFavorite
         view.onClose = onClose
         view.sidebarWidth = sidebarWidth
         view.toolbarInset = toolbarInset
@@ -455,6 +472,7 @@ final class PhotoViewerCanvasView: NSView {
     var onZoomChanged: ((CGFloat) -> Void)?
     var onPrevious: (() -> Void)?
     var onNext: (() -> Void)?
+    var onToggleFavorite: (() -> Void)?
     var onClose: (() -> Void)?
     var sidebarWidth: CGFloat = 0 { didSet { updateGeometry() } }
     var toolbarInset: CGFloat = 0 { didSet { updateGeometry() } }
@@ -641,6 +659,11 @@ final class PhotoViewerCanvasView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        if event.charactersIgnoringModifiers == ".",
+           event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
+            onToggleFavorite?()
+            return
+        }
         switch event.keyCode {
         case 53: onClose?()
         case 123: onPrevious?()

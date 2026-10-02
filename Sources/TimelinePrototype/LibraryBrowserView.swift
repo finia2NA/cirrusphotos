@@ -541,6 +541,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             hash.combine(page.items.count)
             for item in page.items {
                 hash.combine(item.id)
+                hash.combine(item.isFavorite)
                 hash.combine(item.displayAspectRatio)
                 let thumbnail = item.additional?.thumbnail
                 hash.combine(thumbnail?.unitID)
