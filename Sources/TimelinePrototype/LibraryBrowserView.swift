@@ -79,6 +79,37 @@ fileprivate final class FlippedDocumentView: NSView {
     override var isFlipped: Bool { true }
 }
 
+/// Gives the virtualized timeline the normal arrow-key scroll behavior even when it
+/// does not have a SwiftUI focusable child.
+fileprivate final class TimelineScrollView: NSScrollView {
+    override var acceptsFirstResponder: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.scrollWheel(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let direction: CGFloat
+        switch event.keyCode {
+        case 126: direction = -1 // up arrow
+        case 125: direction = 1  // down arrow
+        default:
+            super.keyDown(with: event)
+            return
+        }
+        let distance = max(40, contentView.bounds.height * 0.12)
+        contentView.scroll(to: CGPoint(x: contentView.bounds.minX,
+                                       y: max(0, contentView.bounds.minY + direction * distance)))
+        reflectScrolledClipView(contentView)
+    }
+}
+
 private struct HostedRow: View {
     let row: LibraryViewportGeometry.Row
     let repository: CachedPhotosRepository
@@ -137,7 +168,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
+        let scroll = TimelineScrollView()
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.drawsBackground = true

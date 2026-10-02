@@ -89,10 +89,43 @@ public struct PhotoItem: Codable, Sendable, Identifiable {
         public let thumbnail: ThumbnailInfo?
         public let resolution: Resolution?
         public let orientation: Int?
+        public let videoMeta: VideoMetadata?
+
+        enum CodingKeys: String, CodingKey {
+            case thumbnail, resolution, orientation
+            case videoMeta = "video_meta"
+        }
     }
     public struct Resolution: Codable, Sendable {
         public let width: Int
         public let height: Int
+    }
+
+    /// Synology supplies video duration as seconds, but captures have represented it as
+    /// either an integer, a floating-point number, or a numeric string.
+    public struct VideoMetadata: Codable, Sendable {
+        public let duration: TimeInterval?
+
+        enum CodingKeys: String, CodingKey { case duration }
+
+        public init(from decoder: Decoder) throws {
+            guard let container = try? decoder.container(keyedBy: CodingKeys.self) else {
+                duration = nil
+                return
+            }
+            if let value = try? container.decode(Double.self, forKey: .duration) {
+                duration = value
+            } else if let value = try? container.decode(String.self, forKey: .duration) {
+                duration = Double(value)
+            } else {
+                duration = nil
+            }
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encodeIfPresent(duration, forKey: .duration)
+        }
     }
 
     /// The server-provided resolution already describes the displayed orientation.

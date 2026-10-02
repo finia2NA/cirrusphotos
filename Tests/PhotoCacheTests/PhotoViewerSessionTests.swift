@@ -16,6 +16,7 @@ private actor ViewerTransport: PhotosTransport {
     var releasedFullImages: Set<Int64> = []
     var failImages = false
     private(set) var pageCalls: [Int] = []
+    private(set) var thumbnailCalls: [Int64] = []
     private(set) var fullImageCalls: [Int64] = []
     private(set) var fullImageKeys: [String] = []
     private(set) var cancelledFullImages: Set<Int64> = []
@@ -42,6 +43,7 @@ private actor ViewerTransport: PhotosTransport {
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+        thumbnailCalls.append(descriptor.unitID)
         if failImages { throw ViewerFailure(message: "Offline") }
         return ThumbnailResponse(data: Data([UInt8(truncatingIfNeeded: descriptor.unitID), 0x54]),
                                  etag: "thumb-\(descriptor.unitID)", lastModified: nil)
@@ -201,6 +203,57 @@ final class PhotoViewerSessionTests: XCTestCase {
         await transport.releaseFullImage(1)
         let promotedData = await waitUntil { await session.state().fullImageData == Data([1, 0x46]) }
         XCTAssertTrue(promotedData)
+        await session.close()
+    }
+
+    func testThumbnailBufferWarmsBothNeighborsBeforeCurrentOriginalSucceeds() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let items = try [item(1), item(2), item(3), item(4)]
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: Array(items[0...1]), 2: Array(items[2...3])],
+                                  blockedFullImages: [2])
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+                                         index: LibraryIndex(snapshot: snapshot()),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1,
+                                                               item: items[1], page: Array(items[0...1]),
+                                                               pageVerified: true),
+                                         allowNetwork: true)
+        _ = await session.state()
+        let buffered = await waitUntil {
+            let calls = await transport.thumbnailCalls
+            return calls.contains(1) && calls.contains(3)
+        }
+        XCTAssertTrue(buffered)
+        let fullCalls = await transport.fullImageCalls
+        XCTAssertFalse(fullCalls.contains(1))
+        XCTAssertFalse(fullCalls.contains(3))
+        await session.close()
+    }
+
+    func testNavigationKeepsUnloadedNeighborPageForThumbnailBuffer() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let items = try [item(1), item(2), item(3), item(4)]
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: Array(items[0...1]), 2: Array(items[2...3])],
+                                  blockedPages: [2], blockedFullImages: [2])
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+                                         index: LibraryIndex(snapshot: snapshot()),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                                                               item: items[0], page: Array(items[0...1]),
+                                                               pageVerified: true),
+                                         allowNetwork: true)
+        _ = await session.state()
+        await session.navigateNext()
+        let neighborPageStarted = await waitUntil { await transport.pageCalls.contains(2) }
+        XCTAssertTrue(neighborPageStarted)
+
+        await transport.releasePage(2)
+        let nextThumbnailBuffered = await waitUntil { await transport.thumbnailCalls.contains(3) }
+        XCTAssertTrue(nextThumbnailBuffered,
+                      "Navigation must not cancel metadata needed to buffer the next thumbnail")
+        let fullCalls = await transport.fullImageCalls
+        XCTAssertFalse(fullCalls.contains(3),
+                       "Original prefetch must remain gated on the current original succeeding")
         await session.close()
     }
 

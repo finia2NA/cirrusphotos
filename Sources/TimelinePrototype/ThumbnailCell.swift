@@ -32,6 +32,19 @@ struct ThumbnailCell: View {
             } else {
                 Image(systemName: "photo").foregroundStyle(.tertiary)
             }
+            if let duration = item.additional?.videoMeta?.duration,
+               item.type == "video", duration.isFinite, duration > 0 {
+                Text(Self.formattedDuration(duration))
+                    .font(.caption2.monospacedDigit().weight(.medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 3))
+                    .padding(5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity,
+                           alignment: .bottomTrailing)
+                    .accessibilityLabel("Video duration \(Self.formattedDuration(duration))")
+            }
             if let onActivate {
                 ThumbnailActivationSurface(itemID: item.id, image: image,
                                            label: item.filename.map { "Open \($0)" } ?? "Open photo",
@@ -63,6 +76,15 @@ struct ThumbnailCell: View {
                 if image == nil { failed = true }
             }
         }
+    }
+
+    private static func formattedDuration(_ duration: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(duration.rounded(.down)))
+        let seconds = totalSeconds % 60
+        let minutes = (totalSeconds / 60) % 60
+        let hours = totalSeconds / 3_600
+        if hours > 0 { return String(format: "%d:%02d:%02d", hours, minutes, seconds) }
+        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 
@@ -107,6 +129,7 @@ private struct ThumbnailActivationSurface: NSViewRepresentable {
         }
         override func keyDown(with event: NSEvent) {
             if event.keyCode == 36 || event.keyCode == 49 { anchor?.activate() }
+            else if event.keyCode == 125 || event.keyCode == 126 { enclosingScrollView?.keyDown(with: event) }
             else { super.keyDown(with: event) }
         }
         override func isAccessibilityElement() -> Bool { true }

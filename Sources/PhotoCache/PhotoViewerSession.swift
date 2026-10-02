@@ -97,6 +97,11 @@ public actor PhotoViewerSession {
         var failure: String?
         var completed = false
     }
+    private struct ThumbnailPrefetchJob {
+        let id: UUID
+        let allowNetwork: Bool
+        let task: Task<Void, Never>
+    }
 
     private let repository: CachedPhotosRepository
     private let index: LibraryIndex
@@ -125,6 +130,7 @@ public actor PhotoViewerSession {
     private var thumbnailTask: Task<Void, Never>?
     private var thumbnailAttempt: UUID?
     private var thumbnailTaskAllowsNetwork = false
+    private var thumbnailPrefetchJobs: [String: ThumbnailPrefetchJob] = [:]
     private var fullTask: Task<Void, Never>?
     private var fullAttempt: UUID?
     private var fullTaskAllowsNetwork = false
@@ -213,6 +219,7 @@ public actor PhotoViewerSession {
         }
         restartCurrentAssets()
         ensurePage(desired.sectionIndex, visible: true)
+        scheduleThumbnailNeighbors()
         publish()
     }
 
@@ -222,6 +229,7 @@ public actor PhotoViewerSession {
         pageJobs.removeValue(forKey: desired.sectionIndex)?.task.cancel()
         restartCurrentAssets()
         ensurePage(desired.sectionIndex, visible: true)
+        scheduleThumbnailNeighbors()
         publish()
     }
 
@@ -229,10 +237,12 @@ public actor PhotoViewerSession {
         guard !closed else { return }
         closed = true
         thumbnailTask?.cancel()
+        for job in thumbnailPrefetchJobs.values { job.task.cancel() }
         fullTask?.cancel()
         for job in pageJobs.values { job.task.cancel() }
         for job in fullJobs.values { job.task.cancel() }
         thumbnailTask = nil
+        thumbnailPrefetchJobs.removeAll()
         fullTask = nil
         pageJobs.removeAll()
         fullJobs.removeAll()
@@ -249,6 +259,7 @@ public actor PhotoViewerSession {
         started = true
         startAssetsForCurrentMetadata()
         ensurePage(desired.sectionIndex, visible: true)
+        scheduleThumbnailNeighbors()
         publish()
     }
 
@@ -281,6 +292,7 @@ public actor PhotoViewerSession {
             applyCurrentPage(page, at: location)
         }
         ensurePage(location.sectionIndex, visible: true)
+        scheduleThumbnailNeighbors()
         trimPageJobs(around: location)
         publish()
     }
@@ -326,6 +338,7 @@ public actor PhotoViewerSession {
                 applyCurrentPage(PageEntry(items: items, verified: verified), at: desired)
             }
             if prefetchEnabledGeneration == generation { scheduleLoadedNeighbors() }
+            scheduleThumbnailNeighbors()
         case .failure(let message):
             if sectionIndex == desired.sectionIndex {
                 if currentItem == nil { metadataStatus = .failure(message) }
@@ -599,6 +612,57 @@ public actor PhotoViewerSession {
         scheduleLoadedNeighbors()
     }
 
+    /// Preview fetching is intentionally independent of original-image prefetch. It
+    /// gives arrow navigation a low-resolution image while the next original loads.
+    private func scheduleThumbnailNeighbors() {
+        guard !closed else { return }
+        let locations = [-1, 1].compactMap { location(for: desired.ordinal + $0) }
+        let wantedSections = Set(locations.map(\.sectionIndex))
+        for section in wantedSections where pages[section] == nil || (allowNetwork && pages[section]?.verified == false) {
+            ensurePage(section, visible: false)
+        }
+
+        var wantedKeys: Set<String> = []
+        for location in locations {
+            guard let page = pages[location.sectionIndex],
+                  page.items.indices.contains(location.pageOffset),
+                  let descriptor = page.items[location.pageOffset].additional?.thumbnail else { continue }
+            let key = Self.thumbnailKey(descriptor, size: thumbnailSize)
+            wantedKeys.insert(key)
+            let network = allowNetwork && page.verified
+            if let job = thumbnailPrefetchJobs[key], network && !job.allowNetwork {
+                job.task.cancel()
+                thumbnailPrefetchJobs.removeValue(forKey: key)
+                startThumbnailPrefetch(descriptor, key: key, allowNetwork: true)
+            } else if thumbnailPrefetchJobs[key] == nil {
+                startThumbnailPrefetch(descriptor, key: key, allowNetwork: network)
+            }
+        }
+        for (key, job) in thumbnailPrefetchJobs where !wantedKeys.contains(key) {
+            job.task.cancel()
+            thumbnailPrefetchJobs.removeValue(forKey: key)
+        }
+    }
+
+    private func startThumbnailPrefetch(_ descriptor: ThumbnailInfo, key: String, allowNetwork: Bool) {
+        let id = UUID()
+        let repository = repository
+        let size = thumbnailSize
+        let task = Task { [weak self] in
+            for await _ in await repository.thumbnail(descriptor, size: size,
+                                                       allowNetwork: allowNetwork, priority: .prefetch) {
+                guard !Task.isCancelled else { break }
+            }
+            await self?.finishThumbnailPrefetch(key: key, id: id)
+        }
+        thumbnailPrefetchJobs[key] = ThumbnailPrefetchJob(id: id, allowNetwork: allowNetwork, task: task)
+    }
+
+    private func finishThumbnailPrefetch(key: String, id: UUID) {
+        guard thumbnailPrefetchJobs[key]?.id == id else { return }
+        thumbnailPrefetchJobs.removeValue(forKey: key)
+    }
+
     private func scheduleLoadedNeighbors() {
         guard !closed, prefetchEnabledGeneration == generation else { return }
         let locations = [-1, 1].compactMap { location(for: desired.ordinal + $0) }
@@ -705,10 +769,10 @@ public actor PhotoViewerSession {
 
     private func trimPageJobs(around location: PhotoViewerLocation) {
         var retained: Set<Int> = [location.sectionIndex]
-        if prefetchEnabledGeneration == generation {
-            if let previous = self.location(for: location.ordinal - 1) { retained.insert(previous.sectionIndex) }
-            if let next = self.location(for: location.ordinal + 1) { retained.insert(next.sectionIndex) }
-        }
+        // Neighbor metadata is needed for the always-on thumbnail buffer. Original-image
+        // prefetch remains separately gated on the current original succeeding.
+        if let previous = self.location(for: location.ordinal - 1) { retained.insert(previous.sectionIndex) }
+        if let next = self.location(for: location.ordinal + 1) { retained.insert(next.sectionIndex) }
         for (section, job) in pageJobs where !retained.contains(section) {
             job.task.cancel()
             pageJobs.removeValue(forKey: section)
@@ -765,5 +829,9 @@ public actor PhotoViewerSession {
 
     private static func resourceKey(_ resource: FullImageResource) -> String {
         "\(resource.unitID)|\(resource.cacheKey)"
+    }
+
+    private static func thumbnailKey(_ descriptor: ThumbnailInfo, size: ThumbnailSize) -> String {
+        "\(descriptor.unitID):\(descriptor.cacheKey):\(size.rawValue)"
     }
 }

@@ -47,6 +47,25 @@ final class PhotoItemTests: XCTestCase {
         XCTAssertEqual(resource.filename, "IMG_0007.HEIC")
     }
 
+    func testVideoDurationDecodesFromNumericAndStringMetadata() throws {
+        let numeric = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":8,"time":1700000000,"type":"video","additional":{"video_meta":{"duration":125.5}}}
+        """.utf8))
+        let string = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":9,"time":1700000000,"type":"video","additional":{"video_meta":{"duration":"61"}}}
+        """.utf8))
+        XCTAssertEqual(numeric.additional?.videoMeta?.duration, 125.5)
+        XCTAssertEqual(string.additional?.videoMeta?.duration, 61)
+    }
+
+    func testUnexpectedVideoMetadataShapeDoesNotDiscardItem() throws {
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":10,"time":1700000000,"type":"video","additional":{"video_meta":[]}}
+        """.utf8))
+        XCTAssertEqual(item.id, 10)
+        XCTAssertNil(item.additional?.videoMeta?.duration)
+    }
+
     func testDayIDUsesUTCBoundary() throws {
         let before = try JSONDecoder().decode(PhotoItem.self, from: Data(
             "{\"id\":1,\"time\":1704067199,\"type\":\"photo\"}".utf8))

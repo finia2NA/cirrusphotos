@@ -18,12 +18,12 @@ struct TimelinePrototypeApp: App {
         }
         .windowToolbarStyle(.unified)
         .defaultSize(width: 860, height: 820)
+        .commands { LibraryCommands(model: model) }
         Settings { CacheSettingsView().environmentObject(model) }
         Window("Download Thumbnails", id: "thumbnail-download") {
             ThumbnailRangeDownloadView().environmentObject(model)
         }
         .defaultSize(width: 540, height: 500)
-        .commands { LibraryCommands(model: model) }
     }
 }
 
@@ -191,12 +191,12 @@ private struct LibrarySizeControl: View {
             Slider(value: $value, in: 100...300)
                 .controlSize(.small)
                 .frame(width: 110)
-                .accessibilityLabel("Photo size")
+                .accessibilityLabel("Thumbnail size")
                 .accessibilityValue("\(Int(value.rounded())) points")
             Image(systemName: "plus").accessibilityHidden(true)
         }
         .imageScale(.small)
-        .help("Photo size")
+        .help("Thumbnail size")
     }
 }
 
@@ -281,6 +281,13 @@ private struct LibraryCommands: Commands {
 
     var body: some Commands {
         CommandMenu("Library") {
+            Button("Increase Thumbnail Size") { model.adjustDisplayRowHeight(by: 20) }
+                .keyboardShortcut("+", modifiers: .command)
+                .disabled(model.displayRowHeight >= 300)
+            Button("Decrease Thumbnail Size") { model.adjustDisplayRowHeight(by: -20) }
+                .keyboardShortcut("-", modifiers: .command)
+                .disabled(model.displayRowHeight <= 100)
+            Divider()
             Button("Download Thumbnails…") { openWindow(id: "thumbnail-download") }
                 .disabled(model.snapshot?.timeline.days.isEmpty != false || model.repository == nil ||
                           !model.timelineVerified)
@@ -293,6 +300,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 
 @MainActor
@@ -341,6 +350,10 @@ final class LibraryModel: ObservableObject {
     private static func validDisplayRowHeight(_ value: Double) -> Double {
         guard value.isFinite else { return 180 }
         return min(max(value, 100), 300)
+    }
+
+    func adjustDisplayRowHeight(by amount: Double) {
+        displayRowHeight = Self.validDisplayRowHeight(displayRowHeight + amount)
     }
 
     func load() async {

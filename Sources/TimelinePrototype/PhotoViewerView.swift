@@ -630,7 +630,7 @@ final class PhotoViewerCanvasView: NSView {
         guard !isClosing else { return }
         finishOpeningForInteraction()
         if event.hasPreciseScrollingDeltas {
-            transform.translate(by: CGSize(width: -event.scrollingDeltaX, height: event.scrollingDeltaY))
+            transform.translate(by: CGSize(width: event.scrollingDeltaX, height: -event.scrollingDeltaY))
         } else {
             let anchor = convert(event.locationInWindow, from: nil)
             let factor = exp(-event.scrollingDeltaY * 0.08)
