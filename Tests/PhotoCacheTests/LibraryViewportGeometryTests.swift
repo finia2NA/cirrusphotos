@@ -59,6 +59,55 @@ final class LibraryViewportGeometryTests: XCTestCase {
         XCTAssertNotNil(geometry.y(for: anchor)) // Falls back to the same date/slice.
     }
 
+    func testTargetHeightReflowsRowsAndPreservesItemAnchor() throws {
+        let index = LibraryIndex(snapshot: TimelineSnapshot(sections: [section(day: 3, limit: 8, count: 8)]))
+        let items = try (1...8).map { try item(Int64($0)) }
+        let pages = [0: LibraryPage(sectionIndex: 0, items: items, verified: true)]
+        var geometry = LibraryViewportGeometry(index: index, width: 500, targetRowHeight: 100)
+        geometry.reconcile(pages: pages)
+        let oldRows = geometry.rows(in: 0)
+        let anchoredRow = try XCTUnwrap(oldRows.last)
+        let anchor = try XCTUnwrap(geometry.anchor(at: anchoredRow.y + 11))
+
+        XCTAssertTrue(geometry.setLayout(width: 420, targetRowHeight: 240, pages: pages))
+        XCTAssertEqual(geometry.targetRowHeight, 240)
+        XCTAssertNotEqual(geometry.rows(in: 0).map(\.itemIDs), oldRows.map(\.itemIDs))
+        let itemID = try XCTUnwrap(anchor.itemID)
+        let newRow = try XCTUnwrap(geometry.rows(in: 0).first { $0.itemIDs.contains(itemID) })
+        XCTAssertEqual(try XCTUnwrap(geometry.y(for: anchor)),
+                       geometry.slices[0].y + newRow.y + 11,
+                       accuracy: 0.001)
+    }
+
+    func testShrinkingTargetHeightKeepsAnchorInsideItsPhotoRow() throws {
+        let index = LibraryIndex(snapshot: TimelineSnapshot(sections: [section(day: 3, limit: 8, count: 8)]))
+        let items = try (1...8).map { try item(Int64($0)) }
+        let pages = [0: LibraryPage(sectionIndex: 0, items: items, verified: true)]
+        var geometry = LibraryViewportGeometry(index: index, width: 420, targetRowHeight: 300)
+        geometry.reconcile(pages: pages)
+        let oldRow = try XCTUnwrap(geometry.rows(in: 0).first)
+        let anchor = try XCTUnwrap(geometry.anchor(at: oldRow.y + oldRow.layout.height - 5))
+
+        XCTAssertTrue(geometry.setLayout(width: 420, targetRowHeight: 100, pages: pages))
+        let itemID = try XCTUnwrap(anchor.itemID)
+        let newRow = try XCTUnwrap(geometry.rows(in: 0).first { $0.itemIDs.contains(itemID) })
+        let restored = try XCTUnwrap(geometry.y(for: anchor))
+
+        XCTAssertEqual(restored, geometry.slices[0].y + newRow.y + newRow.layout.height - 1,
+                       accuracy: 0.001)
+        XCTAssertLessThan(restored, geometry.slices[0].y + newRow.y + newRow.layout.height)
+    }
+
+    func testTargetHeightInvalidatesUnloadedEstimates() {
+        let index = LibraryIndex(snapshot: TimelineSnapshot(sections: [section(day: 3, limit: 12, count: 12)]))
+        var geometry = LibraryViewportGeometry(index: index, width: 500, targetRowHeight: 100)
+        let compactHeight = geometry.totalHeight
+
+        XCTAssertTrue(geometry.setLayout(width: 500, targetRowHeight: 300, pages: [:]))
+        XCTAssertGreaterThan(geometry.totalHeight, compactHeight)
+        XCTAssertFalse(geometry.setLayout(width: 500.2, targetRowHeight: 300.2, pages: [:]))
+    }
+
     func testOnlyRetainedRowsKeepItemIDs() throws {
         let index = LibraryIndex(snapshot: TimelineSnapshot(sections: [section(day: 3), section(day: 2)]))
         var geometry = LibraryViewportGeometry(index: index, width: 500)
@@ -128,6 +177,35 @@ final class LibraryViewportGeometryTests: XCTestCase {
         let carriedRows = split.slices.indices.flatMap { split.rows(in: $0) }
         XCTAssertEqual(carriedRows.map(\.layout), unsplitRows.map(\.layout))
         XCTAssertEqual(carriedRows.flatMap(\.itemIDs), [1, 2, 3, 4])
+    }
+
+    func testTargetHeightChangeRebuildsCrossPageCarry() throws {
+        let splitSnapshot = TimelineSnapshot(sections: [
+            section(day: 3, offset: 0, limit: 2, count: 4),
+            section(day: 3, offset: 2, limit: 2, count: 4)
+        ])
+        let splitPages = [
+            0: LibraryPage(sectionIndex: 0, items: [try item(1), try item(2)], verified: true),
+            1: LibraryPage(sectionIndex: 1, items: [try item(3), try item(4)], verified: true)
+        ]
+        var split = LibraryViewportGeometry(index: LibraryIndex(snapshot: splitSnapshot),
+                                            width: 500, targetRowHeight: 100)
+        split.reconcile(pages: splitPages)
+        XCTAssertTrue(split.setLayout(width: 500, targetRowHeight: 200, pages: splitPages))
+        split.reconcile(pages: [1: splitPages[1]!])
+
+        let unsplitSnapshot = TimelineSnapshot(sections: [section(day: 3, limit: 4, count: 4)])
+        var unsplit = LibraryViewportGeometry(index: LibraryIndex(snapshot: unsplitSnapshot),
+                                              width: 500, targetRowHeight: 200)
+        unsplit.reconcile(pages: [
+            0: LibraryPage(sectionIndex: 0,
+                           items: [try item(1), try item(2), try item(3), try item(4)], verified: true)
+        ])
+
+        let splitRows = split.slices.indices.flatMap { split.rows(in: $0) }
+        let unsplitRows = unsplit.slices.indices.flatMap { unsplit.rows(in: $0) }
+        XCTAssertEqual(splitRows.map(\.layout), unsplitRows.map(\.layout))
+        XCTAssertEqual(splitRows.flatMap(\.itemIDs), [1, 2, 3, 4])
     }
 
     func testThreePageFlowKeepsLoadedSuffixStableAsPrefixPagesEvict() throws {

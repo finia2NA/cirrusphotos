@@ -23,7 +23,7 @@ struct ThumbnailCell: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.06))
+            RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.1))
             if let image, displayedRendition == renditionIdentity {
                 Image(nsImage: image).resizable().scaledToFit()
             } else if failed, displayedRendition == renditionIdentity {

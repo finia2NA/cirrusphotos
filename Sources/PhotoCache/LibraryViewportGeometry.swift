@@ -32,6 +32,7 @@ public struct LibraryViewportGeometry {
     public private(set) var slices: [Slice] = []
     public private(set) var totalHeight: Double = 0
     public private(set) var width: Double
+    public private(set) var targetRowHeight: Double
     private var measuredHeights: [Int: Double] = [:]
     private var rows: [Int: [Row]] = [:]
     /// Incomplete rows at API boundaries. Entries are kept only around retained pages,
@@ -43,8 +44,9 @@ public struct LibraryViewportGeometry {
     private let gap = 6.0
     private let headingHeight = 38.0
 
-    public init(index: LibraryIndex, width: Double) {
+    public init(index: LibraryIndex, width: Double, targetRowHeight: Double = 180) {
         self.width = max(1, width)
+        self.targetRowHeight = Self.validTargetHeight(targetRowHeight)
         for day in index.dayIDs {
             for source in index.slices(forDay: day) {
                 let position = slices.count
@@ -57,15 +59,27 @@ public struct LibraryViewportGeometry {
         recalculate()
     }
 
-    public mutating func setWidth(_ newWidth: Double, pages: [Int: LibraryPage]) {
-        guard newWidth.isFinite, newWidth > 0, abs(width - newWidth) > 0.5 else { return }
+    @discardableResult
+    public mutating func setLayout(width newWidth: Double, targetRowHeight newTargetRowHeight: Double,
+                                   pages: [Int: LibraryPage]) -> Bool {
+        guard newWidth.isFinite, newWidth > 0 else { return false }
+        let target = Self.validTargetHeight(newTargetRowHeight)
+        guard abs(width - newWidth) > 0.5 || abs(targetRowHeight - target) > 0.5 else { return false }
         width = newWidth
+        targetRowHeight = target
         measuredHeights.removeAll()
         rows.removeAll()
         boundaryCarry.removeAll()
-        sectionSignatures.removeAll()
+        sectionSignatures = Dictionary(uniqueKeysWithValues: pages.map { section, page in
+            (section, Self.signature(page))
+        })
         measure(pages)
         recalculate()
+        return true
+    }
+
+    public mutating func setWidth(_ newWidth: Double, pages: [Int: LibraryPage]) {
+        setLayout(width: newWidth, targetRowHeight: targetRowHeight, pages: pages)
     }
 
     public mutating func reconcile(pages: [Int: LibraryPage]) {
@@ -140,7 +154,8 @@ public struct LibraryViewportGeometry {
     public func y(forItem itemID: Int64, offset: Double) -> Double? {
         for position in rows.keys {
             if let row = rows[position]?.first(where: { $0.itemIDs.contains(itemID) }) {
-                return slices[position].y + row.y + offset
+                let visibleOffset = min(max(0, offset), max(0, row.layout.height - 1))
+                return slices[position].y + row.y + visibleOffset
             }
         }
         return nil
@@ -180,7 +195,7 @@ public struct LibraryViewportGeometry {
                 slices[position + 1].source.dayID != slice.source.dayID
             let result = JustifiedRows.layoutPrefix(
                 aspectRatios: candidates.map { $0.photo.displayAspectRatio },
-                availableWidth: width, finalize: isDayEnd
+                availableWidth: width, targetHeight: targetRowHeight, finalize: isDayEnd
             )
             append(result.rows, from: candidates, completingAt: position)
             pending = result.pendingRange.map { candidates[$0] }
@@ -193,7 +208,8 @@ public struct LibraryViewportGeometry {
             slices[last + 1].source.dayID != slices[last].source.dayID
         if !reachesDayEnd, !pending.isEmpty {
             let provisional = JustifiedRows.layout(
-                aspectRatios: pending.map { $0.photo.displayAspectRatio }, availableWidth: width
+                aspectRatios: pending.map { $0.photo.displayAspectRatio }, availableWidth: width,
+                targetHeight: targetRowHeight
             )
             append(provisional, from: pending, completingAt: last)
         }
@@ -230,14 +246,19 @@ public struct LibraryViewportGeometry {
         return hash.finalize()
     }
 
+    private static func validTargetHeight(_ height: Double) -> Double {
+        guard height.isFinite else { return 180 }
+        return min(max(height, 100), 300)
+    }
+
     private mutating func recalculate() {
         var y = 0.0
         for position in slices.indices {
             slices[position].y = y
             let count = slices[position].count
             // Representative ratio 1.4 gives a stable initial approximation.
-            let perRow = max(1, Int(width / (180 * 1.4 + gap)))
-            let estimate = Double((count + perRow - 1) / perRow) * 186
+            let perRow = max(1, Int(ceil((width + gap) / (targetRowHeight * 1.4 + gap))))
+            let estimate = Double((count + perRow - 1) / perRow) * (targetRowHeight + gap)
             slices[position].height = measuredHeights[position] ??
                 max(slices[position].heading ? headingHeight : 20,
                     estimate + (slices[position].heading ? headingHeight : 0))

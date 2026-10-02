@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "SynoTimeline",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS("27.0")],
     products: [.executable(name: "SynoTimeline", targets: ["TimelinePrototype"])],
     targets: [
         .target(name: "TimelineCore"),

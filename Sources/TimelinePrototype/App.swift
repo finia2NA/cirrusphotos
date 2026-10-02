@@ -8,21 +8,15 @@ import TimelineCore
 struct TimelinePrototypeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var model = LibraryModel()
-    @State private var selectedTab: PrototypeTab = .photos
+
     var body: some Scene {
-        WindowGroup("Cirrus · Timeline") {
-            TabView(selection: $selectedTab) {
-                LibraryBrowserView(isActive: selectedTab == .photos)
-                    .tabItem { Label("Photos", systemImage: "photo.on.rectangle") }.tag(PrototypeTab.photos)
-                PrototypeView().tabItem { Label("Timeline", systemImage: "calendar") }.tag(PrototypeTab.timeline)
-                SectionExperimentView().tabItem { Label("Section 207", systemImage: "square.grid.3x3") }
-                    .tag(PrototypeTab.section)
-            }
+        WindowGroup("Cirrus Photos") {
+            AppShellView()
                 .environmentObject(model)
                 .frame(minWidth: 560, minHeight: 420)
-                .preferredColorScheme(.dark)
                 .task { await model.load() }
         }
+        .windowToolbarStyle(.unified)
         .defaultSize(width: 860, height: 820)
         Settings { CacheSettingsView().environmentObject(model) }
         Window("Download Thumbnails", id: "thumbnail-download") {
@@ -30,6 +24,86 @@ struct TimelinePrototypeApp: App {
         }
         .defaultSize(width: 540, height: 500)
         .commands { LibraryCommands(model: model) }
+    }
+}
+
+private struct AppShellView: View {
+    private enum Destination: Hashable { case personalLibrary }
+
+    @EnvironmentObject private var model: LibraryModel
+    @State private var destination: Destination? = .personalLibrary
+
+    var body: some View {
+        NavigationSplitView {
+            List(selection: $destination) {
+                Label("Personal Library", systemImage: "photo.on.rectangle.angled")
+                    .tag(Destination.personalLibrary)
+            }
+            .navigationTitle("Cirrus")
+            .navigationSplitViewColumnWidth(min: 170, ideal: 210, max: 280)
+        } detail: {
+            LibraryBrowserView()
+                .navigationTitle("Personal Library")
+                .toolbar { applicationToolbar }
+        }
+        .onChange(of: destination) { _, selection in
+            if selection == nil { destination = .personalLibrary }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var applicationToolbar: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            HStack(spacing: 6) {
+                Image(systemName: "minus")
+                    .accessibilityHidden(true)
+                Slider(value: $model.displayRowHeight, in: 100...300)
+                    .controlSize(.small)
+                    .frame(width: 110)
+                    .accessibilityLabel("Photo size")
+                    .accessibilityValue("\(Int(model.displayRowHeight.rounded())) points")
+                Image(systemName: "plus")
+                    .accessibilityHidden(true)
+            }
+            .imageScale(.small)
+            .help("Photo size")
+        }
+
+        ToolbarItem(placement: .primaryAction) {
+            ConnectionToolbarItem()
+        }
+    }
+}
+
+private struct ConnectionToolbarItem: View {
+    @EnvironmentObject private var library: LibraryModel
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Group {
+                switch library.authenticationStatus {
+                case .notStarted:
+                    Image(systemName: "circle.dotted")
+                    Text(library.error == nil ? "Opening library…" : "Library unavailable")
+                case .loggingIn:
+                    ProgressView().controlSize(.mini)
+                    Text("Logging in…")
+                case .signedIn:
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Text(library.error == nil ? "Connected" : "Metadata unavailable")
+                        .help(library.error ?? "Signed in")
+                case .failed(let message):
+                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+                    Text("Login failed").help(message)
+                }
+            }
+            .foregroundStyle(.secondary)
+
+            Button("Retry") { Task { await library.reload() } }
+                .controlSize(.small)
+                .disabled(library.isLoading)
+        }
+        .font(.caption)
     }
 }
 
@@ -46,75 +120,10 @@ private struct LibraryCommands: Commands {
     }
 }
 
-private enum PrototypeTab: Hashable { case photos, timeline, section }
-
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-    }
-}
-
-struct PrototypeView: View {
-    @EnvironmentObject private var loader: LibraryModel
-    @State private var selected = 0
-    @State private var selectedDate: String?
-
-    var body: some View {
-        Group {
-            if let timeline = loader.snapshot?.timeline, !timeline.days.isEmpty {
-                HStack(spacing: 0) {
-                    VStack(alignment: .leading, spacing: 20) {
-                        Label("Cirrus", systemImage: "photo.stack").font(.title2.weight(.semibold))
-                        HStack(spacing: 7) {
-                            if loader.isLoading { ProgressView().controlSize(.small) }
-                            Text(loader.status).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Text("SELECTED DATE").font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                        Text(timeline.days[safe: selected]?.id ?? timeline.days[0].id).font(.system(size: 36, weight: .medium, design: .rounded)).monospacedDigit()
-                        Text("\(timeline.days[safe: selected]?.count ?? timeline.days[0].count) items · Section \(timeline.days[safe: selected]?.section ?? timeline.days[0].section)")
-                            .foregroundStyle(.secondary)
-                        Text("Day \(selected + 1) of \(timeline.days.count)").font(.callout).foregroundStyle(.secondary)
-                        Spacer()
-                        Text("Move over the timeline to explore. Click or drag to select a date.")
-                            .font(.callout).foregroundStyle(.secondary)
-                        Text("\(timeline.days.count) populated days · \(loader.snapshot?.sectionCount ?? 0) sections\nEach day occupies the same amount of space.")
-                            .font(.caption).foregroundStyle(.tertiary)
-                    }
-                    .padding(36).frame(maxWidth: .infinity, alignment: .leading)
-                    TimelineNavigator(timeline: timeline, selected: $selected)
-                        .frame(width: 190).padding(.vertical, 24).padding(.trailing, 16)
-                }
-            } else if loader.snapshot?.timeline.days.isEmpty == true, loader.timelineVerified {
-                ContentUnavailableView("No dates", systemImage: "calendar",
-                                       description: Text("Personal Space is empty."))
-            } else if let error = loader.error {
-                ContentUnavailableView {
-                    Label("Could not load Cirrus", systemImage: "externaldrive.badge.exclamationmark")
-                } description: {
-                    Text(error)
-                } actions: {
-                    Button("Try Again") { Task { await loader.reload() } }
-                }
-            } else {
-                VStack(spacing: 14) {
-                    ProgressView().controlSize(.large)
-                    Text(loader.status).foregroundStyle(.secondary)
-                }
-            }
-        }
-        .background(Color(red: 0.065, green: 0.065, blue: 0.07))
-        .onChange(of: selected) { _, newValue in
-            if let days = loader.snapshot?.timeline.days, days.indices.contains(newValue) {
-                selectedDate = days[newValue].id
-            }
-        }
-        .onChange(of: loader.snapshot?.timeline.days.map(\.id)) { _, ids in
-            guard let ids, !ids.isEmpty else { return }
-            selected = loader.snapshot?.timeline.index(keeping: selectedDate) ?? 0
-            selectedDate = ids[selected]
-        }
     }
 }
 
@@ -135,6 +144,13 @@ final class LibraryModel: ObservableObject {
     @Published var thumbnailSize: ThumbnailSize = ThumbnailSize(rawValue: UserDefaults.standard.string(forKey: "thumbnailSize") ?? "m") ?? .m {
         didSet { UserDefaults.standard.set(thumbnailSize.rawValue, forKey: "thumbnailSize") }
     }
+    @Published var displayRowHeight: Double = LibraryModel.persistedDisplayRowHeight() {
+        didSet {
+            let valid = Self.validDisplayRowHeight(displayRowHeight)
+            if valid != displayRowHeight { displayRowHeight = valid }
+            UserDefaults.standard.set(valid, forKey: "displayRowHeight")
+        }
+    }
     @Published var budgetFraction: Double = CacheBudget.fraction(for: Int64(UserDefaults.standard.object(forKey: "cacheBudget") as? Int ?? Int(CacheBudget.bytes(at: 0.5)))) {
         didSet {
             let bytes = CacheBudget.bytes(at: budgetFraction)
@@ -146,6 +162,18 @@ final class LibraryModel: ObservableObject {
     private(set) var repository: CachedPhotosRepository?
     private var started = false
     private var authenticationTask: Task<Void, Never>?
+
+    private static func persistedDisplayRowHeight() -> Double {
+        guard let value = (UserDefaults.standard.object(forKey: "displayRowHeight") as? NSNumber)?.doubleValue else {
+            return 180
+        }
+        return validDisplayRowHeight(value)
+    }
+
+    private static func validDisplayRowHeight(_ value: Double) -> Double {
+        guard value.isFinite else { return 180 }
+        return min(max(value, 100), 300)
+    }
 
     func load() async {
         guard !started else { return }
@@ -220,10 +248,16 @@ private extension Collection {
 struct TimelineNavigator: View {
     let timeline: Timeline
     @Binding var selected: Int
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered: Int?
+    @State private var pointerIsNear = false
+    @State private var dragging = false
+    @State private var keyboardActive = false
     @State private var lastDragIndex: Int?
     @FocusState private var focused: Bool
     private let inset: CGFloat = 14
+
+    private var isRevealed: Bool { pointerIsNear || dragging || (focused && keyboardActive) }
 
     var body: some View {
         GeometryReader { geometry in
@@ -236,20 +270,20 @@ struct TimelineNavigator: View {
                 var line = Path()
                 line.move(to: CGPoint(x: rail, y: inset))
                 line.addLine(to: CGPoint(x: rail, y: size.height - inset))
-                context.stroke(line, with: .color(.white.opacity(0.07)), lineWidth: 1)
+                context.stroke(line, with: .color(.primary.opacity(0.12)), lineWidth: 1)
 
                 // Paint marks in one canvas; dates never create individual hit targets.
                 for index in timeline.monthStarts {
                     let dot = CGRect(x: rail - 1.5, y: y(index) - 1.5, width: 3, height: 3)
-                    context.fill(Path(ellipseIn: dot), with: .color(.white.opacity(0.25)))
+                    context.fill(Path(ellipseIn: dot), with: .color(.primary.opacity(0.32)))
                 }
                 var lastLabelY: CGFloat = -.infinity
                 for index in timeline.yearStarts {
                     let position = y(index)
                     guard position - lastLabelY >= 25 else { continue }
-                    context.draw(Text(String(timeline.days[index].year)).font(.system(size: 15, weight: .medium))
-                        .foregroundColor(.white.opacity(0.8)),
-                        at: CGPoint(x: rail - 13, y: position), anchor: .trailing)
+                    context.draw(Text(String(timeline.days[index].year)).font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.primary.opacity(0.82)),
+                        at: CGPoint(x: rail - 11, y: position), anchor: .trailing)
                     lastLabelY = position
                 }
                 var selection = Path()
@@ -260,9 +294,11 @@ struct TimelineNavigator: View {
                 }
                 context.stroke(selection, with: .color(.pink), lineWidth: 2)
             }
+            .opacity(isRevealed ? 1 : 0)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isRevealed)
             .allowsHitTesting(false)
 
-            if let hovered, timeline.days.indices.contains(hovered) {
+            if isRevealed, let hovered, timeline.days.indices.contains(hovered) {
                 let markerY = y(hovered)
                 Rectangle().fill(.pink.opacity(0.7)).frame(width: width - 8, height: 1)
                     .position(x: width / 2, y: markerY).allowsHitTesting(false)
@@ -271,32 +307,47 @@ struct TimelineNavigator: View {
                     Text(timeline.days[hovered].id).font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 .monospacedDigit().padding(.horizontal, 9).padding(.vertical, 6)
+                .frame(width: 126, alignment: .trailing)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
-                .position(x: width / 2 - 10, y: min(max(markerY - 29, 25), geometry.size.height - 25))
+                .position(x: width - 63,
+                          y: min(max(markerY - 29, 25), geometry.size.height - 25))
                 .allowsHitTesting(false)
             }
 
             Color.clear.contentShape(Rectangle())
                 .onContinuousHover { phase in
                     switch phase {
-                    case .active(let point): hovered = timeline.index(at: (point.y - inset) / height)
-                    case .ended: hovered = nil
+                    case .active(let point):
+                        pointerIsNear = true
+                        hovered = timeline.index(at: (point.y - inset) / height)
+                    case .ended:
+                        pointerIsNear = false
+                        hovered = focused && keyboardActive || dragging ?
+                            (timeline.days.indices.contains(selected) ? selected : nil) : nil
                     }
                 }
                 .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                    keyboardActive = false
+                    dragging = true
                     focused = true
                     if let index = timeline.index(at: (value.location.y - inset) / height) {
                         if lastDragIndex != index { selected = index; lastDragIndex = index }
                         hovered = index
                     }
-                }.onEnded { _ in lastDragIndex = nil })
+                }.onEnded { _ in
+                    dragging = false
+                    lastDragIndex = nil
+                    if !pointerIsNear && !(focused && keyboardActive) { hovered = nil }
+                })
                 .focusable().focused($focused).focusEffectDisabled()
                 .onKeyPress(.upArrow) {
                     guard !timeline.days.isEmpty else { return .handled }
+                    keyboardActive = true
                     selected = max(0, min(selected, timeline.days.count - 1) - 1); hovered = selected; return .handled
                 }
                 .onKeyPress(.downArrow) {
                     guard !timeline.days.isEmpty else { return .handled }
+                    keyboardActive = true
                     selected = min(timeline.days.count - 1, max(0, selected) + 1); hovered = selected; return .handled
                 }
                 .accessibilityElement(children: .ignore)
@@ -308,6 +359,26 @@ struct TimelineNavigator: View {
                     case .increment: if !timeline.days.isEmpty { selected = min(timeline.days.count - 1, max(0, selected) + 1) }
                     case .decrement: if !timeline.days.isEmpty { selected = max(0, min(selected, timeline.days.count - 1) - 1) }
                     @unknown default: break
+                    }
+                    keyboardActive = true
+                    focused = true
+                    hovered = timeline.days.indices.contains(selected) ? selected : nil
+                }
+                .onChange(of: focused) { _, isFocused in
+                    if isFocused, !pointerIsNear, !dragging, !timeline.days.isEmpty {
+                        keyboardActive = true
+                        hovered = min(max(0, selected), timeline.days.count - 1)
+                    } else if !isFocused {
+                        keyboardActive = false
+                        if !pointerIsNear && !dragging { hovered = nil }
+                    }
+                }
+                .onChange(of: selected) { _, newSelection in
+                    if focused && keyboardActive, !pointerIsNear, !dragging,
+                       timeline.days.indices.contains(newSelection) {
+                        hovered = newSelection
+                    } else if !pointerIsNear && !dragging && !(focused && keyboardActive) {
+                        hovered = nil
                     }
                 }
         }

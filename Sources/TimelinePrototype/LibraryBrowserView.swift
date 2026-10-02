@@ -5,8 +5,8 @@ import SynologyAPI
 import TimelineCore
 
 struct LibraryBrowserView: View {
-    let isActive: Bool
     @EnvironmentObject private var library: LibraryModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var selectedDay: String?
     @State private var jumpRequest: DayJumpRequest?
 
@@ -24,22 +24,25 @@ struct LibraryBrowserView: View {
 
     var body: some View {
         Group {
-            if !isActive {
-                Color.clear
-            } else if let snapshot = library.snapshot, !snapshot.timeline.days.isEmpty,
+            if let snapshot = library.snapshot, !snapshot.timeline.days.isEmpty,
                let repository = library.repository {
                 HStack(spacing: 0) {
                     LibraryBrowserScrollView(snapshot: snapshot,
                                              revision: library.snapshotRevision,
                                              retryRevision: library.retryRevision,
                                              repository: repository, allowNetwork: library.timelineVerified,
-                                             thumbnailSize: library.thumbnailSize, jumpToDay: jumpRequest,
+                                             thumbnailSize: library.thumbnailSize,
+                                             displayRowHeight: library.displayRowHeight,
+                                             jumpToDay: jumpRequest,
                                              unavailableOffline: library.error != nil || library.authenticationFailed,
+                                             colorScheme: colorScheme,
                                              onRetry: { Task { await library.reload() } }) { day in
                         if snapshot.timeline.days.contains(where: { $0.id == day }) { selectedDay = day }
                     }
                     TimelineNavigator(timeline: snapshot.timeline, selected: selection)
-                        .frame(width: 190).padding(.vertical, 24).padding(.trailing, 16)
+                        .frame(width: 72)
+                        .padding(.vertical, 16)
+                        .padding(.trailing, 6)
                 }
             } else if library.snapshot?.timeline.days.isEmpty == true {
                 ContentUnavailableView("No photos", systemImage: "photo",
@@ -57,43 +60,12 @@ struct LibraryBrowserView: View {
                 ProgressView("Opening library…")
             }
         }
-        .background(Color(red: 0.065, green: 0.065, blue: 0.07))
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            HStack { Spacer(); connectionIndicator.padding(.trailing, 16).padding(.vertical, 5) }
-                .background(Color(red: 0.065, green: 0.065, blue: 0.07))
-        }
+        .background(Color(nsColor: .textBackgroundColor))
         .onChange(of: library.snapshotRevision) { _, _ in
             guard let timeline = library.snapshot?.timeline,
                   let index = timeline.index(keeping: selectedDay) else { selectedDay = nil; return }
             selectedDay = timeline.days[index].id
         }
-        .onChange(of: isActive) { _, active in
-            if !active, let selectedDay { jumpRequest = DayJumpRequest(dayID: selectedDay) }
-        }
-    }
-
-    @ViewBuilder private var connectionIndicator: some View {
-        HStack(spacing: 6) {
-            switch library.authenticationStatus {
-            case .notStarted:
-                Text(library.error == nil ? "Opening library…" : "Library unavailable")
-            case .loggingIn:
-                ProgressView().controlSize(.mini)
-                Text("Logging in…")
-            case .signedIn:
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                Text(library.error == nil ? "Connected" : "Connected · Metadata unavailable")
-                    .help(library.error ?? "Signed in")
-            case .failed(let message):
-                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
-                Text("Login failed").help(message)
-            }
-            Button("Retry") { Task { await library.reload() } }
-                .controlSize(.small).disabled(library.isLoading)
-        }
-        .font(.caption)
-        .padding(.horizontal, 9).padding(.vertical, 6)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
     }
 }
 
@@ -136,8 +108,10 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let repository: CachedPhotosRepository
     let allowNetwork: Bool
     let thumbnailSize: ThumbnailSize
+    let displayRowHeight: Double
     let jumpToDay: DayJumpRequest?
     let unavailableOffline: Bool
+    let colorScheme: ColorScheme
     let onRetry: () -> Void
     let onVisibleDay: (String) -> Void
 
@@ -147,7 +121,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
-        scroll.drawsBackground = false
+        scroll.drawsBackground = true
+        scroll.backgroundColor = .textBackgroundColor
         scroll.contentView.postsBoundsChangedNotifications = true
         let document = FlippedDocumentView()
         scroll.documentView = document
@@ -196,6 +171,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var lastVisibleDay: String?
         private var lastJump: UUID?
         private var unavailableOffline = false
+        private var colorScheme: ColorScheme = .light
         private var onRetry: (() -> Void)?
         private var demandedVisible: [Int] = []
         private var demandedPrefetch: [Int] = []
@@ -211,13 +187,16 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             repository = input.repository
             if thumbnailSize != input.thumbnailSize { viewRevision += 1 }
             thumbnailSize = input.thumbnailSize
+            if colorScheme != input.colorScheme { viewRevision += 1 }
+            colorScheme = input.colorScheme
             let width = max(1, Double(scroll.contentSize.width))
             if revision != input.revision {
                 let previous = geometry?.anchor(at: Double(scroll.contentView.bounds.minY))
                 stopWindow()
                 let newIndex = LibraryIndex(snapshot: input.snapshot)
                 index = newIndex
-                geometry = LibraryViewportGeometry(index: newIndex, width: width)
+                geometry = LibraryViewportGeometry(index: newIndex, width: width,
+                                                   targetRowHeight: input.displayRowHeight)
                 revision = input.revision
                 allowNetwork = input.allowNetwork
                 window = LibraryPageWindow(repository: input.repository, maximumPages: 8)
@@ -236,9 +215,12 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     demandedVisible = []
                     demandedPrefetch = []
                 }
-                if let current = geometry, abs(current.width - width) > 0.5 {
+                if let current = geometry,
+                   abs(current.width - width) > 0.5 ||
+                    abs(current.targetRowHeight - input.displayRowHeight) > 0.5 {
                     let anchor = current.anchor(at: Double(scroll.contentView.bounds.minY))
-                    geometry?.setWidth(width, pages: pages)
+                    geometry?.setLayout(width: width, targetRowHeight: input.displayRowHeight,
+                                        pages: pages)
                     viewRevision += 1
                     updateDocumentHeight()
                     if let anchor, let target = geometry?.y(for: anchor) { scrollTo(target) }
@@ -337,7 +319,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 let width = max(1, Double(scroll.contentSize.width))
                 if abs(current.width - width) > 0.5 {
                     let anchor = current.anchor(at: Double(scroll.contentView.bounds.minY))
-                    geometry?.setWidth(width, pages: pages)
+                    geometry?.setLayout(width: width, targetRowHeight: current.targetRowHeight,
+                                        pages: pages)
                     viewRevision += 1
                     updateDocumentHeight()
                     if let anchor, let target = geometry?.y(for: anchor) { scrollTo(target) }
@@ -444,11 +427,11 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             if let host = hosts[key] {
                 host.frame = frame
                 if let previous = hostRevisions[key], previous != revision {
-                    host.rootView = content
+                    host.rootView = AnyView(content.environment(\.colorScheme, colorScheme))
                     hostRevisions[key] = revision
                 }
             } else {
-                let host = NSHostingView(rootView: content)
+                let host = NSHostingView(rootView: AnyView(content.environment(\.colorScheme, colorScheme)))
                 host.frame = frame
                 document.addSubview(host)
                 hosts[key] = host
