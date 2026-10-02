@@ -6,13 +6,13 @@ Work proceeds in four sequential steps. Each subsequent plan is written after re
 
 Status: implemented, unit-tested and reviewed. Visual verification remains user-led.
 
-Preserve item aspect ratios using metadata before thumbnails arrive. Decode the optional EXIF orientation; orientations 5–8 exchange width and height. The HAR contains orientations 1, 3, 6 and 8. Keep compatibility with older cached records missing orientation.
+Preserve item aspect ratios using metadata before thumbnails arrive. The server's `additional.resolution` is already display-oriented, so use its width and height directly. Decode and retain the optional orientation field, but do not exchange dimensions for orientations 5–8. Keep compatibility with older cached records missing orientation.
 
 Implement a pure, testable row layout using available width, a target height around 180 points and a small gap. Completed rows share a height adjusted to fill the width; the last row is left aligned without excessive enlargement. Extreme panoramas and missing/invalid dimensions must produce finite, contained geometry. Retain chronological item order. Group rows by UTC calendar day, matching the observed timeline date bounds, and give each day a date heading. Recalculate geometry when width changes, not when image bytes arrive.
 
 Apply this first to section 207. Extract reusable row/image views for the later browser. Images should fit their correctly proportioned frames without the current uniform-tile cropping. Scope image work to visible rows; retain existing cache semantics. Guard cancelled image tasks against publishing stale results after decoding. Do not change navigation or create the whole library view yet.
 
-Acceptance: tests cover row width, aspect ratios, final-row behavior, narrow widths, invalid dimensions and orientation. Build and tests pass. Update current architecture documentation to describe the implemented slice. Main agent reviews the result before writing step 2.
+Acceptance: tests cover row width, aspect ratios, final-row behavior, narrow widths, invalid dimensions, and resolution behavior for records with orientation metadata. Build and tests pass. Update current architecture documentation to describe the implemented slice. Main agent reviews the result before writing step 2.
 
 ## Step 2: indexed, cancellable access to cached library pages
 

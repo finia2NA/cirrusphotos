@@ -314,6 +314,8 @@ Common decoded dimensions were:
 
 Less common panoramic and near-square dimensions were also present, up to 640 × 240 in this sample. The median response body was about 35 KB.
 
+`additional.resolution` already describes display orientation. A cache-to-JPEG comparison covered 342 records carrying rotated orientation metadata (319 with orientation 6 and 23 with orientation 8); the raw resolution ratio was closer to the served JPEG ratio in all 342, while swapping width and height was closer in none. The optional orientation value should therefore be retained as metadata, not reapplied when computing grid geometry.
+
 For the thumbnail metadata inspected, `sm`, `m`, and `xl` were all `ready`, while `preview` was `broken`. The client should check readiness instead of assuming every generated size is available and should show a placeholder/retry state when a requested rendition is not ready.
 
 ### Demand-driven loading

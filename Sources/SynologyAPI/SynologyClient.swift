@@ -92,14 +92,11 @@ public struct PhotoItem: Codable, Sendable, Identifiable {
         public let height: Int
     }
 
-    /// Display dimensions account for EXIF rotation before image bytes are available.
+    /// The server-provided resolution already describes the displayed orientation.
     public var displayAspectRatio: Double {
         guard let resolution = additional?.resolution,
               resolution.width > 0, resolution.height > 0 else { return 1 }
-        let rotated = (5...8).contains(additional?.orientation ?? 1)
-        let width = Double(rotated ? resolution.height : resolution.width)
-        let height = Double(rotated ? resolution.width : resolution.height)
-        let ratio = width / height
+        let ratio = Double(resolution.width) / Double(resolution.height)
         return ratio.isFinite && ratio > 0 ? ratio : 1
     }
 
