@@ -184,7 +184,10 @@ final class PhotoViewerPresentation: ObservableObject {
         else {
             switch state.fullImageStatus {
             case .idle: status = "Waiting for full resolution"
-            case .loading: status = "Loading full resolution…"
+            case .loading:
+                status = state.isLoadingLargePreview
+                    ? "Loading large preview and full resolution"
+                    : "Loading full resolution"
             case .ready(let verified, let validationFailure):
                 if isDecodingFullImage { status = "Decoding full resolution…" }
                 else if let validationFailure { status = "Full resolution cached · \(validationFailure)" }

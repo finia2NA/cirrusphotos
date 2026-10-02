@@ -60,6 +60,7 @@ public struct PhotoViewerState: Sendable {
     public let metadataStatus: PhotoViewerResourceStatus
     public let thumbnailStatus: PhotoViewerResourceStatus
     public let fullImageStatus: PhotoViewerResourceStatus
+    public let isLoadingLargePreview: Bool
     public let canNavigatePrevious: Bool
     public let canNavigateNext: Bool
     public let allowNetwork: Bool
@@ -592,8 +593,8 @@ public actor PhotoViewerSession {
         thumbnailPrefetchJobs.removeValue(forKey: key)?.task.cancel()
         if thumbnailData == nil, thumbnailJobs.isEmpty {
             thumbnailStatus = .failure(thumbnailFailures[tier] ?? "The preview is not cached.")
-            publish()
         }
+        publish()
     }
 
     private func startFullImage(resource: FullImageResource, allowNetwork: Bool) {
@@ -910,6 +911,8 @@ public actor PhotoViewerSession {
             metadataStatus: metadataStatus,
             thumbnailStatus: thumbnailStatus,
             fullImageStatus: fullImageStatus,
+            isLoadingLargePreview: thumbnailJobs[.largePreview] != nil &&
+                bestThumbnailTier != .largePreview,
             canNavigatePrevious: desired.ordinal > 0,
             canNavigateNext: desired.ordinal + 1 < totalCount,
             allowNetwork: allowNetwork,

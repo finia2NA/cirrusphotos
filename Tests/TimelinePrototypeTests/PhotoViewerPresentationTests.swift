@@ -169,12 +169,15 @@ final class PhotoViewerPresentationTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(2))
         }
         XCTAssertTrue(bothStarted)
+        XCTAssertTrue(viewer.detailLine.hasSuffix("Loading large preview and full resolution"))
         await transport.releaseConfiguredThumbnail()
         let configuredDisplayed = await waitUntil { viewer.image?.size.width == 6 }
         XCTAssertTrue(configuredDisplayed)
+        XCTAssertTrue(viewer.detailLine.hasSuffix("Loading large preview and full resolution"))
         await transport.releasePreview()
         let previewDisplayed = await waitUntil { viewer.image?.size.width == 12 }
         XCTAssertTrue(previewDisplayed)
+        XCTAssertTrue(viewer.detailLine.hasSuffix("Loading full resolution"))
         let sizes = await transport.thumbnailSizes
         XCTAssertEqual(sizes.first, .xl)
 
