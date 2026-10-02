@@ -134,7 +134,8 @@ final class PhotoViewerPresentation: ObservableObject {
 
     init(repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor = .personalLibrary,
          index: LibraryIndex, request: PhotoViewerOpenRequest,
-         thumbnailSize: ThumbnailSize, allowNetwork: Bool, snapshotRevision: Int) {
+         thumbnailSize: ThumbnailSize, loadsLargePreviews: Bool = false,
+         allowNetwork: Bool, snapshotRevision: Int) {
         source = request.source
         originalItemID = request.seed.item.id
         initialItem = request.seed.item
@@ -142,7 +143,9 @@ final class PhotoViewerPresentation: ObservableObject {
         image = request.source.image
         session = PhotoViewerSession(repository: repository, collection: collection,
                                      index: index, seed: request.seed,
-                                     thumbnailSize: thumbnailSize, allowNetwork: allowNetwork,
+                                     thumbnailSize: thumbnailSize,
+                                     loadsLargePreviews: loadsLargePreviews,
+                                     allowNetwork: allowNetwork,
                                      maximumPages: 3)
         let session = session
         stateTask = Task { [weak self] in

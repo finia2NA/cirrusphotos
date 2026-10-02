@@ -52,6 +52,18 @@ public enum ThumbnailCacheOutcome: Sendable, Equatable {
     case cacheWriteFailed
 }
 
+public enum ThumbnailCachePurpose: Sendable, Equatable {
+    case library
+    case viewerPreview
+
+    fileprivate var kind: CacheKind {
+        switch self {
+        case .library: .thumbnail
+        case .viewerPreview: .previewThumbnail
+        }
+    }
+}
+
 private final class StreamProducer: @unchecked Sendable {
     var task: Task<Void, Never>?
 }
@@ -195,7 +207,8 @@ public actor CachedPhotosRepository {
 
     /// Provisional metadata can request cached bytes with allowNetwork=false.
     public func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, allowNetwork: Bool,
-                          priority: RequestPriority = .visible) -> AsyncStream<ResourceEvent<Data>> {
+                          priority: RequestPriority = .visible,
+                          cachePurpose: ThumbnailCachePurpose = .library) -> AsyncStream<ResourceEvent<Data>> {
         let subscriber = UUID()
         let producer = StreamProducer()
         return AsyncStream(bufferingPolicy: .bufferingNewest(3)) { continuation in
@@ -203,13 +216,20 @@ public actor CachedPhotosRepository {
                 let key = CacheKey.thumbnail(namespace: namespace, descriptor: descriptor, size: size)
                 let cached = try? await store.get(key)
                 guard !Task.isCancelled else { continuation.finish(); return }
+                if cached != nil, cachePurpose == .library {
+                    try? await store.promotePreviewThumbnail(key)
+                }
                 if let cached { continuation.yield(.value(cached.data, verified: cached.validatedRun == runID)) }
                 guard allowNetwork && cached?.validatedRun != runID else { continuation.finish(); return }
                 do {
                     let task = registerImage(descriptor, size: size, key: key,
-                                             subscriber: subscriber, priority: priority)
+                                             subscriber: subscriber, priority: priority,
+                                             cachePurpose: cachePurpose)
                     let current = try await task.value
                     guard !Task.isCancelled else { continuation.finish(); return }
+                    if cachePurpose == .library {
+                        try? await store.promotePreviewThumbnail(key)
+                    }
                     continuation.yield(.value(current.data, verified: true))
                 } catch {
                     if !Task.isCancelled && !(error is CancellationError) &&
@@ -655,15 +675,20 @@ public actor CachedPhotosRepository {
                                priority: RequestPriority = .prefetch) async throws -> ThumbnailCacheOutcome {
         try Task.checkCancellation()
         let key = CacheKey.thumbnail(namespace: namespace, descriptor: descriptor, size: size)
-        if let cached = try? await store.get(key), cached.validatedRun == runID { return .reused }
+        if let cached = try? await store.get(key), cached.validatedRun == runID {
+            try? await store.promotePreviewThumbnail(key)
+            return .reused
+        }
         try Task.checkCancellation()
         let subscriber = UUID()
         let task = registerImage(descriptor, size: size, key: key,
-                                 subscriber: subscriber, priority: priority)
+                                 subscriber: subscriber, priority: priority,
+                                 cachePurpose: .library)
         return try await withTaskCancellationHandler {
             do {
                 let resolution = try await task.value
                 try Task.checkCancellation()
+                try? await store.promotePreviewThumbnail(key)
                 releaseImage(key: key, subscriber: subscriber)
                 return resolution.outcome
             } catch {
@@ -832,7 +857,8 @@ public actor CachedPhotosRepository {
     }
 
     private func registerImage(_ descriptor: ThumbnailInfo, size: ThumbnailSize, key: String,
-                               subscriber: UUID, priority: RequestPriority) -> Task<ImageResolution, Error> {
+                               subscriber: UUID, priority: RequestPriority,
+                               cachePurpose: ThumbnailCachePurpose) -> Task<ImageResolution, Error> {
         if var job = imageJobs[key] {
             job.subscribers.insert(subscriber)
             imageJobs[key] = job
@@ -863,7 +889,7 @@ public actor CachedPhotosRepository {
             }
             guard let data = response.data else { throw SynologyAPIError.invalidResponse }
             do {
-                try await store.put(key, kind: .thumbnail, data: data, validatedRun: runID,
+                try await store.put(key, kind: cachePurpose.kind, data: data, validatedRun: runID,
                                     etag: response.etag, lastModified: response.lastModified,
                                     expectedGeneration: generation)
                 return ImageResolution(data: data, outcome: .fetched)

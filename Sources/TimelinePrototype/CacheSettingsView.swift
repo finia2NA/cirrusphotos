@@ -12,6 +12,8 @@ struct CacheSettingsView: View {
                 Text("Medium").tag(ThumbnailSize.m)
                 Text("Large").tag(ThumbnailSize.xl)
             }
+            Toggle("Load large previews in viewer", isOn: $library.loadsLargeViewerPreviews)
+                .disabled(library.thumbnailSize == .xl)
             HStack {
                 Text("Maximum cache")
                 Slider(value: $library.budgetFraction, in: 0...1)

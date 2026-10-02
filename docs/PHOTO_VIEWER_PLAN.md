@@ -27,3 +27,4 @@ Preserve aspect ratios, authenticated session sharing, cached-first browsing, bo
 - Pause on an image, then step to a neighbor to exercise speculative loading.
 - Return with Back/Escape; confirm the library position and thumbnail-size preference remain intact.
 - Revisit cached images offline and exercise retry after a loading failure.
+- With Small or Medium selected, enable “Load large previews in viewer”; confirm the clicked thumbnail upgrades to a sharper preview before a slow original and rapid arrow navigation reuses adjacent previews. Disable it and confirm the previous thumbnail-to-original behavior. With Large selected, confirm the option is disabled and cached previews are reused without another visible intermediate stage.

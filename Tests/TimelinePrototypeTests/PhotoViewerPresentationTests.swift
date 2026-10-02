@@ -34,11 +34,46 @@ private actor PresentationTransport: PhotosTransport {
     }
 }
 
+private actor ProgressivePresentationTransport: PhotosTransport {
+    let preview: Data
+    let original: Data
+    private var previewReleased = false
+    private var originalReleased = false
+    private(set) var thumbnailSizes: [ThumbnailSize] = []
+    private(set) var fullCalls = 0
+
+    init(preview: Data, original: Data) {
+        self.preview = preview
+        self.original = original
+    }
+
+    func releasePreview() { previewReleased = true }
+    func releaseOriginal() { originalReleased = true }
+    func login(credentials: SynologyCredentials) async throws {}
+    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {}
+    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
+        TimelineSnapshot(sections: [])
+    }
+    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] { [] }
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
+                   etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+        thumbnailSizes.append(size)
+        while !previewReleased { try await Task.sleep(for: .milliseconds(2)) }
+        return ThumbnailResponse(data: preview, etag: nil, lastModified: nil)
+    }
+    func fullImage(_ resource: FullImageResource,
+                   etag: String?, lastModified: String?) async throws -> FullImageResponse {
+        fullCalls += 1
+        while !originalReleased { try await Task.sleep(for: .milliseconds(2)) }
+        return FullImageResponse(data: original, etag: nil, lastModified: nil)
+    }
+}
+
 @MainActor
 final class PhotoViewerPresentationTests: XCTestCase {
-    private func previewData() throws -> Data {
-        let context = try XCTUnwrap(CGContext(data: nil, width: 12, height: 8, bitsPerComponent: 8,
-            bytesPerRow: 48, space: CGColorSpaceCreateDeviceRGB(),
+    private func previewData(width: Int = 12, height: Int = 8) throws -> Data {
+        let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
         let image = try XCTUnwrap(context.makeImage())
         let data = NSMutableData()
@@ -50,7 +85,7 @@ final class PhotoViewerPresentationTests: XCTestCase {
 
     private func item(_ id: Int, favorite: Bool = false) throws -> PhotoItem {
         try JSONDecoder().decode(PhotoItem.self, from: Data("""
-        {"id":\(id),"filename":"\(id).jpg","time":1711929600,"type":"photo","additional":{"thumbnail":{"unit_id":\(id),"cache_key":"key-\(id)","m":"ready"},"favorite":\(favorite)}}
+        {"id":\(id),"filename":"\(id).jpg","time":1711929600,"type":"photo","additional":{"thumbnail":{"unit_id":\(id),"cache_key":"key-\(id)","m":"ready","xl":"ready"},"favorite":\(favorite)}}
         """.utf8))
     }
 
@@ -94,6 +129,84 @@ final class PhotoViewerPresentationTests: XCTestCase {
         XCTAssertNotNil(viewer.decodeFailure)
         XCTAssertTrue(viewer.close())
         XCTAssertFalse(viewer.close(), "Close must be idempotent during the collapse transition")
+        await viewer.session.close()
+    }
+
+    func testLargePreviewUpgradesClickedThumbnailBeforeOriginal() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoPresentation-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let clicked = try previewData(width: 6, height: 4)
+        let preview = try previewData(width: 12, height: 8)
+        let original = try previewData(width: 30, height: 20)
+        let transport = ProgressivePresentationTransport(preview: preview, original: original)
+        let repository = try CachedPhotosRepository(
+            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            baseURL: URL(string: "https://progressive.example.invalid")!, cacheRoot: root, transport: transport)
+        let selected = try item(1)
+        let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 1,
+            list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)])])
+        let source = PhotoViewerSourceAnchor()
+        source.update(itemID: 1, image: try XCTUnwrap(NSImage(data: clicked)))
+        let viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+            request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                item: selected, page: [selected], pageVerified: true), source: source),
+            thumbnailSize: .m, loadsLargePreviews: true,
+            allowNetwork: true, snapshotRevision: 1)
+
+        var bothStarted = false
+        for _ in 0..<500 {
+            let sizes = await transport.thumbnailSizes
+            let fullCalls = await transport.fullCalls
+            if !sizes.isEmpty, fullCalls > 0 { bothStarted = true; break }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertTrue(bothStarted)
+        await transport.releasePreview()
+        let previewDisplayed = await waitUntil { viewer.image?.size.width == 12 }
+        XCTAssertTrue(previewDisplayed)
+        let sizes = await transport.thumbnailSizes
+        XCTAssertEqual(sizes.first, .xl)
+
+        await transport.releaseOriginal()
+        let originalDisplayed = await waitUntil { viewer.image?.size.width == 30 }
+        XCTAssertTrue(originalDisplayed)
+        XCTAssertTrue(viewer.close())
+        await viewer.session.close()
+    }
+
+    func testDecodedOriginalRejectsLateLargePreview() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoPresentation-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = ProgressivePresentationTransport(
+            preview: try previewData(width: 12, height: 8),
+            original: try previewData(width: 30, height: 20))
+        let repository = try CachedPhotosRepository(
+            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            baseURL: URL(string: "https://late-preview.example.invalid")!, cacheRoot: root, transport: transport)
+        let selected = try item(1)
+        let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 1,
+            list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)])])
+        let viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+            request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                item: selected, page: [selected], pageVerified: true), source: PhotoViewerSourceAnchor()),
+            thumbnailSize: .m, loadsLargePreviews: true,
+            allowNetwork: true, snapshotRevision: 1)
+
+        var bothStarted = false
+        for _ in 0..<500 {
+            let sizes = await transport.thumbnailSizes
+            let fullCalls = await transport.fullCalls
+            if !sizes.isEmpty, fullCalls > 0 { bothStarted = true; break }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertTrue(bothStarted)
+        await transport.releaseOriginal()
+        let originalDisplayed = await waitUntil { viewer.image?.size.width == 30 }
+        XCTAssertTrue(originalDisplayed)
+        await transport.releasePreview()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(viewer.image?.size.width, 30)
+        XCTAssertTrue(viewer.close())
         await viewer.session.close()
     }
 

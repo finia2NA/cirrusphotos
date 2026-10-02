@@ -6,10 +6,10 @@ Status: persistent cached-first browser, bounded viewport, and full-size photo r
 
 - The Library menu can warm the selected thumbnail rendition for an inclusive range of populated dates. The picker reports an upper bound from distinct-day item counts; actual readiness is checked per page. Batch work uses one metadata page and two prefetch-priority thumbnail workers at a time and can be cancelled without interrupting another consumer's shared request. It uses the existing total budget and may evict earlier downloads; it does not guarantee pinned offline availability.
 
-- `PhotoCache` stores the full Personal Space timeline and exact item pages as JSON in SQLite, with compressed thumbnail and original-photo files alongside the index. The development cache lives in the repository's Git-ignored `.cache/` directory, separated by a server/account hash. Keys include server/account namespace, request shape, unit ID, opaque thumbnail key, and size where applicable. The app displays cached values before validation and retains current-run markers on disk.
+- `PhotoCache` stores the full Personal Space timeline and exact item pages as JSON in SQLite, with compressed thumbnail and original-photo files alongside the index. The development cache lives in the repository's Git-ignored `.cache/` directory, separated by a server/account hash. Keys include server/account namespace, request shape, unit ID, opaque thumbnail key, and size where applicable. Viewer-fetched `xl` previews share the ordinary `xl` key and file but have a lower-retention category until ordinary thumbnail demand promotes them in place. The app displays cached values before validation and retains current-run markers on disk.
 - Personal Library combines the equal-day navigator with a virtualized Personal Space browser using an eight-page window, compact slice heights, visible-row hosting, and adjacent prefetch. Cached thumbnails can paint from provisional item metadata; requests wait until current page metadata arrives. Thumbnail GETs use ETag or Last-Modified validators, accept 304 with retained local bytes, reject JSON error bodies, and use bounded six-request transfers. ImageIO downsamples off the main actor with two concurrent decodes; `NSCache` holds decoded images.
 - Repository authentication status is independent of resource loading and replayed to the UI. Cached data remains usable during login and after failure. Failed sign-in is memoized until explicit retry, while metadata errors retain a valid session.
-- A standard macOS Settings scene exposes `sm`/`m`/`xl`, a logarithmic 200 MB–100 GB budget, indexed payload usage, and clear-cache. Eviction prioritizes originals before thumbnails and item pages and protects the active complete timeline.
+- A standard macOS Settings scene exposes `sm`/`m`/`xl`, an opt-in “Load large previews in viewer” toggle, a logarithmic 200 MB–100 GB budget, indexed payload usage, and clear-cache. When enabled with `sm` or `m`, current and adjacent viewer `xl` previews use the shared cache while the current original starts concurrently. The option is inactive for `xl`. Eviction prioritizes viewer previews, originals, ordinary thumbnails, and item pages in that order and protects the active complete timeline.
 - `swift test` passes without NAS access. An opt-in test (`RUN_LIVE_SYNOLOGY_TEST=1 swift test --filter PhotoCacheTests/testLiveSectionAndWarmCacheWhenEnabled`) passed against Cirrus: full timeline, current section 207, one thumbnail, cached-first reopen, and later validation. DSM rejected immediate reuse of a TOTP between the two test sessions; login now retries once after the next code window only for login errors 403/404.
 
 Current limitations: albums, maps, video playback, and coordinated session renewal after expiry are pending. Eviction uses SQLite indexed LRU over stored payload bytes; its displayed/budgeted size excludes SQLite/WAL overhead, filesystem allocation, and temporary writes. Shared page/thumbnail/original transfers cancel when their last subscriber leaves. The browser shows errors and cached fallback but has no dedicated retry action for each thumbnail. The repository-local cache is reproducible data rather than a backup. This file's later sections describe broader design and acceptance criteria, not all shipped behavior.
@@ -70,6 +70,7 @@ Create one process-wide `runID`, shared by windows. For each resource, record wh
 | Full timeline for a space/filter | Display the cached complete timeline immediately | Authenticate and fetch the full timeline once; atomically replace it if changed. |
 | Item page | Display an exactly matching cached page, marked provisional | Fetch that page once using the current timeline's descriptor, even if timeline counts did not change. |
 | Thumbnail | Display the cached rendition provisionally | After current item metadata is available, resolve its rendition key and conditionally validate/download the needed image. |
+| Viewer `xl` preview | Display cached preview after the clicked/configured rendition | If enabled with `sm`/`m`, conditionally validate/download current and adjacent previews concurrently with the current original; promote in place if later demanded as an ordinary `xl` thumbnail. |
 | Full-size photo | Display cached original bytes after immediate thumbnail preview | After current metadata is verified, conditionally validate/download the original; prefetch only adjacent images after current success. |
 | Future album/map resources | Same two-stage interface | Define identity and validation rules per endpoint when implemented. Do not assume the timeline validates them. |
 
@@ -183,10 +184,11 @@ A cache entry needs: key/namespace/kind, schema version, payload or relative fil
 
 Keep priorities separate from request scheduling. Evict in this order, LRU within a class:
 
-1. Full-size photos (original image bytes).
-2. Compressed thumbnails.
-3. Item pages and future album/map metadata.
-4. Current complete timeline snapshots, protected during ordinary eviction.
+1. Viewer-fetched `xl` preview thumbnails.
+2. Full-size photos (original image bytes).
+3. Ordinary compressed thumbnails.
+4. Item pages and future album/map metadata.
+5. Current complete timeline snapshots, protected during ordinary eviction.
 
 Remove superseded/unreferenced generations before useful current entries. Only a small bounded set of current timelines is protected; do not pin every historical timeline or all metadata forever. A protected timeline still counts toward the budget and can be cleared explicitly.
 
@@ -201,6 +203,7 @@ Cached images and metadata are private user data even without credentials. Use a
 Add a native SwiftUI `Settings` scene, reachable through the app menu and Command-comma:
 
 - Thumbnail rendition: Small (`sm`), Medium (`m`), Large (`xl`). These are separate cache variants; only request sizes reported ready. Choose Medium as an initial default to evaluate on Retina displays, not a proven optimum. A setting change affects new visible demands and does not eagerly redownload the library.
+- Load large previews in viewer: persisted opt-in, default off. With Small or Medium selected, fetch/cache `xl` for the current photo and immediate neighbors without delaying the original. With Large selected, ordinary `xl` thumbnails already provide this stage, so the option is inactive. Disabling it leaves existing preview entries for normal eviction.
 - Total disk budget: 200 MB–100 GB, logarithmic. Use decimal units consistently: `bytes = 200_000_000 * pow(500, sliderFraction)`. Store the byte count, not the slider position. Lowering it schedules eviction; increasing it does not trigger a library-wide download.
 - Show used bytes and a clear-cache action. Disk budget is distinct from decoded-memory limits.
 

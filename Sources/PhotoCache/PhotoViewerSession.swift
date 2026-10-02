@@ -111,6 +111,7 @@ public actor PhotoViewerSession {
     private let spans: [SectionSpan]
     private let totalCount: Int
     private let thumbnailSize: ThumbnailSize
+    private let loadsLargePreviews: Bool
     private let maximumPages: Int
 
     private var allowNetwork: Bool
@@ -148,11 +149,13 @@ public actor PhotoViewerSession {
     public init(repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor = .personalLibrary,
                 index: LibraryIndex,
                 seed: PhotoViewerSeed, thumbnailSize: ThumbnailSize = .xl,
+                loadsLargePreviews: Bool = false,
                 allowNetwork: Bool, maximumPages: Int = 3) {
         self.repository = repository
         self.collection = collection
         self.index = index
         self.thumbnailSize = thumbnailSize
+        self.loadsLargePreviews = loadsLargePreviews
         self.allowNetwork = allowNetwork
         self.maximumPages = max(1, min(3, maximumPages))
 
@@ -283,6 +286,7 @@ public actor PhotoViewerSession {
     }
 
     func retainedPageCount() -> Int { pages.count }
+    func speculativeThumbnailCount() -> Int { thumbnailPrefetchJobs.count }
     func speculativeFullImageCount() -> Int { fullJobs.count }
 
     private func startIfNeeded() {
@@ -514,13 +518,14 @@ public actor PhotoViewerSession {
         let expectedGeneration = generation
         let expectedID = item.id
         let repository = repository
-        let size = thumbnailSize
+        let request = thumbnailRequest(for: descriptor)
         thumbnailAttempt = attempt
         thumbnailTaskAllowsNetwork = allowNetwork
         if thumbnailData == nil { thumbnailStatus = .loading }
         thumbnailTask = Task { [weak self] in
-            for await event in await repository.thumbnail(descriptor, size: size,
-                                                           allowNetwork: allowNetwork, priority: .visible) {
+            for await event in await repository.thumbnail(descriptor, size: request.size,
+                                                           allowNetwork: allowNetwork, priority: .visible,
+                                                           cachePurpose: request.purpose) {
                 guard !Task.isCancelled else { break }
                 await self?.receiveThumbnail(event, attempt: attempt,
                                              generation: expectedGeneration, itemID: expectedID)
@@ -556,6 +561,7 @@ public actor PhotoViewerSession {
             thumbnailAttempt = nil
             thumbnailTask = nil
             thumbnailTaskAllowsNetwork = false
+            cancelPrefetchSubscriberForCurrentThumbnail()
         }
     }
 
@@ -666,19 +672,28 @@ public actor PhotoViewerSession {
         }
 
         var wantedKeys: Set<String> = []
+        // Keep an adjacent prefetch subscriber alive until the newly selected visible
+        // subscriber has joined the shared repository job. Cancelling it here can race
+        // task startup and needlessly restart the same transfer.
+        if let descriptor = currentItem?.additional?.thumbnail {
+            let request = thumbnailRequest(for: descriptor)
+            let currentKey = Self.thumbnailKey(descriptor, size: request.size)
+            if thumbnailPrefetchJobs[currentKey] != nil { wantedKeys.insert(currentKey) }
+        }
         for location in locations {
             guard let page = pages[location.sectionIndex],
                   page.items.indices.contains(location.pageOffset),
                   let descriptor = page.items[location.pageOffset].additional?.thumbnail else { continue }
-            let key = Self.thumbnailKey(descriptor, size: thumbnailSize)
+            let request = thumbnailRequest(for: descriptor)
+            let key = Self.thumbnailKey(descriptor, size: request.size)
             wantedKeys.insert(key)
             let network = allowNetwork && page.verified
             if let job = thumbnailPrefetchJobs[key], network && !job.allowNetwork {
                 job.task.cancel()
                 thumbnailPrefetchJobs.removeValue(forKey: key)
-                startThumbnailPrefetch(descriptor, key: key, allowNetwork: true)
+                startThumbnailPrefetch(descriptor, request: request, key: key, allowNetwork: true)
             } else if thumbnailPrefetchJobs[key] == nil {
-                startThumbnailPrefetch(descriptor, key: key, allowNetwork: network)
+                startThumbnailPrefetch(descriptor, request: request, key: key, allowNetwork: network)
             }
         }
         for (key, job) in thumbnailPrefetchJobs where !wantedKeys.contains(key) {
@@ -687,13 +702,15 @@ public actor PhotoViewerSession {
         }
     }
 
-    private func startThumbnailPrefetch(_ descriptor: ThumbnailInfo, key: String, allowNetwork: Bool) {
+    private func startThumbnailPrefetch(_ descriptor: ThumbnailInfo,
+                                        request: (size: ThumbnailSize, purpose: ThumbnailCachePurpose),
+                                        key: String, allowNetwork: Bool) {
         let id = UUID()
         let repository = repository
-        let size = thumbnailSize
         let task = Task { [weak self] in
-            for await _ in await repository.thumbnail(descriptor, size: size,
-                                                       allowNetwork: allowNetwork, priority: .prefetch) {
+            for await _ in await repository.thumbnail(descriptor, size: request.size,
+                                                       allowNetwork: allowNetwork, priority: .prefetch,
+                                                       cachePurpose: request.purpose) {
                 guard !Task.isCancelled else { break }
             }
             await self?.finishThumbnailPrefetch(key: key, id: id)
@@ -704,6 +721,21 @@ public actor PhotoViewerSession {
     private func finishThumbnailPrefetch(key: String, id: UUID) {
         guard thumbnailPrefetchJobs[key]?.id == id else { return }
         thumbnailPrefetchJobs.removeValue(forKey: key)
+    }
+
+    private func cancelPrefetchSubscriberForCurrentThumbnail() {
+        guard let descriptor = currentItem?.additional?.thumbnail else { return }
+        let request = thumbnailRequest(for: descriptor)
+        let key = Self.thumbnailKey(descriptor, size: request.size)
+        thumbnailPrefetchJobs.removeValue(forKey: key)?.task.cancel()
+    }
+
+    private func thumbnailRequest(for descriptor: ThumbnailInfo)
+        -> (size: ThumbnailSize, purpose: ThumbnailCachePurpose) {
+        if loadsLargePreviews, thumbnailSize != .xl, descriptor.isReady(.xl) {
+            return (.xl, .viewerPreview)
+        }
+        return (thumbnailSize, .library)
     }
 
     private func scheduleLoadedNeighbors() {

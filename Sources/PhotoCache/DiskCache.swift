@@ -3,10 +3,19 @@ import Foundation
 import SQLite3
 import SynologyAPI
 
-public enum CacheKind: Int, Sendable { case fullImage = 0, thumbnail = 1, page = 2, timeline = 3 }
+public enum CacheKind: Int, Sendable {
+    // Keep the established raw values stable because they are persisted in SQLite.
+    // Lower values are evicted first.
+    case previewThumbnail = -1
+    case fullImage = 0
+    case thumbnail = 1
+    case page = 2
+    case timeline = 3
+}
 
 public struct CacheEntry: Sendable {
     public let data: Data
+    public let kind: CacheKind
     public let etag: String?
     public let lastModified: String?
     public let validatedRun: String?
@@ -73,7 +82,7 @@ public actor DiskCache {
     deinit { sqlite3_close(db) }
 
     public func get(_ key: String) throws -> CacheEntry? {
-        let sql = "SELECT payload,file,etag,last_modified,validated_run,digest FROM entries WHERE key=?"
+        let sql = "SELECT payload,file,etag,last_modified,validated_run,digest,kind FROM entries WHERE key=?"
         let statement = try prepare(sql)
         defer { sqlite3_finalize(statement) }
         bind(key, at: 1, in: statement)
@@ -96,7 +105,11 @@ public actor DiskCache {
             try? remove(key)
             return nil
         }
-        let result = CacheEntry(data: data, etag: columnString(statement, 2),
+        guard let kind = CacheKind(rawValue: Int(sqlite3_column_int(statement, 6))) else {
+            try? remove(key)
+            return nil
+        }
+        let result = CacheEntry(data: data, kind: kind, etag: columnString(statement, 2),
                                 lastModified: columnString(statement, 3), validatedRun: columnString(statement, 4))
         let touch = try prepare("UPDATE entries SET accessed=? WHERE key=?")
         defer { sqlite3_finalize(touch) }
@@ -111,14 +124,21 @@ public actor DiskCache {
     public func put(_ key: String, kind: CacheKind, data: Data, validatedRun: String?,
                     etag: String? = nil, lastModified: String? = nil, expectedGeneration: Int? = nil) throws {
         if let expectedGeneration, expectedGeneration != generation { return }
-        let filename = (kind == .thumbnail || kind == .fullImage) ? key + ".img" : nil
+        let storedKind: CacheKind
+        if kind == .previewThumbnail, try existingKind(for: key) == .thumbnail {
+            storedKind = .thumbnail
+        } else {
+            storedKind = kind
+        }
+        let filename = (storedKind == .previewThumbnail || storedKind == .thumbnail || storedKind == .fullImage)
+            ? key + ".img" : nil
         if let filename {
             try data.write(to: images.appendingPathComponent(filename), options: .atomic)
         }
         let statement = try prepare("INSERT OR REPLACE INTO entries (key,kind,payload,file,cost,accessed,validated_run,etag,last_modified,digest) VALUES (?,?,?,?,?,?,?,?,?,?)")
         defer { sqlite3_finalize(statement) }
         bind(key, at: 1, in: statement)
-        sqlite3_bind_int(statement, 2, Int32(kind.rawValue))
+        sqlite3_bind_int(statement, 2, Int32(storedKind.rawValue))
         if filename == nil { _ = data.withUnsafeBytes { sqlite3_bind_blob(statement, 3, $0.baseAddress, Int32(data.count), sqliteTransient) } }
         else { sqlite3_bind_null(statement, 3) }
         bind(filename, at: 4, in: statement)
@@ -139,6 +159,18 @@ public actor DiskCache {
         bind(run, at: 1, in: statement)
         sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970)
         bind(key, at: 3, in: statement)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw CacheError.storage }
+    }
+
+    /// Promotes a viewer preview to an ordinary thumbnail without touching its image file.
+    public func promotePreviewThumbnail(_ key: String, expectedGeneration: Int? = nil) throws {
+        if let expectedGeneration, expectedGeneration != generation { return }
+        let statement = try prepare("UPDATE entries SET kind=?, accessed=? WHERE key=? AND kind=?")
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int(statement, 1, Int32(CacheKind.thumbnail.rawValue))
+        sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970)
+        bind(key, at: 3, in: statement)
+        sqlite3_bind_int(statement, 4, Int32(CacheKind.previewThumbnail.rawValue))
         guard sqlite3_step(statement) == SQLITE_DONE else { throw CacheError.storage }
     }
 
@@ -192,6 +224,13 @@ public actor DiskCache {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw CacheError.storage }
         return statement
+    }
+    private func existingKind(for key: String) throws -> CacheKind? {
+        let statement = try prepare("SELECT kind FROM entries WHERE key=?")
+        defer { sqlite3_finalize(statement) }
+        bind(key, at: 1, in: statement)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return CacheKind(rawValue: Int(sqlite3_column_int(statement, 0)))
     }
     private func bind(_ value: String?, at index: Int32, in statement: OpaquePointer?) {
         if let value { _ = value.withCString { sqlite3_bind_text(statement, index, $0, -1, sqliteTransient) } }

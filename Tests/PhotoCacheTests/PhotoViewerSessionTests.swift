@@ -14,10 +14,15 @@ private actor ViewerTransport: PhotosTransport {
     var releasedPages: Set<Int> = []
     var blockedFullImages: Set<Int64> = []
     var releasedFullImages: Set<Int64> = []
+    var blockedThumbnails: Set<Int64> = []
+    var releasedThumbnails: Set<Int64> = []
+    var failedFullImages: Set<Int64> = []
     var failImages = false
     private(set) var pageCalls: [Int] = []
     private(set) var pageCollections: [PhotoCollectionDescriptor] = []
     private(set) var thumbnailCalls: [Int64] = []
+    private(set) var thumbnailRequests: [(Int64, ThumbnailSize)] = []
+    private(set) var cancelledThumbnails: Set<Int64> = []
     private(set) var fullImageCalls: [Int64] = []
     private(set) var fullImageKeys: [String] = []
     private(set) var cancelledFullImages: Set<Int64> = []
@@ -28,15 +33,19 @@ private actor ViewerTransport: PhotosTransport {
     var releaseFavorite = false
 
     func configure(pages: [Int: [PhotoItem]], blockedPages: Set<Int> = [],
-                   blockedFullImages: Set<Int64> = [], failImages: Bool = false) {
+                   blockedFullImages: Set<Int64> = [], blockedThumbnails: Set<Int64> = [],
+                   failedFullImages: Set<Int64> = [], failImages: Bool = false) {
         self.pages = pages
         self.blockedPages = blockedPages
         self.blockedFullImages = blockedFullImages
+        self.blockedThumbnails = blockedThumbnails
+        self.failedFullImages = failedFullImages
         self.failImages = failImages
     }
 
     func releasePage(_ offset: Int) { releasedPages.insert(offset) }
     func releaseFullImage(_ id: Int64) { releasedFullImages.insert(id) }
+    func releaseThumbnail(_ id: Int64) { releasedThumbnails.insert(id) }
     func setFavoriteFailure(_ enabled: Bool) { failFavorite = enabled }
     func setFavoriteBlocked(_ enabled: Bool) { blockFavorite = enabled }
     func releaseFavoriteWrite() { releaseFavorite = true }
@@ -68,7 +77,17 @@ private actor ViewerTransport: PhotosTransport {
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         thumbnailCalls.append(descriptor.unitID)
+        thumbnailRequests.append((descriptor.unitID, size))
         if failImages { throw ViewerFailure(message: "Offline") }
+        do {
+            while blockedThumbnails.contains(descriptor.unitID),
+                  !releasedThumbnails.contains(descriptor.unitID) {
+                try await Task.sleep(for: .milliseconds(2))
+            }
+        } catch is CancellationError {
+            cancelledThumbnails.insert(descriptor.unitID)
+            throw CancellationError()
+        }
         return ThumbnailResponse(data: Data([UInt8(truncatingIfNeeded: descriptor.unitID), 0x54]),
                                  etag: "thumb-\(descriptor.unitID)", lastModified: nil)
     }
@@ -77,6 +96,9 @@ private actor ViewerTransport: PhotosTransport {
         fullImageCalls.append(resource.unitID)
         fullImageKeys.append(resource.cacheKey)
         if failImages { throw ViewerFailure(message: "Offline") }
+        if failedFullImages.contains(resource.unitID) {
+            throw ViewerFailure(message: "Original failed")
+        }
         do {
             while blockedFullImages.contains(resource.unitID),
                   !releasedFullImages.contains(resource.unitID) {
@@ -212,13 +234,18 @@ final class PhotoViewerSessionTests: XCTestCase {
         XCTAssertTrue(prefetchCreated)
         let speculativeCount = await session.speculativeFullImageCount()
         XCTAssertLessThanOrEqual(speculativeCount, 2)
-        let firstNeighborStarted = await waitUntil { await transport.fullImageCalls.contains(1) }
-        XCTAssertTrue(firstNeighborStarted)
+        let oneNeighborStarted = await waitUntil {
+            let calls = await transport.fullImageCalls
+            return calls.contains(1) || calls.contains(3)
+        }
+        XCTAssertTrue(oneNeighborStarted)
         calls = await transport.fullImageCalls
         XCTAssertFalse(calls.contains(4))
         await session.navigatePrevious()
         let promoted = await waitUntil { await session.state().item?.id == 1 }
         XCTAssertTrue(promoted)
+        let selectedStarted = await waitUntil { await transport.fullImageCalls.contains(1) }
+        XCTAssertTrue(selectedStarted)
         try? await Task.sleep(for: .milliseconds(20))
         calls = await transport.fullImageCalls
         XCTAssertEqual(calls.filter { $0 == 1 }.count, 1,
@@ -251,6 +278,146 @@ final class PhotoViewerSessionTests: XCTestCase {
         let fullCalls = await transport.fullImageCalls
         XCTAssertFalse(fullCalls.contains(1))
         XCTAssertFalse(fullCalls.contains(3))
+        await session.close()
+    }
+
+    func testLargeViewerPreviewStartsWithOriginalAndWarmsAdjacentXLPreviews() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let items = try [item(1), item(2), item(3), item(4)]
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: Array(items[0...1]), 2: Array(items[2...3])],
+                                  blockedFullImages: [2])
+        let repository = try repository(root: cacheRoot, transport: transport)
+        let session = PhotoViewerSession(repository: repository,
+                                         index: LibraryIndex(snapshot: snapshot()),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1,
+                                                               item: items[1], page: Array(items[0...1]),
+                                                               pageVerified: true),
+                                         thumbnailSize: .sm, loadsLargePreviews: true,
+                                         allowNetwork: true)
+        _ = await session.state()
+        let concurrent = await waitUntil {
+            let thumbnails = await transport.thumbnailRequests
+            let originals = await transport.fullImageCalls
+            return [1, 2, 3].allSatisfy { id in
+                thumbnails.contains { $0.0 == Int64(id) && $0.1 == .xl }
+            } && originals.contains(2)
+        }
+        XCTAssertTrue(concurrent)
+        let state = await session.state()
+        XCTAssertEqual(state.thumbnailData, Data([2, 0x54]))
+        XCTAssertNil(state.fullImageData)
+
+        let descriptor = try XCTUnwrap(items[1].additional?.thumbnail)
+        let namespace = CacheKey.namespace(server: server, account: credentials.username)
+        let entry = try await repository.store.get(
+            CacheKey.thumbnail(namespace: namespace, descriptor: descriptor, size: .xl)
+        )
+        XCTAssertEqual(entry?.kind, .previewThumbnail)
+        await session.close()
+    }
+
+    func testLargePreviewSettingIsInactiveForXLAndOffPreservesConfiguredSize() async throws {
+        let xlRoot = root(); defer { try? FileManager.default.removeItem(at: xlRoot) }
+        let selected = try item(8)
+        let oneSection = TimelineSnapshot(sections: [
+            TimelineSection(offset: 0, limit: 1,
+                            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
+        ])
+        let xlTransport = ViewerTransport()
+        await xlTransport.configure(pages: [0: [selected]])
+        let xlRepository = try repository(root: xlRoot, transport: xlTransport)
+        let xlSession = PhotoViewerSession(repository: xlRepository,
+            index: LibraryIndex(snapshot: oneSection),
+            seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0, item: selected,
+                                  page: [selected], pageVerified: true),
+            thumbnailSize: .xl, loadsLargePreviews: true, allowNetwork: true)
+        _ = await xlSession.state()
+        let xlLoaded = await waitUntil { await xlSession.state().thumbnailData != nil }
+        XCTAssertTrue(xlLoaded)
+        let xlDescriptor = try XCTUnwrap(selected.additional?.thumbnail)
+        let namespace = CacheKey.namespace(server: server, account: credentials.username)
+        let xlEntry = try await xlRepository.store.get(
+            CacheKey.thumbnail(namespace: namespace, descriptor: xlDescriptor, size: .xl)
+        )
+        XCTAssertEqual(xlEntry?.kind, .thumbnail)
+        await xlSession.close()
+
+        let offRoot = root(); defer { try? FileManager.default.removeItem(at: offRoot) }
+        let offTransport = ViewerTransport()
+        await offTransport.configure(pages: [0: [selected]])
+        let offSession = PhotoViewerSession(repository: try repository(root: offRoot, transport: offTransport),
+            index: LibraryIndex(snapshot: oneSection),
+            seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0, item: selected,
+                                  page: [selected], pageVerified: true),
+            thumbnailSize: .sm, loadsLargePreviews: false, allowNetwork: true)
+        _ = await offSession.state()
+        let offLoaded = await waitUntil { await offSession.state().thumbnailData != nil }
+        XCTAssertTrue(offLoaded)
+        let requests = await offTransport.thumbnailRequests
+        XCTAssertTrue(requests.contains { $0.0 == 8 && $0.1 == .sm })
+        XCTAssertFalse(requests.contains { $0.1 == .xl })
+        await offSession.close()
+    }
+
+    func testFullImageFailureRetainsLargePreview() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let selected = try item(9)
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: [selected]], failedFullImages: [9])
+        let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 1,
+            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])])
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+            index: LibraryIndex(snapshot: snapshot),
+            seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0, item: selected,
+                                  page: [selected], pageVerified: true),
+            thumbnailSize: .sm, loadsLargePreviews: true, allowNetwork: true)
+        _ = await session.state()
+        let retained = await waitUntil {
+            let state = await session.state()
+            if case .failure("Original failed") = state.fullImageStatus {
+                return state.thumbnailData == Data([9, 0x54]) && state.fullImageData == nil
+            }
+            return false
+        }
+        XCTAssertTrue(retained)
+        await session.close()
+    }
+
+    func testSelectingInflightAdjacentPreviewPromotesItAndCancelsObsoleteNeighbor() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let items = try [item(1), item(2), item(3)]
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: items], blockedFullImages: [2],
+                                  blockedThumbnails: [1, 3])
+        let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 3,
+            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 3)])])
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+            index: LibraryIndex(snapshot: snapshot),
+            seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1, item: items[1],
+                                  page: items, pageVerified: true),
+            thumbnailSize: .sm, loadsLargePreviews: true, allowNetwork: true)
+        _ = await session.state()
+        let neighborsStarted = await waitUntil {
+            let calls = await transport.thumbnailCalls
+            return calls.contains(1) && calls.contains(3)
+        }
+        XCTAssertTrue(neighborsStarted)
+        let speculativeCount = await session.speculativeThumbnailCount()
+        XCTAssertLessThanOrEqual(speculativeCount, 2)
+
+        await session.navigatePrevious()
+        await transport.releaseThumbnail(1)
+        let selectedLoaded = await waitUntil {
+            let state = await session.state()
+            return state.item?.id == 1 && state.thumbnailData == Data([1, 0x54])
+        }
+        XCTAssertTrue(selectedLoaded)
+        let calls = await transport.thumbnailCalls
+        XCTAssertEqual(calls.filter { $0 == 1 }.count, 1,
+                       "Selecting a prefetched preview must reuse its shared transfer")
+        let obsoleteCancelled = await waitUntil { await transport.cancelledThumbnails.contains(3) }
+        XCTAssertTrue(obsoleteCancelled)
         await session.close()
     }
 

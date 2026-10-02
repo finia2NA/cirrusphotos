@@ -138,6 +138,7 @@ private struct AppShellView: View {
         viewer = PhotoViewerPresentation(repository: repository, collection: selectedCollection,
                                          index: LibraryIndex(snapshot: snapshot),
                                          request: request, thumbnailSize: model.thumbnailSize,
+                                         loadsLargePreviews: model.loadsLargeViewerPreviews,
                                          allowNetwork: model.timelineVerified(for: selectedCollection),
                                          snapshotRevision: model.viewerSnapshotRevision(for: selectedCollection))
     }
@@ -365,6 +366,9 @@ final class LibraryModel: ObservableObject {
     }
     @Published var thumbnailSize: ThumbnailSize = ThumbnailSize(rawValue: UserDefaults.standard.string(forKey: "thumbnailSize") ?? "m") ?? .m {
         didSet { UserDefaults.standard.set(thumbnailSize.rawValue, forKey: "thumbnailSize") }
+    }
+    @Published var loadsLargeViewerPreviews: Bool = UserDefaults.standard.bool(forKey: "loadsLargeViewerPreviews") {
+        didSet { UserDefaults.standard.set(loadsLargeViewerPreviews, forKey: "loadsLargeViewerPreviews") }
     }
     @Published var displayRowHeight: Double = LibraryModel.persistedDisplayRowHeight() {
         didSet {
