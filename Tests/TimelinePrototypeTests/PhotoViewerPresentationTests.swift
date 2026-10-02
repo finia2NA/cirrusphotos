@@ -43,9 +43,9 @@ final class PhotoViewerPresentationTests: XCTestCase {
         return data as Data
     }
 
-    private func item(_ id: Int) throws -> PhotoItem {
+    private func item(_ id: Int, favorite: Bool = false) throws -> PhotoItem {
         try JSONDecoder().decode(PhotoItem.self, from: Data("""
-        {"id":\(id),"filename":"\(id).jpg","time":1711929600,"type":"photo","additional":{"thumbnail":{"unit_id":\(id),"cache_key":"key-\(id)","m":"ready"}}}
+        {"id":\(id),"filename":"\(id).jpg","time":1711929600,"type":"photo","additional":{"thumbnail":{"unit_id":\(id),"cache_key":"key-\(id)","m":"ready"},"favorite":\(favorite)}}
         """.utf8))
     }
 
@@ -107,5 +107,29 @@ final class PhotoViewerPresentationTests: XCTestCase {
         rowView = nil
         XCTAssertNil(weakRow, "An open viewer must not pin an evicted row and its page closures")
         source.activate()
+    }
+
+    func testAlreadyFavoritedSeedHydratesViewerPresentation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoPresentation-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let preview = try previewData()
+        let repository = try CachedPhotosRepository(
+            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            baseURL: URL(string: "https://presentation.example.invalid")!, cacheRoot: root,
+            transport: PresentationTransport(preview: preview))
+        let favored = try item(7, favorite: true)
+        let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 1,
+            list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)])])
+        let viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+            request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                item: favored, page: [favored], pageVerified: true), source: PhotoViewerSourceAnchor()),
+            thumbnailSize: .m, allowNetwork: true, snapshotRevision: 1)
+
+        let hydratedFavorite = await waitUntil {
+            viewer.state?.item?.isFavorite == true && viewer.canToggleFavorite
+        }
+        XCTAssertTrue(hydratedFavorite)
+        XCTAssertTrue(viewer.close())
+        await viewer.session.close()
     }
 }

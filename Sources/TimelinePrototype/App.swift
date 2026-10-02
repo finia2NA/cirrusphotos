@@ -160,13 +160,7 @@ private struct AppShellView: View {
                 ViewerZoomControl(viewer: viewer)
             }
             ToolbarItem(placement: .primaryAction) {
-                Button(action: viewer.toggleFavorite) {
-                    Label(viewer.state?.item?.isFavorite == true ? "Remove from Favorites" : "Add to Favorites",
-                          systemImage: viewer.state?.item?.isFavorite == true ? "heart.fill" : "heart")
-                }
-                .disabled(!viewer.canToggleFavorite)
-                .keyboardShortcut(".", modifiers: [])
-                .help(viewer.state?.favoriteFailure ?? "Toggle Favorite (.)")
+                ViewerFavoriteControl(viewer: viewer)
             }
             ToolbarItem(placement: .principal) {
                 ViewerToolbarTitle(viewer: viewer)
@@ -221,6 +215,23 @@ private struct ViewerZoomControl: View {
             Image(systemName: "plus.magnifyingglass").accessibilityHidden(true)
         }
         .imageScale(.small)
+    }
+}
+
+/// The shell owns the viewer as optional navigation state, so it only observes changes to
+/// that reference. This child observes the presentation itself and refreshes as soon as the
+/// selected item's metadata arrives or its favorite state changes.
+private struct ViewerFavoriteControl: View {
+    @ObservedObject var viewer: PhotoViewerPresentation
+
+    var body: some View {
+        Button(action: viewer.toggleFavorite) {
+            Label(viewer.state?.item?.isFavorite == true ? "Remove from Favorites" : "Add to Favorites",
+                  systemImage: viewer.state?.item?.isFavorite == true ? "heart.fill" : "heart")
+        }
+        .disabled(!viewer.canToggleFavorite)
+        .keyboardShortcut(".", modifiers: [])
+        .help(viewer.state?.favoriteFailure ?? "Toggle Favorite (.)")
     }
 }
 
