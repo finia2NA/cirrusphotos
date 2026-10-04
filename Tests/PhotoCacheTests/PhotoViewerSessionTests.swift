@@ -59,11 +59,10 @@ private actor ViewerTransport: PhotosTransport {
         if failFavorite { throw ViewerFailure(message: "Favorite write failed") }
         favoriteWrites.append(contentsOf: itemIDs.map { ($0, favorite) })
     }
-    func timeline(initial: Bool) async throws -> TimelineSnapshot { TimelineSnapshot(sections: []) }
     func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
         TimelineSnapshot(sections: [])
     }
-    func items(in section: TimelineSection) async throws -> [PhotoItem] {
+    private func loadItems(in section: TimelineSection) async throws -> [PhotoItem] {
         pageCalls.append(section.offset)
         while blockedPages.contains(section.offset), !releasedPages.contains(section.offset) {
             try await Task.sleep(for: .milliseconds(2))
@@ -72,7 +71,7 @@ private actor ViewerTransport: PhotosTransport {
     }
     func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
         pageCollections.append(collection)
-        return try await items(in: section)
+        return try await loadItems(in: section)
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {

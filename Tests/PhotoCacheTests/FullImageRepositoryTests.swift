@@ -31,6 +31,9 @@ private actor FullImageTransport: PhotosTransport {
     func login(credentials: SynologyCredentials) async throws {}
     func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot { TimelineSnapshot(sections: []) }
     func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] { [] }
+    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
+        throw SynologyAPIError.unsupported("Full-image test does not exercise favorite writes.")
+    }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         ThumbnailResponse(data: Data([1]), etag: nil, lastModified: nil)

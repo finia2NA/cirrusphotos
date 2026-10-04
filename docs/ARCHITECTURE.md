@@ -4,6 +4,8 @@
 
 `TimelineCore` contains the platform-independent navigator model. `SynologyAPI` owns credentials, TOTP login, the authenticated URL session, timeline/page requests, thumbnail transport, and authenticated original-photo downloads. `PhotoCache` owns semantic resource keys, cached-first request coordination, SQLite metadata storage, compressed image files, and eviction. `TimelinePrototype` is the SwiftUI macOS executable.
 
+`CachedPhotosRepository` depends on one complete `PhotosTransport` contract for login, collection-aware timelines and pages, favorite writes, thumbnails, and originals. Transports implement every operation explicitly; the Synology client rejects an initial Favorites timeline request because the server does not support that endpoint.
+
 At startup the app reads `USER`, `PW`, and the TOTP secret `OTP` from the ignored `.env`. It opens one shared repository for the app process and starts cached-first Personal Library and Favorites timeline loads concurrently. Personal Library may use `get_init_timeline` on a cold cache before full `get`; Favorites always uses full `get` with `favorite_only=true`. Identical startup descriptors update verification state without replacing the viewport. Timelines are not polled during the run. Successful local favorite mutations trigger a coalesced authoritative Favorites timeline refresh; pages remain demand-driven.
 
 The snapshot preserves every section's date list, offset, and limit, while the navigator deduplicates calendar dates, retains the earliest section index for split days, and sorts newest first. It precomputes year/month boundaries once. Selection is restored by calendar date when a refreshed map arrives. Live changes during a run remain out of scope.

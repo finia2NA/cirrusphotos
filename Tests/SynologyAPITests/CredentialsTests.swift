@@ -38,8 +38,8 @@ final class CredentialsTests: XCTestCase {
         }
         let client = SynologyClient()
         try await client.login(credentials: CredentialStore.load())
-        let initial = try await client.timeline(initial: true)
-        let full = try await client.timeline(initial: false)
+        let initial = try await client.timeline(collection: .personalLibrary, initial: true)
+        let full = try await client.timeline(collection: .personalLibrary, initial: false)
         XCTAssertFalse(initial.timeline.days.isEmpty)
         XCTAssertLessThanOrEqual(initial.timeline.days.reduce(0) { $0 + $1.count }, 500)
         XCTAssertGreaterThanOrEqual(full.timeline.days.count, initial.timeline.days.count)

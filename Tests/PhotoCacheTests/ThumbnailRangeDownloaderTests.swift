@@ -15,12 +15,19 @@ private actor RangeTransport: PhotosTransport {
     func login(credentials: SynologyCredentials) async throws {}
     func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot { TimelineSnapshot(sections: []) }
     func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] { pages[section.offset] ?? [] }
+    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
+        throw SynologyAPIError.unsupported("Range test does not exercise favorite writes.")
+    }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         thumbnailCalls += 1
         if blockThumbnails { try await Task.sleep(for: .seconds(30)) }
         return ThumbnailResponse(data: Data([UInt8(truncatingIfNeeded: descriptor.unitID)]),
                                  etag: "test", lastModified: nil)
+    }
+    func fullImage(_ resource: FullImageResource,
+                   etag: String?, lastModified: String?) async throws -> FullImageResponse {
+        throw SynologyAPIError.unsupported("Range test does not exercise original images.")
     }
 }
 

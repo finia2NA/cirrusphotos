@@ -265,24 +265,6 @@ public protocol PhotosTransport: Sendable {
                    etag: String?, lastModified: String?) async throws -> FullImageResponse
 }
 
-public extension PhotosTransport {
-    func timeline(initial: Bool) async throws -> TimelineSnapshot {
-        try await timeline(collection: .personalLibrary, initial: initial)
-    }
-    func items(in section: TimelineSection) async throws -> [PhotoItem] {
-        try await items(in: section, collection: .personalLibrary)
-    }
-    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
-        throw SynologyAPIError.unsupported("This Photos transport does not support favorites.")
-    }
-    /// Keeps existing test and alternate transports source-compatible while making lack of
-    /// original-image support explicit when the new repository API is used.
-    func fullImage(_ resource: FullImageResource,
-                   etag: String?, lastModified: String?) async throws -> FullImageResponse {
-        throw SynologyAPIError.unsupported("This Photos transport does not support full-size images.")
-    }
-}
-
 public actor SynologyClient: PhotosTransport {
     public static let defaultBaseURL = URL(string: "https://nas.example.com:5001")!
 

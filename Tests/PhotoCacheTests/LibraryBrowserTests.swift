@@ -41,16 +41,12 @@ private actor FakeTransport: PhotosTransport {
         try Task.checkCancellation()
         if let loginFailure { throw FakeFailure(message: loginFailure) }
     }
-    func timeline(initial: Bool) async throws -> TimelineSnapshot {
-        if let timelineFailure { throw FakeFailure(message: timelineFailure) }
-        return timelineSnapshot
-    }
     func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
         collectionTimelineCalls.append((collection, initial))
         if let timelineFailure { throw FakeFailure(message: timelineFailure) }
         return timelineSnapshot
     }
-    func items(in section: TimelineSection) async throws -> [PhotoItem] {
+    private func loadItems(in section: TimelineSection) async throws -> [PhotoItem] {
         itemCalls += 1
         for waiter in startedWaiters { waiter.resume() }
         startedWaiters.removeAll()
@@ -61,7 +57,7 @@ private actor FakeTransport: PhotosTransport {
     }
     func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
         collectionItemCalls.append(collection)
-        return try await items(in: section)
+        return try await loadItems(in: section)
     }
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
         favoriteRequests.append(contentsOf: itemIDs.map { ($0, favorite) })
@@ -79,6 +75,10 @@ private actor FakeTransport: PhotosTransport {
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         ThumbnailResponse(data: Data([1]), etag: nil, lastModified: nil)
+    }
+    func fullImage(_ resource: FullImageResource,
+                   etag: String?, lastModified: String?) async throws -> FullImageResponse {
+        throw SynologyAPIError.unsupported("Library browser test does not exercise original images.")
     }
     func waitForItemStart() async {
         if itemCalls > 0 { return }
