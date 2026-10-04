@@ -3,12 +3,7 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-private struct ViewerFailure: LocalizedError {
-    let message: String
-    var errorDescription: String? { message }
-}
-
-private actor ViewerTransport: PhotosTransport {
+fileprivate actor ViewerTransport: PhotosTransport {
     var pages: [Int: [PhotoItem]] = [:]
     var blockedPages: Set<Int> = []
     var releasedPages: Set<Int> = []
@@ -50,17 +45,13 @@ private actor ViewerTransport: PhotosTransport {
     func setFavoriteBlocked(_ enabled: Bool) { blockFavorite = enabled }
     func releaseFavoriteWrite() { releaseFavorite = true }
 
-    func login(credentials: SynologyCredentials) async throws {}
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
         favoriteRequests.append(contentsOf: itemIDs.map { ($0, favorite) })
         while blockFavorite, !releaseFavorite {
             try await Task.sleep(for: .milliseconds(2))
         }
-        if failFavorite { throw ViewerFailure(message: "Favorite write failed") }
+        if failFavorite { throw TestFailure("Favorite write failed") }
         favoriteWrites.append(contentsOf: itemIDs.map { ($0, favorite) })
-    }
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
-        TimelineSnapshot(sections: [])
     }
     private func loadItems(in section: TimelineSection) async throws -> [PhotoItem] {
         pageCalls.append(section.offset)
@@ -77,7 +68,7 @@ private actor ViewerTransport: PhotosTransport {
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         thumbnailCalls.append(descriptor.unitID)
         thumbnailRequests.append((descriptor.unitID, size))
-        if failImages { throw ViewerFailure(message: "Offline") }
+        if failImages { throw TestFailure("Offline") }
         do {
             while blockedThumbnails.contains(descriptor.unitID),
                   !releasedThumbnails.contains(descriptor.unitID) {
@@ -94,9 +85,9 @@ private actor ViewerTransport: PhotosTransport {
                    etag: String?, lastModified: String?) async throws -> FullImageResponse {
         fullImageCalls.append(resource.unitID)
         fullImageKeys.append(resource.cacheKey)
-        if failImages { throw ViewerFailure(message: "Offline") }
+        if failImages { throw TestFailure("Offline") }
         if failedFullImages.contains(resource.unitID) {
-            throw ViewerFailure(message: "Original failed")
+            throw TestFailure("Original failed")
         }
         do {
             while blockedFullImages.contains(resource.unitID),
@@ -112,15 +103,13 @@ private actor ViewerTransport: PhotosTransport {
     }
 }
 
-final class PhotoViewerSessionTests: XCTestCase {
-    private let server = URL(string: "https://viewer.example.invalid")!
-    private let credentials = SynologyCredentials(username: "viewer", password: "unused", otpSecret: "unused")
+class PhotoViewerSessionTestCase: XCTestCase {
+    fileprivate let server = URL(string: "https://viewer.example.invalid")!
+    fileprivate let credentials = SynologyCredentials(username: "viewer", password: "unused", otpSecret: "unused")
 
-    private func root() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("SynoViewerTest-\(UUID().uuidString)")
-    }
+    fileprivate func root() -> URL { temporaryTestRoot("SynoViewerTest") }
 
-    private func item(_ id: Int, type: String = "photo", revision: String? = nil) throws -> PhotoItem {
+    fileprivate func item(_ id: Int, type: String = "photo", revision: String? = nil) throws -> PhotoItem {
         let key = revision ?? "key-\(id)"
         let json = """
         {"id":\(id),"filename":"\(id).jpg","time":1711929600,"type":"\(type)","additional":{"thumbnail":{"unit_id":\(id),"cache_key":"\(key)","sm":"ready","m":"ready","xl":"ready"}}}
@@ -128,7 +117,7 @@ final class PhotoViewerSessionTests: XCTestCase {
         return try JSONDecoder().decode(PhotoItem.self, from: Data(json.utf8))
     }
 
-    private func snapshot() -> TimelineSnapshot {
+    fileprivate func snapshot() -> TimelineSnapshot {
         let days = [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 4)]
         return TimelineSnapshot(sections: [
             TimelineSection(offset: 0, limit: 2, list: days),
@@ -136,19 +125,14 @@ final class PhotoViewerSessionTests: XCTestCase {
         ])
     }
 
-    private func repository(root: URL, transport: ViewerTransport) throws -> CachedPhotosRepository {
+    fileprivate func repository(root: URL, transport: ViewerTransport) throws -> CachedPhotosRepository {
         try CachedPhotosRepository(credentials: credentials, baseURL: server,
                                    cacheRoot: root, transport: transport)
     }
 
-    private func waitUntil(_ predicate: @escaping @Sendable () async -> Bool) async -> Bool {
-        for _ in 0..<300 {
-            if await predicate() { return true }
-            try? await Task.sleep(for: .milliseconds(3))
-        }
-        return false
-    }
+}
 
+final class PhotoViewerNavigationTests: PhotoViewerSessionTestCase {
     func testNavigationUsesExactSectionOffsetsAndClampsAtBounds() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let items = try [item(1), item(2), item(3), item(4)]
@@ -208,7 +192,9 @@ final class PhotoViewerSessionTests: XCTestCase {
         XCTAssertNotEqual(state.item?.id, 3)
         await session.close()
     }
+}
 
+final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
     func testPrefetchStartsOnlyAfterCurrentFullImageAndStaysAdjacent() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let items = try [item(1), item(2), item(3), item(4)]
@@ -566,7 +552,9 @@ final class PhotoViewerSessionTests: XCTestCase {
         XCTAssertTrue(failedAfterCache)
         await session.close()
     }
+}
 
+final class PhotoViewerMetadataValidationTests: PhotoViewerSessionTestCase {
     func testVerifiedMetadataRevisionReplacesProvisionalResourceBeforeNetworkImage() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let old = try item(1, revision: "old")
@@ -754,7 +742,9 @@ final class PhotoViewerSessionTests: XCTestCase {
         XCTAssertTrue(loaded)
         await session.close()
     }
+}
 
+extension PhotoViewerAssetLifecycleTests {
     func testRetryPreservesLoadedImagesAndSelection() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let selected = try item(14)
@@ -867,7 +857,9 @@ final class PhotoViewerSessionTests: XCTestCase {
         XCTAssertEqual(fullImageCalls, [15])
         await session.close()
     }
+}
 
+final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
     func testFavoriteWriteUpdatesViewerRetainedPageAndDiskCache() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let first = try item(31)

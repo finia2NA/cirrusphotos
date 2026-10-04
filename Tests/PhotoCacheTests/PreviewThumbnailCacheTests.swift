@@ -8,22 +8,12 @@ private actor PreviewThumbnailTransport: PhotosTransport {
     private(set) var thumbnailCalls = 0
 
     func releaseThumbnail() { releaseResponse = true }
-    func login(credentials: SynologyCredentials) async throws {}
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
-        TimelineSnapshot(sections: [])
-    }
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] { [] }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         thumbnailCalls += 1
         while !releaseResponse { try await Task.sleep(for: .milliseconds(2)) }
         return ThumbnailResponse(data: Data([4, 2]), etag: "preview", lastModified: nil)
     }
-    func fullImage(_ resource: FullImageResource,
-                   etag: String?, lastModified: String?) async throws -> FullImageResponse {
-        FullImageResponse(data: Data(), etag: nil, lastModified: nil)
-    }
-    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {}
 }
 
 private func consumePreviewStream(_ stream: AsyncStream<ResourceEvent<Data>>) async -> Data? {
@@ -38,9 +28,7 @@ final class PreviewThumbnailCacheTests: XCTestCase {
     private let credentials = SynologyCredentials(username: "preview", password: "unused", otpSecret: "unused")
     private let server = URL(string: "https://preview.example.invalid")!
 
-    private func root() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("SynoPreviewCache-\(UUID().uuidString)")
-    }
+    private func root() -> URL { temporaryTestRoot("SynoPreviewCache") }
 
     private func descriptor() throws -> ThumbnailInfo {
         try JSONDecoder().decode(ThumbnailInfo.self, from: Data("""

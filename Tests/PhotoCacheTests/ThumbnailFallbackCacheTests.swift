@@ -6,31 +6,19 @@ import XCTest
 private actor FallbackThumbnailTransport: PhotosTransport {
     private(set) var requestedSizes: [ThumbnailSize] = []
 
-    func login(credentials: SynologyCredentials) async throws {}
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
-        TimelineSnapshot(sections: [])
-    }
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] { [] }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         requestedSizes.append(size)
         return ThumbnailResponse(data: Data("network-\(size.rawValue)".utf8),
                                  etag: size.rawValue, lastModified: nil)
     }
-    func fullImage(_ resource: FullImageResource,
-                   etag: String?, lastModified: String?) async throws -> FullImageResponse {
-        FullImageResponse(data: Data(), etag: nil, lastModified: nil)
-    }
-    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {}
 }
 
 final class ThumbnailFallbackCacheTests: XCTestCase {
     private let credentials = SynologyCredentials(username: "fallback", password: "unused", otpSecret: "unused")
     private let server = URL(string: "https://fallback.example.invalid")!
 
-    private func root() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("SynoFallbackCache-\(UUID().uuidString)")
-    }
+    private func root() -> URL { temporaryTestRoot("SynoFallbackCache") }
 
     private func descriptor(unitID: Int64 = 42, revision: String = "revision",
                             medium: String = "ready") throws -> ThumbnailInfo {

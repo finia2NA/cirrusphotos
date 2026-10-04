@@ -3,7 +3,7 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-private actor FakeTransport: PhotosTransport {
+fileprivate actor FakeTransport: PhotosTransport {
     var loginBlocked = false
     var itemBlocked = false
     var loginFailure: String?
@@ -39,11 +39,11 @@ private actor FakeTransport: PhotosTransport {
         loginCalls += 1
         if loginBlocked { await withCheckedContinuation { loginWaiters.append($0) } }
         try Task.checkCancellation()
-        if let loginFailure { throw FakeFailure(message: loginFailure) }
+        if let loginFailure { throw TestFailure(loginFailure) }
     }
     func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
         collectionTimelineCalls.append((collection, initial))
-        if let timelineFailure { throw FakeFailure(message: timelineFailure) }
+        if let timelineFailure { throw TestFailure(timelineFailure) }
         return timelineSnapshot
     }
     private func loadItems(in section: TimelineSection) async throws -> [PhotoItem] {
@@ -52,7 +52,7 @@ private actor FakeTransport: PhotosTransport {
         startedWaiters.removeAll()
         if itemBlocked { await withCheckedContinuation { itemWaiters.append($0) } }
         try Task.checkCancellation()
-        if let itemFailure { throw FakeFailure(message: itemFailure) }
+        if let itemFailure { throw TestFailure(itemFailure) }
         return pageItems
     }
     func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
@@ -64,21 +64,13 @@ private actor FakeTransport: PhotosTransport {
         while favoriteBlocked, !favoriteReleased {
             try await Task.sleep(for: .milliseconds(2))
         }
-        if favoriteFailure { throw FakeFailure(message: "Favorite write failed") }
+        if favoriteFailure { throw TestFailure("Favorite write failed") }
         favoriteWrites.append(contentsOf: itemIDs.map { ($0, favorite) })
     }
     func blockFavoriteWrite() { favoriteBlocked = true; favoriteReleased = false }
     func releaseFavoriteWrite(failing: Bool = false) {
         favoriteFailure = failing
         favoriteReleased = true
-    }
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
-        ThumbnailResponse(data: Data([1]), etag: nil, lastModified: nil)
-    }
-    func fullImage(_ resource: FullImageResource,
-                   etag: String?, lastModified: String?) async throws -> FullImageResponse {
-        throw SynologyAPIError.unsupported("Library browser test does not exercise original images.")
     }
     func waitForItemStart() async {
         if itemCalls > 0 { return }
@@ -96,46 +88,34 @@ private actor FakeTransport: PhotosTransport {
     }
 }
 
-private struct FakeFailure: LocalizedError {
-    let message: String
-    var errorDescription: String? { message }
-}
+class LibraryBrowserTestCase: XCTestCase {
+    fileprivate let server = URL(string: "https://example.invalid")!
+    fileprivate let credentials = SynologyCredentials(username: "test", password: "unused", otpSecret: "unused")
 
-final class LibraryBrowserTests: XCTestCase {
-    private let server = URL(string: "https://example.invalid")!
-    private let credentials = SynologyCredentials(username: "test", password: "unused", otpSecret: "unused")
-
-    private func section(_ day: Int, offset: Int = 0, limit: Int = 2, count: Int = 2) -> TimelineSection {
+    fileprivate func section(_ day: Int, offset: Int = 0, limit: Int = 2, count: Int = 2) -> TimelineSection {
         TimelineSection(offset: offset, limit: limit,
                         list: [TimelineDay(year: 2024, month: 4, day: day, itemCount: count)])
     }
-    private func item(_ id: Int) throws -> PhotoItem {
+    fileprivate func item(_ id: Int) throws -> PhotoItem {
         try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":\(id),\"time\":1711929600,\"type\":\"photo\"}".utf8))
     }
-    private func root() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("SynoBrowserTest-\(UUID().uuidString)")
-    }
-    private func repository(root: URL, transport: FakeTransport) throws -> CachedPhotosRepository {
+    fileprivate func root() -> URL { temporaryTestRoot("SynoBrowserTest") }
+    fileprivate func repository(root: URL, transport: FakeTransport) throws -> CachedPhotosRepository {
         try CachedPhotosRepository(credentials: credentials, baseURL: server, cacheRoot: root, transport: transport)
     }
-    private func seed(_ items: [PhotoItem], section: TimelineSection, repository: CachedPhotosRepository) async throws {
+    fileprivate func seed(_ items: [PhotoItem], section: TimelineSection, repository: CachedPhotosRepository) async throws {
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
         let key = try XCTUnwrap(CacheKey.page(namespace: namespace, section: section))
         try await repository.store.put(key, kind: .page, data: JSONEncoder().encode(items), validatedRun: nil)
     }
-    private func seedTimeline(_ snapshot: TimelineSnapshot, repository: CachedPhotosRepository) async throws {
+    fileprivate func seedTimeline(_ snapshot: TimelineSnapshot, repository: CachedPhotosRepository) async throws {
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
         try await repository.store.put(CacheKey.timeline(namespace: namespace), kind: .timeline,
                                        data: JSONEncoder().encode(snapshot), validatedRun: nil)
     }
-    private func waitUntil(_ condition: () async -> Bool) async -> Bool {
-        for _ in 0..<200 {
-            if await condition() { return true }
-            try? await Task.sleep(for: .milliseconds(5))
-        }
-        return false
-    }
+}
 
+final class LibraryIndexAndCacheIdentityTests: LibraryBrowserTestCase {
     func testIndexMapsSplitAndMixedDaysWithOffset() {
         let snapshot = TimelineSnapshot(sections: [
             TimelineSection(offset: 0, limit: 4, list: [
@@ -155,7 +135,7 @@ final class LibraryBrowserTests: XCTestCase {
         XCTAssertNotEqual(index.fingerprint, LibraryIndex(snapshot: TimelineSnapshot(sections: [section(1)])).fingerprint)
     }
 
-    func testCollectionCacheKeysAreIsolatedWhileImagesRemainShared() throws {
+    func testCollectionMetadataCacheKeysAreIsolated() {
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
         let descriptor = section(3)
         XCTAssertEqual(PhotoCollectionDescriptor.personalLibrary.rawValue, "personal",
@@ -164,12 +144,10 @@ final class LibraryBrowserTests: XCTestCase {
                           CacheKey.timeline(namespace: namespace, collection: .favorites))
         XCTAssertNotEqual(CacheKey.page(namespace: namespace, section: descriptor, collection: .personalLibrary),
                           CacheKey.page(namespace: namespace, section: descriptor, collection: .favorites))
-        let thumbnail = try JSONDecoder().decode(ThumbnailInfo.self,
-            from: Data("{\"unit_id\":1,\"cache_key\":\"revision\"}".utf8))
-        XCTAssertEqual(CacheKey.thumbnail(namespace: namespace, descriptor: thumbnail, size: .m),
-                       CacheKey.thumbnail(namespace: namespace, descriptor: thumbnail, size: .m))
     }
+}
 
+final class FavoriteRepositoryTests: LibraryBrowserTestCase {
     func testFavoritesRoutesTimelineAndPageThroughFilteredCollection() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
         let transport = FakeTransport()
@@ -355,7 +333,9 @@ final class LibraryBrowserTests: XCTestCase {
         let itemCalls = await transport.collectionItemCalls.count
         XCTAssertEqual(itemCalls, 2)
     }
+}
 
+final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
     func testCachedPageArrivesWhileLoginIsBlockedAndOfflineReadFinishes() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
         let fake = FakeTransport()

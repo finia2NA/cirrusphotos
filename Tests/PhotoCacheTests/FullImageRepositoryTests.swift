@@ -3,10 +3,6 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-private struct FullImageFailure: LocalizedError {
-    var errorDescription: String? { "Original image unavailable" }
-}
-
 private actor FullImageTransport: PhotosTransport {
     var shouldFail = false
     var shouldBlock = false
@@ -28,21 +24,11 @@ private actor FullImageTransport: PhotosTransport {
     }
 
     func release(_ unitID: Int64) { released.insert(unitID) }
-    func login(credentials: SynologyCredentials) async throws {}
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot { TimelineSnapshot(sections: []) }
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] { [] }
-    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
-        throw SynologyAPIError.unsupported("Full-image test does not exercise favorite writes.")
-    }
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
-        ThumbnailResponse(data: Data([1]), etag: nil, lastModified: nil)
-    }
     func fullImage(_ resource: FullImageResource,
                    etag: String?, lastModified: String?) async throws -> FullImageResponse {
         calls.append(resource.unitID)
         validators.append((etag, lastModified))
-        if shouldFail { throw FullImageFailure() }
+        if shouldFail { throw TestFailure("Original image unavailable") }
         do {
             while shouldBlock && !released.contains(resource.unitID) {
                 try await Task.sleep(for: .milliseconds(5))
@@ -62,9 +48,7 @@ final class FullImageRepositoryTests: XCTestCase {
     private let credentials = SynologyCredentials(username: "full-image", password: "unused", otpSecret: "unused")
     private let server = URL(string: "https://full-image.example.invalid")!
 
-    private func root() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("SynoFullImageTest-\(UUID().uuidString)")
-    }
+    private func root() -> URL { temporaryTestRoot("SynoFullImageTest") }
 
     private func repository(root: URL, transport: FullImageTransport) throws -> CachedPhotosRepository {
         try CachedPhotosRepository(credentials: credentials, baseURL: server,
@@ -82,14 +66,6 @@ final class FullImageRepositoryTests: XCTestCase {
             for await event in await repository.fullImage(resource, priority: priority) { events.append(event) }
             return events
         }
-    }
-
-    private func waitUntil(_ predicate: @escaping @Sendable () async -> Bool) async -> Bool {
-        for _ in 0..<200 {
-            if await predicate() { return true }
-            try? await Task.sleep(for: .milliseconds(5))
-        }
-        return false
     }
 
     func testCachedFirstValidationOncePerRunAndOfflineFallback() async throws {

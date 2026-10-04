@@ -14,13 +14,11 @@ private actor PresentationTransport: PhotosTransport {
 
     init(preview: Data) { self.preview = preview }
     func releaseThumbnail(_ id: Int64) { releasedThumbnails.insert(id) }
-    func login(credentials: SynologyCredentials) async throws {}
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {}
     func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
         timelineCalls.append((collection, initial))
         return TimelineSnapshot(sections: [])
     }
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] { [] }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         while !releasedThumbnails.contains(descriptor.unitID) {
@@ -53,12 +51,6 @@ private actor ProgressivePresentationTransport: PhotosTransport {
     func releaseConfiguredThumbnail() { configuredReleased = true }
     func releasePreview() { previewReleased = true }
     func releaseOriginal() { originalReleased = true }
-    func login(credentials: SynologyCredentials) async throws {}
-    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {}
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
-        TimelineSnapshot(sections: [])
-    }
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] { [] }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         thumbnailSizes.append(size)
@@ -78,8 +70,8 @@ private actor ProgressivePresentationTransport: PhotosTransport {
 }
 
 @MainActor
-final class PhotoViewerPresentationTests: XCTestCase {
-    private func previewData(width: Int = 12, height: Int = 8) throws -> Data {
+class PhotoViewerPresentationTestCase: XCTestCase {
+    fileprivate func previewData(width: Int = 12, height: Int = 8) throws -> Data {
         let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
             bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
@@ -91,20 +83,23 @@ final class PhotoViewerPresentationTests: XCTestCase {
         return data as Data
     }
 
-    private func item(_ id: Int, favorite: Bool = false) throws -> PhotoItem {
+    fileprivate func item(_ id: Int, favorite: Bool = false) throws -> PhotoItem {
         try JSONDecoder().decode(PhotoItem.self, from: Data("""
         {"id":\(id),"filename":"\(id).jpg","time":1711929600,"type":"photo","additional":{"thumbnail":{"unit_id":\(id),"cache_key":"key-\(id)","m":"ready","xl":"ready"},"favorite":\(favorite)}}
         """.utf8))
     }
 
-    private func waitUntil(_ predicate: @MainActor () -> Bool) async -> Bool {
+    fileprivate func waitUntil(_ predicate: @MainActor () -> Bool) async -> Bool {
         for _ in 0..<500 {
             if predicate() { return true }
             try? await Task.sleep(for: .milliseconds(3))
         }
         return false
     }
+}
 
+@MainActor
+final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
     func testLateThumbnailRemainsAvailableAfterOriginalDecodeFailure() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoPresentation-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -304,7 +299,10 @@ final class PhotoViewerPresentationTests: XCTestCase {
         XCTAssertTrue(viewer.close())
         await viewer.session.close()
     }
+}
 
+@MainActor
+final class LibraryModelTests: PhotoViewerPresentationTestCase {
     func testLibraryModelEagerlyLoadsBothCollectionTimelines() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoModel-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }

@@ -23,7 +23,7 @@ final class PhotoCacheTests: XCTestCase {
     }
 
     func testIncompatibleCacheSchemaDiscardsIndexedAndImageData() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoOldCache-\(UUID().uuidString)")
+        let root = temporaryTestRoot("SynoOldCache")
         defer { try? FileManager.default.removeItem(at: root) }
         let images = root.appendingPathComponent("images", isDirectory: true)
         try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
@@ -46,7 +46,7 @@ final class PhotoCacheTests: XCTestCase {
     }
 
     func testCurrentSchemaReopensWithoutDiscardingCache() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoCurrentCache-\(UUID().uuidString)")
+        let root = temporaryTestRoot("SynoCurrentCache")
         defer { try? FileManager.default.removeItem(at: root) }
         do {
             let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
@@ -58,7 +58,7 @@ final class PhotoCacheTests: XCTestCase {
     }
 
     func testUnreadableIndexRecreatesCache() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoCorruptCache-\(UUID().uuidString)")
+        let root = temporaryTestRoot("SynoCorruptCache")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try Data("not sqlite".utf8).write(to: root.appendingPathComponent("index.sqlite"))
@@ -69,7 +69,7 @@ final class PhotoCacheTests: XCTestCase {
     }
 
     func testFutureCacheSchemaIsNotInterpretedAsCurrent() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoFutureCache-\(UUID().uuidString)")
+        let root = temporaryTestRoot("SynoFutureCache")
         defer { try? FileManager.default.removeItem(at: root) }
         do {
             let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
@@ -125,7 +125,7 @@ final class PhotoCacheTests: XCTestCase {
     }
 
     func testPriorityEvictsOldThumbnailsBeforePinnedTimeline() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoCacheTest-\(UUID().uuidString)")
+        let root = temporaryTestRoot("SynoCacheTest")
         defer { try? FileManager.default.removeItem(at: root) }
         let cache = try DiskCache(root: root, budget: 12, protectedTimelineKey: "timeline")
         try await cache.put("timeline", kind: .timeline, data: Data(repeating: 1, count: 5), validatedRun: "run")
@@ -142,8 +142,7 @@ final class PhotoCacheTests: XCTestCase {
     }
 
     func testFullImagesEvictBeforeThumbnails() async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SynoFullImageEvictionTest-\(UUID().uuidString)")
+        let root = temporaryTestRoot("SynoFullImageEvictionTest")
         defer { try? FileManager.default.removeItem(at: root) }
         let cache = try DiskCache(root: root, budget: 12, protectedTimelineKey: "timeline")
         try await cache.put("timeline", kind: .timeline, data: Data(repeating: 1, count: 4), validatedRun: "run")
@@ -161,8 +160,7 @@ final class PhotoCacheTests: XCTestCase {
     }
 
     func testOversizedFullImageSelfEvictsWithoutPurgingThumbnails() async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SynoOversizedFullImageTest-\(UUID().uuidString)")
+        let root = temporaryTestRoot("SynoOversizedFullImageTest")
         defer { try? FileManager.default.removeItem(at: root) }
         let cache = try DiskCache(root: root, budget: 12, protectedTimelineKey: "timeline")
         try await cache.put("timeline", kind: .timeline, data: Data(repeating: 1, count: 4), validatedRun: "run")
@@ -177,7 +175,7 @@ final class PhotoCacheTests: XCTestCase {
     }
 
     func testCorruptImageIsDiscarded() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoCacheCorruptTest-\(UUID().uuidString)")
+        let root = temporaryTestRoot("SynoCacheCorruptTest")
         defer { try? FileManager.default.removeItem(at: root) }
         let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
         try await cache.put("thumb", kind: .thumbnail, data: Data([1, 2, 3]), validatedRun: "old")
@@ -189,7 +187,7 @@ final class PhotoCacheTests: XCTestCase {
     }
 
     func testClearRejectsLateWrite() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoCacheClearTest-\(UUID().uuidString)")
+        let root = temporaryTestRoot("SynoCacheClearTest")
         defer { try? FileManager.default.removeItem(at: root) }
         let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
         let generation = await cache.currentGeneration()
@@ -204,7 +202,7 @@ final class PhotoCacheTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["RUN_LIVE_SYNOLOGY_TEST"] == "1" else {
             throw XCTSkip("Set RUN_LIVE_SYNOLOGY_TEST=1 to test Cirrus.")
         }
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoLiveCacheTest-\(UUID().uuidString)")
+        let root = temporaryTestRoot("SynoLiveCacheTest")
         defer { try? FileManager.default.removeItem(at: root) }
         let credentials = try CredentialStore.load()
         let first = try CachedPhotosRepository(credentials: credentials, cacheRoot: root)
