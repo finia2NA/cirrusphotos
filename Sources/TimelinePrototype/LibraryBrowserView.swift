@@ -36,7 +36,6 @@ struct LibraryBrowserView: View {
     let collection: PhotoCollectionDescriptor
     var restorationAnchor: PhotoTimelineRestorationAnchor?
     let bridge: LibraryBrowserBridge
-    var contentLeadingInset: CGFloat = 0
     var contentTopInset: CGFloat = 0
     var onOpenPhoto: (PhotoViewerOpenRequest) -> Void = { _ in }
     var onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void = { _ in }
@@ -74,7 +73,6 @@ struct LibraryBrowserView: View {
                                              jumpToDay: jumpRequest,
                                              unavailableOffline: library.error(for: collection) != nil || library.authenticationFailed,
                                              colorScheme: colorScheme,
-                                             contentLeadingInset: contentLeadingInset,
                                              contentTopInset: contentTopInset,
                                              onOpenPhoto: onOpenPhoto,
                                              onRestorationAnchorChanged: onRestorationAnchorChanged,
@@ -211,7 +209,6 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let jumpToDay: DayJumpRequest?
     let unavailableOffline: Bool
     let colorScheme: ColorScheme
-    let contentLeadingInset: CGFloat
     let contentTopInset: CGFloat
     let onOpenPhoto: (PhotoViewerOpenRequest) -> Void
     let onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void
@@ -302,8 +299,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             repository = input.repository
             let insetAnchor = geometry?.anchor(at: visibleTop(in: scroll))
             let oldInsets = scroll.contentInsets
-            let insets = NSEdgeInsets(top: input.contentTopInset,
-                                      left: input.contentLeadingInset, bottom: 0, right: 0)
+            let insets = NSEdgeInsets(top: input.contentTopInset, left: 0, bottom: 0, right: 0)
             scroll.contentInsets = insets
             let insetsChanged = abs(oldInsets.top - insets.top) > 0.5 ||
                 abs(oldInsets.left - insets.left) > 0.5

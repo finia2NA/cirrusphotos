@@ -14,7 +14,6 @@ final class LibraryModel: ObservableObject {
     @Published private var snapshotRevisions: [PhotoCollectionDescriptor: Int] = [:]
     @Published private var viewerSnapshotRevisions: [PhotoCollectionDescriptor: Int] = [:]
     @Published private var timelineVerifications: [PhotoCollectionDescriptor: Bool] = [:]
-    @Published private(set) var status = "Opening library…"
     @Published private var collectionErrors: [PhotoCollectionDescriptor: String] = [:]
     @Published private(set) var isLoading = true
     @Published private(set) var authenticationStatus: AuthenticationStatus = .notStarted
@@ -154,7 +153,6 @@ final class LibraryModel: ObservableObject {
             await refreshUsage()
         } catch {
             collectionErrors[.personalLibrary] = error.localizedDescription
-            status = "Library unavailable"
         }
         isLoading = false
     }
@@ -173,14 +171,8 @@ final class LibraryModel: ObservableObject {
             }
             timelineVerifications[collection] = verified
             if verified { collectionErrors.removeValue(forKey: collection) }
-            if collection == .personalLibrary {
-                status = verified ? "Personal Space · Current" : "Personal Space · Cached or initial"
-            }
         case .failure(let message):
             collectionErrors[collection] = message
-            if collection == .personalLibrary {
-                status = snapshots[collection] == nil ? "Library unavailable" : "Personal Space · Offline copy"
-            }
         }
     }
 
@@ -190,7 +182,6 @@ final class LibraryModel: ObservableObject {
         if let repository { await repository.retryAuthentication() }
         retryRevision += 1
         started = false
-        status = "Checking Cirrus…"
         await load()
     }
 

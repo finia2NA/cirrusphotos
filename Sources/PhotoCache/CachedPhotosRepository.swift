@@ -194,7 +194,7 @@ public actor CachedPhotosRepository {
                 let cached = try? await store.get(key)
                 guard !Task.isCancelled else { continuation.finish(); return }
                 let items = cached.flatMap { try? JSONDecoder().decode([PhotoItem].self, from: $0.data) }
-                    .map { applyingFavoriteOverrides($0, collection: collection) }
+                    .map { applyingFavoriteOverrides($0) }
                 let validation = validationRun(for: collection)
                 if let items { continuation.yield(.value(items, verified: cached?.validatedRun == validation)) }
                 guard allowNetwork && !(cached?.validatedRun == validation && items != nil) else {
@@ -206,7 +206,7 @@ public actor CachedPhotosRepository {
                                             subscriber: subscriber, priority: priority)
                     let current = try await task.value
                     guard !Task.isCancelled else { continuation.finish(); return }
-                    continuation.yield(.value(applyingFavoriteOverrides(current, collection: collection),
+                    continuation.yield(.value(applyingFavoriteOverrides(current),
                                               verified: requestedValidation == validationRun(for: collection)))
                 } catch {
                     if !Task.isCancelled && !(error is CancellationError) &&
@@ -233,8 +233,7 @@ public actor CachedPhotosRepository {
         try await gate.acquire(.metadata, priority: priority, id: id)
         defer { Task { await gate.release(.metadata) } }
         try await connect()
-        return applyingFavoriteOverrides(try await client.items(in: section, collection: collection),
-                                          collection: collection)
+        return applyingFavoriteOverrides(try await client.items(in: section, collection: collection))
     }
 
     /// Provisional metadata can request cached bytes with allowNetwork=false.
@@ -455,8 +454,7 @@ public actor CachedPhotosRepository {
         try await operation.value
     }
 
-    private func applyingFavoriteOverrides(_ items: [PhotoItem],
-                                            collection: PhotoCollectionDescriptor = .personalLibrary) -> [PhotoItem] {
+    private func applyingFavoriteOverrides(_ items: [PhotoItem]) -> [PhotoItem] {
         items.map { item in
             guard let favorite = favoriteOverrides[item.id] else { return item }
             return item.withFavorite(favorite)
@@ -600,10 +598,6 @@ public actor CachedPhotosRepository {
 
     private func sameDay(_ lhs: TimelineDay, _ rhs: TimelineDay) -> Bool {
         lhs.year == rhs.year && lhs.month == rhs.month && lhs.day == rhs.day
-    }
-
-    private func dayID(_ day: TimelineDay) -> String {
-        String(format: "%04d-%02d-%02d", day.year, day.month, day.day)
     }
 
     private func removeFavoriteObserver(_ id: UUID) { favoriteObservers.removeValue(forKey: id) }
@@ -799,13 +793,13 @@ public actor CachedPhotosRepository {
                   mutationEpoch == collectionMutationEpochs[collection, default: 0] else {
                 throw CancellationError()
             }
-            let current = applyingFavoriteOverrides(items, collection: collection)
+            let current = applyingFavoriteOverrides(items)
             if let bytes = try? JSONEncoder().encode(current) {
                 try? await store.put(key, kind: .page, data: bytes,
                                      validatedRun: validation,
                                      expectedGeneration: generation)
             }
-            return applyingFavoriteOverrides(current, collection: collection)
+            return applyingFavoriteOverrides(current)
         }
         pageJobs[key] = SharedJob(id: id, task: task, subscribers: [subscriber])
         pageJobEpochs[key] = mutationEpoch
