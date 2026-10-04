@@ -14,9 +14,13 @@
 
 Keep the amount of marketing-sounding, excessive copy in the application and its documentation to a minimum. Focus on clarity in both.
 
+The synology photos API is unoficially documented in
+https://github.com/zeichensatz/SynologyPhotosAPI. You may refer to this for ideas and exploration, but do not assume that it is complete, correct, or the best way to do things. If you are unsure, about a read-only endpoint, you may perform your own exploration. For any write endpoints, you must confirm with the user before proceeding.
+
 - Tell the user whenever you lack confidence that you can proceed with a clean implementation. Explain the uncertainty and what would resolve it.
 - Tell the user when a HAR capture from the Synology Photos web app would help, and identify the interaction or request that should be captured.
 - If the goal is unclear or more information is needed, tell the user and ask focused clarifying questions.
+- Every keyboard shortcut added to the app must also be exposed as an appropriately named macOS menu-bar command. Treat the menu command as the discoverable command definition and attach its shortcut there rather than implementing a hidden view-only shortcut.
 
 ## Top Level Documentation
 

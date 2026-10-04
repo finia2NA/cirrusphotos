@@ -248,6 +248,14 @@ Requested `additional` fields may be absent when they do not apply or have no va
 
 Observed `additional.video_meta.duration` values are milliseconds (for example, `49000` represents 49 seconds). Keep this unit when serializing cached item responses and convert to seconds for display.
 
+### Capture time is a wall-clock value
+
+The observed `time` field must be treated as capture-local wall-clock components encoded in a Unix-shaped integer, not as an absolute instant to convert into the Mac's current timezone. In `firstone.har`, `IMG_3872.PNG` has `time: 1790803838`. Its pixels show `21:30`; decoding the integer with a GMT calendar yields `2026-09-30 21:30:38`, while converting it to the current Tokyo timezone produces the incorrect `2026-10-01 06:30:38` seen in the prototype.
+
+The captured list record contains no timezone or offset. It also has no GPS or address from which one could infer a zone. A richer observed `Browse.Item.get` response requested `exif`, `gps`, `address`, and `geocoding_id`, but its EXIF object contained camera/exposure fields rather than a capture timezone. Do not infer display time from the current Mac timezone, NAS timezone, filename, or geocoded address.
+
+For display and day grouping, extract Gregorian components using GMT so the encoded wall time remains unchanged: a photo recorded at 21:00 in Germany and one recorded at 21:00 in Japan should both display 21:00. This matches the timeline API's GMT-derived day boundaries. The API is undocumented, so retain a focused regression fixture and decode future optional timezone fields defensively if Synology adds them.
+
 Synology represents an iPhone Live Photo's still member with `type: "live"` and
 `live_type: "photo"`. Treat that item as a photo when requesting and displaying
 the original image; only items with `type: "video"` should enter the unsupported
