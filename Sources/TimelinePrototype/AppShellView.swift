@@ -69,7 +69,6 @@ struct AppShellView: View {
 
                 if let viewer {
                     PhotoViewerView(viewer: viewer,
-                                    sidebarWidth: 0,
                                     toolbarInset: topInset,
                                     reduceMotion: reduceMotion,
                                     onSelectionChanged: followViewer,
