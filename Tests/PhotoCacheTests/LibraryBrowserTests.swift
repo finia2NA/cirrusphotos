@@ -148,6 +148,28 @@ final class LibraryIndexAndCacheIdentityTests: LibraryBrowserTestCase {
 }
 
 final class FavoriteRepositoryTests: LibraryBrowserTestCase {
+    func testTransientViewerPageAppliesFavoriteChangesMadeDuringFetch() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = FakeTransport()
+        let descriptor = section(1, limit: 1, count: 1)
+        let photo = try item(7)
+        await transport.configure(itemBlocked: true, items: [photo])
+        let repository = try repository(root: root, transport: transport)
+        let read = Task {
+            try await repository.transientPage(descriptor, collection: .favorites,
+                                               priority: .visible)
+        }
+        await transport.waitForItemStart()
+
+        try await repository.setFavorite(itemID: photo.id, item: photo, in: descriptor,
+                                         collection: .favorites, to: true)
+        await transport.releaseItems()
+
+        let items = try await read.value
+        XCTAssertEqual(items.first?.isFavorite, true,
+                       "A reconstructed viewer page must use overrides after its network wait")
+    }
+
     func testFavoritesRoutesTimelineAndPageThroughFilteredCollection() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
         let transport = FakeTransport()
