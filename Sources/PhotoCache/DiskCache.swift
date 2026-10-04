@@ -169,6 +169,29 @@ public actor DiskCache {
         return try get(identity.key)
     }
 
+    /// Checks an indexed thumbnail without reading or hashing its image bytes.
+    /// Bulk cache warming uses this to avoid network validation and full-file I/O for exact hits.
+    public func hasThumbnail(_ identity: ThumbnailCacheIdentity) throws -> Bool {
+        let statement = try prepare("SELECT file FROM entries WHERE key=? AND (kind=? OR kind=?)")
+        bind(identity.key, at: 1, in: statement)
+        sqlite3_bind_int(statement, 2, Int32(CacheKind.thumbnail.rawValue))
+        sqlite3_bind_int(statement, 3, Int32(CacheKind.previewThumbnail.rawValue))
+        let found = sqlite3_step(statement) == SQLITE_ROW
+        let filename = found ? columnString(statement, 0) : nil
+        sqlite3_finalize(statement)
+        guard let filename else { return false }
+        guard FileManager.default.fileExists(atPath: images.appendingPathComponent(filename).path) else {
+            try? remove(identity.key)
+            return false
+        }
+        let touch = try prepare("UPDATE entries SET accessed=? WHERE key=?")
+        defer { sqlite3_finalize(touch) }
+        sqlite3_bind_double(touch, 1, Date().timeIntervalSince1970)
+        bind(identity.key, at: 2, in: touch)
+        guard sqlite3_step(touch) == SQLITE_DONE else { throw CacheError.storage }
+        return true
+    }
+
     public func put(_ key: String, kind: CacheKind, data: Data, validatedRun: String?,
                     etag: String? = nil, lastModified: String? = nil, expectedGeneration: Int? = nil,
                     thumbnail identity: ThumbnailCacheIdentity? = nil) throws {

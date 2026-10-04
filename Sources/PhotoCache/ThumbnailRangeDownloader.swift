@@ -47,17 +47,49 @@ public struct ThumbnailBatchSummary: Sendable, Equatable {
     public var reused = 0
     public var unavailable = 0
     public var errors = 0
+    public var downloadedThumbnails = 0
+    public var downloadedBytes: Int64 = 0
+    public var elapsedSeconds: TimeInterval = 0
 
     public init(estimated: Int) { self.estimated = estimated }
+
+    public var averageDownloadedThumbnailBytes: Int64? {
+        guard downloadedThumbnails > 0 else { return nil }
+        return downloadedBytes / Int64(downloadedThumbnails)
+    }
+
+    /// Projects the final transfer from this run's observed download ratio and average payload size.
+    public var estimatedDownloadBytes: Int64? {
+        guard processed > 0, downloadedThumbnails > 0 else { return nil }
+        let remaining = max(0, estimated - processed)
+        let projectedDownloads = Int((Double(remaining) * Double(downloadedThumbnails)
+                                      / Double(processed)).rounded())
+        let totalDownloads = min(estimated, downloadedThumbnails + projectedDownloads)
+        let average = Double(downloadedBytes) / Double(downloadedThumbnails)
+        return Int64((Double(totalDownloads) * average).rounded())
+    }
+
+    public var bytesPerSecond: Double? {
+        guard downloadedBytes > 0, elapsedSeconds > 0 else { return nil }
+        return Double(downloadedBytes) / elapsedSeconds
+    }
+
+    public var estimatedRemainingSeconds: TimeInterval? {
+        guard let estimatedDownloadBytes, let bytesPerSecond, bytesPerSecond > 0 else { return nil }
+        return Double(max(0, estimatedDownloadBytes - downloadedBytes)) / bytesPerSecond
+    }
 }
 
 public struct ThumbnailRangeDownloader: Sendable {
     private let repository: CachedPhotosRepository
     private let workerCount: Int
+    private let now: @Sendable () -> TimeInterval
 
-    public init(repository: CachedPhotosRepository, workerCount: Int = 2) {
+    public init(repository: CachedPhotosRepository, workerCount: Int = 2,
+                now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.repository = repository
         self.workerCount = min(4, max(1, workerCount))
+        self.now = now
     }
 
     /// Processes one metadata page at a time and at most `workerCount` thumbnails at once.
@@ -71,9 +103,11 @@ public struct ThumbnailRangeDownloader: Sendable {
             return empty
         }
         var summary = ThumbnailBatchSummary(estimated: selected.estimatedThumbnailCount(in: snapshot))
+        let startedAt = now()
         let index = LibraryIndex(snapshot: snapshot)
         let selectedDays = Set(selected.dayIDs(in: snapshot))
         let sectionIndices = Set(selectedDays.flatMap { index.sectionIndices(forDay: $0) }).sorted()
+        summary.elapsedSeconds = max(0, now() - startedAt)
         await progress(summary)
 
         for sectionIndex in sectionIndices {
@@ -98,6 +132,7 @@ public struct ThumbnailRangeDownloader: Sendable {
             guard let items = currentItems, !pageFailed else {
                 summary.errors += selectedOffsets.count
                 summary.processed += selectedOffsets.count
+                summary.elapsedSeconds = max(0, now() - startedAt)
                 await progress(summary)
                 continue
             }
@@ -118,34 +153,41 @@ public struct ThumbnailRangeDownloader: Sendable {
                 }
                 candidates.append(thumbnail)
             }
+            summary.elapsedSeconds = max(0, now() - startedAt)
             await progress(summary)
 
             for start in stride(from: 0, to: candidates.count, by: workerCount) {
                 if Task.isCancelled { break }
                 let end = min(start + workerCount, candidates.count)
-                let outcomes = await withTaskGroup(of: ThumbnailCacheOutcome?.self,
-                                                   returning: [ThumbnailCacheOutcome?].self) { group in
+                let outcomes = await withTaskGroup(of: ThumbnailCacheMeasurement?.self,
+                                                   returning: [ThumbnailCacheMeasurement?].self) { group in
                     for descriptor in candidates[start..<end] {
                         group.addTask {
                             if Task.isCancelled { return nil }
-                            return try? await repository.cacheThumbnail(descriptor, size: size,
-                                                                        priority: .prefetch)
+                            return try? await repository.cacheThumbnailMeasurement(
+                                descriptor, size: size, priority: .prefetch,
+                                validateCached: false)
                         }
                     }
-                    var values: [ThumbnailCacheOutcome?] = []
+                    var values: [ThumbnailCacheMeasurement?] = []
                     values.reserveCapacity(end - start)
                     for await value in group { values.append(value) }
                     return values
                 }
                 if Task.isCancelled { break }
-                for outcome in outcomes {
+                for measurement in outcomes {
                     summary.processed += 1
-                    switch outcome {
+                    if let downloadedBytes = measurement?.downloadedBytes, downloadedBytes > 0 {
+                        summary.downloadedThumbnails += 1
+                        summary.downloadedBytes += Int64(downloadedBytes)
+                    }
+                    switch measurement?.outcome {
                     case .fetched?: summary.fetched += 1
                     case .reused?: summary.reused += 1
                     case .cacheWriteFailed?, nil: summary.errors += 1
                     }
                 }
+                summary.elapsedSeconds = max(0, now() - startedAt)
                 await progress(summary)
             }
         }

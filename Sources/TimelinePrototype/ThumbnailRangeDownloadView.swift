@@ -60,6 +60,10 @@ struct ThumbnailRangeDownloadView: View {
 
                 Text("Up to \(estimate.formatted()) photo/video thumbnails")
                     .font(.headline).monospacedDigit()
+                if !isRunning && summary == nil {
+                    Text("Size and speed estimates begin with each batch.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
             }
 
             Text("The range may exceed the \(budgetLabel) cache budget. The budget is not increased, and normal eviction may remove thumbnails downloaded earlier in the batch.")
@@ -79,6 +83,14 @@ struct ThumbnailRangeDownloadView: View {
                         .monospacedDigit()
                     Text("Fetched \(summary.fetched.formatted()) · Reused \(summary.reused.formatted()) · Unavailable \(summary.unavailable.formatted()) · Errors \(summary.errors.formatted())")
                         .font(.callout).foregroundStyle(.secondary).monospacedDigit()
+                    if let estimate = summary.estimatedDownloadBytes,
+                       let average = summary.averageDownloadedThumbnailBytes,
+                       let speed = summary.bytesPerSecond {
+                        Text("Downloaded \(bytes(summary.downloadedBytes)) · Estimated total \(bytes(estimate))")
+                            .font(.callout).monospacedDigit()
+                        Text("Average \(bytes(average)) per thumbnail · \(rate(speed))\(remaining(summary))")
+                            .font(.callout).foregroundStyle(.secondary).monospacedDigit()
+                    }
                     if let outcomeText { Text(outcomeText).font(.callout.weight(.medium)) }
                 }
             }
@@ -111,6 +123,25 @@ struct ThumbnailRangeDownloadView: View {
 
     private var budgetLabel: String {
         ByteCountFormatter.string(fromByteCount: CacheBudget.bytes(at: library.budgetFraction), countStyle: .file)
+    }
+
+    private func bytes(_ count: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
+    }
+
+    private func rate(_ bytesPerSecond: Double) -> String {
+        "\(bytes(Int64(bytesPerSecond.rounded())))/s"
+    }
+
+    private func remaining(_ summary: ThumbnailBatchSummary) -> String {
+        guard summary.processed < summary.estimated,
+              let seconds = summary.estimatedRemainingSeconds else { return "" }
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = seconds >= 3_600 ? [.hour, .minute] : [.minute, .second]
+        formatter.unitsStyle = .abbreviated
+        formatter.maximumUnitCount = 2
+        guard let duration = formatter.string(from: max(1, seconds)) else { return "" }
+        return " · About \(duration) remaining"
     }
 
     private func dateField(_ label: String, _ value: String,

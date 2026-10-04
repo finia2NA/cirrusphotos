@@ -28,6 +28,7 @@ private struct SharedJob<Value: Sendable> {
 private struct ImageResolution: Sendable {
     let data: Data
     let outcome: ThumbnailCacheOutcome
+    let downloadedBytes: Int
 }
 
 private struct FullImageResolution: Sendable {
@@ -48,6 +49,16 @@ public enum ThumbnailCacheOutcome: Sendable, Equatable {
     case fetched
     case reused
     case cacheWriteFailed
+}
+
+public struct ThumbnailCacheMeasurement: Sendable, Equatable {
+    public let outcome: ThumbnailCacheOutcome
+    public let downloadedBytes: Int
+
+    public init(outcome: ThumbnailCacheOutcome, downloadedBytes: Int) {
+        self.outcome = outcome
+        self.downloadedBytes = downloadedBytes
+    }
 }
 
 public struct ThumbnailRenditionValue: Sendable, Equatable {
@@ -605,12 +616,24 @@ public actor CachedPhotosRepository {
     /// Bulk callers must use `.prefetch` so visible browsing can move ahead in the gate.
     public func cacheThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                                priority: RequestPriority = .prefetch) async throws -> ThumbnailCacheOutcome {
+        try await cacheThumbnailMeasurement(descriptor, size: size, priority: priority).outcome
+    }
+
+    /// Resolves one thumbnail while reporting bytes transferred in a successful image response.
+    /// Conditional 304 responses and current-run cache hits report zero downloaded bytes.
+    public func cacheThumbnailMeasurement(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
+                                          priority: RequestPriority = .prefetch,
+                                          validateCached: Bool = true) async throws -> ThumbnailCacheMeasurement {
         try Task.checkCancellation()
         let identity = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: size)
         let key = identity.key
+        if !validateCached, (try? await store.hasThumbnail(identity)) == true {
+            try? await store.promotePreviewThumbnail(key)
+            return ThumbnailCacheMeasurement(outcome: .reused, downloadedBytes: 0)
+        }
         if let cached = try? await store.getThumbnail(identity), cached.validatedRun == runID {
             try? await store.promotePreviewThumbnail(key)
-            return .reused
+            return ThumbnailCacheMeasurement(outcome: .reused, downloadedBytes: 0)
         }
         try Task.checkCancellation()
         let subscriber = UUID()
@@ -623,7 +646,8 @@ public actor CachedPhotosRepository {
                 try Task.checkCancellation()
                 try? await store.promotePreviewThumbnail(key)
                 releaseImage(key: key, subscriber: subscriber)
-                return resolution.outcome
+                return ThumbnailCacheMeasurement(outcome: resolution.outcome,
+                                                 downloadedBytes: resolution.downloadedBytes)
             } catch {
                 releaseImage(key: key, subscriber: subscriber)
                 throw error
@@ -819,9 +843,9 @@ public actor CachedPhotosRepository {
             if response.notModified, let prior {
                 do {
                     try await store.markValidated(key, run: runID, expectedGeneration: generation)
-                    return ImageResolution(data: prior.data, outcome: .reused)
+                    return ImageResolution(data: prior.data, outcome: .reused, downloadedBytes: 0)
                 } catch {
-                    return ImageResolution(data: prior.data, outcome: .cacheWriteFailed)
+                    return ImageResolution(data: prior.data, outcome: .cacheWriteFailed, downloadedBytes: 0)
                 }
             }
             guard let data = response.data else { throw SynologyAPIError.invalidResponse }
@@ -829,9 +853,9 @@ public actor CachedPhotosRepository {
                 try await store.put(key, kind: cachePurpose.kind, data: data, validatedRun: runID,
                                     etag: response.etag, lastModified: response.lastModified,
                                     expectedGeneration: generation, thumbnail: identity)
-                return ImageResolution(data: data, outcome: .fetched)
+                return ImageResolution(data: data, outcome: .fetched, downloadedBytes: data.count)
             } catch {
-                return ImageResolution(data: data, outcome: .cacheWriteFailed)
+                return ImageResolution(data: data, outcome: .cacheWriteFailed, downloadedBytes: data.count)
             }
         }
         imageJobs[key] = SharedJob(id: id, task: task, subscribers: [subscriber])

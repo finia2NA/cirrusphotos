@@ -69,16 +69,53 @@ final class ThumbnailRangeDownloaderTests: XCTestCase {
 
         let downloader = ThumbnailRangeDownloader(repository: try repository(transport: transport, root: root))
         let first = await downloader.download(snapshot: snapshot, range: range, size: .m) { _ in }
-        XCTAssertEqual(first, ThumbnailBatchSummary(estimated: 5, processed: 5, fetched: 4,
-                                                    reused: 0, unavailable: 1, errors: 0))
+        XCTAssertEqual(first.estimated, 5)
+        XCTAssertEqual(first.processed, 5)
+        XCTAssertEqual(first.fetched, 4)
+        XCTAssertEqual(first.reused, 0)
+        XCTAssertEqual(first.unavailable, 1)
+        XCTAssertEqual(first.errors, 0)
+        XCTAssertEqual(first.downloadedThumbnails, 4)
+        XCTAssertEqual(first.downloadedBytes, 4)
+        XCTAssertEqual(first.averageDownloadedThumbnailBytes, 1)
+        XCTAssertEqual(first.estimatedDownloadBytes, 4)
+        XCTAssertNotNil(first.bytesPerSecond)
+        XCTAssertEqual(first.estimatedRemainingSeconds, 0)
         let firstCalls = await transport.thumbnailCalls
         XCTAssertEqual(firstCalls, 4)
 
-        let second = await downloader.download(snapshot: snapshot, range: range, size: .m) { _ in }
-        XCTAssertEqual(second, ThumbnailBatchSummary(estimated: 5, processed: 5, fetched: 0,
-                                                     reused: 4, unavailable: 1, errors: 0))
+        // A new repository has a new validation run. Manual warming should still reuse the
+        // indexed exact files without issuing conditional requests for all of them.
+        let secondDownloader = ThumbnailRangeDownloader(
+            repository: try repository(transport: transport, root: root))
+        let second = await secondDownloader.download(snapshot: snapshot, range: range, size: .m) { _ in }
+        XCTAssertEqual(second.estimated, 5)
+        XCTAssertEqual(second.processed, 5)
+        XCTAssertEqual(second.fetched, 0)
+        XCTAssertEqual(second.reused, 4)
+        XCTAssertEqual(second.unavailable, 1)
+        XCTAssertEqual(second.errors, 0)
+        XCTAssertEqual(second.downloadedThumbnails, 0)
+        XCTAssertEqual(second.downloadedBytes, 0)
+        XCTAssertNil(second.averageDownloadedThumbnailBytes)
+        XCTAssertNil(second.estimatedDownloadBytes)
+        XCTAssertNil(second.bytesPerSecond)
+        XCTAssertNil(second.estimatedRemainingSeconds)
         let secondCalls = await transport.thumbnailCalls
         XCTAssertEqual(secondCalls, 4)
+    }
+
+    func testRunMetricsProjectSizeSpeedAndRemainingTime() {
+        var summary = ThumbnailBatchSummary(estimated: 10)
+        summary.processed = 4
+        summary.downloadedThumbnails = 2
+        summary.downloadedBytes = 1_000
+        summary.elapsedSeconds = 2
+
+        XCTAssertEqual(summary.averageDownloadedThumbnailBytes, 500)
+        XCTAssertEqual(summary.estimatedDownloadBytes, 2_500)
+        XCTAssertEqual(summary.bytesPerSecond, 500)
+        XCTAssertEqual(summary.estimatedRemainingSeconds, 3)
     }
 
     func testChronologicalSliderMapsOldestLeftAndNewestRight() {
@@ -115,17 +152,5 @@ final class ThumbnailRangeDownloaderTests: XCTestCase {
         XCTAssertLessThan(result.processed, result.estimated)
         let finalCalls = await transport.thumbnailCalls
         XCTAssertLessThanOrEqual(finalCalls, 2)
-    }
-}
-
-private extension ThumbnailBatchSummary {
-    init(estimated: Int, processed: Int, fetched: Int, reused: Int,
-         unavailable: Int, errors: Int) {
-        self.init(estimated: estimated)
-        self.processed = processed
-        self.fetched = fetched
-        self.reused = reused
-        self.unavailable = unavailable
-        self.errors = errors
     }
 }

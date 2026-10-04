@@ -25,6 +25,7 @@ struct TimelinePrototypeApp: App {
             ThumbnailRangeDownloadView().environmentObject(model)
         }
         .defaultSize(width: 540, height: 500)
+        .commandsRemoved()
     }
 }
 
