@@ -281,7 +281,7 @@ final class PhotoViewerSessionTests: XCTestCase {
         await session.close()
     }
 
-    func testLargeViewerPreviewStartsWithOriginalAndWarmsAdjacentXLPreviews() async throws {
+    func testLargeViewerPreviewAndOriginalWaitForStableSelection() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let items = try [item(1), item(2), item(3), item(4)]
         let transport = ViewerTransport()
@@ -296,6 +296,15 @@ final class PhotoViewerSessionTests: XCTestCase {
                                          thumbnailSize: .sm, loadsLargePreviews: true,
                                          allowNetwork: true)
         _ = await session.state()
+        try await Task.sleep(for: .milliseconds(40))
+        let earlyThumbnails = await transport.thumbnailRequests
+        let earlyOriginals = await transport.fullImageCalls
+        XCTAssertTrue(earlyThumbnails.contains { $0.0 == 2 && $0.1 == .sm })
+        XCTAssertFalse(earlyThumbnails.contains { $0.1 == .xl })
+        XCTAssertTrue(earlyOriginals.isEmpty)
+        let earlyState = await session.state()
+        XCTAssertTrue(earlyState.isLoadingLargePreview)
+
         let concurrent = await waitUntil {
             let thumbnails = await transport.thumbnailRequests
             let originals = await transport.fullImageCalls
@@ -315,6 +324,40 @@ final class PhotoViewerSessionTests: XCTestCase {
             CacheKey.thumbnail(namespace: namespace, descriptor: descriptor, size: .xl)
         )
         XCTAssertEqual(entry?.kind, .previewThumbnail)
+        await session.close()
+    }
+
+    func testRapidNavigationOnlyStartsExpensiveRequestsForSettledSelection() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let items = try [item(1), item(2), item(3), item(4)]
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: Array(items[0...1]), 2: Array(items[2...3])])
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+                                         index: LibraryIndex(snapshot: snapshot()),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                                                               item: items[0], page: Array(items[0...1]),
+                                                               pageVerified: true),
+                                         thumbnailSize: .sm, loadsLargePreviews: true,
+                                         allowNetwork: true)
+        _ = await session.state()
+        await session.navigateNext()
+        await session.navigateNext()
+        await session.navigateNext()
+        let resolved = await waitUntil { await session.state().item?.id == 4 }
+        XCTAssertTrue(resolved)
+
+        try await Task.sleep(for: .milliseconds(40))
+        let earlyThumbnails = await transport.thumbnailRequests
+        let earlyOriginals = await transport.fullImageCalls
+        XCTAssertFalse(earlyThumbnails.contains { $0.0 < 4 && $0.1 == .xl })
+        XCTAssertFalse(earlyOriginals.contains { $0 < 4 })
+
+        let settled = await waitUntil {
+            let thumbnails = await transport.thumbnailRequests
+            let originals = await transport.fullImageCalls
+            return thumbnails.contains { $0.0 == 4 && $0.1 == .xl } && originals.contains(4)
+        }
+        XCTAssertTrue(settled)
         await session.close()
     }
 
@@ -400,8 +443,11 @@ final class PhotoViewerSessionTests: XCTestCase {
             thumbnailSize: .sm, loadsLargePreviews: true, allowNetwork: true)
         _ = await session.state()
         let neighborsStarted = await waitUntil {
-            let calls = await transport.thumbnailCalls
-            return calls.contains(1) && calls.contains(3)
+            let requests = await transport.thumbnailRequests
+            return [1, 3].allSatisfy { id in
+                requests.contains { $0.0 == Int64(id) && $0.1 == .sm } &&
+                    requests.contains { $0.0 == Int64(id) && $0.1 == .xl }
+            }
         }
         XCTAssertTrue(neighborsStarted)
         let speculativeCount = await session.speculativeThumbnailCount()
@@ -591,7 +637,9 @@ final class PhotoViewerSessionTests: XCTestCase {
         XCTAssertTrue(state.metadataVerified)
         XCTAssertEqual(state.item?.additional?.thumbnail?.cacheKey, "current")
         let keysBeforeRelease = await transport.fullImageKeys
-        XCTAssertEqual(keysBeforeRelease, ["current"])
+        XCTAssertTrue(keysBeforeRelease.isEmpty)
+        let enhancementStarted = await waitUntil { await transport.fullImageKeys == ["current"] }
+        XCTAssertTrue(enhancementStarted)
 
         await transport.releasePage(0)
         let pageVerified = await waitUntil {

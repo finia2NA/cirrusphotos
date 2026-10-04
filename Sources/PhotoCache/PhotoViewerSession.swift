@@ -75,6 +75,8 @@ public struct PhotoViewerState: Sendable {
 /// so a late result cannot
 /// replace a newer selection.
 public actor PhotoViewerSession {
+    private static let enhancementDelay: Duration = .milliseconds(100)
+
     private struct SectionSpan: Sendable {
         let sectionIndex: Int
         let start: Int
@@ -159,6 +161,9 @@ public actor PhotoViewerSession {
     private var fullTaskAllowsNetwork = false
     private var fullJobs: [String: FullJob] = [:]
     private var prefetchEnabledGeneration: UInt64?
+    private var enhancementTask: Task<Void, Never>?
+    private var enhancementAttempt: UUID?
+    private var enhancementsReleasedGeneration: UInt64?
     private var observers: [UUID: AsyncStream<PhotoViewerState>.Continuation] = [:]
 
     public init(repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor = .personalLibrary,
@@ -284,6 +289,7 @@ public actor PhotoViewerSession {
     public func close() {
         guard !closed else { return }
         closed = true
+        cancelEnhancementDelay()
         for job in thumbnailJobs.values { job.task.cancel() }
         for job in thumbnailPrefetchJobs.values { job.task.cancel() }
         fullTask?.cancel()
@@ -337,6 +343,7 @@ public actor PhotoViewerSession {
         thumbnailStatus = .idle
         fullImageStatus = .idle
         prefetchEnabledGeneration = nil
+        cancelEnhancementDelay()
         for job in thumbnailJobs.values { job.task.cancel() }
         thumbnailJobs.removeAll()
         fullTask?.cancel()
@@ -456,6 +463,7 @@ public actor PhotoViewerSession {
             fullAttempt = nil
             fullTaskAllowsNetwork = false
             prefetchEnabledGeneration = nil
+            cancelEnhancementDelay()
             cancelFullJobsExcept(resource: item.fullImageResource)
         } else {
             currentItem = item
@@ -485,11 +493,13 @@ public actor PhotoViewerSession {
         fullAttempt = nil
         fullTaskAllowsNetwork = false
         prefetchEnabledGeneration = nil
+        cancelEnhancementDelay()
         cancelFullJobsExcept(resource: nil)
         publish()
     }
 
     private func restartCurrentAssets() {
+        cancelEnhancementDelay()
         for job in thumbnailJobs.values { job.task.cancel() }
         fullTask?.cancel()
         thumbnailJobs.removeAll()
@@ -505,33 +515,77 @@ public actor PhotoViewerSession {
     private func startAssetsForCurrentMetadata() {
         guard !closed, let item = currentItem else { return }
         let network = allowNetwork && metadataVerified
-        startThumbnails(item: item, allowNetwork: network)
+        let descriptor = item.additional?.thumbnail
+        if let descriptor {
+            if thumbnailSize != .xl {
+                startThumbnail(descriptor: descriptor, itemID: item.id,
+                               request: configuredThumbnailRequest(), allowNetwork: network)
+            }
+            if let expensive = expensiveThumbnailRequest(for: descriptor) {
+                // Cached XL data is cheap and useful immediately. Only its network
+                // validation/download waits for the selection to stabilize.
+                startThumbnail(descriptor: descriptor, itemID: item.id,
+                               request: expensive, allowNetwork: false)
+            }
+        } else {
+            thumbnailStatus = .unsupported("A preview is unavailable for this item.")
+        }
+
+        let resource: FullImageResource?
         if item.isVideo {
             fullImageStatus = .unsupported("Video playback is not supported.")
-            return
-        }
-        guard let resource = item.fullImageResource else {
+            resource = nil
+        } else if let available = item.fullImageResource {
+            resource = available
+            // Read a cached original immediately without authorizing a network transfer.
+            startFullImage(resource: available, allowNetwork: false)
+        } else {
             fullImageStatus = .unsupported("A full-size image is unavailable for this item.")
-            return
+            resource = nil
         }
-        startFullImage(resource: resource, allowNetwork: network)
+        scheduleEnhancements(itemID: item.id, descriptor: descriptor,
+                             resource: resource, allowNetwork: network)
     }
 
-    private func startThumbnails(item: PhotoItem, allowNetwork: Bool) {
-        guard let descriptor = item.additional?.thumbnail else {
-            if item.additional?.thumbnail == nil { thumbnailStatus = .unsupported("A preview is unavailable for this item.") }
-            return
+    private func scheduleEnhancements(itemID: Int64, descriptor: ThumbnailInfo?,
+                                      resource: FullImageResource?, allowNetwork: Bool) {
+        guard allowNetwork, enhancementTask == nil,
+              descriptor.flatMap(expensiveThumbnailRequest) != nil || resource != nil else { return }
+        let attempt = UUID()
+        let expectedGeneration = generation
+        enhancementAttempt = attempt
+        enhancementTask = Task { [weak self] in
+            do { try await Task.sleep(for: Self.enhancementDelay) }
+            catch { return }
+            await self?.releaseEnhancements(attempt: attempt, generation: expectedGeneration,
+                                            itemID: itemID, descriptor: descriptor,
+                                            resource: resource)
         }
-        let requests = thumbnailRequests(for: descriptor)
-        let wantedTiers = Set(requests.map(\.tier))
-        for (tier, job) in thumbnailJobs where !wantedTiers.contains(tier) {
-            job.task.cancel()
-            thumbnailJobs.removeValue(forKey: tier)
+    }
+
+    private func releaseEnhancements(attempt: UUID, generation expectedGeneration: UInt64,
+                                     itemID: Int64, descriptor: ThumbnailInfo?,
+                                     resource: FullImageResource?) {
+        guard !closed, enhancementAttempt == attempt, generation == expectedGeneration,
+              currentItem?.id == itemID else { return }
+        enhancementTask = nil
+        enhancementAttempt = nil
+        enhancementsReleasedGeneration = generation
+        if let descriptor, let request = expensiveThumbnailRequest(for: descriptor) {
+            startThumbnail(descriptor: descriptor, itemID: itemID,
+                           request: request, allowNetwork: true)
         }
-        for request in requests {
-            startThumbnail(descriptor: descriptor, itemID: item.id,
-                           request: request, allowNetwork: allowNetwork)
-        }
+        if let resource { startFullImage(resource: resource, allowNetwork: true) }
+        scheduleThumbnailNeighbors()
+        if fullImageData != nil { enablePrefetchAfterCurrentSuccess() }
+        publish()
+    }
+
+    private func cancelEnhancementDelay() {
+        enhancementTask?.cancel()
+        enhancementTask = nil
+        enhancementAttempt = nil
+        enhancementsReleasedGeneration = nil
     }
 
     private func startThumbnail(descriptor: ThumbnailInfo, itemID: Int64,
@@ -672,13 +726,16 @@ public actor PhotoViewerSession {
 
     private func finishCurrentFull(_ attempt: UUID) {
         if fullAttempt == attempt {
-            if fullImageData == nil, fullImageStatus == .loading {
+            let waitingForEnhancements = allowNetwork && metadataVerified &&
+                enhancementsReleasedGeneration != generation
+            if fullImageData == nil, fullImageStatus == .loading, !waitingForEnhancements {
                 fullImageStatus = .failure("The full-size image is not cached.")
                 publish()
             }
             fullAttempt = nil
             fullTask = nil
-            let needsNetworkValidation = allowNetwork && metadataVerified && !fullTaskAllowsNetwork
+            let needsNetworkValidation = allowNetwork && metadataVerified &&
+                !fullTaskAllowsNetwork && !waitingForEnhancements
             fullTaskAllowsNetwork = false
             if needsNetworkValidation, let resource = currentItem?.fullImageResource {
                 startFullImage(resource: resource, allowNetwork: true)
@@ -687,7 +744,8 @@ public actor PhotoViewerSession {
     }
 
     private func enablePrefetchAfterCurrentSuccess() {
-        guard prefetchEnabledGeneration != generation else { return }
+        guard prefetchEnabledGeneration != generation,
+              !allowNetwork || enhancementsReleasedGeneration == generation else { return }
         prefetchEnabledGeneration = generation
         scheduleLoadedNeighbors()
     }
@@ -708,7 +766,7 @@ public actor PhotoViewerSession {
         // subscribers have joined the shared repository jobs. Cancelling them here can
         // race task startup and needlessly restart the same transfers.
         if let descriptor = currentItem?.additional?.thumbnail {
-            for request in thumbnailRequests(for: descriptor) {
+            for request in currentThumbnailRequests(for: descriptor) {
                 let currentKey = Self.thumbnailKey(descriptor, size: request.size)
                 if thumbnailPrefetchJobs[currentKey] != nil { wantedKeys.insert(currentKey) }
             }
@@ -717,7 +775,7 @@ public actor PhotoViewerSession {
             guard let page = pages[location.sectionIndex],
                   page.items.indices.contains(location.pageOffset),
                   let descriptor = page.items[location.pageOffset].additional?.thumbnail else { continue }
-            for request in thumbnailRequests(for: descriptor) {
+            for request in neighborThumbnailRequests(for: descriptor) {
                 let key = Self.thumbnailKey(descriptor, size: request.size)
                 wantedKeys.insert(key)
                 let network = allowNetwork && page.verified
@@ -757,10 +815,29 @@ public actor PhotoViewerSession {
         thumbnailPrefetchJobs.removeValue(forKey: key)
     }
 
-    private func thumbnailRequests(for descriptor: ThumbnailInfo) -> [ThumbnailRequest] {
-        var requests = [ThumbnailRequest(tier: .configured, size: thumbnailSize, purpose: .library)]
+    private func configuredThumbnailRequest() -> ThumbnailRequest {
+        ThumbnailRequest(tier: .configured, size: thumbnailSize, purpose: .library)
+    }
+
+    private func expensiveThumbnailRequest(for descriptor: ThumbnailInfo) -> ThumbnailRequest? {
+        if thumbnailSize == .xl { return configuredThumbnailRequest() }
         if loadsLargePreviews, thumbnailSize != .xl, descriptor.isReady(.xl) {
-            requests.append(ThumbnailRequest(tier: .largePreview, size: .xl, purpose: .viewerPreview))
+            return ThumbnailRequest(tier: .largePreview, size: .xl, purpose: .viewerPreview)
+        }
+        return nil
+    }
+
+    private func currentThumbnailRequests(for descriptor: ThumbnailInfo) -> [ThumbnailRequest] {
+        var requests: [ThumbnailRequest] = thumbnailSize == .xl ? [] : [configuredThumbnailRequest()]
+        if let expensive = expensiveThumbnailRequest(for: descriptor) { requests.append(expensive) }
+        return requests
+    }
+
+    private func neighborThumbnailRequests(for descriptor: ThumbnailInfo) -> [ThumbnailRequest] {
+        var requests: [ThumbnailRequest] = thumbnailSize == .xl ? [] : [configuredThumbnailRequest()]
+        if enhancementsReleasedGeneration == generation,
+           let expensive = expensiveThumbnailRequest(for: descriptor) {
+            requests.append(expensive)
         }
         return requests
     }
@@ -911,8 +988,7 @@ public actor PhotoViewerSession {
             metadataStatus: metadataStatus,
             thumbnailStatus: thumbnailStatus,
             fullImageStatus: fullImageStatus,
-            isLoadingLargePreview: thumbnailJobs[.largePreview] != nil &&
-                bestThumbnailTier != .largePreview,
+            isLoadingLargePreview: isLargePreviewLoading(),
             canNavigatePrevious: desired.ordinal > 0,
             canNavigateNext: desired.ordinal + 1 < totalCount,
             allowNetwork: allowNetwork,
@@ -925,6 +1001,14 @@ public actor PhotoViewerSession {
     private func publish() {
         let state = makeState()
         for observer in observers.values { observer.yield(state) }
+    }
+
+    private func isLargePreviewLoading() -> Bool {
+        guard let descriptor = currentItem?.additional?.thumbnail,
+              let request = expensiveThumbnailRequest(for: descriptor),
+              request.tier == .largePreview,
+              bestThumbnailTier != request.tier else { return false }
+        return enhancementTask != nil || thumbnailJobs[request.tier] != nil
     }
 
     private func removeObserver(_ id: UUID) { observers.removeValue(forKey: id) }

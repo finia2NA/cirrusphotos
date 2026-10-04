@@ -179,7 +179,8 @@ final class PhotoViewerPresentationTests: XCTestCase {
         XCTAssertTrue(previewDisplayed)
         XCTAssertTrue(viewer.detailLine.hasSuffix("Loading full resolution"))
         let sizes = await transport.thumbnailSizes
-        XCTAssertEqual(sizes.first, .xl)
+        XCTAssertEqual(sizes.first, .m)
+        XCTAssertTrue(sizes.contains(.xl))
 
         await transport.releaseOriginal()
         let originalDisplayed = await waitUntil { viewer.image?.size.width == 30 }
