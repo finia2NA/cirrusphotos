@@ -22,6 +22,8 @@ The application shell reuses one virtualized browser for Personal Library and Fa
 
 The app persists the selected sidebar destination and a versioned anchor per destination in user defaults. Timeline anchors identify a photo by server item ID and retain an ISO day fallback, layout-relative offset, and server page-offset hint. Restoration first opens the nearest available day, then refines to the photo after its hinted page loads. Unknown or obsolete destination anchors are ignored independently.
 
+`BrowserScrollIntentCoordinator` owns a single typed restoration, viewport-preservation, or viewer-reveal intent. New day jumps and viewer requests replace earlier intent; user scrolling cancels pending refinement. Descriptor rebuilds rebase the active intent, while verified page progress survives page eviction until restoration settles. Saved anchors preserve their pixel offset; viewer reveals center the photo and bind deferred rectangle completion to the request identity. The AppKit adapter applies scroll effects and retains responsibility for bounded page demand and row hosting.
+
 ## Full-size image resources and navigation
 
 `PhotoViewerSession` navigates an immutable `LibraryIndex` using section-prefix counts and exact page offsets, including thumbnails carried into rows across API page boundaries. It retains at most three metadata pages and the current plus two adjacent encoded originals. Replaying snapshots carry a selection generation; request tokens and generation checks reject obsolete results during rapid navigation. Verified metadata preserves the selected item by ID if its page position changes. Provisional metadata may read cached images but cannot authorize image downloads.

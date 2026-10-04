@@ -85,7 +85,6 @@ private struct AppShellView: View {
                 LibraryBrowserView(collection: collection,
                                    restorationAnchor: navigationRestoration.timelineAnchor(for: collection),
                                    bridge: browserBridge,
-                                   revealRequest: nil,
                                    contentTopInset: topInset,
                                    onOpenPhoto: openPhoto,
                                    onRestorationAnchorChanged: { anchor in
