@@ -2,7 +2,7 @@ import Foundation
 @testable import PhotoCache
 import SynologyAPI
 import XCTest
-@testable import TimelinePrototype
+@testable import SynoTimelineApp
 
 final class BrowserScrollIntentCoordinatorTests: XCTestCase {
     private func index(day: Int = 3, pages: Int = 1) -> LibraryIndex {

@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import TimelinePrototype
+@testable import SynoTimelineApp
 
 @MainActor
 final class NavigationRestorationTests: XCTestCase {

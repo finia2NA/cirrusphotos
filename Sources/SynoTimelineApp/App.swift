@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @main
-struct TimelinePrototypeApp: App {
+struct SynoTimelineApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var model = LibraryModel()
     @StateObject private var navigationRestoration = NavigationRestorationStore()

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Resolves the prototype's persistent cache beside the project checkout.
+/// Resolves the app's persistent cache beside the project checkout.
 /// LaunchServices does not guarantee an app's process working directory, so the
 /// generated `.app` walks upward to the repository containing `Package.swift`.
 public enum CacheLocation {

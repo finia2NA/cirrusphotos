@@ -5,7 +5,7 @@ import PhotoCache
 import SynologyAPI
 import UniformTypeIdentifiers
 import XCTest
-@testable import TimelinePrototype
+@testable import SynoTimelineApp
 
 private actor PresentationTransport: PhotosTransport {
     let preview: Data

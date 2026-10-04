@@ -4,14 +4,14 @@ import PackageDescription
 let package = Package(
     name: "SynoTimeline",
     platforms: [.macOS("27.0")],
-    products: [.executable(name: "SynoTimeline", targets: ["TimelinePrototype"])],
+    products: [.executable(name: "SynoTimeline", targets: ["SynoTimelineApp"])],
     targets: [
         .target(name: "TimelineCore"),
         .target(name: "SynologyAPI", dependencies: ["TimelineCore"]),
         .target(name: "PhotoCache", dependencies: ["SynologyAPI", "TimelineCore"], linkerSettings: [.linkedLibrary("sqlite3")]),
-        .executableTarget(name: "TimelinePrototype", dependencies: ["TimelineCore", "SynologyAPI", "PhotoCache"]),
+        .executableTarget(name: "SynoTimelineApp", dependencies: ["TimelineCore", "SynologyAPI", "PhotoCache"]),
         .testTarget(name: "TimelineCoreTests", dependencies: ["TimelineCore"]),
-        .testTarget(name: "TimelinePrototypeTests", dependencies: ["TimelinePrototype", "PhotoCache", "SynologyAPI"]),
+        .testTarget(name: "SynoTimelineAppTests", dependencies: ["SynoTimelineApp", "PhotoCache", "SynologyAPI"]),
         .testTarget(name: "SynologyAPITests", dependencies: ["SynologyAPI"]),
         .testTarget(name: "PhotoCacheTests", dependencies: ["PhotoCache", "SynologyAPI"])
     ]
