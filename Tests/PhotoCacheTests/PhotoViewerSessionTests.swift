@@ -756,6 +756,64 @@ final class PhotoViewerSessionTests: XCTestCase {
         await session.close()
     }
 
+    func testRetryPreservesLoadedImagesAndSelection() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let selected = try item(14)
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: [selected]])
+        let snapshot = TimelineSnapshot(sections: [
+            TimelineSection(offset: 0, limit: 1,
+                            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
+        ])
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+                                         index: LibraryIndex(snapshot: snapshot),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                                                               item: selected, page: [selected],
+                                                               pageVerified: true),
+                                         allowNetwork: true)
+        let loaded = await waitUntil {
+            let state = await session.state()
+            return state.thumbnailData != nil && state.fullImageData != nil
+        }
+        XCTAssertTrue(loaded)
+        let before = await session.state()
+        await session.retry()
+        let retried = await session.state()
+        XCTAssertEqual(retried.selection, before.selection)
+        XCTAssertEqual(retried.thumbnailData, before.thumbnailData)
+        XCTAssertEqual(retried.fullImageData, before.fullImageData)
+        await session.close()
+    }
+
+    func testCloseBeforeEnhancementDelayPreventsExpensiveTransfers() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let selected = try item(14)
+        let transport = ViewerTransport()
+        let snapshot = TimelineSnapshot(sections: [
+            TimelineSection(offset: 0, limit: 1,
+                            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
+        ])
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+                                         index: LibraryIndex(snapshot: snapshot),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                                                               item: selected, page: [selected],
+                                                               pageVerified: true),
+                                         allowNetwork: true)
+        _ = await session.state()
+        await session.close()
+        try await Task.sleep(for: .milliseconds(150))
+        let state = await session.state()
+        let thumbnails = await transport.thumbnailRequests
+        let originals = await transport.fullImageCalls
+        XCTAssertTrue(state.isClosed)
+        XCTAssertTrue(thumbnails.isEmpty)
+        XCTAssertTrue(originals.isEmpty)
+        let speculativeThumbnails = await session.speculativeThumbnailCount()
+        let speculativeOriginals = await session.speculativeFullImageCount()
+        XCTAssertEqual(speculativeThumbnails, 0)
+        XCTAssertEqual(speculativeOriginals, 0)
+    }
+
     func testVideoUsesPreviewAndReportsUnsupportedPlayback() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let video = try item(12, type: "video")
