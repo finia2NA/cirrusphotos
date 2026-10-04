@@ -208,7 +208,7 @@ final class PhotoViewerCanvasView: NSView {
 
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
-        case 53: onClose?()
+        case 49, 53: onClose?()
         case 123: onPrevious?()
         case 124: onNext?()
         default: super.keyDown(with: event)

@@ -120,6 +120,7 @@ struct AppShellView: View {
                                          snapshotRevision: model.viewerSnapshotRevision(for: selectedCollection))
         lastViewerFollowSelection = nil
         model.setActiveViewer(viewer)
+        model.installViewerCloseHandler(closeViewer)
         viewer?.canvasController.requestKeyboardFocus()
     }
 

@@ -128,6 +128,21 @@ final class LibraryInputRoutingTests: XCTestCase {
     }
 
     @MainActor
+    func testViewerCloseCommandIsEnabledOnlyWhileHandlerIsInstalled() {
+        let model = LibraryModel()
+        var closes = 0
+
+        model.closeViewer()
+        XCTAssertFalse(model.canCloseViewer)
+        model.installViewerCloseHandler { closes += 1 }
+        XCTAssertTrue(model.canCloseViewer)
+        model.closeViewer()
+        XCTAssertEqual(closes, 1)
+        model.installViewerCloseHandler(nil)
+        XCTAssertFalse(model.canCloseViewer)
+    }
+
+    @MainActor
     func testRepeatedCommandRegistrationDoesNotPublishAndStaleOwnerCannotDeactivate() {
         let model = LibraryModel()
         var publications = 0, calls = 0

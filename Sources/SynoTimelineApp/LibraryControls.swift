@@ -147,9 +147,12 @@ struct LibraryCommands: Commands {
             Button("Extend Selection Down") { model.performBrowserCommand(.move(.down, extending: true)) }
                 .keyboardShortcut(.downArrow, modifiers: [.shift])
                 .disabled(!model.browserCommandsActive)
-            Button("Open Selected Photo") { model.performBrowserCommand(.openSelected) }
+            Button(model.canCloseViewer ? "Close Viewer" : "Open Selected Photo") {
+                if model.canCloseViewer { model.closeViewer() }
+                else { model.performBrowserCommand(.openSelected) }
+            }
                 .keyboardShortcut(.space, modifiers: [])
-                .disabled(!model.canOpenSelectedPhoto)
+                .disabled(!model.canCloseViewer && !model.canOpenSelectedPhoto)
             Divider()
             Button("Toggle Favorite") { model.toggleViewerFavorite() }
                 .keyboardShortcut(".", modifiers: [])

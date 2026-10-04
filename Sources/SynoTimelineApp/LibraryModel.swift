@@ -19,12 +19,14 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var authenticationStatus: AuthenticationStatus = .notStarted
     @Published private(set) var retryRevision = 0
     @Published private(set) var canToggleViewerFavorite = false
+    @Published private(set) var canCloseViewer = false
     @Published private(set) var canOpenSelectedPhoto = false
     @Published private(set) var browserCommandsActive = false
     private var browserSelectionStates: [PhotoCollectionDescriptor: BrowserSelectionState] = [:]
     private var browserCommandHandler: ((BrowserSelectionCommand) -> Void)?
     private var browserCommandOwner: UUID?
     private weak var activeViewer: PhotoViewerPresentation?
+    private var viewerCloseHandler: (() -> Void)?
     private var thumbnailPolicyRevision: UInt64 = 0
     var authenticationFailed: Bool {
         if case .failed = authenticationStatus { return true }
@@ -119,7 +121,18 @@ final class LibraryModel: ObservableObject {
 
     func setActiveViewer(_ viewer: PhotoViewerPresentation?) {
         activeViewer = viewer
+        if viewer == nil { installViewerCloseHandler(nil) }
         updateViewerCommands()
+    }
+
+    func installViewerCloseHandler(_ handler: (() -> Void)?) {
+        viewerCloseHandler = handler
+        if canCloseViewer != (handler != nil) { canCloseViewer = handler != nil }
+    }
+
+    func closeViewer() {
+        guard canCloseViewer else { return }
+        viewerCloseHandler?()
     }
 
     func updateViewerCommands() {
