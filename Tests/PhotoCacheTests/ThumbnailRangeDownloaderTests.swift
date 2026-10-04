@@ -110,12 +110,12 @@ final class ThumbnailRangeDownloaderTests: XCTestCase {
         summary.processed = 4
         summary.downloadedThumbnails = 2
         summary.downloadedBytes = 1_000
-        summary.elapsedSeconds = 2
+        summary.downloadElapsedSeconds = 2
 
         XCTAssertEqual(summary.averageDownloadedThumbnailBytes, 500)
-        XCTAssertEqual(summary.estimatedDownloadBytes, 2_500)
+        XCTAssertEqual(summary.estimatedDownloadBytes, 4_000)
         XCTAssertEqual(summary.bytesPerSecond, 500)
-        XCTAssertEqual(summary.estimatedRemainingSeconds, 3)
+        XCTAssertEqual(summary.estimatedRemainingSeconds, 6)
     }
 
     func testChronologicalSliderMapsOldestLeftAndNewestRight() {

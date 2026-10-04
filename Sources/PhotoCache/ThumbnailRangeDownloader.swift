@@ -49,7 +49,7 @@ public struct ThumbnailBatchSummary: Sendable, Equatable {
     public var errors = 0
     public var downloadedThumbnails = 0
     public var downloadedBytes: Int64 = 0
-    public var elapsedSeconds: TimeInterval = 0
+    public var downloadElapsedSeconds: TimeInterval = 0
 
     public init(estimated: Int) { self.estimated = estimated }
 
@@ -58,20 +58,17 @@ public struct ThumbnailBatchSummary: Sendable, Equatable {
         return downloadedBytes / Int64(downloadedThumbnails)
     }
 
-    /// Projects the final transfer from this run's observed download ratio and average payload size.
+    /// Assumes every unprocessed item will require a download at the observed average payload size.
     public var estimatedDownloadBytes: Int64? {
-        guard processed > 0, downloadedThumbnails > 0 else { return nil }
+        guard downloadedThumbnails > 0 else { return nil }
         let remaining = max(0, estimated - processed)
-        let projectedDownloads = Int((Double(remaining) * Double(downloadedThumbnails)
-                                      / Double(processed)).rounded())
-        let totalDownloads = min(estimated, downloadedThumbnails + projectedDownloads)
         let average = Double(downloadedBytes) / Double(downloadedThumbnails)
-        return Int64((Double(totalDownloads) * average).rounded())
+        return downloadedBytes + Int64((Double(remaining) * average).rounded())
     }
 
     public var bytesPerSecond: Double? {
-        guard downloadedBytes > 0, elapsedSeconds > 0 else { return nil }
-        return Double(downloadedBytes) / elapsedSeconds
+        guard downloadedBytes > 0, downloadElapsedSeconds > 0 else { return nil }
+        return Double(downloadedBytes) / downloadElapsedSeconds
     }
 
     public var estimatedRemainingSeconds: TimeInterval? {
@@ -103,11 +100,9 @@ public struct ThumbnailRangeDownloader: Sendable {
             return empty
         }
         var summary = ThumbnailBatchSummary(estimated: selected.estimatedThumbnailCount(in: snapshot))
-        let startedAt = now()
         let index = LibraryIndex(snapshot: snapshot)
         let selectedDays = Set(selected.dayIDs(in: snapshot))
         let sectionIndices = Set(selectedDays.flatMap { index.sectionIndices(forDay: $0) }).sorted()
-        summary.elapsedSeconds = max(0, now() - startedAt)
         await progress(summary)
 
         for sectionIndex in sectionIndices {
@@ -132,7 +127,6 @@ public struct ThumbnailRangeDownloader: Sendable {
             guard let items = currentItems, !pageFailed else {
                 summary.errors += selectedOffsets.count
                 summary.processed += selectedOffsets.count
-                summary.elapsedSeconds = max(0, now() - startedAt)
                 await progress(summary)
                 continue
             }
@@ -153,12 +147,12 @@ public struct ThumbnailRangeDownloader: Sendable {
                 }
                 candidates.append(thumbnail)
             }
-            summary.elapsedSeconds = max(0, now() - startedAt)
             await progress(summary)
 
             for start in stride(from: 0, to: candidates.count, by: workerCount) {
                 if Task.isCancelled { break }
                 let end = min(start + workerCount, candidates.count)
+                let transferStartedAt = now()
                 let outcomes = await withTaskGroup(of: ThumbnailCacheMeasurement?.self,
                                                    returning: [ThumbnailCacheMeasurement?].self) { group in
                     for descriptor in candidates[start..<end] {
@@ -175,11 +169,13 @@ public struct ThumbnailRangeDownloader: Sendable {
                     return values
                 }
                 if Task.isCancelled { break }
+                var batchDownloadedBytes: Int64 = 0
                 for measurement in outcomes {
                     summary.processed += 1
                     if let downloadedBytes = measurement?.downloadedBytes, downloadedBytes > 0 {
                         summary.downloadedThumbnails += 1
                         summary.downloadedBytes += Int64(downloadedBytes)
+                        batchDownloadedBytes += Int64(downloadedBytes)
                     }
                     switch measurement?.outcome {
                     case .fetched?: summary.fetched += 1
@@ -187,7 +183,9 @@ public struct ThumbnailRangeDownloader: Sendable {
                     case .cacheWriteFailed?, nil: summary.errors += 1
                     }
                 }
-                summary.elapsedSeconds = max(0, now() - startedAt)
+                if batchDownloadedBytes > 0 {
+                    summary.downloadElapsedSeconds += max(0, now() - transferStartedAt)
+                }
                 await progress(summary)
             }
         }
