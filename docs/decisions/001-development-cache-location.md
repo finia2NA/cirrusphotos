@@ -18,7 +18,7 @@ Store the cache under the repository's Git-ignored `.cache/` directory:
 
 The cache locator finds the nearest ancestor containing `Package.swift`. It checks the process working directory first, then walks upward from the application bundle. This keeps `swift run` and `scripts/run-prototype.sh` on the same path even though LaunchServices does not guarantee the working directory of a launched `.app`.
 
-On first use, if the new namespace does not exist and the corresponding legacy directory under `~/Library/Caches/CirrusTimeline` does, the app attempts to move it. Migration failure is non-fatal: the old data remains and the new location starts cold.
+The earlier `~/Library/Caches/CirrusTimeline` location is no longer migrated. Each checkout starts with its own cache. Incompatible SQLite index versions are discarded and recreated from NAS data.
 
 `.cache/` is ignored by Git.
 

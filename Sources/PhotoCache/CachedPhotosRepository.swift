@@ -131,10 +131,6 @@ public actor CachedPhotosRepository {
             root = cacheRoot
         } else {
             root = CacheLocation.defaultRoot().appendingPathComponent(namespace, isDirectory: true)
-            let legacyRoot = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("CirrusTimeline", isDirectory: true)
-                .appendingPathComponent(namespace, isDirectory: true)
-            CacheLocation.migrateDirectory(from: legacyRoot, to: root)
         }
         store = try DiskCache(root: root, budget: budget,
                               protectedTimelineKey: CacheKey.timeline(namespace: namespace))

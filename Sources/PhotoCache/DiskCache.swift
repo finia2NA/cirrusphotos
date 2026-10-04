@@ -4,13 +4,7 @@ import SQLite3
 import SynologyAPI
 
 public enum CacheKind: Int, Sendable {
-    // Keep the established raw values stable because they are persisted in SQLite.
-    // CachePriorityPolicy, not these compatibility values, defines eviction order.
-    case previewThumbnail = -1
-    case fullImage = 0
-    case thumbnail = 1
-    case page = 2
-    case timeline = 3
+    case previewThumbnail, fullImage, thumbnail, page, timeline
 }
 
 public struct CacheEntry: Sendable {
@@ -77,6 +71,7 @@ public enum CacheBudget {
 }
 
 public actor DiskCache {
+    private static let schemaVersion = 1
     private let root: URL
     private let images: URL
     nonisolated(unsafe) private var db: OpaquePointer?
@@ -90,30 +85,53 @@ public actor DiskCache {
         images = root.appendingPathComponent("images", isDirectory: true)
         self.budget = budget
         self.protectedTimelineKey = protectedTimelineKey
-        try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let path = root.appendingPathComponent("index.sqlite").path
-        guard sqlite3_open(path, &db) == SQLITE_OK else { throw CacheError.storage }
-        guard sqlite3_exec(db, "PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS entries (key TEXT PRIMARY KEY, kind INTEGER NOT NULL, payload BLOB, file TEXT, cost INTEGER NOT NULL, accessed REAL NOT NULL, validated_run TEXT, etag TEXT, last_modified TEXT, digest TEXT, retention_class TEXT, retention_rank INTEGER, thumbnail_family TEXT, thumbnail_size TEXT); CREATE INDEX IF NOT EXISTS entries_eviction ON entries(kind, accessed);", nil, nil, nil) == SQLITE_OK else {
+        if FileManager.default.fileExists(atPath: path) {
+            let opened = sqlite3_open(path, &db) == SQLITE_OK
+            if !opened || !Self.isCurrentSchema(db) {
+                sqlite3_close(db)
+                db = nil
+                try Self.discardCacheFiles(at: root)
+            }
+        } else {
+            // Image files without an index have no recoverable keys or retention records.
+            try Self.discardCacheFiles(at: root)
+        }
+        try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
+        let needsSchema = db == nil
+        if db == nil {
+            guard sqlite3_open(path, &db) == SQLITE_OK else { throw CacheError.storage }
+        }
+        guard sqlite3_exec(db, "PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS entries (key TEXT PRIMARY KEY, kind INTEGER NOT NULL, payload BLOB, file TEXT, cost INTEGER NOT NULL, accessed REAL NOT NULL, validated_run TEXT, etag TEXT, last_modified TEXT, digest TEXT, retention_class TEXT, retention_rank INTEGER, thumbnail_family TEXT, thumbnail_size TEXT); CREATE INDEX IF NOT EXISTS entries_retention ON entries(retention_rank,accessed); CREATE INDEX IF NOT EXISTS entries_thumbnail_family ON entries(thumbnail_family,thumbnail_size);", nil, nil, nil) == SQLITE_OK else {
             throw CacheError.storage
         }
-        // Add the integrity column to early prototype indexes without discarding cached images.
-        _ = sqlite3_exec(db, "ALTER TABLE entries ADD COLUMN digest TEXT", nil, nil, nil)
-        _ = sqlite3_exec(db, "ALTER TABLE entries ADD COLUMN retention_class TEXT", nil, nil, nil)
-        _ = sqlite3_exec(db, "ALTER TABLE entries ADD COLUMN retention_rank INTEGER", nil, nil, nil)
-        _ = sqlite3_exec(db, "ALTER TABLE entries ADD COLUMN thumbnail_family TEXT", nil, nil, nil)
-        _ = sqlite3_exec(db, "ALTER TABLE entries ADD COLUMN thumbnail_size TEXT", nil, nil, nil)
-        _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS entries_thumbnail_family ON entries(thumbnail_family,thumbnail_size)", nil, nil, nil)
-        for kind in [CacheKind.previewThumbnail, .fullImage, .thumbnail, .page, .timeline] {
-            let retention = CachePriorityPolicy.defaultClass(for: kind).rawValue
-            let sql = "UPDATE entries SET retention_class='\(retention)' WHERE retention_class IS NULL AND kind=\(kind.rawValue)"
-            guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw CacheError.storage }
+        if needsSchema {
+            guard sqlite3_exec(db, "PRAGMA user_version=\(Self.schemaVersion)", nil, nil, nil) == SQLITE_OK else {
+                throw CacheError.storage
+            }
         }
-        for retention in CacheRetentionClass.allCases {
-            let rank = CachePriorityPolicy.evictionRank(for: retention)
-            let sql = "UPDATE entries SET retention_rank=\(rank) WHERE retention_class='\(retention.rawValue)'"
-            guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw CacheError.storage }
+    }
+
+    private static func isCurrentSchema(_ db: OpaquePointer?) -> Bool {
+        var version: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &version, nil) == SQLITE_OK else { return false }
+        defer { sqlite3_finalize(version) }
+        guard sqlite3_step(version) == SQLITE_ROW,
+              sqlite3_column_int(version, 0) == schemaVersion else { return false }
+        var entries: OpaquePointer?
+        let query = "SELECT key,kind,payload,file,cost,accessed,validated_run,etag,last_modified,digest,retention_class,retention_rank,thumbnail_family,thumbnail_size FROM entries LIMIT 0"
+        guard sqlite3_prepare_v2(db, query, -1, &entries, nil) == SQLITE_OK else { return false }
+        sqlite3_finalize(entries)
+        return true
+    }
+
+    private static func discardCacheFiles(at root: URL) throws {
+        let manager = FileManager.default
+        for name in ["index.sqlite", "index.sqlite-wal", "index.sqlite-shm", "images"] {
+            let url = root.appendingPathComponent(name)
+            if manager.fileExists(atPath: url.path) { try manager.removeItem(at: url) }
         }
-        _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS entries_retention ON entries(retention_rank,accessed)", nil, nil, nil)
     }
 
     deinit { sqlite3_close(db) }

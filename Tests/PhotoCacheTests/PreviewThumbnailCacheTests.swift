@@ -48,12 +48,7 @@ final class PreviewThumbnailCacheTests: XCTestCase {
         """.utf8))
     }
 
-    func testPreviewEvictsBeforeFullImageAndExistingKindsKeepRawValues() async throws {
-        XCTAssertEqual(CacheKind.fullImage.rawValue, 0)
-        XCTAssertEqual(CacheKind.thumbnail.rawValue, 1)
-        XCTAssertEqual(CacheKind.page.rawValue, 2)
-        XCTAssertEqual(CacheKind.timeline.rawValue, 3)
-
+    func testPreviewEvictsBeforeFullImage() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let cache = try DiskCache(root: cacheRoot, budget: 20, protectedTimelineKey: "timeline")
         try await cache.put("timeline", kind: .timeline, data: Data(repeating: 1, count: 4), validatedRun: nil)

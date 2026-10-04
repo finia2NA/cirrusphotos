@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 import SynologyAPI
+import SQLite3
 @testable import PhotoCache
 
 final class PhotoCacheTests: XCTestCase {
@@ -21,21 +22,67 @@ final class PhotoCacheTests: XCTestCase {
         XCTAssertEqual(root.deletingLastPathComponent().standardizedFileURL, project.standardizedFileURL)
     }
 
-    func testLegacyCacheMigrationMovesNamespaceDirectory() throws {
-        let temporary = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SynoCacheMigrationTest-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        let legacy = temporary.appendingPathComponent("legacy/namespace", isDirectory: true)
-        let destination = temporary.appendingPathComponent("project/.cache/namespace", isDirectory: true)
-        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
-        try Data([1, 2, 3]).write(to: legacy.appendingPathComponent("index.sqlite"))
+    func testIncompatibleCacheSchemaDiscardsIndexedAndImageData() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoOldCache-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let images = root.appendingPathComponent("images", isDirectory: true)
+        try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
+        try Data([1]).write(to: images.appendingPathComponent("old.img"))
+        try Data([9]).write(to: root.appendingPathComponent("keep.txt"))
+        let index = root.appendingPathComponent("index.sqlite")
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(index.path, &db), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db, "CREATE TABLE entries (key TEXT PRIMARY KEY, kind INTEGER)", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(db)
 
-        CacheLocation.migrateDirectory(from: legacy, to: destination)
+        let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
+        let old = try await cache.get("old")
+        XCTAssertNil(old)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: images.appendingPathComponent("old.img").path))
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("keep.txt")), Data([9]))
+        try await cache.put("new", kind: .timeline, data: Data([2]), validatedRun: nil)
+        let new = try await cache.get("new")
+        XCTAssertEqual(new?.data, Data([2]))
+    }
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: legacy.path))
-        XCTAssertTrue(FileManager.default.fileExists(
-            atPath: destination.appendingPathComponent("index.sqlite").path
-        ))
+    func testCurrentSchemaReopensWithoutDiscardingCache() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoCurrentCache-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        do {
+            let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
+            try await cache.put("image", kind: .thumbnail, data: Data([4, 5]), validatedRun: "run")
+        }
+        let reopened = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
+        let image = try await reopened.get("image")
+        XCTAssertEqual(image?.data, Data([4, 5]))
+    }
+
+    func testUnreadableIndexRecreatesCache() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoCorruptCache-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("not sqlite".utf8).write(to: root.appendingPathComponent("index.sqlite"))
+        let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
+        try await cache.put("new", kind: .timeline, data: Data([6]), validatedRun: nil)
+        let new = try await cache.get("new")
+        XCTAssertEqual(new?.data, Data([6]))
+    }
+
+    func testFutureCacheSchemaIsNotInterpretedAsCurrent() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoFutureCache-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        do {
+            let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
+            try await cache.put("old", kind: .timeline, data: Data([1]), validatedRun: nil)
+        }
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(root.appendingPathComponent("index.sqlite").path, &db), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db, "PRAGMA user_version=999", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(db)
+
+        let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
+        let old = try await cache.get("old")
+        XCTAssertNil(old)
     }
 
     func testKeysAreSemanticAndIsolated() throws {

@@ -40,24 +40,4 @@ public enum CacheLocation {
         }
         return workingDirectory
     }
-
-    /// Best-effort one-time migration from the earlier macOS Caches location.
-    /// Failure deliberately leaves the old cache untouched and starts a new one.
-    static func migrateDirectory(
-        from legacyRoot: URL,
-        to destinationRoot: URL,
-        fileManager: FileManager = .default
-    ) {
-        guard fileManager.fileExists(atPath: legacyRoot.path),
-              !fileManager.fileExists(atPath: destinationRoot.path) else { return }
-        do {
-            try fileManager.createDirectory(
-                at: destinationRoot.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try fileManager.moveItem(at: legacyRoot, to: destinationRoot)
-        } catch {
-            // A cache migration must never prevent the app from starting.
-        }
-    }
 }

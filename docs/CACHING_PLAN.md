@@ -176,7 +176,7 @@ Recommended implementation tools:
 
 ### On-disk bookkeeping and eviction
 
-For the current development build, use the repository's `.cache/` directory. It is ignored by Git and is not in macOS's system-managed Caches directory. Resolve the repository rather than trusting the process working directory, which is unstable when launching a `.app`. A best-effort one-time migration preserves the earlier account-scoped cache. See [decision 001](decisions/001-development-cache-location.md).
+For the current development build, use the repository's `.cache/` directory. It is ignored by Git and is not in macOS's system-managed Caches directory. Resolve the repository rather than trusting the process working directory, which is unstable when launching a `.app`. SQLite `user_version` identifies the index schema. An incompatible or unreadable index causes the account namespace's index and image files to be discarded and recreated from NAS data. See [decision 001](decisions/001-development-cache-location.md).
 
 This location makes cache persistence follow the project checkout. It is a prototype choice, not a distribution layout. If the app later returns to `~/Library/Caches`, it must treat partial or complete purging as normal: rebuild a missing/corrupt SQLite index, remove rows for missing images, remove orphan files not represented by the index, and make clear-cache remove the entire namespace. A separate user-requested offline library would belong in a non-purgeable location with an explicit lifecycle.
 
