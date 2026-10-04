@@ -5,7 +5,7 @@ import SynologyAPI
 
 public enum CacheKind: Int, Sendable {
     // Keep the established raw values stable because they are persisted in SQLite.
-    // Lower values are evicted first.
+    // CachePriorityPolicy, not these compatibility values, defines eviction order.
     case previewThumbnail = -1
     case fullImage = 0
     case thumbnail = 1
@@ -19,6 +19,18 @@ public struct CacheEntry: Sendable {
     public let etag: String?
     public let lastModified: String?
     public let validatedRun: String?
+}
+
+public struct ThumbnailCacheIdentity: Sendable, Equatable {
+    public let key: String
+    public let family: String
+    public let size: ThumbnailSize
+
+    public init(key: String, family: String, size: ThumbnailSize) {
+        self.key = key
+        self.family = family
+        self.size = size
+    }
 }
 
 public enum CacheKey {
@@ -35,6 +47,14 @@ public enum CacheKey {
     }
     public static func thumbnail(namespace: String, descriptor: ThumbnailInfo, size: ThumbnailSize) -> String {
         digest("\(namespace)|personal|thumbnail|v2|unit|\(descriptor.unitID)|\(descriptor.cacheKey)|\(size.rawValue)")
+    }
+    public static func thumbnailIdentity(namespace: String, descriptor: ThumbnailInfo,
+                                         size: ThumbnailSize) -> ThumbnailCacheIdentity {
+        ThumbnailCacheIdentity(
+            key: thumbnail(namespace: namespace, descriptor: descriptor, size: size),
+            family: digest("\(namespace)|personal|thumbnail-family|v1|unit|\(descriptor.unitID)|\(descriptor.cacheKey)"),
+            size: size
+        )
     }
     public static func fullImage(namespace: String, resource: FullImageResource) -> String {
         digest("\(namespace)|personal|download|v2|unit|\(resource.unitID)|\(resource.cacheKey)")
@@ -63,6 +83,7 @@ public actor DiskCache {
     private var budget: Int64
     private let protectedTimelineKey: String
     private var generation = 0
+    private var configuredThumbnailSize: ThumbnailSize = .m
 
     public init(root: URL, budget: Int64, protectedTimelineKey: String) throws {
         self.root = root
@@ -72,11 +93,27 @@ public actor DiskCache {
         try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
         let path = root.appendingPathComponent("index.sqlite").path
         guard sqlite3_open(path, &db) == SQLITE_OK else { throw CacheError.storage }
-        guard sqlite3_exec(db, "PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS entries (key TEXT PRIMARY KEY, kind INTEGER NOT NULL, payload BLOB, file TEXT, cost INTEGER NOT NULL, accessed REAL NOT NULL, validated_run TEXT, etag TEXT, last_modified TEXT, digest TEXT); CREATE INDEX IF NOT EXISTS entries_eviction ON entries(kind, accessed);", nil, nil, nil) == SQLITE_OK else {
+        guard sqlite3_exec(db, "PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS entries (key TEXT PRIMARY KEY, kind INTEGER NOT NULL, payload BLOB, file TEXT, cost INTEGER NOT NULL, accessed REAL NOT NULL, validated_run TEXT, etag TEXT, last_modified TEXT, digest TEXT, retention_class TEXT, retention_rank INTEGER, thumbnail_family TEXT, thumbnail_size TEXT); CREATE INDEX IF NOT EXISTS entries_eviction ON entries(kind, accessed);", nil, nil, nil) == SQLITE_OK else {
             throw CacheError.storage
         }
         // Add the integrity column to early prototype indexes without discarding cached images.
         _ = sqlite3_exec(db, "ALTER TABLE entries ADD COLUMN digest TEXT", nil, nil, nil)
+        _ = sqlite3_exec(db, "ALTER TABLE entries ADD COLUMN retention_class TEXT", nil, nil, nil)
+        _ = sqlite3_exec(db, "ALTER TABLE entries ADD COLUMN retention_rank INTEGER", nil, nil, nil)
+        _ = sqlite3_exec(db, "ALTER TABLE entries ADD COLUMN thumbnail_family TEXT", nil, nil, nil)
+        _ = sqlite3_exec(db, "ALTER TABLE entries ADD COLUMN thumbnail_size TEXT", nil, nil, nil)
+        _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS entries_thumbnail_family ON entries(thumbnail_family,thumbnail_size)", nil, nil, nil)
+        for kind in [CacheKind.previewThumbnail, .fullImage, .thumbnail, .page, .timeline] {
+            let retention = CachePriorityPolicy.defaultClass(for: kind).rawValue
+            let sql = "UPDATE entries SET retention_class='\(retention)' WHERE retention_class IS NULL AND kind=\(kind.rawValue)"
+            guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw CacheError.storage }
+        }
+        for retention in CacheRetentionClass.allCases {
+            let rank = CachePriorityPolicy.evictionRank(for: retention)
+            let sql = "UPDATE entries SET retention_rank=\(rank) WHERE retention_class='\(retention.rawValue)'"
+            guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw CacheError.storage }
+        }
+        _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS entries_retention ON entries(retention_rank,accessed)", nil, nil, nil)
     }
 
     deinit { sqlite3_close(db) }
@@ -121,8 +158,20 @@ public actor DiskCache {
 
     public func currentGeneration() -> Int { generation }
 
+    public func setConfiguredThumbnailSize(_ size: ThumbnailSize) throws {
+        guard configuredThumbnailSize != size else { return }
+        configuredThumbnailSize = size
+        try reclassifyAllThumbnailFamilies()
+        try trim()
+    }
+
+    public func getThumbnail(_ identity: ThumbnailCacheIdentity) throws -> CacheEntry? {
+        return try get(identity.key)
+    }
+
     public func put(_ key: String, kind: CacheKind, data: Data, validatedRun: String?,
-                    etag: String? = nil, lastModified: String? = nil, expectedGeneration: Int? = nil) throws {
+                    etag: String? = nil, lastModified: String? = nil, expectedGeneration: Int? = nil,
+                    thumbnail identity: ThumbnailCacheIdentity? = nil) throws {
         if let expectedGeneration, expectedGeneration != generation { return }
         let storedKind: CacheKind
         if kind == .previewThumbnail, try existingKind(for: key) == .thumbnail {
@@ -135,7 +184,9 @@ public actor DiskCache {
         if let filename {
             try data.write(to: images.appendingPathComponent(filename), options: .atomic)
         }
-        let statement = try prepare("INSERT OR REPLACE INTO entries (key,kind,payload,file,cost,accessed,validated_run,etag,last_modified,digest) VALUES (?,?,?,?,?,?,?,?,?,?)")
+        let retention = try identity.map { try retentionClass(for: $0) }
+            ?? CachePriorityPolicy.defaultClass(for: storedKind)
+        let statement = try prepare("INSERT OR REPLACE INTO entries (key,kind,payload,file,cost,accessed,validated_run,etag,last_modified,digest,retention_class,retention_rank,thumbnail_family,thumbnail_size) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
         defer { sqlite3_finalize(statement) }
         bind(key, at: 1, in: statement)
         sqlite3_bind_int(statement, 2, Int32(storedKind.rawValue))
@@ -148,7 +199,12 @@ public actor DiskCache {
         bind(etag, at: 8, in: statement)
         bind(lastModified, at: 9, in: statement)
         bind(digest(data), at: 10, in: statement)
+        bind(retention.rawValue, at: 11, in: statement)
+        sqlite3_bind_int(statement, 12, Int32(CachePriorityPolicy.evictionRank(for: retention)))
+        bind(identity?.family, at: 13, in: statement)
+        bind(identity?.size.rawValue, at: 14, in: statement)
         guard sqlite3_step(statement) == SQLITE_DONE else { throw CacheError.storage }
+        if let identity { try reclassifyThumbnailFamily(identity.family) }
         try trim()
     }
 
@@ -181,6 +237,15 @@ public actor DiskCache {
         return sqlite3_column_int64(statement, 0)
     }
 
+    func retentionClass(forKey key: String) throws -> CacheRetentionClass? {
+        let statement = try prepare("SELECT retention_class FROM entries WHERE key=?")
+        defer { sqlite3_finalize(statement) }
+        bind(key, at: 1, in: statement)
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let raw = columnString(statement, 0) else { return nil }
+        return CacheRetentionClass(rawValue: raw)
+    }
+
     public func setBudget(_ value: Int64) throws { budget = value; try trim() }
 
     public func clear() throws {
@@ -198,7 +263,7 @@ public actor DiskCache {
     private func trim() throws {
         let reserve = budget >= 200_000_000 ? min(64_000_000, budget / 10) : 0
         while try usage() > budget - reserve {
-            let statement = try prepare("SELECT key FROM entries WHERE key != ? ORDER BY kind ASC, accessed ASC LIMIT 1")
+            let statement = try prepare("SELECT key FROM entries WHERE key != ? ORDER BY retention_rank ASC, accessed ASC LIMIT 1")
             bind(protectedTimelineKey, at: 1, in: statement)
             let key = sqlite3_step(statement) == SQLITE_ROW ? columnString(statement, 0) : nil
             sqlite3_finalize(statement)
@@ -209,15 +274,99 @@ public actor DiskCache {
 
     func remove(_ key: String, expectedGeneration: Int? = nil) throws {
         if let expectedGeneration, expectedGeneration != generation { return }
-        let existing = try prepare("SELECT file FROM entries WHERE key=?")
+        let existing = try prepare("SELECT file,thumbnail_family FROM entries WHERE key=?")
         bind(key, at: 1, in: existing)
-        let filename = sqlite3_step(existing) == SQLITE_ROW ? columnString(existing, 0) : nil
+        let found = sqlite3_step(existing) == SQLITE_ROW
+        let filename = found ? columnString(existing, 0) : nil
+        let family = found ? columnString(existing, 1) : nil
         sqlite3_finalize(existing)
         let statement = try prepare("DELETE FROM entries WHERE key=?")
         defer { sqlite3_finalize(statement) }
         bind(key, at: 1, in: statement)
         guard sqlite3_step(statement) == SQLITE_DONE else { throw CacheError.storage }
         if let filename { try? FileManager.default.removeItem(at: images.appendingPathComponent(filename)) }
+        if let family { try reclassifyThumbnailFamily(family) }
+    }
+
+    private func reclassifyAllThumbnailFamilies() throws {
+        let optional = try prepare("UPDATE entries SET retention_class=?,retention_rank=? WHERE thumbnail_family IS NOT NULL")
+        bind(CacheRetentionClass.optionalThumbnail.rawValue, at: 1, in: optional)
+        sqlite3_bind_int(optional, 2, Int32(CachePriorityPolicy.evictionRank(for: .optionalThumbnail)))
+        let optionalResult = sqlite3_step(optional)
+        sqlite3_finalize(optional)
+        guard optionalResult == SQLITE_DONE else { throw CacheError.storage }
+
+        let configured = try prepare("UPDATE entries SET retention_class=?,retention_rank=? WHERE thumbnail_family IS NOT NULL AND thumbnail_size=?")
+        bind(CacheRetentionClass.configuredThumbnail.rawValue, at: 1, in: configured)
+        sqlite3_bind_int(configured, 2, Int32(CachePriorityPolicy.evictionRank(for: .configuredThumbnail)))
+        bind(configuredThumbnailSize.rawValue, at: 3, in: configured)
+        let configuredResult = sqlite3_step(configured)
+        sqlite3_finalize(configured)
+        guard configuredResult == SQLITE_DONE else { throw CacheError.storage }
+
+        let smallerSizes = ThumbnailSize.allCases.filter {
+            $0.qualityRank < configuredThumbnailSize.qualityRank
+        }
+        guard !smallerSizes.isEmpty else { return }
+        let placeholders = Array(repeating: "?", count: smallerSizes.count).joined(separator: ",")
+        let fallback = try prepare("UPDATE entries SET retention_class=?,retention_rank=? WHERE thumbnail_family IS NOT NULL AND thumbnail_size IN (\(placeholders)) AND thumbnail_family NOT IN (SELECT thumbnail_family FROM entries WHERE thumbnail_family IS NOT NULL AND thumbnail_size=?)")
+        bind(CacheRetentionClass.smallerFallbackThumbnail.rawValue, at: 1, in: fallback)
+        sqlite3_bind_int(fallback, 2, Int32(CachePriorityPolicy.evictionRank(for: .smallerFallbackThumbnail)))
+        for (offset, size) in smallerSizes.enumerated() {
+            bind(size.rawValue, at: Int32(offset + 3), in: fallback)
+        }
+        bind(configuredThumbnailSize.rawValue, at: Int32(smallerSizes.count + 3), in: fallback)
+        let fallbackResult = sqlite3_step(fallback)
+        sqlite3_finalize(fallback)
+        guard fallbackResult == SQLITE_DONE else { throw CacheError.storage }
+    }
+
+    private func reclassifyThumbnailFamily(_ family: String) throws {
+        let exactExists = try thumbnailExists(family: family, size: configuredThumbnailSize)
+        let query = try prepare("SELECT key,thumbnail_size FROM entries WHERE thumbnail_family=?")
+        bind(family, at: 1, in: query)
+        var updates: [(String, CacheRetentionClass)] = []
+        while sqlite3_step(query) == SQLITE_ROW {
+            guard let key = columnString(query, 0),
+                  let raw = columnString(query, 1),
+                  let size = ThumbnailSize(rawValue: raw) else { continue }
+            let retention: CacheRetentionClass
+            if size == configuredThumbnailSize {
+                retention = .configuredThumbnail
+            } else if size.qualityRank < configuredThumbnailSize.qualityRank && !exactExists {
+                retention = .smallerFallbackThumbnail
+            } else {
+                retention = .optionalThumbnail
+            }
+            updates.append((key, retention))
+        }
+        sqlite3_finalize(query)
+        for (key, retention) in updates {
+            let update = try prepare("UPDATE entries SET retention_class=?,retention_rank=? WHERE key=?")
+            bind(retention.rawValue, at: 1, in: update)
+            sqlite3_bind_int(update, 2, Int32(CachePriorityPolicy.evictionRank(for: retention)))
+            bind(key, at: 3, in: update)
+            let result = sqlite3_step(update)
+            sqlite3_finalize(update)
+            guard result == SQLITE_DONE else { throw CacheError.storage }
+        }
+    }
+
+    private func thumbnailExists(family: String, size: ThumbnailSize) throws -> Bool {
+        let statement = try prepare("SELECT 1 FROM entries WHERE thumbnail_family=? AND thumbnail_size=? LIMIT 1")
+        defer { sqlite3_finalize(statement) }
+        bind(family, at: 1, in: statement)
+        bind(size.rawValue, at: 2, in: statement)
+        return sqlite3_step(statement) == SQLITE_ROW
+    }
+
+    private func retentionClass(for identity: ThumbnailCacheIdentity) throws -> CacheRetentionClass {
+        if identity.size == configuredThumbnailSize { return .configuredThumbnail }
+        if identity.size.qualityRank < configuredThumbnailSize.qualityRank,
+           !(try thumbnailExists(family: identity.family, size: configuredThumbnailSize)) {
+            return .smallerFallbackThumbnail
+        }
+        return .optionalThumbnail
     }
 
     private func prepare(_ sql: String) throws -> OpaquePointer? {
@@ -239,6 +388,12 @@ public actor DiskCache {
     private func columnString(_ statement: OpaquePointer?, _ index: Int32) -> String? {
         guard let text = sqlite3_column_text(statement, index) else { return nil }
         return String(cString: text)
+    }
+}
+
+private extension ThumbnailSize {
+    var qualityRank: Int {
+        switch self { case .sm: 0; case .m: 1; case .xl: 2 }
     }
 }
 

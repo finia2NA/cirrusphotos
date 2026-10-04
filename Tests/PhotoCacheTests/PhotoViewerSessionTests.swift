@@ -327,6 +327,40 @@ final class PhotoViewerSessionTests: XCTestCase {
         await session.close()
     }
 
+    func testViewerUsesCachedSmallerRenditionWhileConfiguredXLDownloads() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let selected = try item(12)
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: [selected]], blockedThumbnails: [12])
+        let repository = try repository(root: cacheRoot, transport: transport)
+        try await repository.setConfiguredThumbnailSize(.xl)
+        let descriptor = try XCTUnwrap(selected.additional?.thumbnail)
+        let namespace = CacheKey.namespace(server: server, account: credentials.username)
+        let medium = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: .m)
+        try await repository.store.put(medium.key, kind: .thumbnail, data: Data([0xAA]),
+                                       validatedRun: "older-run", thumbnail: medium)
+        let oneSection = TimelineSnapshot(sections: [
+            TimelineSection(offset: 0, limit: 1,
+                            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
+        ])
+        let session = PhotoViewerSession(repository: repository,
+            index: LibraryIndex(snapshot: oneSection),
+            seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0, item: selected,
+                                  page: [selected], pageVerified: true),
+            thumbnailSize: .xl, allowNetwork: true)
+
+        let fallbackLoaded = await waitUntil { await session.state().thumbnailData == Data([0xAA]) }
+        XCTAssertTrue(fallbackLoaded)
+        let exactStarted = await waitUntil {
+            await transport.thumbnailRequests.contains { $0.0 == 12 && $0.1 == .xl }
+        }
+        XCTAssertTrue(exactStarted)
+        await transport.releaseThumbnail(12)
+        let exactLoaded = await waitUntil { await session.state().thumbnailData == Data([12, 0x54]) }
+        XCTAssertTrue(exactLoaded)
+        await session.close()
+    }
+
     func testRapidNavigationOnlyStartsExpensiveRequestsForSettledSelection() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let items = try [item(1), item(2), item(3), item(4)]

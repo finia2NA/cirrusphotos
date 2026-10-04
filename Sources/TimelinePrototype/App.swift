@@ -376,12 +376,24 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var retryRevision = 0
     @Published private(set) var canToggleViewerFavorite = false
     private weak var activeViewer: PhotoViewerPresentation?
+    private var thumbnailPolicyRevision: UInt64 = 0
     var authenticationFailed: Bool {
         if case .failed = authenticationStatus { return true }
         return false
     }
     @Published var thumbnailSize: ThumbnailSize = ThumbnailSize(rawValue: UserDefaults.standard.string(forKey: "thumbnailSize") ?? "m") ?? .m {
-        didSet { UserDefaults.standard.set(thumbnailSize.rawValue, forKey: "thumbnailSize") }
+        didSet {
+            UserDefaults.standard.set(thumbnailSize.rawValue, forKey: "thumbnailSize")
+            if let repository {
+                thumbnailPolicyRevision &+= 1
+                let revision = thumbnailPolicyRevision
+                let size = thumbnailSize
+                Task { [weak self] in
+                    guard self?.thumbnailPolicyRevision == revision else { return }
+                    try? await repository.setConfiguredThumbnailSize(size)
+                }
+            }
+        }
     }
     @Published var loadsLargeViewerPreviews: Bool = UserDefaults.standard.bool(forKey: "loadsLargeViewerPreviews") {
         didSet { UserDefaults.standard.set(loadsLargeViewerPreviews, forKey: "loadsLargeViewerPreviews") }
@@ -466,6 +478,7 @@ final class LibraryModel: ObservableObject {
                     budget: CacheBudget.bytes(at: budgetFraction))
             }
             guard let repository else { return }
+            try await repository.setConfiguredThumbnailSize(thumbnailSize)
             if authenticationTask == nil {
                 authenticationTask = Task { [weak self] in
                     for await status in await repository.authentication() {

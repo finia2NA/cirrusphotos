@@ -50,6 +50,18 @@ public enum ThumbnailCacheOutcome: Sendable, Equatable {
     case cacheWriteFailed
 }
 
+public struct ThumbnailRenditionValue: Sendable, Equatable {
+    public let data: Data
+    public let size: ThumbnailSize
+    public let isExact: Bool
+
+    public init(data: Data, size: ThumbnailSize, isExact: Bool) {
+        self.data = data
+        self.size = size
+        self.isExact = isExact
+    }
+}
+
 public enum ThumbnailCachePurpose: Sendable, Equatable {
     case library
     case viewerPreview
@@ -226,8 +238,9 @@ public actor CachedPhotosRepository {
         let producer = StreamProducer()
         return AsyncStream(bufferingPolicy: .bufferingNewest(3)) { continuation in
             producer.task = Task {
-                let key = CacheKey.thumbnail(namespace: namespace, descriptor: descriptor, size: size)
-                let cached = try? await store.get(key)
+                let identity = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: size)
+                let key = identity.key
+                let cached = try? await store.getThumbnail(identity)
                 guard !Task.isCancelled else { continuation.finish(); return }
                 if cached != nil, cachePurpose == .library {
                     try? await store.promotePreviewThumbnail(key)
@@ -256,6 +269,69 @@ public actor CachedPhotosRepository {
                 producer.task?.cancel()
                 Task { await self.releaseImage(key: CacheKey.thumbnail(namespace: self.namespace, descriptor: descriptor, size: size), subscriber: subscriber) }
             }
+        }
+    }
+
+    /// Supplies the best already-cached compatible rendition before resolving the exact
+    /// configured size. Alternate sizes are never fetched or treated as exact completion.
+    public func thumbnailWithFallback(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
+                                      allowNetwork: Bool,
+                                      priority: RequestPriority = .visible) -> AsyncStream<ResourceEvent<ThumbnailRenditionValue>> {
+        let producer = StreamProducer()
+        return AsyncStream(bufferingPolicy: .bufferingNewest(4)) { continuation in
+            producer.task = Task {
+                let exact = CacheKey.thumbnailIdentity(namespace: namespace,
+                                                       descriptor: descriptor, size: size)
+                let exactCached = try? await store.getThumbnail(exact)
+                guard !Task.isCancelled else { continuation.finish(); return }
+                if exactCached == nil,
+                   let fallback = await bestCachedFallback(descriptor, target: size) {
+                    continuation.yield(.value(
+                        ThumbnailRenditionValue(data: fallback.entry.data, size: fallback.size,
+                                                isExact: false),
+                        verified: fallback.entry.validatedRun == runID
+                    ))
+                }
+                guard !Task.isCancelled else { continuation.finish(); return }
+                for await event in thumbnail(descriptor, size: size,
+                                             allowNetwork: allowNetwork && descriptor.isReady(size),
+                                             priority: priority, cachePurpose: .library) {
+                    guard !Task.isCancelled else { continuation.finish(); return }
+                    switch event {
+                    case .value(let data, let verified):
+                        continuation.yield(.value(
+                            ThumbnailRenditionValue(data: data, size: size, isExact: true),
+                            verified: verified
+                        ))
+                    case .failure(let message):
+                        continuation.yield(.failure(message))
+                    }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { @Sendable _ in producer.task?.cancel() }
+        }
+    }
+
+    public func setConfiguredThumbnailSize(_ size: ThumbnailSize) async throws {
+        try await store.setConfiguredThumbnailSize(size)
+    }
+
+    private func bestCachedFallback(_ descriptor: ThumbnailInfo,
+                                    target: ThumbnailSize) async -> (entry: CacheEntry, size: ThumbnailSize)? {
+        for candidate in Self.fallbackSizes(for: target) {
+            let identity = CacheKey.thumbnailIdentity(namespace: namespace,
+                                                      descriptor: descriptor, size: candidate)
+            if let entry = try? await store.getThumbnail(identity) { return (entry, candidate) }
+        }
+        return nil
+    }
+
+    private static func fallbackSizes(for target: ThumbnailSize) -> [ThumbnailSize] {
+        switch target {
+        case .sm: [.m, .xl]
+        case .m: [.xl, .sm]
+        case .xl: [.m, .sm]
         }
     }
 
@@ -530,8 +606,9 @@ public actor CachedPhotosRepository {
     public func cacheThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                                priority: RequestPriority = .prefetch) async throws -> ThumbnailCacheOutcome {
         try Task.checkCancellation()
-        let key = CacheKey.thumbnail(namespace: namespace, descriptor: descriptor, size: size)
-        if let cached = try? await store.get(key), cached.validatedRun == runID {
+        let identity = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: size)
+        let key = identity.key
+        if let cached = try? await store.getThumbnail(identity), cached.validatedRun == runID {
             try? await store.promotePreviewThumbnail(key)
             return .reused
         }
@@ -725,13 +802,14 @@ public actor CachedPhotosRepository {
             return job.task
         }
         let id = UUID()
+        let identity = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: size)
         let task = Task<ImageResolution, Error> {
             let generation = await store.currentGeneration()
             try await gate.acquire(.thumbnail, priority: priority, id: id)
             defer { Task { await gate.release(.thumbnail) } }
             try Task.checkCancellation()
             try await connect()
-            let prior = try? await store.get(key)
+            let prior = try? await store.getThumbnail(identity)
             var response = try await client.thumbnail(descriptor, size: size,
                                                       etag: prior?.etag, lastModified: prior?.lastModified)
             if response.notModified && prior == nil {
@@ -750,7 +828,7 @@ public actor CachedPhotosRepository {
             do {
                 try await store.put(key, kind: cachePurpose.kind, data: data, validatedRun: runID,
                                     etag: response.etag, lastModified: response.lastModified,
-                                    expectedGeneration: generation)
+                                    expectedGeneration: generation, thumbnail: identity)
                 return ImageResolution(data: data, outcome: .fetched)
             } catch {
                 return ImageResolution(data: data, outcome: .cacheWriteFailed)

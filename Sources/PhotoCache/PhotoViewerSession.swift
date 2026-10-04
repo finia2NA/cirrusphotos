@@ -654,13 +654,30 @@ public actor PhotoViewerSession {
         let key = Self.thumbnailKey(descriptor, size: request.size)
         if thumbnailData == nil { thumbnailStatus = .loading }
         let task = Task { [weak self] in
-            for await event in await repository.thumbnail(descriptor, size: request.size,
-                                                           allowNetwork: allowNetwork, priority: .visible,
-                                                           cachePurpose: request.purpose) {
-                guard !Task.isCancelled else { break }
-                await self?.receiveThumbnail(event, attempt: attempt,
-                                             tier: request.tier,
-                                             generation: expectedGeneration, itemID: itemID)
+            if request.purpose == .library {
+                for await event in await repository.thumbnailWithFallback(
+                    descriptor, size: request.size, allowNetwork: allowNetwork, priority: .visible
+                ) {
+                    guard !Task.isCancelled else { break }
+                    let mapped: ResourceEvent<Data>
+                    switch event {
+                    case .value(let value, let verified): mapped = .value(value.data, verified: verified)
+                    case .failure(let message): mapped = .failure(message)
+                    }
+                    await self?.receiveThumbnail(mapped, attempt: attempt,
+                                                 tier: request.tier,
+                                                 generation: expectedGeneration, itemID: itemID)
+                }
+            } else {
+                for await event in await repository.thumbnail(
+                    descriptor, size: request.size, allowNetwork: allowNetwork, priority: .visible,
+                    cachePurpose: request.purpose
+                ) {
+                    guard !Task.isCancelled else { break }
+                    await self?.receiveThumbnail(event, attempt: attempt,
+                                                 tier: request.tier,
+                                                 generation: expectedGeneration, itemID: itemID)
+                }
             }
             await self?.finishThumbnail(attempt, tier: request.tier, key: key)
         }

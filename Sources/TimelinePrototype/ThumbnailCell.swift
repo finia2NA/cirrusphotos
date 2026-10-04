@@ -17,15 +17,18 @@ struct ThumbnailCell: View {
     @State private var failed = false
 
     private var descriptor: ThumbnailInfo? { item.additional?.thumbnail }
+    private var familyIdentity: String {
+        "\(item.id):\(descriptor?.unitID ?? 0):\(descriptor?.cacheKey ?? "missing")"
+    }
     private var renditionIdentity: String {
-        "\(item.id):\(descriptor?.unitID ?? 0):\(descriptor?.cacheKey ?? "missing"):\(size.rawValue)"
+        "\(familyIdentity):\(size.rawValue)"
     }
     private var taskIdentity: String { "\(renditionIdentity):\(allowNetwork)" }
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.1))
-            if let image, displayedRendition == renditionIdentity {
+            if let image, displayedRendition?.hasPrefix(familyIdentity) == true {
                 Image(nsImage: image).resizable().scaledToFit()
             } else if failed, displayedRendition == renditionIdentity {
                 Image(systemName: "photo.badge.exclamationmark").foregroundStyle(.secondary)
@@ -68,19 +71,20 @@ struct ThumbnailCell: View {
     }
 
     private func load() async {
-        if displayedRendition != renditionIdentity {
+        if displayedRendition?.hasPrefix(familyIdentity) != true {
             image = nil
-            displayedRendition = renditionIdentity
         }
-        guard let descriptor, descriptor.isReady(size), let repository else {
+        displayedRendition = renditionIdentity
+        guard let descriptor, let repository else {
             failed = true; return
         }
         failed = false
-        for await event in await repository.thumbnail(descriptor, size: size, allowNetwork: allowNetwork) {
+        for await event in await repository.thumbnailWithFallback(descriptor, size: size,
+                                                                  allowNetwork: allowNetwork) {
             guard !Task.isCancelled else { return }
             switch event {
-            case .value(let data, _):
-                if let decoded = await DecodedImages.shared.image(from: data, maxPixel: 520) {
+            case .value(let value, _):
+                if let decoded = await DecodedImages.shared.image(from: value.data, maxPixel: 520) {
                     guard !Task.isCancelled, displayedRendition == renditionIdentity else { return }
                     image = decoded
                 } else if !Task.isCancelled { failed = true }
