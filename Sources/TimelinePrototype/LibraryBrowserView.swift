@@ -4,9 +4,53 @@ import SwiftUI
 import SynologyAPI
 import TimelineCore
 
+struct BrowserRevealRequest: Equatable {
+    let id: UUID
+    let itemID: Int64
+    let dayID: String
+    let sectionOffsetHint: Int?
+
+    init(itemID: Int64, dayID: String, sectionOffsetHint: Int?) {
+        id = UUID()
+        self.itemID = itemID
+        self.dayID = dayID
+        self.sectionOffsetHint = sectionOffsetHint
+    }
+}
+
+@MainActor
+final class LibraryBrowserBridge: ObservableObject {
+    fileprivate var revealHandler: ((BrowserRevealRequest, @escaping (CGRect?) -> Void) -> Void)?
+    fileprivate var focusHandler: (() -> Void)?
+
+    func reveal(_ request: BrowserRevealRequest, completion: @escaping (CGRect?) -> Void = { _ in }) {
+        guard let revealHandler else { completion(nil); return }
+        final class CompletionGate {
+            var completed = false
+            let completion: (CGRect?) -> Void
+            init(_ completion: @escaping (CGRect?) -> Void) { self.completion = completion }
+            func finish(_ rect: CGRect?) {
+                guard !completed else { return }
+                completed = true
+                completion(rect)
+            }
+        }
+        let gate = CompletionGate(completion)
+        revealHandler(request) { gate.finish($0) }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            gate.finish(nil)
+        }
+    }
+
+    func focusTimeline() { focusHandler?() }
+}
+
 struct LibraryBrowserView: View {
     let collection: PhotoCollectionDescriptor
     var restorationAnchor: PhotoTimelineRestorationAnchor?
+    let bridge: LibraryBrowserBridge
+    var revealRequest: BrowserRevealRequest?
     var contentLeadingInset: CGFloat = 0
     var contentTopInset: CGFloat = 0
     var onOpenPhoto: (PhotoViewerOpenRequest) -> Void = { _ in }
@@ -41,6 +85,8 @@ struct LibraryBrowserView: View {
                                              thumbnailSize: library.thumbnailSize,
                                              displayRowHeight: library.displayRowHeight,
                                              restorationAnchor: restorationAnchor,
+                                             bridge: bridge,
+                                             revealRequest: revealRequest,
                                              jumpToDay: jumpRequest,
                                              unavailableOffline: library.error(for: collection) != nil || library.authenticationFailed,
                                              colorScheme: colorScheme,
@@ -93,6 +139,15 @@ fileprivate final class FlippedDocumentView: NSView {
 /// does not have a SwiftUI focusable child.
 fileprivate final class TimelineScrollView: NSScrollView {
     override var acceptsFirstResponder: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self, let window else { return }
+            window.makeFirstResponder(self)
+        }
+    }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
@@ -168,6 +223,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let thumbnailSize: ThumbnailSize
     let displayRowHeight: Double
     let restorationAnchor: PhotoTimelineRestorationAnchor?
+    let bridge: LibraryBrowserBridge
+    let revealRequest: BrowserRevealRequest?
     let jumpToDay: DayJumpRequest?
     let unavailableOffline: Bool
     let colorScheme: ColorScheme
@@ -245,7 +302,11 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var feedbackTask: Task<Void, Never>?
         private var restorationFeedbackTask: Task<Void, Never>?
         private var programmaticY: Double?
-        private var didApplyRestorationAnchor = false
+        private var didCaptureRestorationAnchor = false
+        private var unresolvedRestorationIntent: PhotoTimelineRestorationAnchor?
+        private var verifiedRestorationSections: Set<Int> = []
+        private var lastRevealID: UUID?
+        private var pendingRevealCompletions: [(CGRect?) -> Void] = []
 
         func configure(_ input: LibraryBrowserScrollView) {
             guard let scroll else { return }
@@ -253,6 +314,17 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             onRetry = input.onRetry
             onOpenPhoto = input.onOpenPhoto
             onRestorationAnchorChanged = input.onRestorationAnchorChanged
+            if !didCaptureRestorationAnchor {
+                unresolvedRestorationIntent = input.restorationAnchor
+                didCaptureRestorationAnchor = true
+            }
+            input.bridge.revealHandler = { [weak self] request, completion in
+                self?.reveal(request, completion: completion)
+            }
+            input.bridge.focusHandler = { [weak self] in
+                guard let scroll = self?.scroll else { return }
+                scroll.window?.makeFirstResponder(scroll)
+            }
             repository = input.repository
             let insetAnchor = geometry?.anchor(at: visibleTop(in: scroll))
             let oldInsets = scroll.contentInsets
@@ -266,10 +338,13 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             if colorScheme != input.colorScheme { viewRevision += 1 }
             colorScheme = input.colorScheme
             let width = availableWidth(in: scroll)
-            if revision != input.revision {
-                let previous = geometry?.anchor(at: visibleTop(in: scroll))
+            let rebuilding = revision != input.revision
+            if rebuilding {
+                let oldIndex = index
+                let previous = pendingAnchor ?? geometry?.anchor(at: visibleTop(in: scroll))
                 stopWindow()
                 let newIndex = LibraryIndex(snapshot: input.snapshot)
+                verifiedRestorationSections.removeAll()
                 index = newIndex
                 geometry = LibraryViewportGeometry(index: newIndex, width: width,
                                                    targetRowHeight: input.displayRowHeight)
@@ -277,11 +352,22 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 allowNetwork = input.allowNetwork
                 window = LibraryPageWindow(repository: input.repository,
                                            collection: input.collection, maximumPages: 8)
-                let restored = previous ?? restorationGeometryAnchor(input.restorationAnchor,
-                                                                       index: newIndex,
-                                                                       geometry: geometry)
+                let oldOffset = previous.flatMap { anchor in
+                    oldIndex?.sections.indices.contains(anchor.sectionIndex) == true
+                        ? oldIndex?.sections[anchor.sectionIndex].offset : nil
+                }
+                let restored = restorationGeometryAnchor(unresolvedRestorationIntent,
+                                                          index: newIndex, geometry: geometry)
+                    ?? previous.flatMap {
+                        rebase($0, sectionOffsetHint: oldOffset, index: newIndex, geometry: geometry)
+                    }
                 pendingAnchor = restored
-                if previous == nil { didApplyRestorationAnchor = true }
+                if input.allowNetwork, let intent = unresolvedRestorationIntent,
+                   !newIndex.dayIDs.contains(intent.dayID) {
+                    // A verified timeline is authoritative proof that the saved day is gone.
+                    unresolvedRestorationIntent = nil
+                    pendingAnchor = nil
+                }
                 updateDocumentHeight()
                 if let restored, let geometry {
                     let day = geometry.nearestDay(to: restored.dayID, orderedDays: newIndex.dayIDs)
@@ -292,6 +378,13 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             } else {
                 if allowNetwork != input.allowNetwork {
                     allowNetwork = input.allowNetwork
+                    if input.allowNetwork, let intent = unresolvedRestorationIntent,
+                       !newIndexContains(dayID: intent.dayID) {
+                        // Equal cached/server descriptors do not rebuild geometry, so
+                        // verification itself must also settle an obsolete saved day.
+                        unresolvedRestorationIntent = nil
+                        pendingAnchor = nil
+                    }
                     viewRevision += 1
                     demandedVisible = []
                     demandedPrefetch = []
@@ -319,11 +412,13 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 demandedPrefetch = []
                 viewRevision += 1
             }
-            if let request = input.jumpToDay, request.id != lastJump {
+            if let request = input.revealRequest, request.id != lastRevealID {
+                reveal(request, completion: { _ in })
+            } else if let request = input.jumpToDay, request.id != lastJump {
                 lastJump = request.id
                 jump(to: request.dayID)
-            } else if insetsChanged {
-                let target = insetAnchor.flatMap { geometry?.y(for: $0) } ?? 0
+            } else if insetsChanged, !rebuilding, let insetAnchor,
+                      let target = geometry?.y(for: insetAnchor) {
                 scrollTo(target)
             }
             viewportChanged()
@@ -335,6 +430,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             feedbackTask?.cancel()
             restorationFeedbackTask?.cancel()
             emitCurrentRestorationAnchor()
+            pendingRevealCompletions.forEach { $0(nil) }
+            pendingRevealCompletions.removeAll()
             stopWindow()
             hosts.values.forEach { $0.removeFromSuperview() }
             hosts.removeAll()
@@ -378,6 +475,14 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                         self.geometry?.anchor(at: self.visibleTop(in: scroll))
                     }
                     self.pages = Dictionary(uniqueKeysWithValues: retained.map { ($0.sectionIndex, $0) })
+                    if let intent = self.unresolvedRestorationIntent, let index = self.index {
+                        for page in retained where page.verified &&
+                            index.slices(inSection: page.sectionIndex).contains(where: {
+                                $0.dayID == intent.dayID
+                            }) {
+                            self.verifiedRestorationSections.insert(page.sectionIndex)
+                        }
+                    }
                     let newSignatures = Dictionary(uniqueKeysWithValues: retained.map {
                         ($0.sectionIndex, Self.signature($0))
                     })
@@ -393,9 +498,23 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                        let exact = self.geometry?.y(forItem: itemID, offset: pending.localOffset) {
                         self.scrollTo(exact)
                         self.pendingAnchor = nil
-                    } else if let pending = self.pendingAnchor, self.pages[pending.sectionIndex] != nil {
-                        // The hinted page was loaded and the photo is gone. Keep the date fallback.
-                        self.pendingAnchor = nil
+                        if self.unresolvedRestorationIntent?.itemID == itemID {
+                            self.unresolvedRestorationIntent = nil
+                        }
+                        self.viewportChanged()
+                        self.finishRevealIfPossible(itemID: itemID)
+                    } else if let pending = self.pendingAnchor,
+                              self.hasAuthoritativelyLoadedDay(pending.dayID) {
+                        if let intent = self.unresolvedRestorationIntent {
+                            let exactDayExists = self.index?.dayIDs.contains(intent.dayID) == true
+                            if self.allowNetwork && (!exactDayExists || pending.dayID == intent.dayID) {
+                                self.unresolvedRestorationIntent = nil
+                                self.pendingAnchor = nil
+                            }
+                        } else {
+                            self.pendingAnchor = nil
+                            self.finishPendingReveals(nil)
+                        }
                     } else if let anchor, let target = self.geometry?.y(for: anchor) {
                         self.scrollTo(target)
                     }
@@ -425,6 +544,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             let clipY = Double(visible.minY)
             if let programmaticY, abs(clipY - programmaticY) > 2 {
                 pendingAnchor = nil
+                unresolvedRestorationIntent = nil
                 self.programmaticY = nil
             }
             let overscan = min(240, height * 0.35)
@@ -496,8 +616,14 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             var prefetch: [Int] = []
             if first > 0 { prefetch.append(first - 1) }
             if last + 1 < index.sections.count { prefetch.append(last + 1) }
-            if visibleSections != demandedVisible || prefetch != demandedPrefetch {
-                demandedVisible = visibleSections
+            var demandedSections = visibleSections
+            if demandedSections.count < 8,
+               let restorationSection = nextRestorationSectionToVerify(index: index),
+               !demandedSections.contains(restorationSection) {
+                demandedSections.append(restorationSection)
+            }
+            if demandedSections != demandedVisible || prefetch != demandedPrefetch {
+                demandedVisible = demandedSections
                 demandedPrefetch = prefetch
                 demandTask?.cancel()
                 if let window {
@@ -508,18 +634,20 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                         _ = await preceding?.value
                         guard !Task.isCancelled else { return }
                         await window.update(index: index, allowNetwork: network,
-                                            visible: visibleSections, prefetch: prefetch,
+                                            visible: demandedSections, prefetch: prefetch,
                                             retryRevision: retry)
                     }
                 }
             }
-            if pendingAnchor == nil { scheduleRestorationFeedback() }
+            if pendingAnchor == nil, unresolvedRestorationIntent == nil {
+                scheduleRestorationFeedback()
+            }
         }
 
         private func restorationGeometryAnchor(_ persisted: PhotoTimelineRestorationAnchor?,
                                                index: LibraryIndex,
                                                geometry: LibraryViewportGeometry?) -> LibraryViewportGeometry.Anchor? {
-            guard !didApplyRestorationAnchor, let persisted, let geometry,
+            guard let persisted, let geometry,
                   let day = geometry.nearestDay(to: persisted.dayID, orderedDays: index.dayIDs) else { return nil }
             let slices = index.slices(forDay: day)
             guard let selected = slices.min(by: { lhs, rhs in
@@ -534,6 +662,94 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                                                   fraction: persisted.sectionFraction)
         }
 
+        private func rebase(_ anchor: LibraryViewportGeometry.Anchor, sectionOffsetHint: Int?,
+                            index: LibraryIndex,
+                            geometry: LibraryViewportGeometry?) -> LibraryViewportGeometry.Anchor? {
+            guard let geometry,
+                  let day = geometry.nearestDay(to: anchor.dayID, orderedDays: index.dayIDs),
+                  let slice = index.slices(forDay: day).min(by: {
+                      abs(index.sections[$0.sectionIndex].offset -
+                          (sectionOffsetHint ?? 0)) <
+                      abs(index.sections[$1.sectionIndex].offset -
+                          (sectionOffsetHint ?? 0))
+                  }) else { return nil }
+            return LibraryViewportGeometry.Anchor(dayID: day, sectionIndex: slice.sectionIndex,
+                                                  itemID: day == anchor.dayID ? anchor.itemID : nil,
+                                                  localOffset: anchor.localOffset,
+                                                  fraction: anchor.fraction)
+        }
+
+        private func reveal(_ request: BrowserRevealRequest, completion: @escaping (CGRect?) -> Void) {
+            guard let index, let geometry else { completion(nil); return }
+            unresolvedRestorationIntent = nil
+            finishPendingReveals(nil)
+            lastRevealID = request.id
+            pendingRevealCompletions.append(completion)
+            guard let day = geometry.nearestDay(to: request.dayID, orderedDays: index.dayIDs),
+                  let slice = index.slices(forDay: day).min(by: { lhs, rhs in
+                      guard let hint = request.sectionOffsetHint else {
+                          return lhs.sectionIndex < rhs.sectionIndex
+                      }
+                      return abs(index.sections[lhs.sectionIndex].offset - hint) <
+                          abs(index.sections[rhs.sectionIndex].offset - hint)
+                  }) else { finishPendingReveals(nil); return }
+            pendingAnchor = LibraryViewportGeometry.Anchor(dayID: day,
+                sectionIndex: slice.sectionIndex, itemID: day == request.dayID ? request.itemID : nil,
+                localOffset: 0, fraction: 0)
+            let target = geometry.y(forItem: request.itemID, offset: 0)
+                ?? geometry.y(forDay: day) ?? 0
+            scrollTo(target)
+            viewportChanged()
+            finishRevealIfPossible(itemID: request.itemID)
+        }
+
+        private func finishRevealIfPossible(itemID: Int64) {
+            guard let scroll, let geometry,
+                  let frame = geometry.frame(forItem: itemID) else { return }
+            if pendingAnchor?.itemID == itemID { pendingAnchor = nil }
+            let centered = frame.midY - visibleHeight(in: scroll) / 2
+            scrollTo(centered)
+            viewportChanged()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let scroll = self.scroll, let document = self.document,
+                      let content = scroll.window?.contentView,
+                      let current = self.geometry?.frame(forItem: itemID) else {
+                    self?.finishPendingReveals(nil)
+                    return
+                }
+                let rect = document.convert(current, to: content)
+                self.finishPendingReveals(content.bounds.intersects(rect) ? rect : nil)
+            }
+        }
+
+        private func finishPendingReveals(_ rect: CGRect?) {
+            let completions = pendingRevealCompletions
+            pendingRevealCompletions.removeAll()
+            completions.forEach { $0(rect) }
+        }
+
+        private func hasAuthoritativelyLoadedDay(_ dayID: String) -> Bool {
+            guard let index else { return false }
+            let sections = Set(index.slices(forDay: dayID).map(\.sectionIndex))
+            return !sections.isEmpty && sections.isSubset(of: verifiedRestorationSections)
+        }
+
+        private func nextRestorationSectionToVerify(index: LibraryIndex) -> Int? {
+            guard allowNetwork, let intent = unresolvedRestorationIntent,
+                  index.dayIDs.contains(intent.dayID) else { return nil }
+            let candidates = index.sectionIndices(forDay: intent.dayID)
+            if let hint = intent.sectionOffsetHint {
+                return candidates.filter { !verifiedRestorationSections.contains($0) }.min {
+                    abs(index.sections[$0].offset - hint) < abs(index.sections[$1].offset - hint)
+                }
+            }
+            return candidates.first { !verifiedRestorationSections.contains($0) }
+        }
+
+        private func newIndexContains(dayID: String) -> Bool {
+            index?.dayIDs.contains(dayID) == true
+        }
+
         private func scheduleRestorationFeedback() {
             restorationFeedbackTask?.cancel()
             restorationFeedbackTask = Task { [weak self] in
@@ -544,6 +760,10 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         }
 
         private func emitCurrentRestorationAnchor() {
+            if let unresolvedRestorationIntent {
+                onRestorationAnchorChanged?(unresolvedRestorationIntent)
+                return
+            }
             guard let scroll, let index, let anchor = geometry?.anchor(at: visibleTop(in: scroll)),
                   index.sections.indices.contains(anchor.sectionIndex) else { return }
             onRestorationAnchorChanged?(PhotoTimelineRestorationAnchor(
@@ -594,6 +814,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
 
         private func jump(to requested: String) {
             pendingAnchor = nil
+            unresolvedRestorationIntent = nil
             guard let geometry, let index,
                   let day = geometry.nearestDay(to: requested, orderedDays: index.dayIDs),
                   let y = geometry.y(forDay: day) else { return }

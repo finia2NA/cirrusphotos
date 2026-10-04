@@ -172,6 +172,21 @@ public struct LibraryViewportGeometry {
         return nil
     }
 
+    /// Returns the exact cell rectangle for a retained item in document coordinates.
+    /// Distant items intentionally have no frame until their bounded metadata page is loaded.
+    public func frame(forItem itemID: Int64) -> CGRect? {
+        for position in rows.keys {
+            guard let row = rows[position],
+                  let match = row.first(where: { $0.itemIDs.contains(itemID) }),
+                  let itemIndex = match.items.firstIndex(where: { $0.photo.id == itemID }),
+                  match.layout.cells.indices.contains(itemIndex) else { continue }
+            let cell = match.layout.cells[itemIndex]
+            return CGRect(x: cell.x, y: slices[position].y + match.y,
+                          width: cell.width, height: match.layout.height)
+        }
+        return nil
+    }
+
     private mutating func measure(_ pages: [Int: LibraryPage]) {
         let loaded = slices.indices.filter { pages[slices[$0].source.sectionIndex] != nil }
         var cursor = 0

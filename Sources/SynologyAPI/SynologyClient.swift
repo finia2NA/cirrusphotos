@@ -81,6 +81,9 @@ public struct TimelineDay: Codable, Sendable, Equatable {
 public struct PhotoItem: Codable, Sendable, Identifiable {
     public let id: Int64
     public let filename: String?
+    /// Capture-local wall-clock components encoded by Synology as epoch-shaped seconds.
+    /// Format with a GMT calendar/time zone; converting through the computer's current
+    /// time zone changes the time the camera recorded.
     public let time: Int64
     public let type: String
     public let liveType: String?
@@ -172,6 +175,17 @@ public struct PhotoItem: Codable, Sendable, Identifiable {
 
     public var isVideo: Bool {
         type == "video"
+    }
+}
+
+public enum CaptureWallTimeFormatter {
+    public static func make(locale: Locale = .current) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter
     }
 }
 

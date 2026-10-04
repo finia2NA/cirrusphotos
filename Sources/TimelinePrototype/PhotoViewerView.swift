@@ -47,7 +47,6 @@ struct PhotoViewerOpenRequest {
 
 struct WindowChromeMetrics: Equatable {
     var top: CGFloat = 0
-    var trafficLightTrailing: CGFloat = 78
 }
 
 struct WindowChromeMetricsReader: NSViewRepresentable {
@@ -66,7 +65,7 @@ struct WindowChromeMetricsReader: NSViewRepresentable {
 
     final class MetricsView: NSView {
         var onChange: ((WindowChromeMetrics) -> Void)?
-        private var last = WindowChromeMetrics(top: -1, trafficLightTrailing: -1)
+        private var last = WindowChromeMetrics(top: -1)
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -94,13 +93,8 @@ struct WindowChromeMetricsReader: NSViewRepresentable {
             let top = isFlipped
                 ? max(0, layout.minY - contentBounds.minY)
                 : max(0, contentBounds.maxY - layout.maxY)
-            let trafficLightTrailing = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
-                .compactMap { window.standardWindowButton($0) }
-                .map { $0.convert($0.bounds, to: content).maxX }
-                .max() ?? 0
-            let metrics = WindowChromeMetrics(top: top, trafficLightTrailing: trafficLightTrailing)
-            guard abs(metrics.top - last.top) > 0.5 ||
-                    abs(metrics.trafficLightTrailing - last.trafficLightTrailing) > 0.5 else { return }
+            let metrics = WindowChromeMetrics(top: top)
+            guard abs(metrics.top - last.top) > 0.5 else { return }
             last = metrics
             onChange?(metrics)
         }
@@ -123,6 +117,7 @@ final class PhotoViewerPresentation: ObservableObject {
     let snapshotRevision: Int
     let canvasController = PhotoViewerCanvasController()
     private let initialItem: PhotoItem
+    private let index: LibraryIndex
 
     private var stateTask: Task<Void, Never>?
     private var decodeTask: Task<Void, Never>?
@@ -139,6 +134,7 @@ final class PhotoViewerPresentation: ObservableObject {
         source = request.source
         originalItemID = request.seed.item.id
         initialItem = request.seed.item
+        self.index = index
         self.snapshotRevision = snapshotRevision
         image = request.source.image
         session = PhotoViewerSession(repository: repository, collection: collection,
@@ -224,6 +220,11 @@ final class PhotoViewerPresentation: ObservableObject {
     func toggleFavorite() {
         guard canToggleFavorite else { return }
         Task { await session.toggleFavorite() }
+    }
+
+    func sectionOffsetHint(for location: PhotoViewerLocation) -> Int? {
+        guard index.sections.indices.contains(location.sectionIndex) else { return nil }
+        return index.sections[location.sectionIndex].offset
     }
 
     var emptyStateMessage: String? {
@@ -342,12 +343,7 @@ final class PhotoViewerPresentation: ObservableObject {
         }
     }
 
-    private static let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter
-    }()
+    private static let dateFormatter = CaptureWallTimeFormatter.make()
 }
 
 struct PhotoViewerView: View {
@@ -355,6 +351,7 @@ struct PhotoViewerView: View {
     let sidebarWidth: CGFloat
     let toolbarInset: CGFloat
     let reduceMotion: Bool
+    let onSelectionChanged: (PhotoViewerState) -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -369,7 +366,6 @@ struct PhotoViewerView: View {
                               controller: viewer.canvasController,
                               onPrevious: viewer.navigatePrevious,
                               onNext: viewer.navigateNext,
-                              onToggleFavorite: viewer.toggleFavorite,
                               onClose: onClose) { viewer.zoom = Double($0) }
                 .accessibilityLabel(viewer.filename)
 
@@ -407,6 +403,15 @@ struct PhotoViewerView: View {
                     .frame(maxHeight: .infinity, alignment: .bottom)
             }
         }
+        .onAppear {
+            if let state = viewer.state { onSelectionChanged(state) }
+        }
+        .onChange(of: viewer.state?.selection) { _, _ in
+            if let state = viewer.state { onSelectionChanged(state) }
+        }
+        .onChange(of: viewer.canToggleFavorite) { _, _ in
+            if let state = viewer.state { onSelectionChanged(state) }
+        }
     }
 }
 
@@ -414,6 +419,7 @@ struct PhotoViewerView: View {
 final class PhotoViewerCanvasController {
     weak var view: PhotoViewerCanvasView?
     private var pendingGeneration: UInt64?
+    private var pendingFocus = false
 
     func attach(_ view: PhotoViewerCanvasView) {
         self.view = view
@@ -421,11 +427,20 @@ final class PhotoViewerCanvasController {
             view.resetForSelection(pendingGeneration)
             self.pendingGeneration = nil
         }
+        if pendingFocus {
+            pendingFocus = false
+            view.requestKeyboardFocus()
+        }
     }
 
     func resetForSelection(_ generation: UInt64) {
         if let view { view.resetForSelection(generation) }
         else { pendingGeneration = generation }
+    }
+
+    func requestKeyboardFocus() {
+        if let view { view.requestKeyboardFocus() }
+        else { pendingFocus = true }
     }
 
     func collapse(to rectInWindow: CGRect?, reduceMotion: Bool, completion: @escaping () -> Void) {
@@ -445,7 +460,6 @@ private struct PhotoViewerCanvas: NSViewRepresentable {
     let controller: PhotoViewerCanvasController
     let onPrevious: () -> Void
     let onNext: () -> Void
-    let onToggleFavorite: () -> Void
     let onClose: () -> Void
     let onZoomChanged: (CGFloat) -> Void
 
@@ -454,7 +468,6 @@ private struct PhotoViewerCanvas: NSViewRepresentable {
         view.onZoomChanged = onZoomChanged
         view.onPrevious = onPrevious
         view.onNext = onNext
-        view.onToggleFavorite = onToggleFavorite
         view.onClose = onClose
         controller.attach(view)
         return view
@@ -464,7 +477,6 @@ private struct PhotoViewerCanvas: NSViewRepresentable {
         view.onZoomChanged = onZoomChanged
         view.onPrevious = onPrevious
         view.onNext = onNext
-        view.onToggleFavorite = onToggleFavorite
         view.onClose = onClose
         view.sidebarWidth = sidebarWidth
         view.toolbarInset = toolbarInset
@@ -480,7 +492,6 @@ final class PhotoViewerCanvasView: NSView {
     var onZoomChanged: ((CGFloat) -> Void)?
     var onPrevious: (() -> Void)?
     var onNext: (() -> Void)?
-    var onToggleFavorite: (() -> Void)?
     var onClose: (() -> Void)?
     var sidebarWidth: CGFloat = 0 { didSet { updateGeometry() } }
     var toolbarInset: CGFloat = 0 { didSet { updateGeometry() } }
@@ -515,9 +526,19 @@ final class PhotoViewerCanvasView: NSView {
         }
         if window != nil, !hasAcquiredFocus {
             hasAcquiredFocus = true
-            window?.makeFirstResponder(self)
+            requestKeyboardFocus()
         }
         updateGeometry()
+    }
+
+    /// SwiftUI installs the representable while the thumbnail's mouse/key event is
+    /// still unwinding. Deferring the responder change prevents that source control
+    /// from remaining the key target underneath the viewer.
+    func requestKeyboardFocus() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window, !self.isClosing else { return }
+            window.makeFirstResponder(self)
+        }
     }
 
     override func layout() {
@@ -600,15 +621,22 @@ final class PhotoViewerCanvasView: NSView {
     func collapse(to rectInWindow: CGRect?, reduceMotion: Bool, completion: @escaping () -> Void) {
         guard !isClosing else { return }
         isClosing = true
-        animationTimer?.invalidate()
+        let renderedFrame: CGRect
+        if let start = transitionStartFrame, let target = transitionTargetFrame {
+            renderedFrame = Self.interpolate(from: start, to: target, progress: transitionProgress)
+        } else {
+            renderedFrame = transform.imageFrame
+        }
+        let startingAlpha = backgroundAlpha
+        stopAnimation()
         let destination = reduceMotion ? nil : rectInWindow.flatMap(convertWindowContentRect)
-        transitionStartFrame = transform.imageFrame
-        transitionTargetFrame = destination ?? transform.imageFrame
+        transitionStartFrame = renderedFrame
+        transitionTargetFrame = destination ?? renderedFrame
         transitionProgress = 0
         animate(duration: reduceMotion ? 0.12 : 0.24) { [weak self] value in
             guard let self else { return }
             transitionProgress = value
-            backgroundAlpha = 1 - value
+            backgroundAlpha = startingAlpha * (1 - value)
             needsDisplay = true
         } completion: { [weak self] in
             self?.animationTimer = nil
@@ -667,11 +695,6 @@ final class PhotoViewerCanvasView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        if event.charactersIgnoringModifiers == ".",
-           event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
-            onToggleFavorite?()
-            return
-        }
         switch event.keyCode {
         case 53: onClose?()
         case 123: onPrevious?()

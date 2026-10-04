@@ -41,9 +41,7 @@ private struct FavoriteCacheBackup: Sendable {
 
 private struct FavoriteMutationTransaction: Sendable {
     let previousFavorite: Bool
-    let previousLocalSections: [Int64: TimelineSection]
     var cacheBackups: [String: FavoriteCacheBackup] = [:]
-    var previousFavoritesSnapshot: TimelineSnapshot?
 }
 
 public enum ThumbnailCacheOutcome: Sendable, Equatable {
@@ -87,15 +85,17 @@ public actor CachedPhotosRepository {
     private var collectionMutationEpochs: [PhotoCollectionDescriptor: UInt64] = [:]
     private var timelineRefreshObservers: [PhotoCollectionDescriptor: [UUID: AsyncStream<ResourceEvent<TimelineSnapshot>>.Continuation]] = [:]
     private var pageJobs: [String: SharedJob<[PhotoItem]>] = [:]
+    private var pageJobEpochs: [String: UInt64] = [:]
     private var imageJobs: [String: SharedJob<ImageResolution>] = [:]
     private var fullImageJobs: [String: SharedJob<FullImageResolution>] = [:]
     private var pendingPagePromotions: [String] = []
     private var favoriteObservers: [UUID: AsyncStream<FavoriteChange>.Continuation] = [:]
     private var favoriteOverrides: [Int64: Bool] = [:]
     private var latestFavoriteChanges: [Int64: FavoriteChange] = [:]
-    private var localFavoriteSections: [Int64: TimelineSection] = [:]
     private var pendingFavoriteIDs: Set<Int64> = []
     private var favoriteWriteTail: Task<Void, Never>?
+    private var favoritesRefreshTask: Task<Void, Never>?
+    private var favoritesMetadataDirty = false
 
     public init(credentials: SynologyCredentials, baseURL: URL = SynologyClient.defaultBaseURL,
                 budget: Int64 = CacheBudget.bytes(at: 0.5), cacheRoot: URL? = nil,
@@ -205,6 +205,19 @@ public actor CachedPhotosRepository {
         }
     }
 
+    /// Fetches metadata for a session-translated descriptor without reading or writing
+    /// authoritative page-cache keys. Used only to reconstruct a frozen viewer playlist.
+    func transientPage(_ section: TimelineSection,
+                       collection: PhotoCollectionDescriptor,
+                       priority: RequestPriority) async throws -> [PhotoItem] {
+        let id = UUID()
+        try await gate.acquire(.metadata, priority: priority, id: id)
+        defer { Task { await gate.release(.metadata) } }
+        try await connect()
+        return applyingFavoriteOverrides(try await client.items(in: section, collection: collection),
+                                          collection: collection)
+    }
+
     /// Provisional metadata can request cached bytes with allowNetwork=false.
     public func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, allowNetwork: Bool,
                           priority: RequestPriority = .visible,
@@ -300,8 +313,8 @@ public actor CachedPhotosRepository {
         }
     }
 
-    /// Emits cached projection changes caused by local mutations. Normal startup reads
-    /// use `timeline(collection:)`; this stream keeps views current without polling.
+    /// Emits authoritative metadata replacements caused by local mutations. Normal startup
+    /// reads use `timeline(collection:)`; this stream keeps views current without polling.
     public func timelineRefreshes(collection: PhotoCollectionDescriptor) -> AsyncStream<ResourceEvent<TimelineSnapshot>> {
         let id = UUID()
         return AsyncStream(bufferingPolicy: .bufferingNewest(2)) { continuation in
@@ -313,7 +326,7 @@ public actor CachedPhotosRepository {
     }
 
     /// The independent task survives a viewer closing after the request starts. Writes
-    /// are serialized so rollback can restore one exact optimistic cache transaction.
+    /// are serialized; membership/order is reconciled from the NAS after successful writes.
     public func setFavorite(itemID: Int64, item: PhotoItem? = nil,
                             in section: TimelineSection,
                             collection: PhotoCollectionDescriptor = .personalLibrary,
@@ -325,27 +338,35 @@ public actor CachedPhotosRepository {
         let operation = Task<Void, Error> {
             defer { pendingFavoriteIDs.remove(itemID) }
             await previous?.value
+            favoritesRefreshTask?.cancel()
             let generation = await store.currentGeneration()
             var transaction = FavoriteMutationTransaction(
-                previousFavorite: favoriteOverrides[itemID] ?? item?.isFavorite ?? !favorite,
-                previousLocalSections: localFavoriteSections
-            )
+                previousFavorite: favoriteOverrides[itemID] ?? item?.isFavorite ?? !favorite)
             collectionMutationEpochs[.favorites, default: 0] &+= 1
             publishFavorite(itemID: itemID, section: section, favorite: favorite)
-            await updateFavoriteCaches(itemID: itemID, item: item, sourceSection: section,
-                                       sourceCollection: collection, favorite: favorite,
-                                       generation: generation, transaction: &transaction)
+            let resolvedItem: PhotoItem?
+            if let item {
+                resolvedItem = item
+            } else {
+                resolvedItem = await cachedItem(itemID: itemID, section: section,
+                                                collection: collection)
+            }
+            await patchPersonalPages(itemID: itemID, item: resolvedItem, sourceSection: section,
+                                     sourceCollection: collection, favorite: favorite,
+                                     generation: generation, transaction: &transaction)
             do {
                 try await connect()
                 try await client.setFavorite(itemIDs: [itemID], favorite: favorite)
             } catch {
                 collectionMutationEpochs[.favorites, default: 0] &+= 1
                 await rollbackFavoriteCaches(transaction, generation: generation)
-                localFavoriteSections = transaction.previousLocalSections
                 publishFavorite(itemID: itemID, section: section,
                                 favorite: transaction.previousFavorite)
+                if favoritesMetadataDirty { scheduleFavoritesRefresh() }
                 throw error
             }
+            favoritesMetadataDirty = true
+            scheduleFavoritesRefresh()
         }
         favoriteWriteTail = Task { _ = try? await operation.value }
         try await operation.value
@@ -353,9 +374,8 @@ public actor CachedPhotosRepository {
 
     private func applyingFavoriteOverrides(_ items: [PhotoItem],
                                             collection: PhotoCollectionDescriptor = .personalLibrary) -> [PhotoItem] {
-        items.compactMap { item in
+        items.map { item in
             guard let favorite = favoriteOverrides[item.id] else { return item }
-            if collection == .favorites, !favorite { return nil }
             return item.withFavorite(favorite)
         }
     }
@@ -365,46 +385,6 @@ public actor CachedPhotosRepository {
         let change = FavoriteChange(itemID: itemID, section: section, favorite: favorite)
         latestFavoriteChanges[itemID] = change
         for observer in favoriteObservers.values { observer.yield(change) }
-    }
-
-    private func updateFavoriteCaches(itemID: Int64, item suppliedItem: PhotoItem?,
-                                      sourceSection: TimelineSection,
-                                      sourceCollection: PhotoCollectionDescriptor,
-                                      favorite: Bool, generation: Int,
-                                      transaction: inout FavoriteMutationTransaction) async {
-        let item: PhotoItem?
-        if let suppliedItem {
-            item = suppliedItem
-        } else {
-            item = await cachedItem(itemID: itemID, section: sourceSection,
-                                    collection: sourceCollection)
-        }
-        await patchPersonalPages(itemID: itemID, item: item, sourceSection: sourceSection,
-                                 sourceCollection: sourceCollection, favorite: favorite,
-                                 generation: generation, transaction: &transaction)
-
-        let timelineKey = CacheKey.timeline(namespace: namespace, collection: .favorites)
-        let cachedTimeline = try? await store.get(timelineKey)
-        let oldSnapshot = latestTimelines[.favorites] ?? cachedTimeline.flatMap {
-            try? JSONDecoder().decode(TimelineSnapshot.self, from: $0.data)
-        }
-        transaction.previousFavoritesSnapshot = oldSnapshot
-        await recordBackup(key: timelineKey, kind: .timeline,
-                           knownEntry: cachedTimeline, transaction: &transaction)
-
-        guard let item else { return }
-        let original = oldSnapshot ?? TimelineSnapshot(sections: [])
-        guard let projection = await favoriteProjection(from: original, item: item,
-                                                        favorite: favorite,
-                                                        generation: generation,
-                                                        transaction: &transaction) else { return }
-        latestTimelines[.favorites] = projection
-        if let bytes = try? JSONEncoder().encode(projection) {
-            try? await store.put(timelineKey, kind: .timeline, data: bytes,
-                                 validatedRun: validationRun(for: .favorites),
-                                 expectedGeneration: generation)
-        }
-        publishTimelineProjection(projection, collection: .favorites)
     }
 
     private func cachedItem(itemID: Int64, section: TimelineSection,
@@ -450,163 +430,6 @@ public actor CachedPhotosRepository {
         }
     }
 
-    private func favoriteProjection(from snapshot: TimelineSnapshot, item: PhotoItem,
-                                    favorite: Bool, generation: Int,
-                                    transaction: inout FavoriteMutationTransaction) async -> TimelineSnapshot? {
-        guard let day = utcDay(for: item) else { return nil }
-        var sections = snapshot.sections
-        let dayIndices = sections.indices.filter { index in
-            sections[index].list.contains(where: { sameDay($0, day) })
-        }
-
-        if favorite {
-            let oldCount = dayIndices.compactMap { index in
-                sections[index].list.first(where: { sameDay($0, day) })?.itemCount
-            }.max().map { max(0, $0) } ?? 0
-            let localSection = TimelineSection(offset: oldCount, limit: 1,
-                list: [TimelineDay(year: day.year, month: day.month, day: day.day,
-                                   itemCount: oldCount + 1)])
-            let insertion = dayIndices.last.map { $0 + 1 } ?? sections.firstIndex { section in
-                guard let first = section.list.first else { return false }
-                return dayID(first) < dayID(day)
-            } ?? sections.endIndex
-            sections.insert(localSection, at: insertion)
-            localFavoriteSections[item.id] = localSection
-            if let key = CacheKey.page(namespace: namespace, section: localSection, collection: .favorites) {
-                await recordBackup(key: key, kind: .page, transaction: &transaction)
-                if let bytes = try? JSONEncoder().encode([item.withFavorite(true)]) {
-                    try? await store.put(key, kind: .page, data: bytes,
-                                         validatedRun: validationRun(for: .favorites),
-                                         expectedGeneration: generation)
-                }
-            }
-            return TimelineSnapshot(sections: sections)
-        }
-
-        if let localSection = localFavoriteSections[item.id],
-           let localIndex = sections.firstIndex(of: localSection) {
-            if let key = CacheKey.page(namespace: namespace, section: localSection, collection: .favorites) {
-                await recordBackup(key: key, kind: .page, transaction: &transaction)
-                try? await store.remove(key, expectedGeneration: generation)
-            }
-            let shiftedSections = localFavoriteSections.compactMap { otherID, otherSection in
-                otherID != item.id && otherSection.offset > localSection.offset &&
-                    otherSection.list.contains(where: { sameDay($0, day) })
-                    ? (otherID, otherSection) : nil
-            }
-            for (otherID, otherSection) in shiftedSections {
-                guard let index = sections.firstIndex(of: otherSection) else { continue }
-                let adjusted = TimelineSection(offset: otherSection.offset - 1,
-                    limit: otherSection.limit,
-                    list: otherSection.list.map { value in
-                        sameDay(value, day) ? TimelineDay(year: value.year, month: value.month,
-                                                          day: value.day,
-                                                          itemCount: max(0, value.itemCount - 1)) : value
-                    })
-                let oldKey = CacheKey.page(namespace: namespace, section: otherSection,
-                                           collection: .favorites)
-                let newKey = CacheKey.page(namespace: namespace, section: adjusted,
-                                           collection: .favorites)
-                let cached: CacheEntry?
-                if let oldKey {
-                    cached = try? await store.get(oldKey)
-                } else {
-                    cached = nil
-                }
-                if let oldKey {
-                    await recordBackup(key: oldKey, kind: .page, knownEntry: cached,
-                                       transaction: &transaction)
-                }
-                if let newKey {
-                    await recordBackup(key: newKey, kind: .page, transaction: &transaction)
-                    if let cached {
-                        try? await store.put(newKey, kind: .page, data: cached.data,
-                                             validatedRun: validationRun(for: .favorites),
-                                             etag: cached.etag, lastModified: cached.lastModified,
-                                             expectedGeneration: generation)
-                    }
-                }
-                if let oldKey, oldKey != newKey {
-                    try? await store.remove(oldKey, expectedGeneration: generation)
-                }
-                sections[index] = adjusted
-                localFavoriteSections[otherID] = adjusted
-            }
-            sections.remove(at: localIndex)
-            localFavoriteSections.removeValue(forKey: item.id)
-            return TimelineSnapshot(sections: sections)
-        }
-
-        guard !dayIndices.isEmpty else { return snapshot }
-        var cachedPages: [Int: CacheEntry] = [:]
-        var target = dayIndices.last!
-        for index in dayIndices {
-            guard let key = CacheKey.page(namespace: namespace, section: sections[index], collection: .favorites),
-                  let cached = try? await store.get(key),
-                  let items = try? JSONDecoder().decode([PhotoItem].self, from: cached.data) else { continue }
-            cachedPages[index] = cached
-            if items.contains(where: { $0.id == item.id }) { target = index }
-        }
-
-        let oldSections = sections
-        let targetSection = oldSections[target]
-        for index in dayIndices {
-            let section = oldSections[index]
-            let adjustedOffset = index != target && section.offset >= targetSection.offset + targetSection.limit
-                ? max(0, section.offset - 1) : section.offset
-            let adjustedLimit = index == target ? max(0, section.limit - 1) : section.limit
-            let adjustedList = section.list.compactMap { value -> TimelineDay? in
-                guard sameDay(value, day) else { return value }
-                let count = max(0, value.itemCount - 1)
-                return count == 0 ? nil : TimelineDay(year: value.year, month: value.month,
-                                                       day: value.day, itemCount: count)
-            }
-            sections[index] = TimelineSection(offset: adjustedOffset, limit: adjustedLimit,
-                                               list: adjustedList)
-        }
-
-        var removals = Set<Int>()
-        for index in dayIndices where sections[index].limit == 0 || sections[index].list.isEmpty {
-            removals.insert(index)
-        }
-        let survivingKeys = Set(sections.indices.compactMap { index -> String? in
-            guard !removals.contains(index) else { return nil }
-            return CacheKey.page(namespace: namespace, section: sections[index], collection: .favorites)
-        })
-        for index in dayIndices {
-            let oldSection = oldSections[index]
-            guard let oldKey = CacheKey.page(namespace: namespace, section: oldSection, collection: .favorites) else {
-                continue
-            }
-            let cached: CacheEntry?
-            if let known = cachedPages[index] {
-                cached = known
-            } else {
-                cached = try? await store.get(oldKey)
-            }
-            await recordBackup(key: oldKey, kind: .page, knownEntry: cached, transaction: &transaction)
-            if !removals.contains(index),
-               let newKey = CacheKey.page(namespace: namespace, section: sections[index], collection: .favorites),
-               let cached,
-               let items = try? JSONDecoder().decode([PhotoItem].self, from: cached.data) {
-                await recordBackup(key: newKey, kind: .page, transaction: &transaction)
-                let updated = items.filter { $0.id != item.id }.map { $0.withFavorite(true) }
-                if let bytes = try? JSONEncoder().encode(updated) {
-                    try? await store.put(newKey, kind: .page, data: bytes,
-                                         validatedRun: validationRun(for: .favorites),
-                                         etag: cached.etag, lastModified: cached.lastModified,
-                                         expectedGeneration: generation)
-                }
-            }
-            if !survivingKeys.contains(oldKey) {
-                try? await store.remove(oldKey, expectedGeneration: generation)
-            }
-        }
-        for index in removals.sorted(by: >) { sections.remove(at: index) }
-        localFavoriteSections.removeValue(forKey: item.id)
-        return TimelineSnapshot(sections: sections)
-    }
-
     private func recordBackup(key: String, kind: CacheKind, knownEntry: CacheEntry? = nil,
                               transaction: inout FavoriteMutationTransaction) async {
         guard transaction.cacheBackups[key] == nil else { return }
@@ -632,13 +455,46 @@ public actor CachedPhotosRepository {
                 try? await store.remove(key, expectedGeneration: generation)
             }
         }
-        if let snapshot = transaction.previousFavoritesSnapshot {
-            latestTimelines[.favorites] = snapshot
-            let timelineKey = CacheKey.timeline(namespace: namespace, collection: .favorites)
-            let verified = transaction.cacheBackups[timelineKey]?.entry?.validatedRun == validationRun(for: .favorites)
-            publishTimelineProjection(snapshot, collection: .favorites, verified: verified)
-        } else {
-            latestTimelines.removeValue(forKey: .favorites)
+    }
+
+    private func scheduleFavoritesRefresh() {
+        favoritesRefreshTask?.cancel()
+        let epoch = collectionMutationEpochs[.favorites, default: 0]
+        favoritesRefreshTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(50)) }
+            catch { return }
+            await self?.refreshFavoritesAfterMutation(epoch: epoch)
+        }
+    }
+
+    private func refreshFavoritesAfterMutation(epoch: UInt64) async {
+        let collection = PhotoCollectionDescriptor.favorites
+        timelineJobs.removeValue(forKey: collection)?.task.cancel()
+        let id = UUID()
+        do {
+            try await gate.acquire(.metadata, priority: .visible, id: id)
+            defer { Task { await gate.release(.metadata) } }
+            try await connect()
+            let snapshot = try await client.timeline(collection: collection, initial: false)
+            guard epoch == collectionMutationEpochs[collection, default: 0] else { return }
+            let generation = await store.currentGeneration()
+            latestTimelines[collection] = snapshot
+            if let bytes = try? JSONEncoder().encode(snapshot) {
+                try? await store.put(CacheKey.timeline(namespace: namespace, collection: collection),
+                                     kind: .timeline, data: bytes,
+                                     validatedRun: validationRun(for: collection),
+                                     expectedGeneration: generation)
+            }
+            publishTimelineProjection(snapshot, collection: collection)
+            favoritesMetadataDirty = false
+            favoritesRefreshTask = nil
+        } catch {
+            guard epoch == collectionMutationEpochs[collection, default: 0],
+                  !(error is CancellationError) else { return }
+            for observer in timelineRefreshObservers[collection]?.values ?? [:].values {
+                observer.yield(.failure("Favorites refresh: \(error.localizedDescription)"))
+            }
+            favoritesRefreshTask = nil
         }
     }
 
@@ -823,15 +679,17 @@ public actor CachedPhotosRepository {
         let promoted = pendingPagePromotions.contains(key)
         pendingPagePromotions.removeAll(where: { $0 == key })
         let effectivePriority: RequestPriority = promoted ? .visible : priority
-        if var job = pageJobs[key] {
+        let mutationEpoch = collectionMutationEpochs[collection, default: 0]
+        if var job = pageJobs[key], pageJobEpochs[key] == mutationEpoch {
             job.subscribers.insert(subscriber)
             pageJobs[key] = job
             if effectivePriority == .visible { Task { await gate.promote(job.id) } }
             return job.task
         }
+        pageJobs.removeValue(forKey: key)?.task.cancel()
+        pageJobEpochs.removeValue(forKey: key)
         let id = UUID()
         let validation = validationRun(for: collection)
-        let mutationEpoch = collectionMutationEpochs[collection, default: 0]
         let task = Task<[PhotoItem], Error> {
             let generation = await store.currentGeneration()
             try await gate.acquire(.metadata, priority: effectivePriority, id: id)
@@ -853,6 +711,7 @@ public actor CachedPhotosRepository {
             return applyingFavoriteOverrides(current, collection: collection)
         }
         pageJobs[key] = SharedJob(id: id, task: task, subscribers: [subscriber])
+        pageJobEpochs[key] = mutationEpoch
         return task
     }
 
@@ -955,7 +814,10 @@ public actor CachedPhotosRepository {
     private func releasePage(key: String?, subscriber: UUID) {
         guard let key, var job = pageJobs[key] else { return }
         job.subscribers.remove(subscriber)
-        if job.subscribers.isEmpty { job.task.cancel(); pageJobs.removeValue(forKey: key); cancelIdleLogin() }
+        if job.subscribers.isEmpty {
+            job.task.cancel(); pageJobs.removeValue(forKey: key); pageJobEpochs.removeValue(forKey: key)
+            cancelIdleLogin()
+        }
         else { pageJobs[key] = job }
     }
     private func releaseImage(key: String, subscriber: UUID) {
@@ -987,7 +849,7 @@ public actor CachedPhotosRepository {
     }
 
     private func validationRun(for collection: PhotoCollectionDescriptor) -> String {
-        "\(runID):\(collection.rawValue)"
+        "\(runID):\(collection.rawValue):\(collectionMutationEpochs[collection, default: 0])"
     }
 
     private func removeTimelineRefreshObserver(collection: PhotoCollectionDescriptor, id: UUID) {

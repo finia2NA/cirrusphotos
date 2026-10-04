@@ -118,6 +118,24 @@ final class LibraryViewportGeometryTests: XCTestCase {
         XCTAssertNotNil(geometry.y(forDay: "2024-04-02"))
     }
 
+    func testItemFrameMatchesItsMeasuredCellAndDisappearsOnEviction() throws {
+        let index = LibraryIndex(snapshot: TimelineSnapshot(sections: [section(day: 3, limit: 4, count: 4)]))
+        var geometry = LibraryViewportGeometry(index: index, width: 500)
+        let items = try (1...4).map { try item(Int64($0), width: $0 * 100, height: 100) }
+        geometry.reconcile(pages: [0: LibraryPage(sectionIndex: 0, items: items, verified: true)])
+        let row = try XCTUnwrap(geometry.rows(in: 0).first { $0.itemIDs.contains(3) })
+        let itemIndex = try XCTUnwrap(row.itemIDs.firstIndex(of: 3))
+        let cell = row.layout.cells[itemIndex]
+        let frame = try XCTUnwrap(geometry.frame(forItem: 3))
+
+        XCTAssertEqual(frame.minX, cell.x, accuracy: 0.001)
+        XCTAssertEqual(frame.minY, geometry.slices[0].y + row.y, accuracy: 0.001)
+        XCTAssertEqual(frame.width, cell.width, accuracy: 0.001)
+        XCTAssertEqual(frame.height, row.layout.height, accuracy: 0.001)
+        geometry.reconcile(pages: [:])
+        XCTAssertNil(geometry.frame(forItem: 3))
+    }
+
     func testItemAnchorFindsMovedSectionAfterIndexRefresh() throws {
         let old = LibraryIndex(snapshot: TimelineSnapshot(sections: [section(day: 3), section(day: 2)]))
         var oldGeometry = LibraryViewportGeometry(index: old, width: 500)

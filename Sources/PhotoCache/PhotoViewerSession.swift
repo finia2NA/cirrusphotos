@@ -151,6 +151,8 @@ public actor PhotoViewerSession {
     private var favoriteFailures: [Int64: String] = [:]
     private var favoriteValues: [Int64: Bool] = [:]
     private var favoriteTask: Task<Void, Never>?
+    private var playlist = ViewerPlaylist()
+    private var playlistRevision: UInt64 = 0
 
     private var pages: [Int: PageEntry] = [:]
     private var pageJobs: [Int: PageJob] = [:]
@@ -238,11 +240,24 @@ public actor PhotoViewerSession {
         publish()
         let section = index.sections[desired.sectionIndex]
         let target = !item.isFavorite
+        let previousPlaylistEntry = playlist.entry(for: itemID)
+        if collection == .favorites,
+           let slice = index.slices(inSection: desired.sectionIndex)
+            .first(where: { $0.pageRange.contains(desired.pageOffset) }) {
+            let dayOffset = slice.dayRange.lowerBound + desired.pageOffset - slice.pageRange.lowerBound
+            playlist.record(item: item, dayID: slice.dayID, dayOffset: dayOffset,
+                            isFavorite: target)
+            playlistDidChange()
+        }
         applyFavorite(itemID: itemID, value: target)
         do {
             try await repository.setFavorite(itemID: itemID, item: item, in: section,
                                               collection: collection, to: target)
         } catch {
+            if collection == .favorites {
+                playlist.restore(previousPlaylistEntry, itemID: itemID)
+                playlistDidChange()
+            }
             applyFavorite(itemID: itemID, value: item.isFavorite)
             favoriteFailures[itemID] = error.localizedDescription
         }
@@ -380,6 +395,31 @@ public actor PhotoViewerSession {
         let revision = retryRevision
         let repository = repository
         let priority: RequestPriority = visible ? .visible : .prefetch
+        if collection == .favorites, playlist.hasEntries, network {
+            let plan = playlist.plan(for: descriptor)
+            let playlistRevision = playlistRevision
+            let task = Task { [weak self] in
+                do {
+                    let live = try await repository.transientPage(plan.liveSection,
+                                                                  collection: collection,
+                                                                  priority: priority)
+                    guard !Task.isCancelled else { return }
+                    let items = await self?.reconstructPlaylistPage(
+                        live, plan: plan, playlistRevision: playlistRevision
+                    )
+                    guard let items else { return }
+                    await self?.receivePage(.value(items, verified: true), sectionIndex: sectionIndex,
+                                            id: id, retryRevision: revision)
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    await self?.receivePage(.failure(error.localizedDescription), sectionIndex: sectionIndex,
+                                            id: id, retryRevision: revision)
+                }
+                await self?.finishPage(sectionIndex: sectionIndex, id: id)
+            }
+            pageJobs[sectionIndex] = PageJob(id: id, allowNetwork: network, task: task)
+            return
+        }
         let task = Task { [weak self] in
             for await event in await repository.page(descriptor, collection: collection,
                                                       allowNetwork: network, priority: priority) {
@@ -389,6 +429,19 @@ public actor PhotoViewerSession {
             await self?.finishPage(sectionIndex: sectionIndex, id: id)
         }
         pageJobs[sectionIndex] = PageJob(id: id, allowNetwork: network, task: task)
+    }
+
+    private func reconstructPlaylistPage(_ live: [PhotoItem], plan: ViewerPlaylist.PagePlan,
+                                         playlistRevision expectedRevision: UInt64) -> [PhotoItem]? {
+        guard expectedRevision == playlistRevision else { return nil }
+        return applyingFavorites(playlist.reconstruct(live, using: plan))
+    }
+
+    private func playlistDidChange() {
+        playlistRevision &+= 1
+        retryRevision &+= 1
+        for job in pageJobs.values { job.task.cancel() }
+        pageJobs.removeAll()
     }
 
     private func receivePage(_ event: ResourceEvent<[PhotoItem]>, sectionIndex: Int,

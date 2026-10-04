@@ -190,7 +190,7 @@ final class LibraryBrowserTests: XCTestCase {
         XCTAssertEqual(itemCalls, [.favorites])
     }
 
-    func testFavoriteMutationUpdatesCachedProjectionWithoutTimelineOrPageRefresh() async throws {
+    func testFavoriteMutationRefreshesAuthoritativeTimelineAfterWrite() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
         let transport = FakeTransport()
         let descriptor = section(1, limit: 1, count: 1)
@@ -201,16 +201,17 @@ final class LibraryBrowserTests: XCTestCase {
         for await _ in await repository.timeline(collection: .favorites) {}
         for await _ in await repository.page(descriptor, collection: .favorites) {}
         var refreshes = await repository.timelineRefreshes(collection: .favorites).makeAsyncIterator()
+        await transport.configure(timelineSnapshot: TimelineSnapshot(sections: []))
 
         try await repository.setFavorite(itemID: photo.id, item: photo, in: descriptor,
                                          collection: .favorites, to: false)
         guard case .value(let updated, let verified) = await refreshes.next() else {
-            return XCTFail("Missing local Favorites projection")
+            return XCTFail("Missing authoritative Favorites refresh")
         }
         XCTAssertTrue(updated.sections.isEmpty)
         XCTAssertTrue(verified)
         let favoriteTimelineCallCount = await transport.collectionTimelineCalls.filter { $0.0 == .favorites }.count
-        XCTAssertEqual(favoriteTimelineCallCount, 1)
+        XCTAssertEqual(favoriteTimelineCallCount, 2)
         let finalItemCallCount = await transport.collectionItemCalls.count
         XCTAssertEqual(finalItemCallCount, 1)
 
@@ -222,11 +223,11 @@ final class LibraryBrowserTests: XCTestCase {
         XCTAssertTrue(try JSONDecoder().decode(TimelineSnapshot.self, from: timelineEntry.data).sections.isEmpty)
         let oldPageKey = try XCTUnwrap(CacheKey.page(namespace: namespace, section: descriptor,
                                                      collection: .favorites))
-        let removedPage = try await repository.store.get(oldPageKey)
-        XCTAssertNil(removedPage)
+        let oldPage = try await repository.store.get(oldPageKey)
+        XCTAssertNotNil(oldPage, "The last cached page stays visible until new geometry demands replacement")
     }
 
-    func testFavoriteAdditionAppearsInCachedProjectionBeforeWriteCompletes() async throws {
+    func testFavoriteAdditionWaitsForWriteThenUsesServerOrdering() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
         let transport = FakeTransport()
         let sourceSection = section(1, limit: 1, count: 1)
@@ -244,69 +245,43 @@ final class LibraryBrowserTests: XCTestCase {
         }
         let requestStarted = await waitUntil { await transport.favoriteRequests.count == 1 }
         XCTAssertTrue(requestStarted)
-        guard case .value(let optimistic, let verified) = await refreshes.next() else {
-            return XCTFail("Missing optimistic Favorites addition")
-        }
-        XCTAssertTrue(verified)
-        XCTAssertEqual(optimistic.timeline.days.first?.count, 3)
-        let slices = LibraryIndex(snapshot: optimistic).slices(forDay: "2024-04-01")
-        XCTAssertEqual(slices.map(\.dayRange), [0..<2, 2..<3])
-        let localSection = try XCTUnwrap(optimistic.sections.last)
-        XCTAssertEqual(localSection.offset, 2)
-        XCTAssertEqual(localSection.limit, 1)
-        var cachedPage = await repository.page(localSection, collection: .favorites,
-                                               allowNetwork: false).makeAsyncIterator()
-        guard case .value(let items, let pageVerified) = await cachedPage.next() else {
-            return XCTFail("Missing optimistic Favorites page")
-        }
-        XCTAssertEqual(items.map(\.id), [photo.id])
-        XCTAssertTrue(items[0].isFavorite)
-        XCTAssertTrue(pageVerified)
-        let itemCalls = await transport.collectionItemCalls
-        XCTAssertTrue(itemCalls.isEmpty)
         let timelineCalls = await transport.collectionTimelineCalls.filter { $0.0 == .favorites }.count
         XCTAssertEqual(timelineCalls, 1)
 
+        let authoritative = section(1, limit: 3, count: 3)
+        await transport.configure(timelineSnapshot: TimelineSnapshot(sections: [authoritative]))
         await transport.releaseFavoriteWrite()
         try await mutation.value
-
-        let secondPhoto = try item(10)
-        try await repository.setFavorite(itemID: secondPhoto.id, item: secondPhoto,
-                                         in: sourceSection, collection: .personalLibrary, to: true)
-        guard case .value(let twoLocalFavorites, _) = await refreshes.next() else {
-            return XCTFail("Missing second optimistic Favorites addition")
+        guard case .value(let refreshed, let verified) = await refreshes.next() else {
+            return XCTFail("Missing authoritative Favorites addition")
         }
-        XCTAssertEqual(twoLocalFavorites.timeline.days.first?.count, 4)
-        let expandedSlices = LibraryIndex(snapshot: twoLocalFavorites).slices(forDay: "2024-04-01")
-        XCTAssertEqual(expandedSlices.map(\.dayRange), [0..<2, 2..<3, 3..<4])
-
-        try await repository.setFavorite(itemID: photo.id, item: photo.withFavorite(true),
-                                         in: sourceSection, collection: .personalLibrary, to: false)
-        guard case .value(let compacted, _) = await refreshes.next() else {
-            return XCTFail("Missing optimistic removal of the locally added favorite")
-        }
-        XCTAssertEqual(compacted.timeline.days.first?.count, 3)
-        let compactedSlices = LibraryIndex(snapshot: compacted).slices(forDay: "2024-04-01")
-        XCTAssertEqual(compactedSlices.map(\.dayRange), [0..<2, 2..<3])
-        let remainingLocalSection = try XCTUnwrap(compacted.sections.last)
-        var remainingPage = await repository.page(remainingLocalSection, collection: .favorites,
-                                                  allowNetwork: false).makeAsyncIterator()
-        guard case .value(let remainingItems, _) = await remainingPage.next() else {
-            return XCTFail("Missing compacted local Favorites page")
-        }
-        XCTAssertEqual(remainingItems.map(\.id), [secondPhoto.id])
-
-        try await repository.setFavorite(itemID: secondPhoto.id, item: secondPhoto.withFavorite(true),
-                                         in: sourceSection, collection: .personalLibrary, to: false)
-        guard case .value(let restored, _) = await refreshes.next() else {
-            return XCTFail("Missing final optimistic Favorites removal")
-        }
-        XCTAssertEqual(restored.sections, [existingFavoritesSection])
+        XCTAssertTrue(verified)
+        XCTAssertEqual(refreshed.sections, [authoritative])
         let finalTimelineCalls = await transport.collectionTimelineCalls.filter { $0.0 == .favorites }.count
-        XCTAssertEqual(finalTimelineCalls, 1)
+        XCTAssertEqual(finalTimelineCalls, 2)
     }
 
-    func testFailedFavoriteMutationRollsBackCachedProjection() async throws {
+    func testConsecutiveFavoriteWritesCoalesceAuthoritativeRefresh() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = FakeTransport()
+        let descriptor = section(1, limit: 2, count: 2)
+        let repository = try repository(root: root, transport: transport)
+        var refreshes = await repository.timelineRefreshes(collection: .favorites).makeAsyncIterator()
+
+        async let first: Void = repository.setFavorite(itemID: 81, in: descriptor, to: true)
+        async let second: Void = repository.setFavorite(itemID: 82, in: descriptor, to: true)
+        _ = try await (first, second)
+        guard case .value = await refreshes.next() else {
+            return XCTFail("Missing coalesced authoritative refresh")
+        }
+
+        let favoriteWriteCount = await transport.favoriteWrites.count
+        XCTAssertEqual(favoriteWriteCount, 2)
+        let timelineCalls = await transport.collectionTimelineCalls.filter { $0.0 == .favorites }.count
+        XCTAssertEqual(timelineCalls, 1)
+    }
+
+    func testFailedFavoriteMutationRollsBackStatusWithoutChangingMembership() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
         let transport = FakeTransport()
         let descriptor = section(1, limit: 1, count: 1)
@@ -318,7 +293,6 @@ final class LibraryBrowserTests: XCTestCase {
         for await _ in await repository.timeline(collection: .favorites) {}
         for await _ in await repository.page(descriptor, collection: .favorites) {}
         var favoriteChanges = await repository.favoriteChanges().makeAsyncIterator()
-        var refreshes = await repository.timelineRefreshes(collection: .favorites).makeAsyncIterator()
 
         let mutation = Task {
             try await repository.setFavorite(itemID: photo.id, item: photo, in: descriptor,
@@ -328,10 +302,6 @@ final class LibraryBrowserTests: XCTestCase {
         XCTAssertTrue(requestStarted)
         let optimisticChange = await favoriteChanges.next()
         XCTAssertEqual(optimisticChange?.favorite, false)
-        guard case .value(let optimistic, _) = await refreshes.next() else {
-            return XCTFail("Missing optimistic projection")
-        }
-        XCTAssertTrue(optimistic.sections.isEmpty)
 
         await transport.releaseFavoriteWrite(failing: true)
         do {
@@ -340,10 +310,6 @@ final class LibraryBrowserTests: XCTestCase {
         } catch {}
         let rollbackChange = await favoriteChanges.next()
         XCTAssertEqual(rollbackChange?.favorite, true)
-        guard case .value(let restored, _) = await refreshes.next() else {
-            return XCTFail("Missing rollback projection")
-        }
-        XCTAssertEqual(restored.sections, [descriptor])
 
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
         let pageKey = try XCTUnwrap(CacheKey.page(namespace: namespace, section: descriptor,
@@ -376,6 +342,8 @@ final class LibraryBrowserTests: XCTestCase {
         await transport.waitForItemStart()
 
         try await repository.setFavorite(itemID: photo.id, in: descriptor, to: false)
+        await transport.configure(itemBlocked: true, items: [],
+                                  timelineSnapshot: TimelineSnapshot(sections: []))
         await transport.releaseItems()
 
         let staleValues = await staleRequest.value

@@ -201,11 +201,7 @@ public actor LibraryPageWindow {
         guard let fingerprint else { return }
         for (section, page) in pages where page.items.contains(where: { $0.id == change.itemID }) {
             let items: [PhotoItem]
-            if collection == .favorites, !change.favorite {
-                items = page.items.filter { $0.id != change.itemID }
-            } else {
-                items = page.items.map { $0.id == change.itemID ? $0.withFavorite(change.favorite) : $0 }
-            }
+            items = page.items.map { $0.id == change.itemID ? $0.withFavorite(change.favorite) : $0 }
             let updated = LibraryPage(sectionIndex: section,
                                       items: items, verified: page.verified)
             pages[section] = updated

@@ -111,6 +111,17 @@ final class PhotoItemTests: XCTestCase {
         XCTAssertEqual(after.utcDayID, "2024-01-01")
     }
 
+    func testCaptureWallTimeDoesNotConvertThroughCurrentTimezone() throws {
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data(
+            "{\"id\":3872,\"time\":1790803838,\"type\":\"photo\"}".utf8))
+        let formatter = CaptureWallTimeFormatter.make(locale: Locale(identifier: "en_US_POSIX"))
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+
+        XCTAssertEqual(formatter.string(from: Date(timeIntervalSince1970: TimeInterval(item.time))),
+                       "2026-09-30 21:30")
+        XCTAssertEqual(item.utcDayID, "2026-09-30")
+    }
+
     func testFavoriteDecodesAndOldCachedItemsRemainUnfavorited() throws {
         let favored = try JSONDecoder().decode(PhotoItem.self, from: Data("""
         {"id":1,"time":1700000000,"type":"photo","additional":{"favorite":true}}

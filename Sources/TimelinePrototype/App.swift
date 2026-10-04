@@ -32,11 +32,12 @@ private struct AppShellView: View {
     @EnvironmentObject private var model: LibraryModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var navigationRestoration: NavigationRestorationStore
-    @State private var sidebarVisible = true
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var viewer: PhotoViewerPresentation?
     @State private var selectedCollection: PhotoCollectionDescriptor
     @State private var chrome = WindowChromeMetrics()
-    private let sidebarWidth: CGFloat = 210
+    @State private var lastViewerFollowSelection: PhotoViewerSelection?
+    @StateObject private var browserBridge = LibraryBrowserBridge()
 
     init(navigationRestoration: NavigationRestorationStore) {
         self.navigationRestoration = navigationRestoration
@@ -44,49 +45,19 @@ private struct AppShellView: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            let topInset = max(chrome.top, geometry.safeAreaInsets.top)
-            ZStack(alignment: .topLeading) {
-                LibraryBrowserView(collection: selectedCollection,
-                                   restorationAnchor: navigationRestoration.timelineAnchor(for: selectedCollection),
-                                   contentLeadingInset: sidebarVisible ? sidebarWidth : 0,
-                                   contentTopInset: topInset,
-                                   onOpenPhoto: openPhoto,
-                                   onRestorationAnchorChanged: { anchor in
-                                       navigationRestoration.setTimelineAnchor(anchor, for: selectedCollection)
-                                   })
-                    .id(selectedCollection)
-                    .allowsHitTesting(viewer == nil)
-                    .ignoresSafeArea(.container, edges: .top)
-
-                if let viewer {
-                    PhotoViewerView(viewer: viewer,
-                                    sidebarWidth: sidebarVisible ? sidebarWidth : 0,
-                                    toolbarInset: topInset,
-                                    reduceMotion: reduceMotion,
-                                    onClose: closeViewer)
-                        .ignoresSafeArea(.container, edges: .top)
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            List(selection: Binding(get: { selectedCollection }, set: select)) {
+                Label("Personal Library", systemImage: "photo.on.rectangle.angled")
+                    .tag(PhotoCollectionDescriptor.personalLibrary)
+                Section("Collections") {
+                    Label("Favorites", systemImage: "heart")
+                        .tag(PhotoCollectionDescriptor.favorites)
                 }
-
-                Rectangle()
-                    .fill(.regularMaterial)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: topInset)
-                    .ignoresSafeArea(.container, edges: .top)
-                    .allowsHitTesting(false)
-
-                if sidebarVisible {
-                    sidebar()
-                        .frame(width: sidebarWidth)
-                        .frame(maxHeight: .infinity)
-                        .glassEffect(.regular.interactive(), in: Rectangle())
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                }
-
-                WindowChromeMetricsReader { chrome = $0 }
-                    .allowsHitTesting(false)
             }
-            .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: sidebarVisible)
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 320)
+        } detail: {
+            detail
         }
         .toolbar(removing: .title)
         .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
@@ -105,41 +76,63 @@ private struct AppShellView: View {
         }
     }
 
-    private func sidebar() -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                select(.personalLibrary)
-            } label: {
-                Label("Personal Library", systemImage: "photo.on.rectangle.angled")
-                    .font(.body.weight(.medium))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .background(selectedCollection == .personalLibrary ? Color.accentColor.opacity(0.14) : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 9))
+    private var detail: some View {
+        GeometryReader { geometry in
+            let topInset = max(chrome.top, geometry.safeAreaInsets.top)
+            let collection = selectedCollection
+            ZStack(alignment: .topLeading) {
+                LibraryBrowserView(collection: collection,
+                                   restorationAnchor: navigationRestoration.timelineAnchor(for: collection),
+                                   bridge: browserBridge,
+                                   revealRequest: nil,
+                                   contentTopInset: topInset,
+                                   onOpenPhoto: openPhoto,
+                                   onRestorationAnchorChanged: { anchor in
+                                       navigationRestoration.setTimelineAnchor(anchor, for: collection)
+                                   })
+                    .id(collection)
+                    .allowsHitTesting(viewer == nil)
+                    .ignoresSafeArea(.container, edges: .top)
+
+                if let viewer {
+                    PhotoViewerView(viewer: viewer,
+                                    sidebarWidth: 0,
+                                    toolbarInset: topInset,
+                                    reduceMotion: reduceMotion,
+                                    onSelectionChanged: followViewer,
+                                    onClose: closeViewer)
+                        .ignoresSafeArea(.container, edges: .top)
+                }
+
+                Rectangle()
+                    .fill(.regularMaterial)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: topInset)
+                    .ignoresSafeArea(.container, edges: .top)
+                    .allowsHitTesting(false)
+
+                WindowChromeMetricsReader { chrome = $0 }
+                    .allowsHitTesting(false)
             }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 10)
-            Text("Collections")
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                .padding(.horizontal, 24).padding(.top, 8)
-            Button { select(.favorites) } label: {
-                Label("Favorites", systemImage: "heart")
-                    .font(.body.weight(.medium))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14).padding(.vertical, 9)
-                    .background(selectedCollection == .favorites ? Color.accentColor.opacity(0.14) : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 9))
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 10)
-            Spacer()
         }
-        .padding(.top, 8)
     }
 
     private func select(_ collection: PhotoCollectionDescriptor) {
-        if viewer != nil { closeViewer() }
+        guard collection != selectedCollection else { return }
+        if let active = viewer {
+            guard active.close() else { return }
+            active.canvasController.collapse(to: nil, reduceMotion: reduceMotion) {
+                if viewer === active { viewer = nil }
+                lastViewerFollowSelection = nil
+                model.setActiveViewer(nil)
+                finishSelection(collection)
+            }
+            return
+        }
+        finishSelection(collection)
+    }
+
+    private func finishSelection(_ collection: PhotoCollectionDescriptor) {
         navigationRestoration.select(collection)
         selectedCollection = collection
     }
@@ -153,38 +146,44 @@ private struct AppShellView: View {
                                          loadsLargePreviews: model.loadsLargeViewerPreviews,
                                          allowNetwork: model.timelineVerified(for: selectedCollection),
                                          snapshotRevision: model.viewerSnapshotRevision(for: selectedCollection))
+        lastViewerFollowSelection = nil
+        model.setActiveViewer(viewer)
+        viewer?.canvasController.requestKeyboardFocus()
     }
 
     private func closeViewer() {
         guard let active = viewer else { return }
-        let canReturnToSource = active.state?.selection.itemID == active.originalItemID
-        let target = canReturnToSource ? active.source.rectInWindowContent() : nil
+        let request = revealRequest(for: active)
         guard active.close() else { return }
-        active.canvasController.collapse(to: target, reduceMotion: reduceMotion) {
-            if viewer === active { viewer = nil }
+        let finish: (CGRect?) -> Void = { target in
+            active.canvasController.collapse(to: target, reduceMotion: reduceMotion) {
+                if viewer === active { viewer = nil }
+                lastViewerFollowSelection = nil
+                model.setActiveViewer(nil)
+                browserBridge.focusTimeline()
+            }
         }
+        if let request { browserBridge.reveal(request, completion: finish) }
+        else { finish(nil) }
+    }
+
+    private func followViewer(_ state: PhotoViewerState) {
+        model.updateViewerCommands()
+        guard let active = viewer, !active.isClosing,
+              state.selection != lastViewerFollowSelection,
+              let request = revealRequest(for: active) else { return }
+        lastViewerFollowSelection = state.selection
+        browserBridge.reveal(request)
+    }
+
+    private func revealRequest(for active: PhotoViewerPresentation) -> BrowserRevealRequest? {
+        guard let state = active.state, let item = state.item else { return nil }
+        return BrowserRevealRequest(itemID: item.id, dayID: item.utcDayID,
+                                    sectionOffsetHint: active.sectionOffsetHint(for: state.desiredLocation))
     }
 
     @ToolbarContentBuilder
     private var applicationToolbar: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            Color.clear
-                .frame(width: toolbarLeadingAlignmentWidth, height: 1)
-                .accessibilityHidden(true)
-        }
-        .sharedBackgroundVisibility(.hidden)
-
-        ToolbarItem(placement: .navigation) {
-            Button {
-                sidebarVisible.toggle()
-            } label: {
-                Label("Toggle Sidebar", systemImage: "sidebar.left")
-            }
-            .help(sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
-        }
-
-        ToolbarSpacer(.fixed, placement: .navigation)
-
         if let viewer {
             ToolbarItem(placement: .navigation) {
                 Button(action: closeViewer) {
@@ -215,11 +214,6 @@ private struct AppShellView: View {
         }
     }
 
-    /// Navigation toolbar content begins just after the traffic lights. This fills the
-    /// remaining portion of the sidebar so its toggle's trailing edge follows the divider.
-    private var toolbarLeadingAlignmentWidth: CGFloat {
-        max(0, sidebarWidth - chrome.trafficLightTrailing - 64)
-    }
 }
 
 private struct LibrarySizeControl: View {
@@ -267,7 +261,6 @@ private struct ViewerFavoriteControl: View {
                   systemImage: viewer.state?.item?.isFavorite == true ? "heart.fill" : "heart")
         }
         .disabled(!viewer.canToggleFavorite)
-        .keyboardShortcut(".", modifiers: [])
         .help(viewer.state?.favoriteFailure ?? "Toggle Favorite (.)")
     }
 }
@@ -345,6 +338,10 @@ private struct LibraryCommands: Commands {
                 .keyboardShortcut("-", modifiers: .command)
                 .disabled(model.displayRowHeight <= 100)
             Divider()
+            Button("Toggle Favorite") { model.toggleViewerFavorite() }
+                .keyboardShortcut(".", modifiers: [])
+                .disabled(!model.canToggleViewerFavorite)
+            Divider()
             Button("Download Thumbnails…") { openWindow(id: "thumbnail-download") }
                 .disabled(model.snapshot?.timeline.days.isEmpty != false || model.repository == nil ||
                           !model.timelineVerified)
@@ -363,6 +360,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 @MainActor
 final class LibraryModel: ObservableObject {
+    private enum TimelineUpdateReason: Equatable {
+        case authoritativeLoad
+        case favoriteMutationRefresh
+    }
+
     @Published private var snapshots: [PhotoCollectionDescriptor: TimelineSnapshot] = [:]
     @Published private var snapshotRevisions: [PhotoCollectionDescriptor: Int] = [:]
     @Published private var viewerSnapshotRevisions: [PhotoCollectionDescriptor: Int] = [:]
@@ -372,6 +374,8 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var isLoading = true
     @Published private(set) var authenticationStatus: AuthenticationStatus = .notStarted
     @Published private(set) var retryRevision = 0
+    @Published private(set) var canToggleViewerFavorite = false
+    private weak var activeViewer: PhotoViewerPresentation?
     var authenticationFailed: Bool {
         if case .failed = authenticationStatus { return true }
         return false
@@ -435,6 +439,21 @@ final class LibraryModel: ObservableObject {
         displayRowHeight = Self.validDisplayRowHeight(displayRowHeight + amount)
     }
 
+    func setActiveViewer(_ viewer: PhotoViewerPresentation?) {
+        activeViewer = viewer
+        updateViewerCommands()
+    }
+
+    func updateViewerCommands() {
+        canToggleViewerFavorite = activeViewer?.canToggleFavorite == true
+    }
+
+    func toggleViewerFavorite() {
+        guard canToggleViewerFavorite else { return }
+        activeViewer?.toggleFavorite()
+        updateViewerCommands()
+    }
+
     func load() async {
         guard !started else { return }
         started = true
@@ -459,7 +478,8 @@ final class LibraryModel: ObservableObject {
                 refreshTasks[collection] = Task { [weak self] in
                     for await event in await repository.timelineRefreshes(collection: collection) {
                         guard !Task.isCancelled else { return }
-                        self?.receive(event, collection: collection, forceRevision: true)
+                        self?.receive(event, collection: collection,
+                                      reason: .favoriteMutationRefresh)
                     }
                 }
             }
@@ -482,14 +502,14 @@ final class LibraryModel: ObservableObject {
     }
 
     private func receive(_ event: ResourceEvent<TimelineSnapshot>, collection: PhotoCollectionDescriptor,
-                         forceRevision: Bool = false) {
+                         reason: TimelineUpdateReason = .authoritativeLoad) {
         switch event {
         case .value(let snapshot, let verified):
             let changed = snapshots[collection]?.sections != snapshot.sections
-            if forceRevision || changed {
+            if reason == .favoriteMutationRefresh || changed {
                 snapshots[collection] = snapshot
                 snapshotRevisions[collection, default: 0] += 1
-                if changed, !forceRevision {
+                if changed, reason == .authoritativeLoad {
                     viewerSnapshotRevisions[collection, default: 0] += 1
                 }
             }
