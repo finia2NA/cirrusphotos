@@ -396,7 +396,7 @@ Recommended native cache layers:
 
 The disk cache should have an explicit size limit and LRU eviction. Avoid storing session tokens in cache filenames or metadata.
 
-The [cache design proposal](CACHING_PLAN.md) refines these recommendations with cached-first startup, category priorities, semantic request keys, and bounded UI state. Its freshness policy supersedes a generic time-based expiration policy.
+The [cache design proposal](plans/CACHING_PLAN.md) refines these recommendations with cached-first startup, category priorities, semantic request keys, and bounded UI state. Its freshness policy supersedes a generic time-based expiration policy.
 
 A subsequent read-only Cirrus probe confirmed both ETag and Last-Modified conditional requests return HTTP 304 with no body for an unchanged `sm` thumbnail. See the proposal for the probe's authentication details and limits; edit-driven invalidation remains unverified.
 
