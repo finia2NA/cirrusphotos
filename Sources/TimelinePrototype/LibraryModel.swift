@@ -1,0 +1,208 @@
+import PhotoCache
+import SwiftUI
+import SynologyAPI
+import TimelineCore
+
+@MainActor
+final class LibraryModel: ObservableObject {
+    private enum TimelineUpdateReason: Equatable {
+        case authoritativeLoad
+        case favoriteMutationRefresh
+    }
+
+    @Published private var snapshots: [PhotoCollectionDescriptor: TimelineSnapshot] = [:]
+    @Published private var snapshotRevisions: [PhotoCollectionDescriptor: Int] = [:]
+    @Published private var viewerSnapshotRevisions: [PhotoCollectionDescriptor: Int] = [:]
+    @Published private var timelineVerifications: [PhotoCollectionDescriptor: Bool] = [:]
+    @Published private(set) var status = "Opening library…"
+    @Published private var collectionErrors: [PhotoCollectionDescriptor: String] = [:]
+    @Published private(set) var isLoading = true
+    @Published private(set) var authenticationStatus: AuthenticationStatus = .notStarted
+    @Published private(set) var retryRevision = 0
+    @Published private(set) var canToggleViewerFavorite = false
+    private weak var activeViewer: PhotoViewerPresentation?
+    private var thumbnailPolicyRevision: UInt64 = 0
+    var authenticationFailed: Bool {
+        if case .failed = authenticationStatus { return true }
+        return false
+    }
+    @Published var thumbnailSize: ThumbnailSize = ThumbnailSize(rawValue: UserDefaults.standard.string(forKey: "thumbnailSize") ?? "m") ?? .m {
+        didSet {
+            UserDefaults.standard.set(thumbnailSize.rawValue, forKey: "thumbnailSize")
+            if let repository {
+                thumbnailPolicyRevision &+= 1
+                let revision = thumbnailPolicyRevision
+                let size = thumbnailSize
+                Task { [weak self] in
+                    guard self?.thumbnailPolicyRevision == revision else { return }
+                    try? await repository.setConfiguredThumbnailSize(size)
+                }
+            }
+        }
+    }
+    @Published var loadsLargeViewerPreviews: Bool = UserDefaults.standard.bool(forKey: "loadsLargeViewerPreviews") {
+        didSet { UserDefaults.standard.set(loadsLargeViewerPreviews, forKey: "loadsLargeViewerPreviews") }
+    }
+    @Published var displayRowHeight: Double = LibraryModel.persistedDisplayRowHeight() {
+        didSet {
+            let valid = Self.validDisplayRowHeight(displayRowHeight)
+            if valid != displayRowHeight { displayRowHeight = valid }
+            UserDefaults.standard.set(valid, forKey: "displayRowHeight")
+        }
+    }
+    @Published var budgetFraction: Double = CacheBudget.fraction(for: Int64(UserDefaults.standard.object(forKey: "cacheBudget") as? Int ?? Int(CacheBudget.bytes(at: 0.5)))) {
+        didSet {
+            let bytes = CacheBudget.bytes(at: budgetFraction)
+            UserDefaults.standard.set(Int(bytes), forKey: "cacheBudget")
+            if let repository { Task { try? await repository.setBudget(bytes) } }
+        }
+    }
+    @Published private(set) var cacheUsage: Int64 = 0
+    private(set) var repository: CachedPhotosRepository?
+    private var started = false
+    private var authenticationTask: Task<Void, Never>?
+    private var refreshTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
+
+    init(repository: CachedPhotosRepository? = nil) {
+        self.repository = repository
+    }
+
+    var snapshot: TimelineSnapshot? { snapshot(for: .personalLibrary) }
+    var snapshotRevision: Int { snapshotRevision(for: .personalLibrary) }
+    var timelineVerified: Bool { timelineVerified(for: .personalLibrary) }
+    var error: String? { error(for: .personalLibrary) }
+
+    func snapshot(for collection: PhotoCollectionDescriptor) -> TimelineSnapshot? { snapshots[collection] }
+    func snapshotRevision(for collection: PhotoCollectionDescriptor) -> Int { snapshotRevisions[collection, default: 0] }
+    func viewerSnapshotRevision(for collection: PhotoCollectionDescriptor) -> Int {
+        viewerSnapshotRevisions[collection, default: 0]
+    }
+    func timelineVerified(for collection: PhotoCollectionDescriptor) -> Bool { timelineVerifications[collection] == true }
+    func error(for collection: PhotoCollectionDescriptor) -> String? { collectionErrors[collection] }
+
+    private static func persistedDisplayRowHeight() -> Double {
+        guard let value = (UserDefaults.standard.object(forKey: "displayRowHeight") as? NSNumber)?.doubleValue else {
+            return 180
+        }
+        return validDisplayRowHeight(value)
+    }
+
+    private static func validDisplayRowHeight(_ value: Double) -> Double {
+        guard value.isFinite else { return 180 }
+        return min(max(value, 100), 300)
+    }
+
+    func adjustDisplayRowHeight(by amount: Double) {
+        displayRowHeight = Self.validDisplayRowHeight(displayRowHeight + amount)
+    }
+
+    func setActiveViewer(_ viewer: PhotoViewerPresentation?) {
+        activeViewer = viewer
+        updateViewerCommands()
+    }
+
+    func updateViewerCommands() {
+        canToggleViewerFavorite = activeViewer?.canToggleFavorite == true
+    }
+
+    func toggleViewerFavorite() {
+        guard canToggleViewerFavorite else { return }
+        activeViewer?.toggleFavorite()
+        updateViewerCommands()
+    }
+
+    func load() async {
+        guard !started else { return }
+        started = true
+        isLoading = true
+        collectionErrors.removeAll()
+        do {
+            if repository == nil {
+                let credentials = try CredentialStore.load()
+                repository = try CachedPhotosRepository(credentials: credentials,
+                    budget: CacheBudget.bytes(at: budgetFraction))
+            }
+            guard let repository else { return }
+            try await repository.setConfiguredThumbnailSize(thumbnailSize)
+            if authenticationTask == nil {
+                authenticationTask = Task { [weak self] in
+                    for await status in await repository.authentication() {
+                        guard !Task.isCancelled else { return }
+                        self?.authenticationStatus = status
+                    }
+                }
+            }
+            for collection in PhotoCollectionDescriptor.allCases where refreshTasks[collection] == nil {
+                refreshTasks[collection] = Task { [weak self] in
+                    for await event in await repository.timelineRefreshes(collection: collection) {
+                        guard !Task.isCancelled else { return }
+                        self?.receive(event, collection: collection,
+                                      reason: .favoriteMutationRefresh)
+                    }
+                }
+            }
+            await withTaskGroup(of: Void.self) { group in
+                for collection in PhotoCollectionDescriptor.allCases {
+                    group.addTask { [weak self] in
+                        for await event in await repository.timeline(collection: collection) {
+                            guard !Task.isCancelled else { return }
+                            await self?.receive(event, collection: collection)
+                        }
+                    }
+                }
+            }
+            await refreshUsage()
+        } catch {
+            collectionErrors[.personalLibrary] = error.localizedDescription
+            status = "Library unavailable"
+        }
+        isLoading = false
+    }
+
+    private func receive(_ event: ResourceEvent<TimelineSnapshot>, collection: PhotoCollectionDescriptor,
+                         reason: TimelineUpdateReason = .authoritativeLoad) {
+        switch event {
+        case .value(let snapshot, let verified):
+            let changed = snapshots[collection]?.sections != snapshot.sections
+            if reason == .favoriteMutationRefresh || changed {
+                snapshots[collection] = snapshot
+                snapshotRevisions[collection, default: 0] += 1
+                if changed, reason == .authoritativeLoad {
+                    viewerSnapshotRevisions[collection, default: 0] += 1
+                }
+            }
+            timelineVerifications[collection] = verified
+            if verified { collectionErrors.removeValue(forKey: collection) }
+            if collection == .personalLibrary {
+                status = verified ? "Personal Space · Current" : "Personal Space · Cached or initial"
+            }
+        case .failure(let message):
+            collectionErrors[collection] = message
+            if collection == .personalLibrary {
+                status = snapshots[collection] == nil ? "Library unavailable" : "Personal Space · Offline copy"
+            }
+        }
+    }
+
+    func reload() async {
+        guard !isLoading else { return }
+        isLoading = true
+        if let repository { await repository.retryAuthentication() }
+        retryRevision += 1
+        started = false
+        status = "Checking Cirrus…"
+        await load()
+    }
+
+    func refreshUsage() async {
+        if let repository { cacheUsage = (try? await repository.usage()) ?? 0 }
+    }
+
+    func clearCache() async {
+        if let repository {
+            try? await repository.clearCache()
+            DecodedImages.shared.clear()
+            await refreshUsage()
+        }
+    }
+}
