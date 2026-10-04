@@ -125,7 +125,7 @@ struct AppShellView: View {
 
     private func closeViewer() {
         guard let active = viewer else { return }
-        let request = revealRequest(for: active)
+        let request = revealRequest(for: active, selectOnCompletion: true)
         guard active.close() else { return }
         let finish: (CGRect?) -> Void = { target in
             active.canvasController.collapse(to: target, reduceMotion: reduceMotion) {
@@ -148,10 +148,12 @@ struct AppShellView: View {
         browserBridge.reveal(request)
     }
 
-    private func revealRequest(for active: PhotoViewerPresentation) -> BrowserRevealRequest? {
+    private func revealRequest(for active: PhotoViewerPresentation,
+                               selectOnCompletion: Bool = false) -> BrowserRevealRequest? {
         guard let state = active.state, let item = state.item else { return nil }
         return BrowserRevealRequest(itemID: item.id, dayID: item.utcDayID,
-                                    sectionOffsetHint: active.sectionOffsetHint(for: state.desiredLocation))
+                                    sectionOffsetHint: active.sectionOffsetHint(for: state.desiredLocation),
+                                    selectOnCompletion: selectOnCompletion)
     }
 
     @ToolbarContentBuilder
@@ -176,7 +178,7 @@ struct AppShellView: View {
             .sharedBackgroundVisibility(.hidden)
         } else {
             ToolbarItem(placement: .navigation) {
-                LibrarySizeControl(value: $model.displayRowHeight)
+                LibrarySizeControl(value: $model.itemsPerRow)
             }
         }
 

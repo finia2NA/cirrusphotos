@@ -27,16 +27,16 @@ final class PhotoItemTests: XCTestCase {
         XCTAssertEqual(landscape.displayAspectRatio, 569.0 / 320.0, accuracy: 0.001)
     }
 
-    func testOlderCachedRecordAndInvalidResolution() throws {
-        let legacy = try decode(resolution: "{\"width\":4000,\"height\":2000}", orientation: "")
-        XCTAssertNil(legacy.filename)
-        XCTAssertNil(legacy.additional?.orientation)
-        XCTAssertEqual(legacy.displayAspectRatio, 2)
+    func testMinimalRecordAndInvalidResolution() throws {
+        let minimal = try decode(resolution: "{\"width\":4000,\"height\":2000}", orientation: "")
+        XCTAssertNil(minimal.filename)
+        XCTAssertNil(minimal.additional?.orientation)
+        XCTAssertEqual(minimal.displayAspectRatio, 2)
         XCTAssertEqual(try decode(resolution: "{\"width\":0,\"height\":2000}", orientation: "").displayAspectRatio, 1)
         XCTAssertEqual(try decode(resolution: "{\"width\":4000,\"height\":-1}", orientation: "").displayAspectRatio, 1)
     }
 
-    func testFilenameAndFullImageResourceDecodeWithoutBreakingLegacyItems() throws {
+    func testFilenameAndFullImageResourceDecodeWithOptionalMetadata() throws {
         let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
         {"id":7,"filename":"IMG_0007.HEIC","time":1700000000,"type":"photo","additional":{"thumbnail":{"unit_id":17,"cache_key":"17_revision","sm":"ready"}}}
         """.utf8))
@@ -122,16 +122,16 @@ final class PhotoItemTests: XCTestCase {
         XCTAssertEqual(item.utcDayID, "2026-09-30")
     }
 
-    func testFavoriteDecodesAndOldCachedItemsRemainUnfavorited() throws {
+    func testFavoriteDefaultsFalseWhenOptionalFieldIsAbsent() throws {
         let favored = try JSONDecoder().decode(PhotoItem.self, from: Data("""
         {"id":1,"time":1700000000,"type":"photo","additional":{"favorite":true}}
         """.utf8))
-        let legacy = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        let minimal = try JSONDecoder().decode(PhotoItem.self, from: Data("""
         {"id":2,"time":1700000000,"type":"photo","additional":{"resolution":{"width":4,"height":2}}}
         """.utf8))
         XCTAssertTrue(favored.isFavorite)
-        XCTAssertFalse(legacy.isFavorite)
-        let updated = legacy.withFavorite(true)
+        XCTAssertFalse(minimal.isFavorite)
+        let updated = minimal.withFavorite(true)
         XCTAssertTrue(updated.isFavorite)
         XCTAssertEqual(updated.displayAspectRatio, 2)
         let roundTrip = try JSONDecoder().decode(PhotoItem.self, from: JSONEncoder().encode(updated))

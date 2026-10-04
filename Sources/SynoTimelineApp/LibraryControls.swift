@@ -1,16 +1,17 @@
 import SwiftUI
 
 struct LibrarySizeControl: View {
-    @Binding var value: Double
+    @Binding var value: Int
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "minus").accessibilityHidden(true)
-            Slider(value: $value, in: 100...300)
+            Slider(value: Binding(get: { Double(13 - value) },
+                                  set: { value = 13 - Int($0.rounded()) }), in: 3...10, step: 1)
                 .controlSize(.small)
                 .frame(width: 110)
                 .accessibilityLabel("Thumbnail size")
-                .accessibilityValue("\(Int(value.rounded())) points")
+                .accessibilityValue("\(value) items per row")
             Image(systemName: "plus").accessibilityHidden(true)
         }
         .imageScale(.small)
@@ -115,12 +116,40 @@ struct LibraryCommands: Commands {
 
     var body: some Commands {
         CommandMenu("Library") {
-            Button("Increase Thumbnail Size") { model.adjustDisplayRowHeight(by: 20) }
+            Button("Increase Thumbnail Size") { model.adjustItemsPerRow(by: -1) }
                 .keyboardShortcut("+", modifiers: .command)
-                .disabled(model.displayRowHeight >= 300)
-            Button("Decrease Thumbnail Size") { model.adjustDisplayRowHeight(by: -20) }
+                .disabled(model.itemsPerRow <= 3)
+            Button("Decrease Thumbnail Size") { model.adjustItemsPerRow(by: 1) }
                 .keyboardShortcut("-", modifiers: .command)
-                .disabled(model.displayRowHeight <= 100)
+                .disabled(model.itemsPerRow >= 10)
+            Divider()
+            Button("Select Left") { model.performBrowserCommand(.move(.left, extending: false)) }
+                .keyboardShortcut(.leftArrow, modifiers: [])
+                .disabled(!model.browserCommandsActive)
+            Button("Select Right") { model.performBrowserCommand(.move(.right, extending: false)) }
+                .keyboardShortcut(.rightArrow, modifiers: [])
+                .disabled(!model.browserCommandsActive)
+            Button("Select Up") { model.performBrowserCommand(.move(.up, extending: false)) }
+                .keyboardShortcut(.upArrow, modifiers: [])
+                .disabled(!model.browserCommandsActive)
+            Button("Select Down") { model.performBrowserCommand(.move(.down, extending: false)) }
+                .keyboardShortcut(.downArrow, modifiers: [])
+                .disabled(!model.browserCommandsActive)
+            Button("Extend Selection Left") { model.performBrowserCommand(.move(.left, extending: true)) }
+                .keyboardShortcut(.leftArrow, modifiers: [.shift])
+                .disabled(!model.browserCommandsActive)
+            Button("Extend Selection Right") { model.performBrowserCommand(.move(.right, extending: true)) }
+                .keyboardShortcut(.rightArrow, modifiers: [.shift])
+                .disabled(!model.browserCommandsActive)
+            Button("Extend Selection Up") { model.performBrowserCommand(.move(.up, extending: true)) }
+                .keyboardShortcut(.upArrow, modifiers: [.shift])
+                .disabled(!model.browserCommandsActive)
+            Button("Extend Selection Down") { model.performBrowserCommand(.move(.down, extending: true)) }
+                .keyboardShortcut(.downArrow, modifiers: [.shift])
+                .disabled(!model.browserCommandsActive)
+            Button("Open Selected Photo") { model.performBrowserCommand(.openSelected) }
+                .keyboardShortcut(.space, modifiers: [])
+                .disabled(!model.canOpenSelectedPhoto)
             Divider()
             Button("Toggle Favorite") { model.toggleViewerFavorite() }
                 .keyboardShortcut(".", modifiers: [])

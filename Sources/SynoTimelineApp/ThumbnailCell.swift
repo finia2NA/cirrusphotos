@@ -11,6 +11,9 @@ struct ThumbnailCell: View {
     let repository: CachedPhotosRepository?
     let size: ThumbnailSize
     let allowNetwork: Bool
+    var isSelected = false
+    var onSelect: (() -> Void)? = nil
+    var onCommand: ((BrowserSelectionCommand) -> Void)? = nil
     var onActivate: ((PhotoViewerSourceAnchor) -> Void)? = nil
     @State private var image: NSImage?
     @State private var displayedRendition: String?
@@ -27,7 +30,7 @@ struct ThumbnailCell: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.1))
+            RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.08))
             if let image, displayedRendition?.hasPrefix(familyIdentity) == true {
                 Image(nsImage: image).resizable().scaledToFit()
             } else if failed, displayedRendition == renditionIdentity {
@@ -61,8 +64,11 @@ struct ThumbnailCell: View {
             }
             if let onActivate {
                 ThumbnailActivationSurface(itemID: item.id, image: image,
-                                           label: (item.filename.map { "Open \($0)" } ?? "Open photo") +
+                                           isSelected: isSelected,
+                                           label: (item.filename ?? "Photo") +
                                                (item.isFavorite ? ", favorite" : ""),
+                                           onSelect: onSelect ?? {},
+                                           onCommand: onCommand ?? { _ in },
                                            onActivate: onActivate)
             }
         }
@@ -106,10 +112,13 @@ struct ThumbnailCell: View {
 
 /// The AppKit surface supplies a source rectangle in window-content coordinates. A SwiftUI
 /// global frame is not reliable here because every virtualized row owns a detached hosting view.
-private struct ThumbnailActivationSurface: NSViewRepresentable {
+struct ThumbnailActivationSurface: NSViewRepresentable {
     let itemID: Int64
     let image: NSImage?
+    let isSelected: Bool
     let label: String
+    let onSelect: () -> Void
+    let onCommand: (BrowserSelectionCommand) -> Void
     let onActivate: (PhotoViewerSourceAnchor) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -125,7 +134,10 @@ private struct ThumbnailActivationSurface: NSViewRepresentable {
         context.coordinator.anchor.update(itemID: itemID, image: image)
         view.anchor = context.coordinator.anchor
         view.onActivate = onActivate
+        view.onSelect = onSelect
+        view.onCommand = onCommand
         view.accessibilityTitle = label
+        view.selected = isSelected
     }
 
     @MainActor
@@ -133,30 +145,66 @@ private struct ThumbnailActivationSurface: NSViewRepresentable {
         let anchor = PhotoViewerSourceAnchor()
     }
 
-    final class ActivationView: NSView, PhotoViewerSourceActivating {
+    final class ActivationView: NSView, PhotoViewerSourceActivating, PhotoViewerSourceProviding {
         weak var anchor: PhotoViewerSourceAnchor?
         var onActivate: ((PhotoViewerSourceAnchor) -> Void)?
+        var onSelect: (() -> Void)?
+        var onCommand: ((BrowserSelectionCommand) -> Void)?
         var accessibilityTitle = "Open photo"
+        var selected = false
         override var acceptsFirstResponder: Bool { true }
+        override func becomeFirstResponder() -> Bool {
+            let result = super.becomeFirstResponder()
+            if result {
+                DispatchQueue.main.async { [weak self] in
+                    (self?.enclosingScrollView as? TimelineScrollView)?.publishFocusState()
+                }
+            }
+            return result
+        }
+        override func resignFirstResponder() -> Bool {
+            let result = super.resignFirstResponder()
+            if result {
+                DispatchQueue.main.async { [weak self] in
+                    (self?.enclosingScrollView as? TimelineScrollView)?.publishFocusState()
+                }
+            }
+            return result
+        }
         override func mouseDown(with event: NSEvent) {
-            guard event.clickCount == 1 else { return }
             window?.makeFirstResponder(self)
-            anchor?.activate()
+            onSelect?()
         }
         override func keyDown(with event: NSEvent) {
-            if event.keyCode == 36 || event.keyCode == 49 { anchor?.activate() }
-            else if event.keyCode == 125 || event.keyCode == 126 { enclosingScrollView?.keyDown(with: event) }
-            else { super.keyDown(with: event) }
+            let disallowed = event.modifierFlags.intersection([.command, .option, .control])
+            if event.keyCode == 36, disallowed.isEmpty {
+                onSelect?()
+            } else if let command = event.browserSelectionCommand {
+                onCommand?(command)
+            } else {
+                super.keyDown(with: event)
+            }
         }
         override func isAccessibilityElement() -> Bool { true }
         override func accessibilityRole() -> NSAccessibility.Role? { .button }
         override func accessibilityLabel() -> String? { accessibilityTitle }
+        override func accessibilityValue() -> Any? { selected ? "selected" : "not selected" }
         override func accessibilityPerformPress() -> Bool {
-            anchor?.activate()
+            onSelect?()
             return true
+        }
+        override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+            [NSAccessibilityCustomAction(name: "Open") { [weak self] in
+                guard let self else { return false }
+                self.anchor?.activate()
+                return true
+            }]
         }
         func activateViewerSource(_ anchor: PhotoViewerSourceAnchor) {
             onActivate?(anchor)
+        }
+        func viewerSourceAnchor(for itemID: Int64) -> PhotoViewerSourceAnchor? {
+            anchor?.itemID == itemID ? anchor : nil
         }
         override func resetCursorRects() {
             addCursorRect(bounds, cursor: .pointingHand)

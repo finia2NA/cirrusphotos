@@ -154,7 +154,6 @@ public enum ThumbnailSize: String, CaseIterable, Codable, Sendable { case sm, m,
 
 /// A server-side item collection that shares the Photos timeline/item APIs.
 public enum PhotoCollectionDescriptor: String, CaseIterable, Codable, Hashable, Sendable {
-    /// Preserve the existing Personal Library cache namespace.
     case personalLibrary = "personal"
     case favorites
 

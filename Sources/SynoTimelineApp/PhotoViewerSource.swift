@@ -7,6 +7,21 @@ protocol PhotoViewerSourceActivating: AnyObject {
 }
 
 @MainActor
+protocol PhotoViewerSourceProviding: AnyObject {
+    func viewerSourceAnchor(for itemID: Int64) -> PhotoViewerSourceAnchor?
+}
+
+@MainActor
+func findViewerSourceAnchor(for itemID: Int64, in view: NSView) -> PhotoViewerSourceAnchor? {
+    if let provider = view as? PhotoViewerSourceProviding,
+       let anchor = provider.viewerSourceAnchor(for: itemID) { return anchor }
+    for subview in view.subviews {
+        if let anchor = findViewerSourceAnchor(for: itemID, in: subview) { return anchor }
+    }
+    return nil
+}
+
+@MainActor
 final class PhotoViewerSourceAnchor {
     private weak var view: NSView?
     private(set) var itemID: Int64?

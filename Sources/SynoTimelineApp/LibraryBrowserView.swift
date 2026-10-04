@@ -4,6 +4,105 @@ import SwiftUI
 import SynologyAPI
 import TimelineCore
 
+enum BrowserSelectionCommand {
+    case move(LibrarySelectionDirection, extending: Bool)
+    case openSelected
+    case endExtension
+}
+
+struct BrowserSelectionState: Equatable {
+    var selection = LibrarySelection()
+    var descriptorFingerprint: String?
+    var membershipRevision = 0
+    var membershipSignatures: [Int: Int] = [:]
+
+    var generation: String? { descriptorFingerprint.map { "\($0):\(membershipRevision)" } }
+
+    mutating func bind(to fingerprint: String) {
+        guard descriptorFingerprint != fingerprint else { return }
+        descriptorFingerprint = fingerprint
+        membershipRevision = 0
+        membershipSignatures.removeAll()
+        selection.bind(to: "\(fingerprint):0")
+    }
+
+    @discardableResult
+    mutating func reconcileMembership(_ updates: [Int: Int]) -> Bool {
+        let changed = updates.contains { section, signature in
+            membershipSignatures[section] != nil && membershipSignatures[section] != signature
+        }
+        if changed {
+            membershipRevision += 1
+            if let generation { selection.bind(to: generation) }
+        }
+        for (section, signature) in updates { membershipSignatures[section] = signature }
+        return changed
+    }
+}
+
+struct BrowserMarqueeSelection {
+    let baseline: IndexSet
+    let toggles: Bool
+    private(set) var knownFrames: [Int: CGRect] = [:]
+
+    mutating func update(rectangle: CGRect, loadedFrames: [Int: CGRect]) -> IndexSet {
+        for (ordinal, frame) in loadedFrames { knownFrames[ordinal] = frame }
+        let hits = IndexSet(knownFrames.compactMap { $0.value.intersects(rectangle) ? $0.key : nil })
+        guard toggles else { return hits }
+        var result = baseline
+        result.formSymmetricDifference(hits)
+        return result
+    }
+}
+
+struct BrowserPendingOpen: Equatable {
+    let ordinal: Int
+    let generation: String?
+    let selectionEpoch: UInt64
+
+    func matches(selection: LibrarySelection, generation: String?, selectionEpoch: UInt64) -> Bool {
+        selection.count == 1 && selection.contains(ordinal) && self.generation == generation &&
+            self.selectionEpoch == selectionEpoch
+    }
+}
+
+struct BrowserPointerInteraction {
+    private(set) var start: CGPoint?
+    private(set) var current: CGPoint?
+    private(set) var dragging = false
+    var isActive: Bool { start != nil }
+    var rectangle: CGRect? {
+        guard dragging, let start, let current else { return nil }
+        return CGRect(x: min(start.x, current.x), y: min(start.y, current.y),
+                      width: abs(current.x - start.x), height: abs(current.y - start.y))
+    }
+
+    mutating func begin(at point: CGPoint) {
+        start = point; current = point; dragging = false
+    }
+
+    mutating func drag(to point: CGPoint, threshold: CGFloat = 3) -> CGRect? {
+        current = point
+        if let start, !dragging,
+           hypot(point.x - start.x, point.y - start.y) >= threshold { dragging = true }
+        return rectangle
+    }
+
+    mutating func move(to point: CGPoint) -> CGRect? {
+        current = point
+        return rectangle
+    }
+
+    mutating func finish(at point: CGPoint) -> CGRect? {
+        current = point
+        return rectangle
+    }
+
+    mutating func cancel() {
+        start = nil; current = nil; dragging = false
+    }
+}
+
 @MainActor
 final class LibraryBrowserBridge: ObservableObject {
     fileprivate var revealHandler: ((BrowserRevealRequest, @escaping (CGRect?) -> Void) -> Void)?
@@ -67,7 +166,8 @@ struct LibraryBrowserView: View {
                                              retryRevision: library.retryRevision,
                                              repository: repository, allowNetwork: library.timelineVerified(for: collection),
                                              thumbnailSize: library.thumbnailSize,
-                                             displayRowHeight: library.displayRowHeight,
+                                             itemsPerRow: library.itemsPerRow,
+                                             selectionState: library.selectionState(for: collection),
                                              restorationAnchor: restorationAnchor,
                                              bridge: bridge,
                                              jumpToDay: jumpRequest,
@@ -75,6 +175,11 @@ struct LibraryBrowserView: View {
                                              colorScheme: colorScheme,
                                              contentTopInset: contentTopInset,
                                              onOpenPhoto: onOpenPhoto,
+                                             onSelectionStateChanged: { library.setSelectionState($0, for: collection) },
+                                             onCommandStateChanged: { owner, active, canOpen, handler in
+                                                 library.installBrowserCommands(owner: owner, active: active, canOpen: canOpen,
+                                                                                handler: handler)
+                                             },
                                              onRestorationAnchorChanged: onRestorationAnchorChanged,
                                              onRetry: { Task { await library.reload() } }) { day in
                         if snapshot.timeline.days.contains(where: { $0.id == day }) { selectedDay = day }
@@ -113,47 +218,168 @@ struct LibraryBrowserView: View {
     }
 }
 
-fileprivate final class FlippedDocumentView: NSView {
+final class FlippedDocumentView: NSView {
     override var isFlipped: Bool { true }
-}
-
-/// Gives the virtualized timeline the normal arrow-key scroll behavior even when it
-/// does not have a SwiftUI focusable child.
-fileprivate final class TimelineScrollView: NSScrollView {
     override var acceptsFirstResponder: Bool { true }
+    var interaction: ((InteractionPhase) -> Void)?
+    var commandHandler: ((BrowserSelectionCommand) -> Void)?
+    weak var timelineScrollView: TimelineScrollView?
+    weak var overlay: SelectionOverlayView?
+    var selectionFrames: [CGRect] = [] { didSet { overlay?.selectionFrames = selectionFrames } }
+    var marquee: CGRect? { didSet { overlay?.marquee = marquee } }
+    private var downPoint: CGPoint?
 
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard let window else { return }
-        DispatchQueue.main.async { [weak self, weak window] in
-            guard let self, let window else { return }
-            window.makeFirstResponder(self)
-        }
+    enum InteractionPhase {
+        case down(CGPoint, clickCount: Int, shift: Bool)
+        case drag(CGPoint)
+        case up(CGPoint)
     }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        let point = convert(event.locationInWindow, from: nil)
+        downPoint = point
+        interaction?(.down(point, clickCount: event.clickCount,
+                           shift: event.modifierFlags.contains(.shift)))
+    }
+    override func mouseDragged(with event: NSEvent) {
+        interaction?(.drag(convert(event.locationInWindow, from: nil)))
+    }
+    override func mouseUp(with event: NSEvent) {
+        interaction?(.up(convert(event.locationInWindow, from: nil)))
+        downPoint = nil
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result { timelineScrollView?.publishFocusState() }
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        if result { timelineScrollView?.focusChanged?(false) }
+        return result
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard let command = event.browserSelectionCommand else {
+            super.keyDown(with: event)
+            return
+        }
+        commandHandler?(command)
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        if !event.modifierFlags.contains(.shift) { commandHandler?(.endExtension) }
+        super.flagsChanged(with: event)
+    }
+}
+
+extension NSEvent {
+    var browserSelectionCommand: BrowserSelectionCommand? {
+        let disallowed = modifierFlags.intersection([.command, .option, .control])
+        guard disallowed.isEmpty else { return nil }
+        switch keyCode {
+        case 123: return .move(.left, extending: modifierFlags.contains(.shift))
+        case 124: return .move(.right, extending: modifierFlags.contains(.shift))
+        case 126: return .move(.up, extending: modifierFlags.contains(.shift))
+        case 125: return .move(.down, extending: modifierFlags.contains(.shift))
+        case 49 where !modifierFlags.contains(.shift): return .openSelected
+        default: return nil
+        }
+    }
+}
+
+final class SelectionOverlayView: NSView {
+    override var isFlipped: Bool { true }
+    var selectionFrames: [CGRect] = [] { didSet { needsDisplay = true } }
+    var marquee: CGRect? { didSet { needsDisplay = true } }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        NSColor.systemBlue.setStroke()
+        for frame in selectionFrames {
+            let path = NSBezierPath(roundedRect: frame.insetBy(dx: -2, dy: -2), xRadius: 5, yRadius: 5)
+            path.lineWidth = 3
+            path.stroke()
+        }
+        if let marquee {
+            NSColor.systemBlue.withAlphaComponent(0.12).setFill()
+            NSBezierPath(rect: marquee).fill()
+            NSColor.systemBlue.withAlphaComponent(0.9).setStroke()
+            let path = NSBezierPath(rect: marquee); path.lineWidth = 1; path.stroke()
+        }
+    }
+}
+
+final class PassThroughHostingView<Content: View>: NSHostingView<Content> {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+final class PassThroughSourceView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+@MainActor
+final class BrowserSelectionObservation: ObservableObject {
+    @Published var indexes = IndexSet()
+}
+
+/// Owns timeline scrolling and tracks whether its document or an accessibility item has focus.
+final class TimelineScrollView: NSScrollView {
+    var focusChanged: ((Bool) -> Void)?
+    weak var keyboardResponder: NSView?
+
+    var browserCommandContextActive: Bool {
+        guard let window, window.isKeyWindow else { return false }
+        if window.firstResponder === keyboardResponder { return true }
+        return (window.firstResponder as? ThumbnailActivationSurface.ActivationView)?.enclosingScrollView === self
+    }
+
+    @discardableResult
+    func focusTimeline() -> Bool {
+        guard let keyboardResponder else { return false }
+        return window?.makeFirstResponder(keyboardResponder) == true
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: nil)
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
+        guard let window else { return }
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(windowKeyStateChanged(_:)),
+                                                   name: name, object: window)
+        }
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self, let window else { return }
+            if window.isKeyWindow,
+               window.firstResponder == nil || window.firstResponder === window {
+                self.focusTimeline()
+            }
+            self.publishFocusState()
+        }
+    }
+
+    @objc private func windowKeyStateChanged(_ notification: Notification) {
+        if notification.name == NSWindow.didBecomeKeyNotification, let window,
+           window.firstResponder == nil || window.firstResponder === window {
+            focusTimeline()
+        }
+        publishFocusState()
+    }
+
+    func publishFocusState() { focusChanged?(browserCommandContextActive) }
+
+    override func mouseDown(with event: NSEvent) {
+        focusTimeline()
         super.mouseDown(with: event)
     }
 
     override func scrollWheel(with event: NSEvent) {
-        window?.makeFirstResponder(self)
+        focusTimeline()
         super.scrollWheel(with: event)
-    }
-
-    override func keyDown(with event: NSEvent) {
-        let direction: CGFloat
-        switch event.keyCode {
-        case 126: direction = -1 // up arrow
-        case 125: direction = 1  // down arrow
-        default:
-            super.keyDown(with: event)
-            return
-        }
-        let distance = max(40, contentView.bounds.height * 0.12)
-        contentView.scroll(to: CGPoint(x: contentView.bounds.minX,
-                                       y: max(0, contentView.bounds.minY + direction * distance)))
-        reflectScrolledClipView(contentView)
     }
 }
 
@@ -162,24 +388,35 @@ private struct HostedRow: View {
     let repository: CachedPhotosRepository
     let size: ThumbnailSize
     let pages: [Int: LibraryPage]
-    let onOpenPhoto: (PhotoViewerOpenRequest) -> Void
+    let onSelect: (Int) -> Void
+    let onCommand: (BrowserSelectionCommand) -> Void
+    let onOpenPhoto: (Int, PhotoViewerOpenRequest) -> Void
+    @ObservedObject var selection: BrowserSelectionObservation
 
     var body: some View {
         HStack(alignment: .top, spacing: row.layout.gap) {
             ForEach(row.layout.cells.indices, id: \.self) { position in
                 let cell = row.layout.cells[position]
-                let item = row.items[position]
-                let page = pages[item.sectionIndex]
-                ThumbnailCell(item: item.photo, repository: repository,
-                              size: size, allowNetwork: item.verified) { source in
-                    let seed = PhotoViewerSeed(sectionIndex: item.sectionIndex,
-                                               pageOffset: item.pageOffset,
-                                               item: item.photo,
-                                               page: page?.items,
-                                               pageVerified: page?.verified ?? item.verified)
-                    onOpenPhoto(PhotoViewerOpenRequest(seed: seed, source: source))
+                if let item = row.slots[position] {
+                    let ratio = max(0.0001, item.photo.displayAspectRatio)
+                    let fittedWidth = min(cell.width, row.layout.height * ratio)
+                    let fittedHeight = min(row.layout.height, cell.width / ratio)
+                    ThumbnailCell(item: item.photo, repository: repository,
+                                  size: size, allowNetwork: item.verified,
+                                  isSelected: selection.indexes.contains(item.ordinal),
+                                  onSelect: { onSelect(item.ordinal) },
+                                  onCommand: onCommand) { source in
+                        let page = pages[item.sectionIndex]
+                        let seed = PhotoViewerSeed(sectionIndex: item.sectionIndex,
+                            pageOffset: item.pageOffset, item: item.photo, page: page?.items,
+                            pageVerified: page?.verified ?? item.verified)
+                        onOpenPhoto(item.ordinal, PhotoViewerOpenRequest(seed: seed, source: source))
+                    }
+                        .frame(width: fittedWidth, height: fittedHeight)
+                        .frame(width: cell.width, height: row.layout.height)
+                } else {
+                    Color.clear.frame(width: cell.width, height: row.layout.height)
                 }
-                    .frame(width: cell.width, height: row.layout.height)
             }
         }
         .frame(width: row.layout.width, height: row.layout.height, alignment: .leading)
@@ -203,7 +440,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let repository: CachedPhotosRepository
     let allowNetwork: Bool
     let thumbnailSize: ThumbnailSize
-    let displayRowHeight: Double
+    let itemsPerRow: Int
+    let selectionState: BrowserSelectionState
     let restorationAnchor: PhotoTimelineRestorationAnchor?
     let bridge: LibraryBrowserBridge
     let jumpToDay: DayJumpRequest?
@@ -211,6 +449,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let colorScheme: ColorScheme
     let contentTopInset: CGFloat
     let onOpenPhoto: (PhotoViewerOpenRequest) -> Void
+    let onSelectionStateChanged: (BrowserSelectionState) -> Void
+    let onCommandStateChanged: (UUID, Bool, Bool, ((BrowserSelectionCommand) -> Void)?) -> Void
     let onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void
     let onRetry: () -> Void
     let onVisibleDay: (String) -> Void
@@ -225,9 +465,23 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         scroll.automaticallyAdjustsContentInsets = false
         scroll.contentView.postsBoundsChangedNotifications = true
         let document = FlippedDocumentView()
+        let overlay = SelectionOverlayView()
+        document.overlay = overlay
+        document.addSubview(overlay)
         scroll.documentView = document
+        scroll.keyboardResponder = document
+        document.timelineScrollView = scroll
         context.coordinator.scroll = scroll
         context.coordinator.document = document
+        document.commandHandler = { [weak coordinator = context.coordinator] command in
+            coordinator?.perform(command)
+        }
+        scroll.focusChanged = { [weak coordinator = context.coordinator] active in
+            coordinator?.publishCommandState(active: active)
+        }
+        document.interaction = { [weak coordinator = context.coordinator] phase in
+            coordinator?.interact(phase)
+        }
         context.coordinator.observer = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
         ) { [weak coordinator = context.coordinator] _ in
@@ -273,6 +527,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var colorScheme: ColorScheme = .light
         private var onRetry: (() -> Void)?
         private var onOpenPhoto: ((PhotoViewerOpenRequest) -> Void)?
+        private var onSelectionStateChanged: ((BrowserSelectionState) -> Void)?
+        private var onCommandStateChanged: ((UUID, Bool, Bool, ((BrowserSelectionCommand) -> Void)?) -> Void)?
         private var onRestorationAnchorChanged: ((PhotoTimelineRestorationAnchor) -> Void)?
         private var demandedVisible: [Int] = []
         private var demandedPrefetch: [Int] = []
@@ -281,20 +537,36 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var feedbackTask: Task<Void, Never>?
         private var restorationFeedbackTask: Task<Void, Never>?
         private var pendingReveal: (id: UUID, completion: (CGRect?) -> Void)?
+        private var selectionState = BrowserSelectionState()
+        private var selection: LibrarySelection {
+            get { selectionState.selection }
+            set { selectionState.selection = newValue }
+        }
+        private let selectionObservation = BrowserSelectionObservation()
+        private let commandOwner = UUID()
+        private var pointer = BrowserPointerInteraction()
+        private var pointerShift = false
+        private var marqueeSelection: BrowserMarqueeSelection?
+        private var autoscrollTask: Task<Void, Never>?
+        private var pendingOpen: BrowserPendingOpen?
+        private var selectionEpoch: UInt64 = 0
+        private var selectAfterRevealItemID: Int64?
+        private weak var sourceProxy: NSView?
 
         func configure(_ input: LibraryBrowserScrollView) {
             guard let scroll else { return }
             onVisibleDay = input.onVisibleDay
             onRetry = input.onRetry
             onOpenPhoto = input.onOpenPhoto
+            onSelectionStateChanged = input.onSelectionStateChanged
+            onCommandStateChanged = input.onCommandStateChanged
             onRestorationAnchorChanged = input.onRestorationAnchorChanged
             scrollIntent.captureRestoration(input.restorationAnchor)
             input.bridge.revealHandler = { [weak self] request, completion in
                 self?.reveal(request, completion: completion)
             }
             input.bridge.focusHandler = { [weak self] in
-                guard let scroll = self?.scroll else { return }
-                scroll.window?.makeFirstResponder(scroll)
+                (self?.scroll as? TimelineScrollView)?.focusTimeline()
             }
             repository = input.repository
             let insetAnchor = geometry?.anchor(at: visibleTop(in: scroll))
@@ -312,11 +584,16 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             if rebuilding {
                 let oldIndex = index
                 let previous = geometry?.anchor(at: visibleTop(in: scroll))
+                cancelPointerInteraction()
+                pendingOpen = nil
                 stopWindow()
                 let newIndex = LibraryIndex(snapshot: input.snapshot)
                 index = newIndex
                 geometry = LibraryViewportGeometry(index: newIndex, width: width,
-                                                   targetRowHeight: input.displayRowHeight)
+                                                   itemsPerRow: input.itemsPerRow)
+                selectionState = input.selectionState
+                selectionState.bind(to: newIndex.fingerprint)
+                publishSelection()
                 revision = input.revision
                 allowNetwork = input.allowNetwork
                 window = LibraryPageWindow(repository: input.repository,
@@ -338,11 +615,13 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     demandedPrefetch = []
                 }
                 if let current = geometry,
-                   abs(current.width - width) > 0.5 ||
-                    abs(current.targetRowHeight - input.displayRowHeight) > 0.5 {
+                   abs(current.width - width) > 0.5 || current.itemsPerRow != input.itemsPerRow {
                     let anchor = current.anchor(at: visibleTop(in: scroll))
-                    geometry?.setLayout(width: width, targetRowHeight: input.displayRowHeight,
+                    geometry?.setLayout(width: width, itemsPerRow: input.itemsPerRow,
                                         pages: pages)
+                    selection.endExtension()
+                    cancelPointerInteraction()
+                    pendingOpen = nil
                     viewRevision += 1
                     updateDocumentHeight()
                     if let anchor, let target = geometry?.y(for: anchor) { scrollTo(target) }
@@ -364,12 +643,15 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                let target = scrollIntent.jump(id: request.id, dayID: request.dayID,
                                               index: index, geometry: geometry) {
                 cancelSupersededReveal()
+                pendingOpen = nil
+                cancelPointerInteraction()
                 scrollTo(target)
             } else if insetsChanged, !rebuilding, let insetAnchor,
                       let target = geometry?.y(for: insetAnchor) {
                 scrollTo(target)
             }
             viewportChanged()
+            publishCommandState(active: (scroll as? TimelineScrollView)?.browserCommandContextActive == true)
         }
 
         func stop() {
@@ -380,6 +662,9 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             emitCurrentRestorationAnchor()
             scrollIntent.stop()
             cancelSupersededReveal()
+            selectAfterRevealItemID = nil
+            cancelPointerInteraction()
+            onCommandStateChanged?(commandOwner, false, false, nil)
             stopWindow()
             hosts.values.forEach { $0.removeFromSuperview() }
             hosts.removeAll()
@@ -426,12 +711,23 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     let newSignatures = Dictionary(uniqueKeysWithValues: retained.map {
                         ($0.sectionIndex, Self.signature($0))
                     })
+                    let newMembership = Dictionary(uniqueKeysWithValues: retained.map {
+                        ($0.sectionIndex, Self.membershipSignature($0))
+                    })
+                    let membershipChanged = self.selectionState.reconcileMembership(newMembership)
+                    if membershipChanged {
+                        self.pendingOpen = nil
+                        self.cancelPointerInteraction()
+                        self.publishSelection()
+                    }
+                    self.persistSelectionState()
                     for (section, signature) in newSignatures where self.pageSignatures[section] != signature {
                         self.rowRevisions[section, default: 0] += 1
                     }
                     self.pageSignatures = newSignatures
                     self.errors = self.errors.filter { self.demandedVisible.contains($0.key) }
                     self.geometry?.reconcile(pages: self.pages)
+                    self.refreshMarqueeSelection()
                     self.viewRevision += 1
                     self.updateDocumentHeight()
                     if let index = self.index, let geometry = self.geometry {
@@ -439,12 +735,19 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                             geometry: geometry, timelineVerified: self.allowNetwork) {
                         case .scroll(let target): self.scrollTo(target)
                         case .reveal(let id, let itemID): self.finishRevealIfPossible(id: id, itemID: itemID)
-                        case .settled: self.cancelSupersededReveal()
+                        case .settled:
+                            if self.selectAfterRevealItemID != nil {
+                                self.selection.replace(with: nil)
+                                self.selectAfterRevealItemID = nil
+                                self.publishSelection()
+                            }
+                            self.cancelSupersededReveal()
                         case .preserveViewport:
                             if let anchor, let target = geometry.y(for: anchor) { self.scrollTo(target) }
                         }
                     }
                     self.viewportChanged()
+                    self.openPendingIfPossible()
                 }
             }
         }
@@ -455,8 +758,11 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 let width = availableWidth(in: scroll)
                 if abs(current.width - width) > 0.5 {
                     let anchor = current.anchor(at: visibleTop(in: scroll))
-                    geometry?.setLayout(width: width, targetRowHeight: current.targetRowHeight,
+                    geometry?.setLayout(width: width, itemsPerRow: current.itemsPerRow,
                                         pages: pages)
+                    selection.endExtension()
+                    cancelPointerInteraction()
+                    pendingOpen = nil
                     viewRevision += 1
                     updateDocumentHeight()
                     if let anchor, let target = geometry?.y(for: anchor) { scrollTo(target) }
@@ -473,11 +779,11 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             let overscan = min(240, height * 0.35)
             let range = geometry.sliceRange(y: max(0, y - overscan), height: height + 2 * overscan)
             var wanted: Set<String> = []
-            var visibleSections: [Int] = []
+            let visibleSections = geometry.sectionIndices(y: max(0, y - overscan),
+                                                          height: height + 2 * overscan)
             for position in range {
                 let slice = geometry.slices[position]
                 let section = slice.source.sectionIndex
-                if !visibleSections.contains(section) { visibleSections.append(section) }
                 if slice.heading {
                     addHost("h:\(position)", frame: CGRect(x: 0, y: slice.y, width: geometry.width, height: 32),
                             content: AnyView(Text(slice.source.dayID).font(.headline)
@@ -513,9 +819,14 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                             frame: CGRect(x: 0, y: rowY, width: geometry.width, height: row.layout.height),
                             content: AnyView(HostedRow(row: row, repository: repository,
                                                        size: thumbnailSize, pages: pages,
-                                                       onOpenPhoto: onOpenPhoto ?? { _ in })),
+                                                       onSelect: { [weak self] in self?.selectFromAccessibility($0) },
+                                                       onCommand: { [weak self] in self?.perform($0) },
+                                                       onOpenPhoto: { [weak self] ordinal, request in
+                                                           self?.openFromAccessibility(ordinal, request: request)
+                                                       },
+                                                       selection: selectionObservation)),
                             revision: (viewRevision, rowRevisions[section] ?? 0),
-                            wanted: &wanted, document: document)
+                            wanted: &wanted, document: document, passThrough: true)
                 }
             }
             for key in hosts.keys where !wanted.contains(key) {
@@ -565,14 +876,18 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             if scrollIntent.canPersistViewport {
                 scheduleRestorationFeedback()
             }
+            updateSelectionDrawing()
         }
 
         private func reveal(_ request: BrowserRevealRequest, completion: @escaping (CGRect?) -> Void) {
             guard let index, let geometry else { completion(nil); return }
+            pendingOpen = nil
+            cancelPointerInteraction()
             let target = scrollIntent.reveal(request, index: index, geometry: geometry)
             cancelSupersededReveal()
             guard let target else { completion(nil); return }
             pendingReveal = (request.id, completion)
+            selectAfterRevealItemID = request.selectOnCompletion ? request.itemID : nil
             scrollTo(target)
             viewportChanged()
             finishRevealIfPossible(id: request.id, itemID: request.itemID)
@@ -582,6 +897,12 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             guard scrollIntent.revealID == id, let scroll, let geometry,
                   let frame = geometry.frame(forItem: itemID) else { return }
             scrollIntent.revealPositioned(id: id)
+            if selectAfterRevealItemID == itemID,
+               let ordinal = index?.ordinalForLoadedItemID(itemID, pages: pages) {
+                selection.replace(with: ordinal)
+                selectAfterRevealItemID = nil
+                publishSelection()
+            }
             scrollTo(frame.midY - visibleHeight(in: scroll) / 2)
             viewportChanged()
             DispatchQueue.main.async { [weak self] in
@@ -608,7 +929,205 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private func cancelSupersededReveal() {
             guard let pendingReveal, pendingReveal.id != scrollIntent.revealID else { return }
             self.pendingReveal = nil
+            selectAfterRevealItemID = nil
             pendingReveal.completion(nil)
+        }
+
+        func publishCommandState(active: Bool) {
+            let active = active && (scroll as? TimelineScrollView)?.browserCommandContextActive == true
+            if !active { cancelPointerInteraction(); selection.endExtension(); pendingOpen = nil }
+            let canOpen = active && selection.count == 1 && selection.first.flatMap(loadedItem)?.photo.type != "video"
+            let callback = onCommandStateChanged, owner = commandOwner
+            let handler: ((BrowserSelectionCommand) -> Void)? = active ? { [weak self] in self?.perform($0) } : nil
+            DispatchQueue.main.async { callback?(owner, active, canOpen, handler) }
+        }
+
+        func perform(_ command: BrowserSelectionCommand) {
+            guard let scroll = scroll as? TimelineScrollView,
+                  scroll.browserCommandContextActive else { return }
+            switch command {
+            case .move(let direction, let extending):
+                guard let index, let geometry else { return }
+                let visible = geometry.firstOrdinal(inVerticalRange:
+                    visibleTop(in: scroll)...(visibleTop(in: scroll) + visibleHeight(in: scroll)))
+                if let cursor = selection.move(direction, extending: extending, in: index,
+                                               columns: geometry.itemsPerRow, firstVisible: visible) {
+                    scrollIntent.selectionNavigation()
+                    revealSelectionCursor(cursor)
+                    publishSelection()
+                }
+            case .openSelected:
+                guard selection.count == 1, let ordinal = selection.first else { return }
+                open(ordinal: ordinal)
+            case .endExtension:
+                selection.endExtension()
+                publishSelection()
+            }
+        }
+
+        func interact(_ phase: FlippedDocumentView.InteractionPhase) {
+            guard let scroll, let geometry else { return }
+            switch phase {
+            case .down(let point, let clickCount, let shift):
+                (scroll as? TimelineScrollView)?.focusTimeline()
+                pointer.begin(at: point); pointerShift = shift
+                marqueeSelection = BrowserMarqueeSelection(baseline: selection.indexes, toggles: shift)
+                if clickCount >= 2, let ordinal = geometry.ordinal(at: point) {
+                    selection.replace(with: ordinal)
+                    publishSelection()
+                    open(ordinal: ordinal)
+                    pointer.cancel()
+                }
+            case .drag(let point):
+                guard pointer.isActive, let rectangle = pointer.drag(to: point) else { return }
+                updateMarquee(rectangle, geometry: geometry)
+                startAutoscrollIfNeeded()
+            case .up(let point):
+                defer { cancelPointerInteraction() }
+                guard pointer.isActive else { return }
+                if let rectangle = pointer.finish(at: point) { updateMarquee(rectangle, geometry: geometry) }
+                else {
+                    if let ordinal = geometry.ordinal(at: point) {
+                        if pointerShift { selection.add(ordinal) } else { selection.replace(with: ordinal) }
+                    } else if !pointerShift { selection.replace(with: nil) }
+                    publishSelection()
+                }
+            }
+        }
+
+        private func publishSelection() {
+            selectionEpoch &+= 1
+            pendingOpen = nil
+            selectionObservation.indexes = selection.indexes
+            persistSelectionState()
+            updateSelectionDrawing()
+            if let scroll = scroll as? TimelineScrollView {
+                publishCommandState(active: scroll.browserCommandContextActive)
+            }
+        }
+
+        private func persistSelectionState() {
+            let value = selectionState, callback = onSelectionStateChanged
+            DispatchQueue.main.async { callback?(value) }
+        }
+
+        private func updateSelectionDrawing() {
+            guard let geometry else { document?.selectionFrames = []; return }
+            document?.selectionFrames = geometry.frames(for: selection.indexes)
+        }
+
+        private func loadedItem(_ ordinal: Int) -> LibraryViewportGeometry.RowItem? {
+            guard let location = index?.location(forOrdinal: ordinal), let page = pages[location.sectionIndex],
+                  page.items.indices.contains(location.pageOffset) else { return nil }
+            return LibraryViewportGeometry.RowItem(photo: page.items[location.pageOffset], verified: page.verified,
+                sectionIndex: location.sectionIndex, pageOffset: location.pageOffset, ordinal: ordinal)
+        }
+
+        private func selectFromAccessibility(_ ordinal: Int) {
+            selection.replace(with: ordinal)
+            scrollIntent.selectionNavigation()
+            publishSelection()
+        }
+
+        private func openFromAccessibility(_ ordinal: Int, request: PhotoViewerOpenRequest) {
+            guard loadedItem(ordinal)?.photo.type != "video" else { return }
+            selectFromAccessibility(ordinal)
+            onOpenPhoto?(request)
+        }
+
+        private func revealSelectionCursor(_ ordinal: Int) {
+            guard let scroll, let frame = geometry?.slotFrame(for: ordinal) else { return }
+            let top = visibleTop(in: scroll), bottom = top + visibleHeight(in: scroll)
+            if frame.minY < top { scrollTo(frame.minY) }
+            else if frame.maxY > bottom { scrollTo(frame.maxY - visibleHeight(in: scroll)) }
+            viewportChanged()
+        }
+
+        private func open(ordinal: Int) {
+            if loadedItem(ordinal)?.photo.type == "video" { pendingOpen = nil; return }
+            guard let item = loadedItem(ordinal), let document,
+                  let frame = geometry?.frame(forItem: item.photo.id) else {
+                pendingOpen = BrowserPendingOpen(ordinal: ordinal, generation: selectionState.generation,
+                                                 selectionEpoch: selectionEpoch)
+                revealSelectionCursor(ordinal)
+                return
+            }
+            pendingOpen = nil
+            if let anchor = findViewerSourceAnchor(for: item.photo.id, in: document) {
+                let page = pages[item.sectionIndex]
+                let seed = PhotoViewerSeed(sectionIndex: item.sectionIndex, pageOffset: item.pageOffset,
+                    item: item.photo, page: page?.items, pageVerified: page?.verified ?? item.verified)
+                onOpenPhoto?(PhotoViewerOpenRequest(seed: seed, source: anchor))
+                return
+            }
+            sourceProxy?.removeFromSuperview()
+            let proxy = PassThroughSourceView(frame: frame)
+            proxy.wantsLayer = true
+            proxy.layer?.backgroundColor = NSColor.clear.cgColor
+            document.addSubview(proxy)
+            sourceProxy = proxy
+            let anchor = PhotoViewerSourceAnchor()
+            anchor.attach(proxy)
+            anchor.update(itemID: item.photo.id, image: nil)
+            let page = pages[item.sectionIndex]
+            let seed = PhotoViewerSeed(sectionIndex: item.sectionIndex, pageOffset: item.pageOffset,
+                item: item.photo, page: page?.items, pageVerified: page?.verified ?? item.verified)
+            onOpenPhoto?(PhotoViewerOpenRequest(seed: seed, source: anchor))
+        }
+
+        private func openPendingIfPossible() {
+            guard let request = pendingOpen,
+                  request.matches(selection: selection, generation: selectionState.generation,
+                                  selectionEpoch: selectionEpoch) else {
+                pendingOpen = nil; return
+            }
+            if loadedItem(request.ordinal) != nil { open(ordinal: request.ordinal) }
+        }
+
+        private func autoScroll(for point: CGPoint) {
+            guard let scroll else { return }
+            let top = visibleTop(in: scroll), bottom = top + visibleHeight(in: scroll), edge = 28.0
+            var target = top
+            if point.y < top + edge { target = top - 18 }
+            else if point.y > bottom - edge { target = top + 18 }
+            guard target != top else { return }
+            scrollTo(target)
+            viewportChanged()
+            let delta = visibleTop(in: scroll) - top
+            guard delta != 0, let geometry else { return }
+            let adjusted = CGPoint(x: point.x, y: point.y + delta)
+            if let rectangle = pointer.move(to: adjusted) { updateMarquee(rectangle, geometry: geometry) }
+        }
+
+        private func updateMarquee(_ rectangle: CGRect, geometry: LibraryViewportGeometry) {
+            document?.marquee = rectangle
+            guard var marqueeSelection else { return }
+            selection.replace(with: marqueeSelection.update(rectangle: rectangle,
+                loadedFrames: geometry.loadedFramesByOrdinal()))
+            self.marqueeSelection = marqueeSelection
+            publishSelection()
+        }
+
+        private func refreshMarqueeSelection() {
+            guard let rectangle = pointer.rectangle, let geometry else { return }
+            updateMarquee(rectangle, geometry: geometry)
+        }
+
+        private func startAutoscrollIfNeeded() {
+            guard autoscrollTask == nil else { return }
+            autoscrollTask = Task { [weak self] in
+                while let self, !Task.isCancelled, self.pointer.dragging {
+                    if let point = self.pointer.current { self.autoScroll(for: point) }
+                    try? await Task.sleep(for: .milliseconds(35))
+                }
+            }
+        }
+
+        private func cancelPointerInteraction() {
+            pointer.cancel()
+            marqueeSelection = nil
+            autoscrollTask?.cancel(); autoscrollTask = nil
+            document?.marquee = nil
         }
 
         private func scheduleRestorationFeedback() {
@@ -637,7 +1156,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         }
 
         private func addHost(_ key: String, frame: CGRect, content: AnyView,
-                             revision: (Int, Int), wanted: inout Set<String>, document: NSView) {
+                             revision: (Int, Int), wanted: inout Set<String>, document: NSView,
+                             passThrough: Bool = false) {
             wanted.insert(key)
             if let host = hosts[key] {
                 host.frame = frame
@@ -646,9 +1166,13 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     hostRevisions[key] = revision
                 }
             } else {
-                let host = NSHostingView(rootView: AnyView(content.environment(\.colorScheme, colorScheme)))
+                let root = AnyView(content.environment(\.colorScheme, colorScheme))
+                let host: NSHostingView<AnyView> = passThrough ?
+                    PassThroughHostingView(rootView: root) : NSHostingView(rootView: root)
                 host.frame = frame
-                document.addSubview(host)
+                if let overlay = (document as? FlippedDocumentView)?.overlay {
+                    document.addSubview(host, positioned: .below, relativeTo: overlay)
+                } else { document.addSubview(host) }
                 hosts[key] = host
                 hostRevisions[key] = revision
             }
@@ -659,6 +1183,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             let frame = CGRect(x: 0, y: 0, width: CGFloat(availableWidth(in: scroll)),
                                height: max(CGFloat(geometry.totalHeight), scroll.contentSize.height))
             if document.frame != frame { document.frame = frame }
+            document.overlay?.frame = document.bounds
         }
 
         private func scrollTo(_ y: Double) {
@@ -688,6 +1213,13 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 hash.combine(thumbnail?.m)
                 hash.combine(thumbnail?.xl)
             }
+            return hash.finalize()
+        }
+
+        private static func membershipSignature(_ page: LibraryPage) -> Int {
+            var hash = Hasher()
+            hash.combine(page.items.count)
+            for item in page.items { hash.combine(item.id) }
             return hash.finalize()
         }
 

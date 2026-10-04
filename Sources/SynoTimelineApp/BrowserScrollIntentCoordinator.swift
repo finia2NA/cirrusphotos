@@ -6,6 +6,12 @@ struct BrowserRevealRequest: Equatable {
     let itemID: Int64
     let dayID: String
     let sectionOffsetHint: Int?
+    let selectOnCompletion: Bool
+
+    init(itemID: Int64, dayID: String, sectionOffsetHint: Int?, selectOnCompletion: Bool = false) {
+        self.itemID = itemID; self.dayID = dayID; self.sectionOffsetHint = sectionOffsetHint
+        self.selectOnCompletion = selectOnCompletion
+    }
 }
 
 /// Owns navigation intent, independently of AppKit's row hosting and scroll effects.
@@ -166,6 +172,8 @@ struct BrowserScrollIntentCoordinator {
     }
 
     mutating func stop() { settle(); programmaticY = nil }
+
+    mutating func selectionNavigation() { settle(); programmaticY = nil }
 
     private mutating func settle() {
         intent = .idle

@@ -2,19 +2,28 @@ import Foundation
 import SynologyAPI
 import TimelineCore
 
-/// Compact vertical map. Only the current page window contributes row/item geometry.
+/// Exact fixed-grid geometry derived from descriptor counts. Retained pages only add item
+/// metadata; they never change row placement or document height.
 public struct LibraryViewportGeometry {
     public struct RowItem {
         public let photo: PhotoItem
         public let verified: Bool
         public let sectionIndex: Int
         public let pageOffset: Int
+        public let ordinal: Int
+
+        public init(photo: PhotoItem, verified: Bool, sectionIndex: Int, pageOffset: Int, ordinal: Int) {
+            self.photo = photo; self.verified = verified; self.sectionIndex = sectionIndex
+            self.pageOffset = pageOffset; self.ordinal = ordinal
+        }
     }
     public struct Row {
         public let y: Double
-        public let layout: JustifiedRows.Row
-        public let items: [RowItem]
+        public let layout: FixedPhotoGrid.Row
+        public let slots: [RowItem?]
+        public var items: [RowItem] { slots.compactMap { $0 } }
         public var itemIDs: [Int64] { items.map { $0.photo.id } }
+        public let firstOrdinal: Int
     }
     public struct Slice {
         public let source: LibraryIndex.Slice
@@ -30,90 +39,73 @@ public struct LibraryViewportGeometry {
         public let localOffset: Double
         public let fraction: Double
 
-        public init(dayID: String, sectionIndex: Int, itemID: Int64?,
-                    localOffset: Double, fraction: Double) {
-            self.dayID = dayID
-            self.sectionIndex = sectionIndex
-            self.itemID = itemID
-            self.localOffset = localOffset
-            self.fraction = fraction
+        public init(dayID: String, sectionIndex: Int, itemID: Int64?, localOffset: Double, fraction: Double) {
+            self.dayID = dayID; self.sectionIndex = sectionIndex; self.itemID = itemID
+            self.localOffset = localOffset; self.fraction = fraction
         }
     }
 
     public private(set) var slices: [Slice] = []
-    public private(set) var totalHeight: Double = 0
+    public private(set) var totalHeight = 0.0
     public private(set) var width: Double
-    public private(set) var targetRowHeight: Double
-    private var measuredHeights: [Int: Double] = [:]
-    private var rows: [Int: [Row]] = [:]
-    /// Incomplete rows at API boundaries. Entries are kept only around retained pages,
-    /// letting an evicted look-behind page keep the next page stable without library-wide growth.
-    private var boundaryCarry: [Int: [RowItem]] = [:]
-    private var sectionSignatures: [Int: Int] = [:]
+    public private(set) var itemsPerRow: Int
+
+    private let index: LibraryIndex
+    private var pages: [Int: LibraryPage] = [:]
+    private var materializedRows: [Int: [Row]] = [:]
     private var sectionToSlices: [Int: [Int]] = [:]
     private var dayToFirstSlice: [String: Int] = [:]
-    private let gap = 6.0
+    private var dayOrigins: [String: Double] = [:]
+    private struct DayLayout {
+        let id: String
+        let origin: Double
+        let height: Double
+        let startOrdinal: Int
+        let count: Int
+    }
+    private var dayLayouts: [DayLayout] = []
+    private var itemFrames: [Int64: CGRect] = [:]
+    private var itemSlotFrames: [Int64: CGRect] = [:]
     private let headingHeight = 38.0
+    private let gap = FixedPhotoGrid.gap
 
-    public init(index: LibraryIndex, width: Double, targetRowHeight: Double = 180) {
+    public init(index: LibraryIndex, width: Double, itemsPerRow: Int = 6) {
+        self.index = index
         self.width = max(1, width)
-        self.targetRowHeight = Self.validTargetHeight(targetRowHeight)
-        for day in index.dayIDs {
-            for source in index.slices(forDay: day) {
-                let position = slices.count
-                if dayToFirstSlice[day] == nil { dayToFirstSlice[day] = position }
-                sectionToSlices[source.sectionIndex, default: []].append(position)
-                slices.append(Slice(source: source, heading: position == dayToFirstSlice[day],
-                                    count: source.pageRange.count))
-            }
-        }
+        self.itemsPerRow = FixedPhotoGrid.columns(itemsPerRow)
+        buildSlices()
         recalculate()
     }
 
+    public var slotSide: Double {
+        FixedPhotoGrid.slotWidth(availableWidth: width, columns: itemsPerRow, gap: gap)
+    }
+
     @discardableResult
-    public mutating func setLayout(width newWidth: Double, targetRowHeight newTargetRowHeight: Double,
+    public mutating func setLayout(width newWidth: Double, itemsPerRow newCount: Int,
                                    pages: [Int: LibraryPage]) -> Bool {
         guard newWidth.isFinite, newWidth > 0 else { return false }
-        let target = Self.validTargetHeight(newTargetRowHeight)
-        guard abs(width - newWidth) > 0.5 || abs(targetRowHeight - target) > 0.5 else { return false }
-        width = newWidth
-        targetRowHeight = target
-        measuredHeights.removeAll()
-        rows.removeAll()
-        boundaryCarry.removeAll()
-        sectionSignatures = Dictionary(uniqueKeysWithValues: pages.map { section, page in
-            (section, Self.signature(page))
-        })
-        measure(pages)
+        let count = FixedPhotoGrid.columns(newCount)
+        guard abs(width - newWidth) > 0.5 || itemsPerRow != count else { return false }
+        width = newWidth; itemsPerRow = count; self.pages = pages
         recalculate()
         return true
     }
 
     public mutating func setWidth(_ newWidth: Double, pages: [Int: LibraryPage]) {
-        setLayout(width: newWidth, targetRowHeight: targetRowHeight, pages: pages)
+        _ = setLayout(width: newWidth, itemsPerRow: itemsPerRow, pages: pages)
     }
 
     public mutating func reconcile(pages: [Int: LibraryPage]) {
-        let signatures = Dictionary(uniqueKeysWithValues: pages.map { section, page in
-            (section, Self.signature(page))
-        })
-        let changedPositions = signatures.compactMap { section, signature -> Int? in
-            guard sectionSignatures[section] != nil, sectionSignatures[section] != signature else { return nil }
-            return sectionToSlices[section]?.first
-        }
-        if let earliest = changedPositions.min() {
-            boundaryCarry = boundaryCarry.filter { $0.key <= earliest }
-        }
-        sectionSignatures = signatures
-        rows.removeAll(keepingCapacity: true)
-        measure(pages)
-        recalculate()
+        self.pages = pages
+        materializeRows()
     }
+
+    public func rows(in slice: Int) -> [Row] { materializedRows[slice] ?? [] }
 
     public func sliceRange(y: Double, height: Double) -> Range<Int> {
         guard !slices.isEmpty else { return 0..<0 }
-        let first = slice(at: y)
-        let last = slice(at: y + max(0, height))
+        let first = slice(at: y), last = slice(at: y + max(0, height))
         return first..<min(slices.count, last + 1)
     }
 
@@ -122,178 +114,227 @@ public struct LibraryViewportGeometry {
         var low = 0, high = slices.count
         while low < high {
             let middle = (low + high) / 2
-            if slices[middle].y + slices[middle].height <= y { low = middle + 1 }
-            else { high = middle }
+            if slices[middle].y + slices[middle].height <= y { low = middle + 1 } else { high = middle }
         }
         return min(low, slices.count - 1)
     }
 
-    public func y(forDay day: String) -> Double? {
-        dayToFirstSlice[day].map { slices[$0].y }
-    }
-
+    public func y(forDay day: String) -> Double? { dayOrigins[day] }
     public func nearestDay(to day: String, orderedDays: [String]) -> String? {
         guard !orderedDays.isEmpty else { return nil }
         return orderedDays.first(where: { $0 <= day }) ?? orderedDays.last
     }
 
-    public func rows(in slice: Int) -> [Row] { rows[slice] ?? [] }
-
     public func anchor(at y: Double) -> Anchor? {
         guard !slices.isEmpty else { return nil }
-        let position = slice(at: y)
-        let entry = slices[position]
-        let row = rows[position]?.last(where: { entry.y + $0.y <= y })
+        let position = slice(at: y), entry = slices[position]
+        let row = materializedRows[position]?.last(where: { entry.y + $0.y <= y })
         let origin = entry.y + (row?.y ?? 0)
         return Anchor(dayID: entry.source.dayID, sectionIndex: entry.source.sectionIndex,
-                      itemID: row?.itemIDs.first, localOffset: y - origin,
+                      itemID: row?.items.first?.photo.id, localOffset: y - origin,
                       fraction: min(1, max(0, (y - entry.y) / max(1, entry.height))))
     }
 
     public func y(for anchor: Anchor) -> Double? {
-        if let itemID = anchor.itemID {
-            if let exact = y(forItem: itemID, offset: anchor.localOffset) { return exact }
-        }
+        if let id = anchor.itemID, let exact = y(forItem: id, offset: anchor.localOffset) { return exact }
         if let position = (sectionToSlices[anchor.sectionIndex] ?? []).first(where: {
             slices[$0].source.dayID == anchor.dayID
-        }) {
-            return slices[position].y + slices[position].height * anchor.fraction
-        }
+        }) { return slices[position].y + slices[position].height * anchor.fraction }
         return y(forDay: anchor.dayID)
     }
 
     public func y(forItem itemID: Int64, offset: Double) -> Double? {
-        for position in rows.keys {
-            if let row = rows[position]?.first(where: { $0.itemIDs.contains(itemID) }) {
-                let visibleOffset = min(max(0, offset), max(0, row.layout.height - 1))
-                return slices[position].y + row.y + visibleOffset
-            }
-        }
-        return nil
+        guard let frame = itemSlotFrames[itemID] else { return nil }
+        return frame.minY + min(max(0, offset), max(0, frame.height - 1))
     }
-
-    /// Returns the exact cell rectangle for a retained item in document coordinates.
-    /// Distant items intentionally have no frame until their bounded metadata page is loaded.
-    public func frame(forItem itemID: Int64) -> CGRect? {
-        for position in rows.keys {
-            guard let row = rows[position],
-                  let match = row.first(where: { $0.itemIDs.contains(itemID) }),
-                  let itemIndex = match.items.firstIndex(where: { $0.photo.id == itemID }),
-                  match.layout.cells.indices.contains(itemIndex) else { continue }
-            let cell = match.layout.cells[itemIndex]
-            return CGRect(x: cell.x, y: slices[position].y + match.y,
-                          width: cell.width, height: match.layout.height)
-        }
-        return nil
-    }
-
-    private mutating func measure(_ pages: [Int: LibraryPage]) {
-        let loaded = slices.indices.filter { pages[slices[$0].source.sectionIndex] != nil }
-        var cursor = 0
-        while cursor < loaded.count {
-            let start = loaded[cursor]
-            var end = cursor + 1
-            while end < loaded.count,
-                  loaded[end] == loaded[end - 1] + 1,
-                  slices[loaded[end]].source.dayID == slices[start].source.dayID {
-                end += 1
-            }
-            measureRun(Array(loaded[cursor..<end]), pages: pages)
-            cursor = end
-        }
-        // Full PhotoItem values are retained only for boundaries touching the bounded
-        // page window. Distant slices keep scalar heights, not item metadata.
-        let allowedCarry = Set(loaded + loaded.map { $0 + 1 }.filter { $0 < slices.count })
-        boundaryCarry = boundaryCarry.filter { allowedCarry.contains($0.key) }
-    }
-
-    private mutating func measureRun(_ positions: [Int], pages: [Int: LibraryPage]) {
-        guard let first = positions.first, let last = positions.last else { return }
-        var pending = boundaryCarry[first] ?? []
-        for position in positions {
-            let slice = slices[position]
-            guard let page = pages[slice.source.sectionIndex] else { continue }
-            let pageItems = page.items.dropFirst(slice.source.pageRange.lowerBound)
-                .prefix(slice.source.pageRange.count)
-                .enumerated().map { offset, photo in
-                    RowItem(photo: photo, verified: page.verified,
-                            sectionIndex: slice.source.sectionIndex,
-                            pageOffset: slice.source.pageRange.lowerBound + offset)
+    public func frame(forItem itemID: Int64) -> CGRect? { itemFrames[itemID] }
+    public func frames(for selection: IndexSet) -> [CGRect] {
+        materializedRows.values.flatMap { rows in
+            rows.flatMap { row in
+                row.slots.compactMap { item in
+                    guard let item, selection.contains(item.ordinal) else { return nil }
+                    return itemFrames[item.photo.id]
                 }
-            let candidates = pending + pageItems
-            let isDayEnd = position + 1 >= slices.count ||
-                slices[position + 1].source.dayID != slice.source.dayID
-            let result = JustifiedRows.layoutPrefix(
-                aspectRatios: candidates.map { $0.photo.displayAspectRatio },
-                availableWidth: width, targetHeight: targetRowHeight, finalize: isDayEnd
-            )
-            append(result.rows, from: candidates, completingAt: position)
-            pending = result.pendingRange.map { candidates[$0] }
-            if position + 1 < slices.count { boundaryCarry[position + 1] = pending }
-        }
-
-        // The next page is not retained yet. Paint the bounded pending row provisionally;
-        // it will be replaced with a justified cross-page row when that page arrives.
-        let reachesDayEnd = last + 1 >= slices.count ||
-            slices[last + 1].source.dayID != slices[last].source.dayID
-        if !reachesDayEnd, !pending.isEmpty {
-            let provisional = JustifiedRows.layout(
-                aspectRatios: pending.map { $0.photo.displayAspectRatio }, availableWidth: width,
-                targetHeight: targetRowHeight
-            )
-            append(provisional, from: pending, completingAt: last)
-        }
-
-        for position in positions {
-            var y = slices[position].heading ? headingHeight : 0
-            let measuredRows = rows[position] ?? []
-            var relocated: [Row] = []
-            for row in measuredRows {
-                relocated.append(Row(y: y, layout: row.layout, items: row.items))
-                y += row.layout.height + gap
             }
-            rows[position] = relocated
-            measuredHeights[position] = max(y, slices[position].heading ? headingHeight : 0)
         }
     }
-
-    private mutating func append(_ layouts: [JustifiedRows.Row], from candidates: [RowItem],
-                                 completingAt position: Int) {
-        for layout in layouts {
-            let selected = layout.cells.map { candidates[$0.index] }
-            rows[position, default: []].append(Row(y: 0, layout: layout,
-                                                   items: selected))
+    public func loadedFramesByOrdinal() -> [Int: CGRect] {
+        var result: [Int: CGRect] = [:]
+        for rows in materializedRows.values {
+            for row in rows {
+                for item in row.slots.compactMap({ $0 }) {
+                    if let frame = itemFrames[item.photo.id] { result[item.ordinal] = frame }
+                }
+            }
         }
+        return result
     }
 
-    private static func signature(_ page: LibraryPage) -> Int {
-        var hash = Hasher()
-        hash.combine(page.verified)
-        for item in page.items {
-            hash.combine(item.id)
-            hash.combine(item.displayAspectRatio)
-        }
-        return hash.finalize()
+    public func slotFrame(for ordinal: Int) -> CGRect? {
+        guard let location = index.location(forOrdinal: ordinal), let dayY = dayOrigins[location.dayID] else { return nil }
+        return FixedPhotoGrid.slotFrame(column: location.dayOffset % itemsPerRow,
+            rowY: dayY + headingHeight + Double(location.dayOffset / itemsPerRow) * (slotSide + gap),
+            availableWidth: width, columns: itemsPerRow, gap: gap)
     }
 
-    private static func validTargetHeight(_ height: Double) -> Double {
-        guard height.isFinite else { return 180 }
-        return min(max(height, 100), 300)
+    public func firstOrdinal(inVerticalRange range: ClosedRange<Double>) -> Int? {
+        guard !dayLayouts.isEmpty else { return nil }
+        var day = firstDay(overlapping: range.lowerBound)
+        while day < dayLayouts.count, dayLayouts[day].origin <= range.upperBound {
+            let layout = dayLayouts[day]
+            if let rows = visibleRows(in: layout, lower: range.lowerBound, upper: range.upperBound) {
+                return layout.startOrdinal + rows.lowerBound * itemsPerRow
+            }
+            day += 1
+        }
+        return nil
+    }
+
+    public func ordinal(at point: CGPoint, fittedImagesOnly: Bool = true) -> Int? {
+        for sliceRows in materializedRows.values {
+            for row in sliceRows {
+                for item in row.slots.compactMap({ $0 }) {
+                    let frame = fittedImagesOnly ? itemFrames[item.photo.id] : slotFrame(for: item.ordinal)
+                    if frame?.contains(point) == true { return item.ordinal }
+                }
+            }
+        }
+        return nil
+    }
+
+    public func ordinals(intersecting rect: CGRect, fittedImagesOnly: Bool = true) -> IndexSet {
+        var result = IndexSet()
+        for sliceRows in materializedRows.values {
+            for row in sliceRows {
+                for item in row.slots.compactMap({ $0 }) {
+                    let frame = fittedImagesOnly ? itemFrames[item.photo.id] : slotFrame(for: item.ordinal)
+                    if frame?.intersects(rect) == true { result.insert(item.ordinal) }
+                }
+            }
+        }
+        return result
+    }
+
+    public func sectionIndices(y: Double, height: Double) -> [Int] {
+        let lower = y, upper = y + max(0, height)
+        var result: [Int] = []
+        guard !dayLayouts.isEmpty else { return result }
+        var day = firstDay(overlapping: lower)
+        while day < dayLayouts.count, dayLayouts[day].origin <= upper {
+            let layout = dayLayouts[day]
+            if let rows = visibleRows(in: layout, lower: lower, upper: upper) {
+                for row in rows {
+                    for ordinal in (layout.startOrdinal + row * itemsPerRow)..<min(
+                        layout.startOrdinal + layout.count,
+                        layout.startOrdinal + (row + 1) * itemsPerRow) {
+                    if let section = index.location(forOrdinal: ordinal)?.sectionIndex,
+                       !result.contains(section) { result.append(section) }
+                    }
+                }
+            }
+            day += 1
+        }
+        return result
+    }
+
+    private mutating func buildSlices() {
+        for day in index.dayIDs {
+            for source in index.slices(forDay: day) {
+                let position = slices.count
+                if dayToFirstSlice[day] == nil { dayToFirstSlice[day] = position }
+                sectionToSlices[source.sectionIndex, default: []].append(position)
+                slices.append(Slice(source: source, heading: position == dayToFirstSlice[day], count: source.pageRange.count))
+            }
+        }
     }
 
     private mutating func recalculate() {
+        materializedRows.removeAll(); itemFrames.removeAll(); itemSlotFrames.removeAll()
+        dayOrigins.removeAll(); dayLayouts.removeAll(keepingCapacity: true)
         var y = 0.0
-        for position in slices.indices {
-            slices[position].y = y
-            let count = slices[position].count
-            // Representative ratio 1.4 gives a stable initial approximation.
-            let perRow = max(1, Int(ceil((width + gap) / (targetRowHeight * 1.4 + gap))))
-            let estimate = Double((count + perRow - 1) / perRow) * (targetRowHeight + gap)
-            slices[position].height = measuredHeights[position] ??
-                max(slices[position].heading ? headingHeight : 20,
-                    estimate + (slices[position].heading ? headingHeight : 0))
-            y += slices[position].height
+        for dayID in index.dayIDs {
+            dayOrigins[dayID] = y
+            let count = index.dayCount(dayID)
+            let rowCount = (count + itemsPerRow - 1) / itemsPerRow
+            let dayHeight = headingHeight + Double(rowCount) * (slotSide + gap)
+            if let start = index.dayStart(dayID) {
+                dayLayouts.append(DayLayout(id: dayID, origin: y, height: dayHeight,
+                                            startOrdinal: start, count: count))
+            }
+            for source in index.slices(forDay: dayID) {
+                guard let position = slicePosition(source: source) else { continue }
+                slices[position].y = y
+                let firstRow = (source.dayRange.lowerBound + itemsPerRow - 1) / itemsPerRow
+                let lastRow = source.dayRange.isEmpty ? firstRow - 1 : (source.dayRange.upperBound - 1) / itemsPerRow
+                let rowStarts = max(0, lastRow - firstRow + 1)
+                slices[position].height = (slices[position].heading ? headingHeight : 0) +
+                    Double(rowStarts) * (slotSide + gap)
+                y += slices[position].height
+            }
         }
         totalHeight = y
+        materializeRows()
+    }
+
+    private func firstDay(overlapping y: Double) -> Int {
+        var low = 0, high = dayLayouts.count
+        while low < high {
+            let middle = (low + high) / 2
+            if dayLayouts[middle].origin + dayLayouts[middle].height < y { low = middle + 1 }
+            else { high = middle }
+        }
+        return low
+    }
+
+    private func visibleRows(in day: DayLayout, lower: Double, upper: Double) -> Range<Int>? {
+        let rowCount = (day.count + itemsPerRow - 1) / itemsPerRow
+        guard rowCount > 0 else { return nil }
+        let stride = slotSide + gap
+        let first = max(0, Int(ceil((lower - day.origin - headingHeight - slotSide) / stride)))
+        let last = min(rowCount - 1, Int(floor((upper - day.origin - headingHeight) / stride)))
+        return first <= last ? first..<(last + 1) : nil
+    }
+
+    private mutating func materializeRows() {
+        materializedRows.removeAll(keepingCapacity: true)
+        itemFrames.removeAll(keepingCapacity: true); itemSlotFrames.removeAll(keepingCapacity: true)
+        var loaded: [Int: RowItem] = [:], starts = Set<Int>()
+        for (section, page) in pages {
+            for (offset, photo) in page.items.enumerated() {
+                guard let ordinal = index.ordinal(sectionIndex: section, pageOffset: offset),
+                      let location = index.location(forOrdinal: ordinal), let dayStart = index.dayStart(location.dayID) else { continue }
+                loaded[ordinal] = RowItem(photo: photo, verified: page.verified, sectionIndex: section,
+                                          pageOffset: offset, ordinal: ordinal)
+                starts.insert(dayStart + (location.dayOffset / itemsPerRow) * itemsPerRow)
+            }
+        }
+        for start in starts.sorted() {
+            guard let location = index.location(forOrdinal: start), let dayY = dayOrigins[location.dayID] else { continue }
+            let count = min(itemsPerRow, index.dayCount(location.dayID) - location.dayOffset), side = slotSide
+            let layout = FixedPhotoGrid.row(itemCount: count, availableWidth: width,
+                                           columns: itemsPerRow)
+            let absoluteY = dayY + headingHeight + Double(location.dayOffset / itemsPerRow) * (side + gap)
+            let slots = (0..<count).map { loaded[start + $0] }
+            guard let owner = slicePosition(containing: location) else { continue }
+            materializedRows[owner, default: []].append(Row(y: absoluteY - slices[owner].y,
+                                                            layout: layout, slots: slots, firstOrdinal: start))
+            for (position, item) in slots.enumerated() {
+                guard let item else { continue }
+                let slot = FixedPhotoGrid.slotFrame(column: position, rowY: absoluteY,
+                    availableWidth: width, columns: itemsPerRow, gap: gap)
+                itemSlotFrames[item.photo.id] = slot
+                itemFrames[item.photo.id] = FixedPhotoGrid.fittedFrame(in: slot,
+                                                                        aspectRatio: item.photo.displayAspectRatio)
+            }
+        }
+    }
+
+    private func slicePosition(source: LibraryIndex.Slice) -> Int? {
+        (sectionToSlices[source.sectionIndex] ?? []).first { slices[$0].source == source }
+    }
+    private func slicePosition(containing location: LibraryIndex.Location) -> Int? {
+        (sectionToSlices[location.sectionIndex] ?? []).first {
+            slices[$0].source.dayID == location.dayID && slices[$0].source.pageRange.contains(location.pageOffset)
+        }
     }
 }

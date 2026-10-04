@@ -19,6 +19,11 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var authenticationStatus: AuthenticationStatus = .notStarted
     @Published private(set) var retryRevision = 0
     @Published private(set) var canToggleViewerFavorite = false
+    @Published private(set) var canOpenSelectedPhoto = false
+    @Published private(set) var browserCommandsActive = false
+    private var browserSelectionStates: [PhotoCollectionDescriptor: BrowserSelectionState] = [:]
+    private var browserCommandHandler: ((BrowserSelectionCommand) -> Void)?
+    private var browserCommandOwner: UUID?
     private weak var activeViewer: PhotoViewerPresentation?
     private var thumbnailPolicyRevision: UInt64 = 0
     var authenticationFailed: Bool {
@@ -42,11 +47,11 @@ final class LibraryModel: ObservableObject {
     @Published var loadsLargeViewerPreviews: Bool = UserDefaults.standard.bool(forKey: "loadsLargeViewerPreviews") {
         didSet { UserDefaults.standard.set(loadsLargeViewerPreviews, forKey: "loadsLargeViewerPreviews") }
     }
-    @Published var displayRowHeight: Double = LibraryModel.persistedDisplayRowHeight() {
+    @Published var itemsPerRow: Int = LibraryModel.persistedItemsPerRow() {
         didSet {
-            let valid = Self.validDisplayRowHeight(displayRowHeight)
-            if valid != displayRowHeight { displayRowHeight = valid }
-            UserDefaults.standard.set(valid, forKey: "displayRowHeight")
+            let valid = min(10, max(3, itemsPerRow))
+            if valid != itemsPerRow { itemsPerRow = valid }
+            UserDefaults.standard.set(valid, forKey: "itemsPerRow")
         }
     }
     @Published var budgetFraction: Double = CacheBudget.fraction(for: Int64(UserDefaults.standard.object(forKey: "cacheBudget") as? Int ?? Int(CacheBudget.bytes(at: 0.5)))) {
@@ -79,20 +84,37 @@ final class LibraryModel: ObservableObject {
     func timelineVerified(for collection: PhotoCollectionDescriptor) -> Bool { timelineVerifications[collection] == true }
     func error(for collection: PhotoCollectionDescriptor) -> String? { collectionErrors[collection] }
 
-    private static func persistedDisplayRowHeight() -> Double {
-        guard let value = (UserDefaults.standard.object(forKey: "displayRowHeight") as? NSNumber)?.doubleValue else {
-            return 180
-        }
-        return validDisplayRowHeight(value)
+    private static func persistedItemsPerRow() -> Int {
+        guard let value = (UserDefaults.standard.object(forKey: "itemsPerRow") as? NSNumber)?.intValue else { return 6 }
+        return min(10, max(3, value))
     }
 
-    private static func validDisplayRowHeight(_ value: Double) -> Double {
-        guard value.isFinite else { return 180 }
-        return min(max(value, 100), 300)
+    func adjustItemsPerRow(by amount: Int) {
+        itemsPerRow = min(10, max(3, itemsPerRow + amount))
     }
 
-    func adjustDisplayRowHeight(by amount: Double) {
-        displayRowHeight = Self.validDisplayRowHeight(displayRowHeight + amount)
+    func selectionState(for collection: PhotoCollectionDescriptor) -> BrowserSelectionState {
+        browserSelectionStates[collection] ?? BrowserSelectionState()
+    }
+
+    func setSelectionState(_ state: BrowserSelectionState, for collection: PhotoCollectionDescriptor) {
+        browserSelectionStates[collection] = state
+    }
+
+    func installBrowserCommands(owner: UUID, active: Bool, canOpen: Bool,
+                                handler: ((BrowserSelectionCommand) -> Void)?) {
+        if active { browserCommandOwner = owner }
+        else if browserCommandOwner != nil && browserCommandOwner != owner { return }
+        let open = active && canOpen
+        if browserCommandsActive != active { browserCommandsActive = active }
+        if canOpenSelectedPhoto != open { canOpenSelectedPhoto = open }
+        browserCommandHandler = active ? handler : nil
+        if !active { browserCommandOwner = nil }
+    }
+
+    func performBrowserCommand(_ command: BrowserSelectionCommand) {
+        guard browserCommandsActive else { return }
+        browserCommandHandler?(command)
     }
 
     func setActiveViewer(_ viewer: PhotoViewerPresentation?) {

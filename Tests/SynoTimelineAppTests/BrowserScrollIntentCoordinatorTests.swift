@@ -95,6 +95,22 @@ final class BrowserScrollIntentCoordinatorTests: XCTestCase {
         XCTAssertFalse(state.finishReveal(id: request.id))
     }
 
+    func testSelectionNavigationSupersedesRestorationAndViewerReveal() {
+        let index = index()
+        var state = BrowserScrollIntentCoordinator()
+        state.captureRestoration(saved())
+        let geometry = rebuild(&state, index: index)
+        XCTAssertNotNil(state.restoration)
+        state.selectionNavigation()
+        XCTAssertTrue(state.canPersistViewport)
+        let request = BrowserRevealRequest(itemID: 42, dayID: "2024-04-03", sectionOffsetHint: nil)
+        _ = state.reveal(request, index: index, geometry: geometry)
+        XCTAssertEqual(state.revealID, request.id)
+        state.selectionNavigation()
+        XCTAssertNil(state.revealID)
+        XCTAssertTrue(state.canPersistViewport)
+    }
+
     func testCachedExactRestorationUsesPixelOffsetWithoutViewerCentering() throws {
         let index = index()
         var state = BrowserScrollIntentCoordinator()
