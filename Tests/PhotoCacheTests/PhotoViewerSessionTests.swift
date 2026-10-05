@@ -937,8 +937,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         var changes = await repo.favoriteChanges().makeAsyncIterator()
         let replayed = await changes.next()
 
-        XCTAssertEqual(replayed?.itemID, 51)
-        XCTAssertEqual(replayed?.favorite, true)
+        XCTAssertEqual(replayed?.values[51], true)
     }
 
     func testFavoriteWriteSurvivesViewerCloseAndUpdatesTimeline() async throws {

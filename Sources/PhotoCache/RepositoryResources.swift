@@ -14,9 +14,61 @@ public enum AuthenticationStatus: Sendable, Equatable {
 }
 
 public struct FavoriteChange: Sendable {
-    public let itemID: Int64
-    public let section: TimelineSection
-    public let favorite: Bool
+    public let values: [Int64: Bool]
+    public let sourceSection: TimelineSection?
+    public let sourceCollection: PhotoCollectionDescriptor
+
+    public init(values: [Int64: Bool], sourceSection: TimelineSection? = nil, sourceCollection: PhotoCollectionDescriptor = .personalLibrary) {
+        self.values = values
+        self.sourceSection = sourceSection
+        self.sourceCollection = sourceCollection
+    }
+}
+
+public struct SelectionFavoriteAction: Sendable {
+    public let affectedIDs: [Int64]
+    public let targetFavorite: Bool
+    public let sectionsByID: [Int64: TimelineSection]
+    public let collection: PhotoCollectionDescriptor
+    public let itemsByID: [Int64: PhotoItem]
+
+    public init(
+        affectedIDs: [Int64],
+        targetFavorite: Bool,
+        sectionsByID: [Int64: TimelineSection],
+        collection: PhotoCollectionDescriptor,
+        itemsByID: [Int64: PhotoItem] = [:]
+    ) {
+        self.affectedIDs = affectedIDs
+        self.targetFavorite = targetFavorite
+        self.sectionsByID = sectionsByID
+        self.collection = collection
+        self.itemsByID = itemsByID
+    }
+}
+
+public struct BatchFavoriteOutcome: Sendable, Equatable {
+    public let successfulCount: Int
+    public let failedCount: Int
+
+    public init(successfulCount: Int, failedCount: Int) {
+        self.successfulCount = successfulCount
+        self.failedCount = failedCount
+    }
+}
+
+public struct BatchFavoriteError: LocalizedError, Sendable {
+    public let outcome: BatchFavoriteOutcome
+    public let underlyingError: any Error
+
+    public init(outcome: BatchFavoriteOutcome, underlyingError: any Error) {
+        self.outcome = outcome
+        self.underlyingError = underlyingError
+    }
+
+    public var errorDescription: String? {
+        "Favorite update failed (\(outcome.successfulCount) updated, \(outcome.failedCount) failed): \(underlyingError.localizedDescription)"
+    }
 }
 
 struct SharedJob<Value: Sendable> {

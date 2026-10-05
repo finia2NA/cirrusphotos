@@ -1,4 +1,5 @@
 import SwiftUI
+import SynologyAPI
 
 struct LibrarySizeControl: View {
     @Binding var value: Int
@@ -47,6 +48,35 @@ struct ViewerFavoriteControl: View {
         }
         .disabled(!viewer.canToggleFavorite)
         .help(viewer.state?.favoriteFailure ?? "Toggle Favorite (.)")
+    }
+}
+
+struct BrowserFavoriteControl: View {
+    @ObservedObject var model: LibraryModel
+    let collection: PhotoCollectionDescriptor
+
+    var body: some View {
+        Button(action: model.toggleSelectionFavorite) {
+            Label("Toggle Favorite", systemImage: "heart")
+        }
+        .disabled(!canToggle)
+        .accessibilityLabel(accessibilityLabel)
+        .help("Toggle Favorite (.)")
+    }
+
+    private var canToggle: Bool {
+        model.canToggleBrowserFavorite && model.timelineVerified(for: collection)
+    }
+
+    private var accessibilityLabel: String {
+        let count = model.browserSelectionCount
+        if count == 0 {
+            return "Toggle Favorite"
+        } else if count == 1 {
+            return "Toggle Favorite for 1 Selected Item"
+        } else {
+            return "Toggle Favorite for \(count) Selected Items"
+        }
     }
 }
 
@@ -154,9 +184,9 @@ struct LibraryCommands: Commands {
                 .keyboardShortcut(.space, modifiers: [])
                 .disabled(!model.canCloseViewer && !model.canOpenSelectedPhoto)
             Divider()
-            Button("Toggle Favorite") { model.toggleViewerFavorite() }
+            Button("Toggle Favorite") { model.toggleSelectionFavorite() }
                 .keyboardShortcut(".", modifiers: [])
-                .disabled(!model.canToggleViewerFavorite)
+                .disabled(!model.canToggleFavorite)
             Divider()
             Button("Download Thumbnails…") { openWindow(id: "thumbnail-download") }
                 .disabled(model.snapshot?.timeline.days.isEmpty != false || model.repository == nil ||

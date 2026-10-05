@@ -233,6 +233,10 @@ extension CachedPhotosRepository {
         "\(runID):\(collection.rawValue):\(metadata.mutationEpochs[collection, default: 0])"
     }
 
+    public func latestTimelineSnapshot(collection: PhotoCollectionDescriptor) -> TimelineSnapshot? {
+        metadata.latestTimelines[collection]
+    }
+
     private func removeTimelineRefreshObserver(collection: PhotoCollectionDescriptor, id: UUID) {
         metadata.refreshObservers[collection]?.removeValue(forKey: id)
     }

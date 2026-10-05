@@ -6,56 +6,167 @@ extension CachedPhotosRepository {
         let id = UUID()
         return AsyncStream(bufferingPolicy: .unbounded) { continuation in
             favorites.observers[id] = continuation
-            for change in favorites.latestChanges.values { continuation.yield(change) }
+            if !favorites.overrides.isEmpty {
+                continuation.yield(FavoriteChange(values: favorites.overrides))
+            }
             continuation.onTermination = { @Sendable _ in
                 Task { await self.removeFavoriteObserver(id) }
             }
         }
     }
 
-    /// The independent task survives a viewer closing after the request starts. Writes
-    /// are serialized; membership/order is reconciled from the NAS after successful writes.
+    /// Single-item convenience wrapper over setFavoritesBatch so viewer behavior
+    /// does not fork into a separate pipeline.
     public func setFavorite(itemID: Int64, item: PhotoItem? = nil,
                             in section: TimelineSection,
                             collection: PhotoCollectionDescriptor = .personalLibrary,
                             to favorite: Bool) async throws {
-        guard favorites.pendingIDs.insert(itemID).inserted else {
-            throw SynologyAPIError.unsupported("A favorite change is already in progress.")
+        var itemsByID: [Int64: PhotoItem] = [:]
+        if let item {
+            itemsByID[itemID] = item
+        } else if let cached = await cachedItem(itemID: itemID, section: section, collection: collection) {
+            itemsByID[itemID] = cached
         }
+        let action = SelectionFavoriteAction(
+            affectedIDs: [itemID],
+            targetFavorite: favorite,
+            sectionsByID: [itemID: section],
+            collection: collection,
+            itemsByID: itemsByID
+        )
+        try await setFavoritesBatch(action: action)
+    }
+
+    /// Executes an already-prepared batch favorite mutation with chunking, optimistic publication,
+    /// rollback on failure, and an authoritative Favorites refresh.
+    public func setFavoritesBatch(action: SelectionFavoriteAction) async throws {
+        let allIDs = action.affectedIDs
+        guard !allIDs.isEmpty else { return }
+        let target = action.targetFavorite
+
+        // 1. Atomically reject or claim every affected ID against pendingIDs
+        for id in allIDs {
+            guard !favorites.pendingIDs.contains(id) else {
+                throw SynologyAPIError.unsupported("A favorite change is already in progress.")
+            }
+        }
+        for id in allIDs {
+            favorites.pendingIDs.insert(id)
+        }
+
         let previous = favorites.writeTail
         let operation = Task<Void, Error> {
-            defer { favorites.pendingIDs.remove(itemID) }
+            defer {
+                for id in allIDs {
+                    self.favorites.pendingIDs.remove(id)
+                }
+            }
             await previous?.value
-            favorites.refreshTask?.cancel()
-            let generation = await store.currentGeneration()
-            var transaction = FavoriteMutationTransaction(
-                previousFavorite: favorites.overrides[itemID] ?? item?.isFavorite ?? !favorite)
-            metadata.mutationEpochs[.favorites, default: 0] &+= 1
-            favorites.publish(itemID: itemID, section: section, favorite: favorite)
-            let resolvedItem: PhotoItem?
-            if let item {
-                resolvedItem = item
-            } else {
-                resolvedItem = await cachedItem(itemID: itemID, section: section,
-                                                collection: collection)
+            self.favorites.refreshTask?.cancel()
+            let generation = await self.store.currentGeneration()
+
+            // Advance the Favorites mutation epoch once before the action
+            self.metadata.mutationEpochs[.favorites, default: 0] &+= 1
+
+            // Record previous values for all affected IDs
+            var previousValues: [Int64: Bool] = [:]
+            for id in allIDs {
+                let prev = self.favorites.overrides[id] ?? action.itemsByID[id]?.isFavorite ?? !target
+                previousValues[id] = prev
             }
-            await patchPersonalPages(itemID: itemID, item: resolvedItem, sourceSection: section,
-                                     sourceCollection: collection, favorite: favorite,
-                                     generation: generation, transaction: &transaction)
+
+            // Apply one uniform target value to affected IDs in favorites.overrides
+            // and publish one batched favorite change
+            var targetMap: [Int64: Bool] = [:]
+            for id in allIDs {
+                targetMap[id] = target
+            }
+            self.favorites.publish(
+                values: targetMap,
+                section: action.sectionsByID.values.first,
+                collection: action.collection
+            )
+
+            // Patch cached Personal Library pages by grouping changes per cache key
+            // and decoding/encoding each affected page once
+            var transaction = BatchFavoriteMutationTransaction()
+            await self.patchPersonalPagesBatch(
+                action: action,
+                target: target,
+                generation: generation,
+                transaction: &transaction
+            )
+
+            // Connect once, then call transport sequentially in fixed-size chunks
+            let chunkSize = 100
+            let chunks = stride(from: 0, to: allIDs.count, by: chunkSize).map {
+                Array(allIDs[$0..<min($0 + chunkSize, allIDs.count)])
+            }
+
+            var successfulIDs: [Int64] = []
+            var failedOrUnsubmittedIDs: [Int64] = []
+            var writeError: (any Error)? = nil
+
             do {
-                try await connect()
-                try await client.setFavorite(itemIDs: [itemID], favorite: favorite)
+                try await self.connect()
+                for (chunkIndex, chunk) in chunks.enumerated() {
+                    do {
+                        try await self.client.setFavorite(itemIDs: chunk, favorite: target)
+                        successfulIDs.append(contentsOf: chunk)
+                    } catch {
+                        writeError = error
+                        let failedStart = chunkIndex * chunkSize
+                        failedOrUnsubmittedIDs = Array(allIDs[failedStart...])
+                        break
+                    }
+                }
             } catch {
-                metadata.mutationEpochs[.favorites, default: 0] &+= 1
-                await rollbackFavoriteCaches(transaction, generation: generation)
-                favorites.publish(itemID: itemID, section: section,
-                                favorite: transaction.previousFavorite)
-                if favorites.metadataDirty { scheduleFavoritesRefresh() }
-                throw error
+                writeError = error
+                failedOrUnsubmittedIDs = allIDs
             }
-            favorites.metadataDirty = true
-            scheduleFavoritesRefresh()
+
+            if !failedOrUnsubmittedIDs.isEmpty {
+                // Advance mutation epoch to reject older in-flight Favorites metadata
+                self.metadata.mutationEpochs[.favorites, default: 0] &+= 1
+
+                // Roll back failed and unsubmitted IDs only
+                var rollbackMap: [Int64: Bool] = [:]
+                for id in failedOrUnsubmittedIDs {
+                    rollbackMap[id] = previousValues[id] ?? !target
+                }
+                self.favorites.publish(
+                    values: rollbackMap,
+                    section: action.sectionsByID.values.first,
+                    collection: action.collection
+                )
+
+                // Reapply previous values to affected cached page entries
+                await self.rollbackBatchFavoriteCaches(
+                    transaction: transaction,
+                    failedIDs: Set(failedOrUnsubmittedIDs),
+                    previousValues: previousValues,
+                    generation: generation
+                )
+
+                // Refresh authoritative Favorites timeline after any success or ambiguous state
+                if self.favorites.metadataDirty || !successfulIDs.isEmpty {
+                    self.scheduleFavoritesRefresh()
+                }
+
+                let outcome = BatchFavoriteOutcome(
+                    successfulCount: successfulIDs.count,
+                    failedCount: failedOrUnsubmittedIDs.count
+                )
+                throw BatchFavoriteError(
+                    outcome: outcome,
+                    underlyingError: writeError ?? SynologyAPIError.unsupported("Write failed")
+                )
+            }
+
+            self.favorites.metadataDirty = true
+            self.scheduleFavoritesRefresh()
         }
+
         favorites.writeTail = Task { _ = try? await operation.value }
         try await operation.value
     }
@@ -68,34 +179,60 @@ extension CachedPhotosRepository {
         return items.first(where: { $0.id == itemID })
     }
 
-    private func patchPersonalPages(itemID: Int64, item: PhotoItem?,
-                                    sourceSection: TimelineSection,
-                                    sourceCollection: PhotoCollectionDescriptor,
-                                    favorite: Bool, generation: Int,
-                                    transaction: inout FavoriteMutationTransaction) async {
-        var candidates: [TimelineSection] = []
-        if sourceCollection == .personalLibrary { candidates.append(sourceSection) }
-        if let snapshot = metadata.latestTimelines[.personalLibrary] {
-            if let item, let day = utcDay(for: item) {
-                candidates.append(contentsOf: snapshot.sections.filter { section in
-                    section.list.contains(where: { sameDay($0, day) })
-                })
-            } else if sourceCollection != .personalLibrary {
-                candidates.append(contentsOf: snapshot.sections)
+    private func patchPersonalPagesBatch(
+        action: SelectionFavoriteAction,
+        target: Bool,
+        generation: Int,
+        transaction: inout BatchFavoriteMutationTransaction
+    ) async {
+        let itemIDSet = Set(action.affectedIDs)
+        var candidateSections: [TimelineSection] = []
+
+        if action.collection == .personalLibrary {
+            var seenSections: Set<TimelineSection> = []
+            for id in action.affectedIDs {
+                if let sec = action.sectionsByID[id], seenSections.insert(sec).inserted {
+                    candidateSections.append(sec)
+                }
+            }
+        } else if let snapshot = metadata.latestTimelines[.personalLibrary] {
+            // For favorites collection, find personal library sections by item dates
+            var targetDays: Set<TimelineDay> = []
+            var hadUnknownDay = false
+            for id in action.affectedIDs {
+                if let item = action.itemsByID[id], let day = utcDay(for: item) {
+                    targetDays.insert(day)
+                } else {
+                    hadUnknownDay = true
+                }
+            }
+            if hadUnknownDay {
+                candidateSections = snapshot.sections
+            } else {
+                candidateSections = snapshot.sections.filter { section in
+                    section.list.contains(where: { day in targetDays.contains(where: { sameDay($0, day) }) })
+                }
             }
         }
-        var seen: Set<String> = []
-        for section in candidates {
-            guard let key = CacheKey.page(namespace: namespace, section: section,
-                                          collection: .personalLibrary),
-                  seen.insert(key).inserted,
+
+        var seenKeys: Set<String> = []
+        for section in candidateSections {
+            guard let key = CacheKey.page(namespace: namespace, section: section, collection: .personalLibrary),
+                  seenKeys.insert(key).inserted,
                   let cached = try? await store.get(key),
-                  let items = try? JSONDecoder().decode([PhotoItem].self, from: cached.data),
-                  items.contains(where: { $0.id == itemID }) else { continue }
-            await recordBackup(key: key, kind: .page, knownEntry: cached, transaction: &transaction)
-            guard let bytes = try? JSONEncoder().encode(items.map {
-                $0.id == itemID ? $0.withFavorite(favorite) : $0
-            }) else { continue }
+                  let items = try? JSONDecoder().decode([PhotoItem].self, from: cached.data) else { continue }
+
+            let hasAffectedItems = items.contains { itemIDSet.contains($0.id) }
+            guard hasAffectedItems else { continue }
+
+            transaction.cacheBackups[key] = BatchFavoriteCacheBackup(kind: .page, entry: cached)
+            let updatedItems = items.map { item -> PhotoItem in
+                if itemIDSet.contains(item.id) {
+                    return item.withFavorite(target)
+                }
+                return item
+            }
+            guard let bytes = try? JSONEncoder().encode(updatedItems) else { continue }
             try? await store.put(key, kind: .page, data: bytes,
                                  validatedRun: cached.validatedRun,
                                  etag: cached.etag, lastModified: cached.lastModified,
@@ -103,34 +240,38 @@ extension CachedPhotosRepository {
         }
     }
 
-    private func recordBackup(key: String, kind: CacheKind, knownEntry: CacheEntry? = nil,
-                              transaction: inout FavoriteMutationTransaction) async {
-        guard transaction.cacheBackups[key] == nil else { return }
-        let entry: CacheEntry?
-        if let knownEntry {
-            entry = knownEntry
-        } else {
-            entry = try? await store.get(key)
-        }
-        transaction.cacheBackups[key] = FavoriteCacheBackup(kind: kind, entry: entry)
-    }
-
-    private func rollbackFavoriteCaches(_ transaction: FavoriteMutationTransaction,
-                                        generation: Int) async {
+    private func rollbackBatchFavoriteCaches(
+        transaction: BatchFavoriteMutationTransaction,
+        failedIDs: Set<Int64>,
+        previousValues: [Int64: Bool],
+        generation: Int
+    ) async {
         guard await store.currentGeneration() == generation else { return }
         for (key, backup) in transaction.cacheBackups {
-            if let entry = backup.entry {
-                try? await store.put(key, kind: backup.kind, data: entry.data,
-                                     validatedRun: entry.validatedRun,
-                                     etag: entry.etag, lastModified: entry.lastModified,
-                                     expectedGeneration: generation)
-            } else {
-                try? await store.remove(key, expectedGeneration: generation)
+            guard let originalEntry = backup.entry,
+                  let items = try? JSONDecoder().decode([PhotoItem].self, from: originalEntry.data) else { continue }
+            let hasFailedItems = items.contains { failedIDs.contains($0.id) }
+            guard hasFailedItems else { continue }
+
+            let currentStored = (try? await store.get(key))?.data
+            let currentItems = (currentStored.flatMap { try? JSONDecoder().decode([PhotoItem].self, from: $0) }) ?? items
+
+            let rolledBackItems = currentItems.map { item -> PhotoItem in
+                if failedIDs.contains(item.id) {
+                    let prev = previousValues[item.id] ?? item.isFavorite
+                    return item.withFavorite(prev)
+                }
+                return item
             }
+            guard let bytes = try? JSONEncoder().encode(rolledBackItems) else { continue }
+            try? await store.put(key, kind: backup.kind, data: bytes,
+                                 validatedRun: originalEntry.validatedRun,
+                                 etag: originalEntry.etag, lastModified: originalEntry.lastModified,
+                                 expectedGeneration: generation)
         }
     }
 
-    private func scheduleFavoritesRefresh() {
+    func scheduleFavoritesRefresh() {
         favorites.refreshTask?.cancel()
         let epoch = metadata.mutationEpochs[.favorites, default: 0]
         favorites.refreshTask = Task { [weak self] in
@@ -179,7 +320,7 @@ extension CachedPhotosRepository {
         }
     }
 
-    private func utcDay(for item: PhotoItem) -> TimelineDay? {
+    func utcDay(for item: PhotoItem) -> TimelineDay? {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let components = calendar.dateComponents([.year, .month, .day],
@@ -188,19 +329,18 @@ extension CachedPhotosRepository {
         return TimelineDay(year: year, month: month, day: day, itemCount: 0)
     }
 
-    private func sameDay(_ lhs: TimelineDay, _ rhs: TimelineDay) -> Bool {
+    func sameDay(_ lhs: TimelineDay, _ rhs: TimelineDay) -> Bool {
         lhs.year == rhs.year && lhs.month == rhs.month && lhs.day == rhs.day
     }
 
     private func removeFavoriteObserver(_ id: UUID) { favorites.observers.removeValue(forKey: id) }
 }
 
-private struct FavoriteCacheBackup: Sendable {
+private struct BatchFavoriteCacheBackup: Sendable {
     let kind: CacheKind
     let entry: CacheEntry?
 }
 
-private struct FavoriteMutationTransaction: Sendable {
-    let previousFavorite: Bool
-    var cacheBackups: [String: FavoriteCacheBackup] = [:]
+private struct BatchFavoriteMutationTransaction: Sendable {
+    var cacheBackups: [String: BatchFavoriteCacheBackup] = [:]
 }

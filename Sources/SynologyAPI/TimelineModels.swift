@@ -30,7 +30,7 @@ public struct TimelineSnapshot: Codable, Sendable {
     }
 }
 
-public struct TimelineSection: Codable, Sendable, Equatable {
+public struct TimelineSection: Codable, Sendable, Equatable, Hashable {
     public let offset: Int
     public let limit: Int
     public let list: [TimelineDay]
@@ -42,7 +42,7 @@ public struct TimelineSection: Codable, Sendable, Equatable {
     }
 }
 
-public struct TimelineDay: Codable, Sendable, Equatable {
+public struct TimelineDay: Codable, Sendable, Equatable, Hashable {
     public let year: Int
     public let month: Int
     public let day: Int

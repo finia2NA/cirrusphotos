@@ -56,15 +56,34 @@ extension PhotoViewerSession {
 
     func applyingFavorites(_ items: [PhotoItem]) -> [PhotoItem] { items.map(applyingFavorite) }
 
-    func applyFavorite(itemID: Int64, value: Bool) {
-        favoriteValues[itemID] = value
-        for (section, page) in metadata.pages where page.items.contains(where: { $0.id == itemID }) {
-            metadata.pages[section] = ViewerMetadataWindow.PageEntry(items: page.items.map { $0.id == itemID ? $0.withFavorite(value) : $0 },
-                                       verified: page.verified)
+    func applyFavorites(_ values: [Int64: Bool]) {
+        for (itemID, value) in values {
+            favoriteValues[itemID] = value
         }
-        if currentItem?.id == itemID {
-            currentItem = currentItem?.withFavorite(value)
+        var pagesChanged = false
+        for (section, page) in metadata.pages {
+            var modified = false
+            let items = page.items.map { item -> PhotoItem in
+                if let fav = values[item.id], item.isFavorite != fav {
+                    modified = true
+                    return item.withFavorite(fav)
+                }
+                return item
+            }
+            if modified {
+                metadata.pages[section] = ViewerMetadataWindow.PageEntry(items: items, verified: page.verified)
+                pagesChanged = true
+            }
+        }
+        if let current = currentItem, let fav = values[current.id], current.isFavorite != fav {
+            currentItem = current.withFavorite(fav)
+            publish()
+        } else if pagesChanged {
             publish()
         }
+    }
+
+    func applyFavorite(itemID: Int64, value: Bool) {
+        applyFavorites([itemID: value])
     }
 }

@@ -145,7 +145,7 @@ public actor PhotoViewerSession {
         favoriteTask = Task { [weak self] in
             for await change in await repository.favoriteChanges() {
                 guard !Task.isCancelled else { return }
-                await self?.applyFavorite(itemID: change.itemID, value: change.favorite)
+                await self?.applyFavorites(change.values)
             }
         }
         startAssetsForCurrentMetadata()

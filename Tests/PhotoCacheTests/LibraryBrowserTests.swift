@@ -301,7 +301,7 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         let requestStarted = await waitUntil { await transport.favoriteRequests.count == 1 }
         XCTAssertTrue(requestStarted)
         let optimisticChange = await favoriteChanges.next()
-        XCTAssertEqual(optimisticChange?.favorite, false)
+        XCTAssertEqual(optimisticChange?.values[photo.id], false)
 
         await transport.releaseFavoriteWrite(failing: true)
         do {
@@ -309,7 +309,7 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
             XCTFail("Expected the favorite write to fail")
         } catch {}
         let rollbackChange = await favoriteChanges.next()
-        XCTAssertEqual(rollbackChange?.favorite, true)
+        XCTAssertEqual(rollbackChange?.values[photo.id], true)
 
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
         let pageKey = try XCTUnwrap(CacheKey.page(namespace: namespace, section: descriptor,

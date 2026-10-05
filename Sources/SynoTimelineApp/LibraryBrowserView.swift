@@ -7,7 +7,33 @@ import TimelineCore
 enum BrowserSelectionCommand {
     case move(LibrarySelectionDirection, extending: Bool)
     case openSelected
+    case toggleFavorite
     case endExtension
+}
+
+/// Immutable snapshot of browser command context published to the shell.
+struct BrowserCommandSnapshot: Sendable {
+    let owner: UUID
+    let active: Bool
+    let canOpen: Bool
+    let canToggleFavorite: Bool
+    let collection: PhotoCollectionDescriptor
+    let indexFingerprint: String?
+    let selectionGeneration: String?
+    let selectedOrdinals: IndexSet
+    let knownItemIDsByOrdinal: [Int: Int64]
+
+    static let inactive = BrowserCommandSnapshot(
+        owner: UUID(),
+        active: false,
+        canOpen: false,
+        canToggleFavorite: false,
+        collection: .personalLibrary,
+        indexFingerprint: nil,
+        selectionGeneration: nil,
+        selectedOrdinals: IndexSet(),
+        knownItemIDsByOrdinal: [:]
+    )
 }
 
 struct BrowserSelectionState: Equatable {
@@ -176,9 +202,8 @@ struct LibraryBrowserView: View {
                                              contentTopInset: contentTopInset,
                                              onOpenPhoto: onOpenPhoto,
                                              onSelectionStateChanged: { library.setSelectionState($0, for: collection) },
-                                             onCommandStateChanged: { owner, active, canOpen, handler in
-                                                 library.installBrowserCommands(owner: owner, active: active, canOpen: canOpen,
-                                                                                handler: handler)
+                                             onCommandStateChanged: { snapshot, handler in
+                                                 library.installBrowserCommands(snapshot: snapshot, handler: handler)
                                              },
                                              onRestorationAnchorChanged: onRestorationAnchorChanged,
                                              onRetry: { Task { await library.reload() } }) { day in
@@ -450,7 +475,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let contentTopInset: CGFloat
     let onOpenPhoto: (PhotoViewerOpenRequest) -> Void
     let onSelectionStateChanged: (BrowserSelectionState) -> Void
-    let onCommandStateChanged: (UUID, Bool, Bool, ((BrowserSelectionCommand) -> Void)?) -> Void
+    let onCommandStateChanged: (BrowserCommandSnapshot, ((BrowserSelectionCommand) -> Void)?) -> Void
     let onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void
     let onRetry: () -> Void
     let onVisibleDay: (String) -> Void
@@ -521,6 +546,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var allowNetwork = false
         private var thumbnailSize: ThumbnailSize = .m
         private var repository: CachedPhotosRepository?
+        private var collection: PhotoCollectionDescriptor = .personalLibrary
         private var onVisibleDay: ((String) -> Void)?
         private var lastVisibleDay: String?
         private var unavailableOffline = false
@@ -528,7 +554,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var onRetry: (() -> Void)?
         private var onOpenPhoto: ((PhotoViewerOpenRequest) -> Void)?
         private var onSelectionStateChanged: ((BrowserSelectionState) -> Void)?
-        private var onCommandStateChanged: ((UUID, Bool, Bool, ((BrowserSelectionCommand) -> Void)?) -> Void)?
+        private var onCommandStateChanged: ((BrowserCommandSnapshot, ((BrowserSelectionCommand) -> Void)?) -> Void)?
         private var onRestorationAnchorChanged: ((PhotoTimelineRestorationAnchor) -> Void)?
         private var demandedVisible: [Int] = []
         private var demandedPrefetch: [Int] = []
@@ -555,6 +581,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
 
         func configure(_ input: LibraryBrowserScrollView) {
             guard let scroll else { return }
+            collection = input.collection
             onVisibleDay = input.onVisibleDay
             onRetry = input.onRetry
             onOpenPhoto = input.onOpenPhoto
@@ -664,7 +691,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             cancelSupersededReveal()
             selectAfterRevealItemID = nil
             cancelPointerInteraction()
-            onCommandStateChanged?(commandOwner, false, false, nil)
+            onCommandStateChanged?(.inactive, nil)
             stopWindow()
             hosts.values.forEach { $0.removeFromSuperview() }
             hosts.removeAll()
@@ -937,9 +964,29 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             let active = active && (scroll as? TimelineScrollView)?.browserCommandContextActive == true
             if !active { cancelPointerInteraction(); selection.endExtension(); pendingOpen = nil }
             let canOpen = active && selection.count == 1 && selection.first.flatMap(loadedItem)?.photo.type != "video"
+            let canToggleFavorite = active && !selection.indexes.isEmpty && allowNetwork
             let callback = onCommandStateChanged, owner = commandOwner
             let handler: ((BrowserSelectionCommand) -> Void)? = active ? { [weak self] in self?.perform($0) } : nil
-            DispatchQueue.main.async { callback?(owner, active, canOpen, handler) }
+            let knownItemIDs: [Int: Int64]
+            if active {
+                var map: [Int: Int64] = [:]
+                for ordinal in selection.indexes {
+                    if let item = loadedItem(ordinal) { map[ordinal] = item.photo.id }
+                }
+                knownItemIDs = map
+            } else {
+                knownItemIDs = [:]
+            }
+            let snapshot = BrowserCommandSnapshot(
+                owner: owner, active: active, canOpen: canOpen,
+                canToggleFavorite: canToggleFavorite,
+                collection: collection,
+                indexFingerprint: index?.fingerprint,
+                selectionGeneration: selectionState.generation,
+                selectedOrdinals: selection.indexes,
+                knownItemIDsByOrdinal: knownItemIDs
+            )
+            DispatchQueue.main.async { callback?(snapshot, handler) }
         }
 
         func perform(_ command: BrowserSelectionCommand) {
@@ -959,6 +1006,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             case .openSelected:
                 guard selection.count == 1, let ordinal = selection.first else { return }
                 open(ordinal: ordinal)
+            case .toggleFavorite:
+                break  // Routed through LibraryModel; the browser handler is not invoked for this.
             case .endExtension:
                 selection.endExtension()
                 publishSelection()

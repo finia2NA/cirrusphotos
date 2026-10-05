@@ -22,12 +22,19 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var canCloseViewer = false
     @Published private(set) var canOpenSelectedPhoto = false
     @Published private(set) var browserCommandsActive = false
+    /// Whether the browser selection-favorite action may begin (selection non-empty, no active write).
+    @Published private(set) var canToggleBrowserFavorite = false
+    /// Pending confirmation for a large selection-favorite action; nil when no confirmation is needed.
+    @Published private(set) var pendingFavoriteConfirmation: SelectionFavoriteConfirmation?
     private var browserSelectionStates: [PhotoCollectionDescriptor: BrowserSelectionState] = [:]
     private var browserCommandHandler: ((BrowserSelectionCommand) -> Void)?
     private var browserCommandOwner: UUID?
+    private var browserCommandSnapshot: BrowserCommandSnapshot = .inactive
     private weak var activeViewer: PhotoViewerPresentation?
     private var viewerCloseHandler: (() -> Void)?
     private var thumbnailPolicyRevision: UInt64 = 0
+    /// True while a selection-favorite write (or resolution) is in progress.
+    private(set) var browserFavoriteBusy = false
     var authenticationFailed: Bool {
         if case .failed = authenticationStatus { return true }
         return false
@@ -103,15 +110,60 @@ final class LibraryModel: ObservableObject {
         browserSelectionStates[collection] = state
     }
 
-    func installBrowserCommands(owner: UUID, active: Bool, canOpen: Bool,
-                                handler: ((BrowserSelectionCommand) -> Void)?) {
+    func installBrowserCommands(snapshot: BrowserCommandSnapshot, handler: ((BrowserSelectionCommand) -> Void)?) {
+        let active = snapshot.active
+        let owner = snapshot.owner
         if active { browserCommandOwner = owner }
         else if browserCommandOwner != nil && browserCommandOwner != owner { return }
-        let open = active && canOpen
+        let canOpen = active && snapshot.canOpen
         if browserCommandsActive != active { browserCommandsActive = active }
-        if canOpenSelectedPhoto != open { canOpenSelectedPhoto = open }
+        if canOpenSelectedPhoto != canOpen { canOpenSelectedPhoto = canOpen }
         browserCommandHandler = active ? handler : nil
+        browserCommandSnapshot = active ? snapshot : .inactive
+        updateBrowserFavoriteAvailability()
         if !active { browserCommandOwner = nil }
+    }
+
+    func installBrowserCommands(
+        owner: UUID,
+        active: Bool,
+        canOpen: Bool,
+        canToggleFavorite: Bool = false,
+        collection: PhotoCollectionDescriptor = .personalLibrary,
+        selectedOrdinals: IndexSet = IndexSet(),
+        handler: ((BrowserSelectionCommand) -> Void)? = nil
+    ) {
+        let snapshot = BrowserCommandSnapshot(
+            owner: owner,
+            active: active,
+            canOpen: canOpen,
+            canToggleFavorite: canToggleFavorite,
+            collection: collection,
+            indexFingerprint: nil,
+            selectionGeneration: nil,
+            selectedOrdinals: selectedOrdinals,
+            knownItemIDsByOrdinal: [:]
+        )
+        installBrowserCommands(snapshot: snapshot, handler: handler)
+    }
+
+    var browserSelectionCount: Int { browserCommandSnapshot.selectedOrdinals.count }
+
+    var canToggleFavorite: Bool {
+        if activeViewer != nil {
+            return canToggleViewerFavorite
+        } else {
+            return canToggleBrowserFavorite
+        }
+    }
+
+    private func updateBrowserFavoriteAvailability() {
+        let available = browserCommandsActive &&
+            !browserCommandSnapshot.selectedOrdinals.isEmpty &&
+            pendingFavoriteConfirmation == nil &&
+            !browserFavoriteBusy &&
+            timelineVerified(for: browserCommandSnapshot.collection)
+        if canToggleBrowserFavorite != available { canToggleBrowserFavorite = available }
     }
 
     func performBrowserCommand(_ command: BrowserSelectionCommand) {
@@ -144,6 +196,83 @@ final class LibraryModel: ObservableObject {
         activeViewer?.toggleFavorite()
         updateViewerCommands()
     }
+
+    // MARK: - Selection Favorites
+
+    /// Begins a selection favorite operation for the active browser. Routes through
+    /// the viewer if it is open; otherwise resolves the full browser selection.
+    func toggleSelectionFavorite() {
+        if activeViewer != nil {
+            toggleViewerFavorite()
+            return
+        }
+        guard canToggleBrowserFavorite, !browserFavoriteBusy,
+              let repository else { return }
+        let snap = browserCommandSnapshot
+        guard snap.active, !snap.selectedOrdinals.isEmpty else { return }
+        browserFavoriteBusy = true
+        updateBrowserFavoriteAvailability()
+        Task { [weak self] in
+            await self?.resolveThenMutateFavorites(snapshot: snap, repository: repository)
+        }
+    }
+
+    private func resolveThenMutateFavorites(snapshot: BrowserCommandSnapshot,
+                                             repository: CachedPhotosRepository) async {
+        defer {
+            browserFavoriteBusy = false
+            updateBrowserFavoriteAvailability()
+        }
+        guard let timelineSnapshot = snapshots[snapshot.collection] else { return }
+        let resolver = SelectionFavoriteResolver(repository: repository)
+        guard let action = await resolver.resolve(
+            collection: snapshot.collection,
+            snapshot: timelineSnapshot,
+            selectedOrdinals: snapshot.selectedOrdinals,
+            knownItemIDsByOrdinal: snapshot.knownItemIDsByOrdinal
+        ) else { return }
+
+        guard !action.affectedIDs.isEmpty else { return }
+
+        if action.affectedIDs.count > 5 {
+            let confirmation = SelectionFavoriteConfirmation(action: action)
+            pendingFavoriteConfirmation = confirmation
+            return
+        }
+        await executeFavoriteAction(action, repository: repository)
+    }
+
+    func confirmBrowserFavorite() {
+        guard let confirmation = pendingFavoriteConfirmation,
+              let repository else {
+            pendingFavoriteConfirmation = nil
+            return
+        }
+        let action = confirmation.action
+        pendingFavoriteConfirmation = nil
+        browserFavoriteBusy = true
+        updateBrowserFavoriteAvailability()
+        Task { [weak self] in
+            defer {
+                self?.browserFavoriteBusy = false
+                self?.updateBrowserFavoriteAvailability()
+            }
+            await self?.executeFavoriteAction(action, repository: repository)
+        }
+    }
+
+    func cancelBrowserFavorite() {
+        pendingFavoriteConfirmation = nil
+        browserFavoriteBusy = false
+        updateBrowserFavoriteAvailability()
+    }
+
+    private func executeFavoriteAction(_ action: SelectionFavoriteAction,
+                                       repository: CachedPhotosRepository) async {
+        try? await repository.setFavoritesBatch(action: action)
+    }
+
+    // MARK: - Lifecycle
 
     func load() async {
         guard !started else { return }
@@ -206,8 +335,10 @@ final class LibraryModel: ObservableObject {
             }
             timelineVerifications[collection] = verified
             if verified { collectionErrors.removeValue(forKey: collection) }
+            updateBrowserFavoriteAvailability()
         case .failure(let message):
             collectionErrors[collection] = message
+            updateBrowserFavoriteAvailability()
         }
     }
 
@@ -229,6 +360,30 @@ final class LibraryModel: ObservableObject {
             try? await repository.clearCache()
             DecodedImages.shared.clear()
             await refreshUsage()
+        }
+    }
+}
+
+/// Carries the resolved action while awaiting user confirmation.
+struct SelectionFavoriteConfirmation: Identifiable, Sendable {
+    var id: String { "\(action.targetFavorite):\(action.affectedIDs.count)" }
+    let action: SelectionFavoriteAction
+
+    var title: String {
+        let count = action.affectedIDs.count
+        let noun = count == 1 ? "Photo" : "Photos"
+        if action.targetFavorite {
+            return "Add \(count) \(noun) to Favorites?"
+        } else {
+            return "Remove \(count) \(noun) from Favorites?"
+        }
+    }
+
+    var actionButtonTitle: String {
+        if action.targetFavorite {
+            return "Add to Favorites"
+        } else {
+            return "Remove from Favorites"
         }
     }
 }

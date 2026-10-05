@@ -57,7 +57,6 @@ struct RepositoryImageWork {
 struct RepositoryFavoriteState {
     var observers: [UUID: AsyncStream<FavoriteChange>.Continuation] = [:]
     var overrides: [Int64: Bool] = [:]
-    var latestChanges: [Int64: FavoriteChange] = [:]
     var pendingIDs: Set<Int64> = []
     var writeTail: Task<Void, Never>?
     var refreshTask: Task<Void, Never>?
@@ -70,10 +69,11 @@ struct RepositoryFavoriteState {
         }
     }
 
-    mutating func publish(itemID: Int64, section: TimelineSection, favorite: Bool) {
-        overrides[itemID] = favorite
-        let change = FavoriteChange(itemID: itemID, section: section, favorite: favorite)
-        latestChanges[itemID] = change
+    mutating func publish(values: [Int64: Bool], section: TimelineSection? = nil, collection: PhotoCollectionDescriptor = .personalLibrary) {
+        for (itemID, favorite) in values {
+            overrides[itemID] = favorite
+        }
+        let change = FavoriteChange(values: values, sourceSection: section, sourceCollection: collection)
         for observer in observers.values { observer.yield(change) }
     }
 }

@@ -48,6 +48,21 @@ struct AppShellView: View {
         .onChange(of: model.viewerSnapshotRevision(for: selectedCollection)) { _, revision in
             if let viewer, viewer.snapshotRevision != revision { viewer.invalidateForNewIndex() }
         }
+        .alert(
+            model.pendingFavoriteConfirmation?.title ?? "",
+            isPresented: Binding(
+                get: { model.pendingFavoriteConfirmation != nil },
+                set: { if !$0 { model.cancelBrowserFavorite() } }
+            ),
+            presenting: model.pendingFavoriteConfirmation
+        ) { confirmation in
+            Button(confirmation.actionButtonTitle) {
+                model.confirmBrowserFavorite()
+            }
+            Button("Cancel", role: .cancel) {
+                model.cancelBrowserFavorite()
+            }
+        }
     }
 
     private var detail: some View {
@@ -180,6 +195,9 @@ struct AppShellView: View {
         } else {
             ToolbarItem(placement: .navigation) {
                 LibrarySizeControl(value: $model.itemsPerRow)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                BrowserFavoriteControl(model: model, collection: selectedCollection)
             }
         }
 

@@ -1,6 +1,6 @@
 # Selection Favorites
 
-Status: Planned.
+Status: Implemented.
 
 ## Goal
 

@@ -197,15 +197,24 @@ public actor LibraryPageWindow {
     }
 
     private func receiveFavorite(_ change: FavoriteChange) {
-        favoriteValues[change.itemID] = change.favorite
+        for (id, val) in change.values {
+            favoriteValues[id] = val
+        }
         guard let fingerprint else { return }
-        for (section, page) in pages where page.items.contains(where: { $0.id == change.itemID }) {
-            let items: [PhotoItem]
-            items = page.items.map { $0.id == change.itemID ? $0.withFavorite(change.favorite) : $0 }
-            let updated = LibraryPage(sectionIndex: section,
-                                      items: items, verified: page.verified)
-            pages[section] = updated
-            publish(.page(updated, fingerprint: fingerprint))
+        for (section, page) in pages {
+            var modified = false
+            let items = page.items.map { item -> PhotoItem in
+                if let val = change.values[item.id], item.isFavorite != val {
+                    modified = true
+                    return item.withFavorite(val)
+                }
+                return item
+            }
+            if modified {
+                let updated = LibraryPage(sectionIndex: section, items: items, verified: page.verified)
+                pages[section] = updated
+                publish(.page(updated, fingerprint: fingerprint))
+            }
         }
     }
     private func publish(_ event: LibraryPageEvent) {

@@ -1,6 +1,24 @@
 import Foundation
 import SynologyAPI
 
+func temporaryTestRoot(_ prefix: String) -> URL {
+    FileManager.default.temporaryDirectory
+        .appendingPathComponent("\(prefix)-\(UUID().uuidString)")
+}
+
+@MainActor
+func waitUntil(
+    attempts: Int = 500,
+    interval: Duration = .milliseconds(3),
+    _ predicate: @escaping @MainActor @Sendable () async -> Bool
+) async -> Bool {
+    for _ in 0..<attempts {
+        if await predicate() { return true }
+        try? await Task.sleep(for: interval)
+    }
+    return false
+}
+
 private struct UnexpectedTransportCall: Error {}
 
 extension PhotosTransport {
