@@ -1,0 +1,292 @@
+import Foundation
+import XCTest
+import SynologyAPI
+import PhotoCache
+@testable import SynoTimelineApp
+
+@MainActor
+final class InfoPanelTests: XCTestCase {
+
+    // MARK: - Formatting
+
+    func testDayRangeFormatting() {
+        let locale = Locale(identifier: "en_US")
+        XCTAssertEqual(InfoPanelFormatting.dayRange(newest: "2026-07-08", oldest: "2026-07-08",
+                                                    locale: locale), "Jul 8, 2026")
+        XCTAssertEqual(InfoPanelFormatting.dayRange(newest: "2026-07-08", oldest: "2026-04-21",
+                                                    locale: locale), "Apr 21 – Jul 8, 2026")
+        XCTAssertEqual(InfoPanelFormatting.dayRange(newest: "2026-07-08", oldest: "2025-04-21",
+                                                    locale: locale), "Apr 21, 2025 – Jul 8, 2026")
+        XCTAssertNil(InfoPanelFormatting.dayRange(newest: nil, oldest: "2026-07-08", locale: locale))
+        XCTAssertNil(InfoPanelFormatting.dayRange(newest: "2026-07-08", oldest: nil, locale: locale))
+    }
+
+    func testMegapixelTruncationAndBadgeMapping() {
+        XCTAssertEqual(InfoPanelFormatting.megapixels(width: 5152, height: 7728), "39 MP")
+        XCTAssertEqual(InfoPanelFormatting.megapixels(width: 4000, height: 3000), "12 MP")
+        XCTAssertNil(InfoPanelFormatting.megapixels(width: 0, height: 100))
+        XCTAssertEqual(InfoPanelFormatting.formatBadge(filename: "IMG_1.HEIC"), "HEIF")
+        XCTAssertEqual(InfoPanelFormatting.formatBadge(filename: "a.hif"), "HEIF")
+        XCTAssertEqual(InfoPanelFormatting.formatBadge(filename: "a.jpeg"), "JPEG")
+        XCTAssertEqual(InfoPanelFormatting.formatBadge(filename: "a.PNG"), "PNG")
+        XCTAssertEqual(InfoPanelFormatting.formatBadge(filename: "a.tiff"), "TIFF")
+        XCTAssertEqual(InfoPanelFormatting.formatBadge(filename: "raw.dng"), "DNG")
+        XCTAssertEqual(InfoPanelFormatting.formatBadge(filename: "clip.mov"), "MOV")
+        XCTAssertEqual(InfoPanelFormatting.formatBadge(filename: "noext"), nil)
+    }
+
+    func testApertureDurationAndByteCountFormatting() {
+        XCTAssertEqual(InfoPanelFormatting.apertureValue("F2.8"), "f/2.8")
+        XCTAssertEqual(InfoPanelFormatting.apertureValue("f/2.8"), "f/2.8")
+        XCTAssertEqual(InfoPanelFormatting.apertureValue("2.8"), "2.8")
+        XCTAssertEqual(InfoPanelFormatting.duration(49), "0:49")
+        XCTAssertEqual(InfoPanelFormatting.duration(65.4), "1:05")
+        XCTAssertEqual(InfoPanelFormatting.duration(0), "0:00")
+        let bytes = InfoPanelFormatting.byteCount(1_230_000_000)
+        XCTAssertTrue(bytes.contains("GB"))
+        XCTAssertTrue(InfoPanelFormatting.byteCount(2_000).contains("KB"))
+    }
+
+    func testPageCacheKeyDerivesFromSharedRequestFields() throws {
+        XCTAssertTrue(PhotosRequestFields.pageAdditional.contains("exif"))
+        let section = TimelineSection(offset: 0, limit: 1,
+                                      list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
+        let namespace = CacheKey.namespace(server: SynologyClient.defaultBaseURL, account: "alice")
+        let standard = try XCTUnwrap(CacheKey.page(namespace: namespace, section: section))
+        XCTAssertEqual(standard,
+                       CacheKey.page(namespace: namespace, section: section,
+                                     additional: PhotosRequestFields.pageAdditional))
+        let alternate = try XCTUnwrap(CacheKey.page(namespace: namespace, section: section,
+                                                    additional: ["thumbnail"]))
+        XCTAssertNotEqual(standard, alternate)
+    }
+
+    // MARK: - Model
+
+    func testEmptySelectionShowsPlaceholder() async throws {
+        let setup = try await makeContext()
+        setup.model.updateBrowserContext(repository: setup.repo, snapshot: nil,
+                                         collection: .personalLibrary, selection: IndexSet())
+        setup.model.setVisible(true)
+        XCTAssertEqual(setup.model.content.kind, .empty)
+    }
+
+    func testSingleSelectionBuildsCameraMetricsAndExposure() async throws {
+        let exif = """
+        {"aperture":"F2.8","camera":"iPhone 13 Pro","exposure_time":"1/25 s","focal_length":"9.0 mm","iso":"1250","lens":"iPhone 13 Pro back triple camera 9mm f/2.8"}
+        """
+        let item = makeItem(id: 5, filename: "IMG_3905.HEIC", filesize: 1_768_222,
+                            exif: exif, width: 4032, height: 3024)
+        let setup = try await makeContext(items: [item])
+        let model = setup.model
+        model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
+                                   collection: .personalLibrary, selection: IndexSet(integer: 0))
+        model.setVisible(true)
+        let resolved = await waitUntil { model.content.kind == .single && !model.content.isLoading }
+        XCTAssertTrue(resolved)
+        XCTAssertEqual(model.content.filename, "IMG_3905.HEIC")
+        XCTAssertEqual(model.content.camera, "iPhone 13 Pro")
+        XCTAssertEqual(model.content.lens, "iPhone 13 Pro back triple camera 9mm f/2.8")
+        XCTAssertEqual(model.content.exposure, ["ISO 1250", "9.0 mm", "f/2.8", "1/25 s"])
+        XCTAssertEqual(model.content.formatBadge, "HEIF")
+        XCTAssertTrue(model.content.metrics.contains("12 MP"))
+        XCTAssertTrue(model.content.metrics.contains("4032 × 3024"))
+        XCTAssertTrue(model.content.metrics.contains(InfoPanelFormatting.byteCount(1_768_222)))
+        XCTAssertNotNil(model.content.dateTimeText)
+    }
+
+    func testEmptyExifHidesCameraBlock() async throws {
+        let exif = """
+        {"aperture":"","camera":"","exposure_time":"","focal_length":"","iso":"","lens":""}
+        """
+        let item = makeItem(id: 6, filename: "IMG_3987.PNG", filesize: 512_000, exif: exif)
+        let setup = try await makeContext(items: [item])
+        let model = setup.model
+        model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
+                                   collection: .personalLibrary, selection: IndexSet(integer: 0))
+        model.setVisible(true)
+        _ = await waitUntil { model.content.kind == .single && !model.content.isLoading }
+        XCTAssertNil(model.content.camera)
+        XCTAssertNil(model.content.lens)
+        XCTAssertTrue(model.content.exposure.isEmpty)
+        XCTAssertEqual(model.content.formatBadge, "PNG")
+    }
+
+    func testVideoShowsDurationInsteadOfCameraFields() async throws {
+        let item = makeItem(id: 7, type: "video", filename: "clip.mov", filesize: 2_000_000,
+                            durationMilliseconds: 49_000)
+        let setup = try await makeContext(items: [item])
+        let model = setup.model
+        model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
+                                   collection: .personalLibrary, selection: IndexSet(integer: 0))
+        model.setVisible(true)
+        _ = await waitUntil { model.content.kind == .single && !model.content.isLoading }
+        XCTAssertEqual(model.content.durationText, "0:49")
+        XCTAssertNil(model.content.camera)
+        XCTAssertTrue(model.content.exposure.isEmpty)
+        XCTAssertTrue(model.content.metrics.contains(InfoPanelFormatting.byteCount(2_000_000)))
+    }
+
+    func testMultipleSelectionResolvesCountDateAndSize() async throws {
+        let items = [makeItem(id: 1, filesize: 1000), makeItem(id: 2, filesize: 1000)]
+        let setup = try await makeContext(items: items)
+        let model = setup.model
+        model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
+                                   collection: .personalLibrary, selection: IndexSet(integersIn: 0...1))
+        model.setVisible(true)
+        let resolved = await waitUntil {
+            model.content.kind == .multiple && model.content.countText == "2 Photos" &&
+                !model.content.isResolvingSize
+        }
+        XCTAssertTrue(resolved)
+        XCTAssertEqual(model.content.sizeText, InfoPanelFormatting.byteCount(2000))
+        XCTAssertEqual(model.content.dateRangeText,
+                       InfoPanelFormatting.dayRange(newest: "2024-04-03", oldest: "2024-04-03"))
+    }
+
+    func testMixedSelectionUsesItemsNoun() async throws {
+        let items = [makeItem(id: 1, filesize: 1000),
+                     makeItem(id: 2, type: "video", filesize: 2000)]
+        let setup = try await makeContext(items: items)
+        let model = setup.model
+        model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
+                                   collection: .personalLibrary, selection: IndexSet(integersIn: 0...1))
+        model.setVisible(true)
+        let resolved = await waitUntil {
+            model.content.kind == .multiple && model.content.countText == "2 Items" &&
+                !model.content.isResolvingSize
+        }
+        XCTAssertTrue(resolved)
+    }
+
+    func testViewerItemOverridesBrowserSelectionAndRevertsOnClose() async throws {
+        let items = [makeItem(id: 1, filesize: 1000), makeItem(id: 2, filesize: 1000)]
+        let setup = try await makeContext(items: items)
+        let model = setup.model
+        model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
+                                   collection: .personalLibrary, selection: IndexSet(integersIn: 0...1))
+        model.setVisible(true)
+        _ = await waitUntil { model.content.kind == .multiple }
+
+        model.updateViewer(active: true, item: makeItem(id: 9, filename: "IMG_0009.HEIC"))
+        XCTAssertEqual(model.content.kind, .single)
+        XCTAssertEqual(model.content.filename, "IMG_0009.HEIC")
+
+        model.updateViewer(active: true, item: nil)
+        XCTAssertEqual(model.content.kind, .single)
+        XCTAssertTrue(model.content.isLoading)
+
+        model.updateViewer(active: false, item: nil)
+        let reverted = await waitUntil { model.content.kind == .multiple }
+        XCTAssertTrue(reverted)
+    }
+
+    func testViewerActiveWithNilItemNeverShowsBrowserSummary() async throws {
+        let items = [makeItem(id: 1, filesize: 1000), makeItem(id: 2, filesize: 1000)]
+        let setup = try await makeContext(items: items)
+        let model = setup.model
+        model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
+                                   collection: .personalLibrary, selection: IndexSet(integersIn: 0...1))
+        model.setVisible(true)
+        model.updateViewer(active: true, item: nil)
+        XCTAssertEqual(model.content.kind, .single)
+        XCTAssertTrue(model.content.isLoading)
+        try? await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(model.content.kind, .single)
+        XCTAssertTrue(model.content.isLoading)
+    }
+
+    func testHiddenModelPerformsNoPageReads() async throws {
+        let setup = try await makeContext(items: [makeItem(id: 1, filesize: 1000)])
+        let model = setup.model
+        model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
+                                   collection: .personalLibrary, selection: IndexSet(integer: 0))
+        try? await Task.sleep(for: .milliseconds(250))
+        let calls = await setup.transport.recordedItemCalls()
+        XCTAssertEqual(calls, 0)
+        XCTAssertEqual(model.content.kind, .empty)
+    }
+
+    func testRapidSelectionUpdatesResolveOnlyOnce() async throws {
+        let items = [makeItem(id: 1, filename: "IMG_0001.HEIC", filesize: 1000),
+                     makeItem(id: 2, filename: "IMG_0002.HEIC", filesize: 1000)]
+        let setup = try await makeContext(items: items)
+        let model = setup.model
+        model.setVisible(true)
+        for selection in [IndexSet(integer: 0), IndexSet(integer: 1), IndexSet(integer: 0)] {
+            model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
+                                       collection: .personalLibrary, selection: selection)
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        let resolved = await waitUntil { model.content.kind == .single && !model.content.isLoading }
+        XCTAssertTrue(resolved)
+        XCTAssertEqual(model.content.filename, "IMG_0001.HEIC")
+        try? await Task.sleep(for: .milliseconds(200))
+        let calls = await setup.transport.recordedItemCalls()
+        XCTAssertEqual(calls, 1)
+    }
+
+    func testUnavailableLibraryShowsFailureForNonEmptySelection() async throws {
+        let model = InfoPanelModel()
+        model.updateBrowserContext(repository: nil, snapshot: nil, collection: .personalLibrary,
+                                   selection: IndexSet(integer: 0))
+        model.setVisible(true)
+        guard case .failure = model.content.kind else {
+            return XCTFail("Expected failure content")
+        }
+    }
+
+    // MARK: - Support
+
+    private struct Context {
+        let model: InfoPanelModel
+        let repo: CachedPhotosRepository
+        let transport: InfoPanelMockTransport
+        let snapshot: TimelineSnapshot
+    }
+
+    private func makeContext(items: [PhotoItem] = []) async throws -> Context {
+        let root = temporaryTestRoot("InfoPanel")
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let transport = InfoPanelMockTransport()
+        let section = TimelineSection(offset: 0, limit: max(1, items.count),
+                                      list: [TimelineDay(year: 2024, month: 4, day: 3,
+                                                         itemCount: max(1, items.count))])
+        if !items.isEmpty {
+            await transport.setPage(items, start: section.dateBounds!.start)
+        }
+        let credentials = SynologyCredentials(username: "alice", password: "pw", otpSecret: "unused")
+        let repo = try CachedPhotosRepository(credentials: credentials, budget: 100_000_000,
+                                              cacheRoot: root, transport: transport)
+        return Context(model: InfoPanelModel(), repo: repo, transport: transport,
+                       snapshot: TimelineSnapshot(sections: [section]))
+    }
+
+    private func makeItem(id: Int64, time: Int64 = 1712102400, type: String = "photo",
+                          filename: String? = nil, filesize: Int64? = nil,
+                          exif: String? = nil, width: Int = 1000, height: Int = 1000,
+                          durationMilliseconds: Int? = nil) -> PhotoItem {
+        var fields = ["\"id\":\(id)", "\"time\":\(time)", "\"type\":\"\(type)\""]
+        if let filename { fields.append("\"filename\":\"\(filename)\"") }
+        if let filesize { fields.append("\"filesize\":\(filesize)") }
+        var additional = ["\"resolution\":{\"width\":\(width),\"height\":\(height)}"]
+        if let exif { additional.append("\"exif\":\(exif)") }
+        if let durationMilliseconds { additional.append("\"video_meta\":{\"duration\":\(durationMilliseconds)}") }
+        fields.append("\"additional\":{\(additional.joined(separator: ","))}")
+        let json = "{" + fields.joined(separator: ",") + "}"
+        return try! JSONDecoder().decode(PhotoItem.self, from: Data(json.utf8))
+    }
+}
+
+actor InfoPanelMockTransport: PhotosTransport {
+    private var pages: [Int64: [PhotoItem]] = [:]
+    private var itemCalls = 0
+
+    func setPage(_ items: [PhotoItem], start: Int64) { pages[start] = items }
+    func recordedItemCalls() -> Int { itemCalls }
+
+    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
+        itemCalls += 1
+        return section.dateBounds.flatMap { pages[$0.start] } ?? []
+    }
+}

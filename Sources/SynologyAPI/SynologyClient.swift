@@ -72,7 +72,7 @@ public actor SynologyClient: PhotosTransport {
             "api": "SYNO.Foto.Browse.Item", "version": "7", "method": "list",
             "offset": String(section.offset), "limit": String(section.limit),
             "start_time": String(bounds.start), "end_time": String(bounds.end),
-            "additional": "[\"thumbnail\",\"resolution\",\"orientation\",\"video_convert\",\"video_meta\",\"address\",\"favorite\"]",
+            "additional": Self.additionalParameter,
             "_sid": sid
         ]
         if collection.favoriteOnly { parameters["favorite_only"] = "true" }
@@ -82,6 +82,10 @@ public actor SynologyClient: PhotosTransport {
         )
         guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
         return data.list
+    }
+
+    private static var additionalParameter: String {
+        "[" + PhotosRequestFields.pageAdditional.map { "\"\($0)\"" }.joined(separator: ",") + "]"
     }
 
     public func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {

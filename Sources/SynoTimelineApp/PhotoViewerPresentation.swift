@@ -19,6 +19,7 @@ final class PhotoViewerPresentation: ObservableObject {
     let originalItemID: Int64
     let snapshotRevision: Int
     let canvasController = PhotoViewerCanvasController()
+    var onInfoItemChanged: ((PhotoItem?) -> Void)?
     private let initialItem: PhotoItem
     private let index: LibraryIndex
 
@@ -202,6 +203,7 @@ final class PhotoViewerPresentation: ObservableObject {
             canvasController.resetForSelection(next.selection.generation)
         }
         state = next
+        onInfoItemChanged?(next.item)
         if let data = next.fullImageData, lastFullData != data {
             lastFullData = data
             decodeFull(data, selection: next.selection)

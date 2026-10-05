@@ -80,6 +80,28 @@ struct BrowserFavoriteControl: View {
     }
 }
 
+struct InfoPanelToolbarControl: View {
+    @EnvironmentObject private var infoPanel: InfoPanelModel
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
+
+    var body: some View {
+        Button(action: toggle) {
+            Label(infoPanel.isVisible ? "Hide Info" : "Show Info",
+                  systemImage: infoPanel.isVisible ? "info.circle.fill" : "info.circle")
+        }
+        .help(infoPanel.isVisible ? "Hide Info (Cmd+I)" : "Show Info (Cmd+I)")
+    }
+
+    private func toggle() {
+        if infoPanel.isVisible {
+            dismissWindow(id: InfoPanelScene.id)
+        } else {
+            openWindow(id: InfoPanelScene.id)
+        }
+    }
+}
+
 struct ViewerToolbarTitle: View {
     @ObservedObject var viewer: PhotoViewerPresentation
     var body: some View {
@@ -142,7 +164,9 @@ struct ConnectionToolbarItem: View {
 
 struct LibraryCommands: Commands {
     @ObservedObject var model: LibraryModel
+    @ObservedObject var infoPanel: InfoPanelModel
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some Commands {
         CommandMenu("Library") {
@@ -187,6 +211,15 @@ struct LibraryCommands: Commands {
             Button("Toggle Favorite") { model.toggleSelectionFavorite() }
                 .keyboardShortcut(".", modifiers: [])
                 .disabled(!model.canToggleFavorite)
+            Divider()
+            Button(infoPanel.isVisible ? "Hide Info" : "Show Info") {
+                if infoPanel.isVisible {
+                    dismissWindow(id: InfoPanelScene.id)
+                } else {
+                    openWindow(id: InfoPanelScene.id)
+                }
+            }
+            .keyboardShortcut("i", modifiers: [.command])
             Divider()
             Button("Download Thumbnails…") { openWindow(id: "thumbnail-download") }
                 .disabled(model.snapshot?.timeline.days.isEmpty != false || model.repository == nil ||

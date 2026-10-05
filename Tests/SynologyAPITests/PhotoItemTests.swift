@@ -139,6 +139,69 @@ final class PhotoItemTests: XCTestCase {
         XCTAssertFalse(roundTrip.withFavorite(false).isFavorite)
     }
 
+    func testFilesizeAndExifDecodeWithSnakeCaseMapping() throws {
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":239118,"filename":"IMG_3905.HEIC","filesize":1768222,"time":1790803838,"type":"photo","additional":{"exif":{"aperture":"F2.8","camera":"iPhone 13 Pro","exposure_time":"1/25 s","focal_length":"9.0 mm","iso":"1250","lens":"iPhone 13 Pro back triple camera 9mm f/2.8"}}}
+        """.utf8))
+        XCTAssertEqual(item.filesize, 1_768_222)
+        let exif = try XCTUnwrap(item.additional?.exif)
+        XCTAssertEqual(exif.aperture, "F2.8")
+        XCTAssertEqual(exif.camera, "iPhone 13 Pro")
+        XCTAssertEqual(exif.exposureTime, "1/25 s")
+        XCTAssertEqual(exif.focalLength, "9.0 mm")
+        XCTAssertEqual(exif.iso, "1250")
+        XCTAssertEqual(exif.lens, "iPhone 13 Pro back triple camera 9mm f/2.8")
+        XCTAssertTrue(exif.hasAnyValue)
+    }
+
+    func testEmptyExifStringsHideEveryRow() throws {
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":1,"time":1700000000,"type":"photo","additional":{"exif":{"aperture":"","camera":"","exposure_time":"","focal_length":"","iso":"","lens":""}}}
+        """.utf8))
+        let exif = try XCTUnwrap(item.additional?.exif)
+        XCTAssertNil(exif.aperture)
+        XCTAssertNil(exif.camera)
+        XCTAssertNil(exif.exposureTime)
+        XCTAssertNil(exif.focalLength)
+        XCTAssertNil(exif.iso)
+        XCTAssertNil(exif.lens)
+        XCTAssertFalse(exif.hasAnyValue)
+    }
+
+    func testExifKeepsUnknownKeysAndMixedValuesAcrossCacheRoundTrip() throws {
+        let json = """
+        {"id":1,"time":1700000000,"type":"photo","additional":{"exif":{"iso":1250,"has_geolocation":false,"aperture":"F2.8","focal_length":9.0,"empty":null,"unknown_object":{"a":1},"unknown_array":[1,2]}}}
+        """
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data(json.utf8))
+        let exif = try XCTUnwrap(item.additional?.exif)
+        XCTAssertEqual(exif.iso, "1250")
+        XCTAssertEqual(exif.aperture, "F2.8")
+        XCTAssertEqual(exif.focalLength, "9")
+        XCTAssertEqual(exif.raw["iso"], .number(1250))
+        XCTAssertEqual(exif.raw["has_geolocation"], .bool(false))
+        XCTAssertEqual(exif.raw["empty"], .null)
+        XCTAssertEqual(exif.raw["unknown_object"], .null)
+        XCTAssertEqual(exif.raw["unknown_array"], .null)
+
+        let updated = item.withFavorite(true)
+        XCTAssertTrue(updated.isFavorite)
+        XCTAssertEqual(updated.additional?.exif, exif)
+
+        let restored = try JSONDecoder().decode(PhotoItem.self, from: JSONEncoder().encode(updated))
+        XCTAssertEqual(restored.additional?.exif, exif)
+        XCTAssertEqual(restored.filesize, nil)
+    }
+
+    func testFavoriteToggleKeepsFilesizeWhenAdditionalIsAbsent() throws {
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":1,"filename":"IMG_0001.HEIC","filesize":42,"time":1700000000,"type":"photo"}
+        """.utf8))
+        let updated = item.withFavorite(true)
+        XCTAssertTrue(updated.isFavorite)
+        XCTAssertEqual(updated.filesize, 42)
+        XCTAssertNil(updated.additional?.exif)
+    }
+
     private func decode(id: Int = 1, resolution: String, orientation: String) throws -> PhotoItem {
         let json = "{\"id\":\(id),\"time\":1700000000,\"type\":\"photo\",\"additional\":{\"resolution\":\(resolution)\(orientation)}}"
         return try JSONDecoder().decode(PhotoItem.self, from: Data(json.utf8))

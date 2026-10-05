@@ -165,6 +165,7 @@ struct LibraryBrowserView: View {
     var onOpenPhoto: (PhotoViewerOpenRequest) -> Void = { _ in }
     var onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void = { _ in }
     @EnvironmentObject private var library: LibraryModel
+    @EnvironmentObject private var infoPanel: InfoPanelModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedDay: String?
     @State private var jumpRequest: DayJumpRequest?
@@ -201,7 +202,14 @@ struct LibraryBrowserView: View {
                                              colorScheme: colorScheme,
                                              contentTopInset: contentTopInset,
                                              onOpenPhoto: onOpenPhoto,
-                                             onSelectionStateChanged: { library.setSelectionState($0, for: collection) },
+                                             onSelectionStateChanged: { state in
+                                                 library.setSelectionState(state, for: collection)
+                                                 infoPanel.updateBrowserContext(
+                                                     repository: library.repository,
+                                                     snapshot: library.snapshot(for: collection),
+                                                     collection: collection,
+                                                     selection: state.selection.indexes)
+                                             },
                                              onCommandStateChanged: { snapshot, handler in
                                                  library.installBrowserCommands(snapshot: snapshot, handler: handler)
                                              },

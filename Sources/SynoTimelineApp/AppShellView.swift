@@ -4,7 +4,9 @@ import SynologyAPI
 
 struct AppShellView: View {
     @EnvironmentObject private var model: LibraryModel
+    @EnvironmentObject private var infoPanel: InfoPanelModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dismissWindow) private var dismissWindow
     @ObservedObject var navigationRestoration: NavigationRestorationStore
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var viewer: PhotoViewerPresentation?
@@ -39,6 +41,9 @@ struct AppShellView: View {
         .onExitCommand {
             if viewer != nil { closeViewer() }
         }
+        .onDisappear {
+            dismissWindow(id: InfoPanelScene.id)
+        }
         .onChange(of: model.timelineVerified(for: selectedCollection)) { _, verified in
             viewer?.updateAllowNetwork(verified)
         }
@@ -47,6 +52,9 @@ struct AppShellView: View {
         }
         .onChange(of: model.viewerSnapshotRevision(for: selectedCollection)) { _, revision in
             if let viewer, viewer.snapshotRevision != revision { viewer.invalidateForNewIndex() }
+        }
+        .onChange(of: model.snapshotRevision(for: selectedCollection)) { _, _ in
+            updateInfoPanelContext()
         }
         .alert(
             model.pendingFavoriteConfirmation?.title ?? "",
@@ -125,6 +133,7 @@ struct AppShellView: View {
                 if viewer === active { viewer = nil }
                 lastViewerFollowSelection = nil
                 model.setActiveViewer(nil)
+                infoPanel.updateViewer(active: false, item: nil)
                 finishSelection(collection)
             }
             return
@@ -135,6 +144,16 @@ struct AppShellView: View {
     private func finishSelection(_ collection: PhotoCollectionDescriptor) {
         navigationRestoration.select(collection)
         selectedCollection = collection
+        updateInfoPanelContext()
+    }
+
+    private func updateInfoPanelContext() {
+        let collection = selectedCollection
+        infoPanel.updateBrowserContext(
+            repository: model.repository,
+            snapshot: model.snapshot(for: collection),
+            collection: collection,
+            selection: model.selectionState(for: collection).selection.indexes)
     }
 
     private func openPhoto(_ request: PhotoViewerOpenRequest) {
@@ -149,6 +168,11 @@ struct AppShellView: View {
         lastViewerFollowSelection = nil
         model.setActiveViewer(viewer)
         model.installViewerCloseHandler(closeViewer)
+        infoPanel.updateViewer(active: true, item: request.seed.item)
+        let panel = infoPanel
+        viewer?.onInfoItemChanged = { [weak panel] item in
+            panel?.updateViewer(active: true, item: item)
+        }
         viewer?.canvasController.requestKeyboardFocus()
     }
 
@@ -161,6 +185,7 @@ struct AppShellView: View {
                 if viewer === active { viewer = nil }
                 lastViewerFollowSelection = nil
                 model.setActiveViewer(nil)
+                infoPanel.updateViewer(active: false, item: nil)
                 browserBridge.focusTimeline()
             }
         }
@@ -201,6 +226,9 @@ struct AppShellView: View {
             ToolbarItem(placement: .primaryAction) {
                 ViewerFavoriteControl(viewer: viewer)
             }
+            ToolbarItem(placement: .primaryAction) {
+                InfoPanelToolbarControl()
+            }
             ToolbarItem(placement: .principal) {
                 ViewerToolbarTitle(viewer: viewer)
             }
@@ -211,6 +239,9 @@ struct AppShellView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 BrowserFavoriteControl(model: model, collection: selectedCollection)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                InfoPanelToolbarControl()
             }
         }
 

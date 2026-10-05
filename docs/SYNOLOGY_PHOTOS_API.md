@@ -248,6 +248,23 @@ Requested `additional` fields may be absent when they do not apply or have no va
 
 Observed `additional.video_meta.duration` values are milliseconds (for example, `49000` represents 49 seconds). Keep this unit when serializing cached item responses and convert to seconds for display.
 
+### Item EXIF in page lists
+
+A read-only probe on 2026-10-06 confirmed that `SYNO.Foto.Browse.Item` `method=list` honors `exif` in its `additional` array. This client therefore requests EXIF with every item page instead of issuing per-item `method=get` requests the way the web client does. Each item then carries an `additional.exif` object:
+
+```json
+"exif": {
+  "aperture": "F2.8",
+  "camera": "iPhone 13 Pro",
+  "exposure_time": "1/25 s",
+  "focal_length": "9.0 mm",
+  "iso": "1250",
+  "lens": "iPhone 13 Pro back triple camera 9mm f/2.8"
+}
+```
+
+Values are display-ready strings. Items without EXIF (PNG screenshots, videos) return empty strings for every field, so the client treats an empty value as absent. `aperture` uses uppercase `F` notation (`F2.8`); the UI converts it to `f/2.8`. The client preserves every key the server returns in the cached page even though it currently displays only the six fields above.
+
 ### Capture time is a wall-clock value
 
 The observed `time` field must be treated as capture-local wall-clock components encoded in a Unix-shaped integer, not as an absolute instant to convert into the Mac's current timezone. In `firstone.har`, `IMG_3872.PNG` has `time: 1790803838`. Its pixels show `21:30`; decoding the integer with a GMT calendar yields `2026-09-30 21:30:38`, while converting it to the current Tokyo timezone produces the incorrect `2026-10-01 06:30:38` seen in the prototype.

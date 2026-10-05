@@ -1,6 +1,6 @@
 import Foundation
 
-public struct PhotoItem: Codable, Sendable, Identifiable {
+public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
     public let id: Int64
     public let filename: String?
     /// Capture-local wall-clock components encoded by Synology as epoch-shaped seconds.
@@ -9,22 +9,24 @@ public struct PhotoItem: Codable, Sendable, Identifiable {
     public let time: Int64
     public let type: String
     public let liveType: String?
+    public let filesize: Int64?
     public var additional: Additional?
 
     enum CodingKeys: String, CodingKey {
-        case id, filename, time, type, additional
+        case id, filename, time, type, filesize, additional
         case liveType = "live_type"
     }
 
-    public struct Additional: Codable, Sendable {
+    public struct Additional: Codable, Sendable, Equatable {
         public let thumbnail: ThumbnailInfo?
         public let resolution: Resolution?
         public let orientation: Int?
         public let videoMeta: VideoMetadata?
+        public let exif: ExifInfo?
         public var favorite: Bool?
 
         enum CodingKeys: String, CodingKey {
-            case thumbnail, resolution, orientation, favorite
+            case thumbnail, resolution, orientation, exif, favorite
             case videoMeta = "video_meta"
         }
     }
@@ -39,6 +41,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable {
                 resolution: nil,
                 orientation: nil,
                 videoMeta: nil,
+                exif: nil,
                 favorite: favorite
             )
         } else {
@@ -47,7 +50,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable {
         return copy
     }
 
-    public struct Resolution: Codable, Sendable {
+    public struct Resolution: Codable, Sendable, Equatable {
         public let width: Int
         public let height: Int
     }
@@ -55,7 +58,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable {
     /// Synology supplies video duration in milliseconds, as an integer, a
     /// floating-point number, or a numeric string. Keep the wire value intact
     /// when caching and expose seconds to the UI.
-    public struct VideoMetadata: Codable, Sendable {
+    public struct VideoMetadata: Codable, Sendable, Equatable {
         private let durationMilliseconds: Double?
         public var duration: TimeInterval? { durationMilliseconds.map { $0 / 1_000 } }
 
@@ -130,7 +133,7 @@ public struct FullImageResource: Hashable, Sendable {
     }
 }
 
-public struct ThumbnailInfo: Codable, Sendable {
+public struct ThumbnailInfo: Codable, Sendable, Equatable {
     public let unitID: Int64
     public let cacheKey: String
     public let sm: String?
@@ -151,6 +154,108 @@ public struct ThumbnailInfo: Codable, Sendable {
 }
 
 public enum ThumbnailSize: String, CaseIterable, Codable, Sendable { case sm, m, xl }
+
+/// A JSON scalar as returned in an EXIF object. Non-scalar or unrecognized shapes decode to `.null`.
+public enum ExifValue: Codable, Sendable, Equatable {
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case null
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else {
+            self = .null
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value): try container.encode(value)
+        case .number(let value): try container.encode(value)
+        case .bool(let value): try container.encode(value)
+        case .null: try container.encodeNil()
+        }
+    }
+}
+
+/// The complete EXIF object returned for an item. Every server key is retained in
+/// `raw`; the typed accessors expose the fields the UI displays today. Missing and
+/// empty values both surface as `nil`.
+public struct ExifInfo: Codable, Sendable, Equatable {
+    /// Every key the server returned, preserved verbatim for future display.
+    public let raw: [String: ExifValue]
+
+    public init(raw: [String: ExifValue]) {
+        self.raw = raw
+    }
+
+    public var aperture: String? { displayValue("aperture") }
+    public var camera: String? { displayValue("camera") }
+    public var exposureTime: String? { displayValue("exposure_time") }
+    public var focalLength: String? { displayValue("focal_length") }
+    public var iso: String? { displayValue("iso") }
+    public var lens: String? { displayValue("lens") }
+
+    /// True when at least one of the six display fields has a non-empty value.
+    public var hasAnyValue: Bool {
+        aperture != nil || camera != nil || exposureTime != nil ||
+            focalLength != nil || iso != nil || lens != nil
+    }
+
+    private func displayValue(_ key: String) -> String? {
+        guard let value = raw[key] else { return nil }
+        let text: String
+        switch value {
+        case .string(let string): text = string
+        case .number(let number): text = Self.string(from: number)
+        case .bool(let flag): text = flag ? "true" : "false"
+        case .null: return nil
+        }
+        return text.isEmpty ? nil : text
+    }
+
+    private static func string(from number: Double) -> String {
+        if number.rounded() == number, abs(number) < 9_007_199_254_740_992 {
+            return String(Int64(number))
+        }
+        return String(number)
+    }
+
+    private struct AnyKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: AnyKey.self)
+        var values: [String: ExifValue] = [:]
+        for key in container.allKeys {
+            values[key.stringValue] = (try? container.decode(ExifValue.self, forKey: key)) ?? .null
+        }
+        raw = values
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: AnyKey.self)
+        for (key, value) in raw {
+            guard let codingKey = AnyKey(stringValue: key) else { continue }
+            try container.encode(value, forKey: codingKey)
+        }
+    }
+}
 
 /// A server-side item collection that shares the Photos timeline/item APIs.
 public enum PhotoCollectionDescriptor: String, CaseIterable, Codable, Hashable, Sendable {
