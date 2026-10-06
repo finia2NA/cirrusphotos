@@ -568,7 +568,7 @@ Before hardening the production data layer, record or directly test:
 ## References
 
 - Synology, DSM Login Web API Guide: <https://kb.synology.com/en-us/DG/DSM_Login_Web_API_Guide/2>
-- Unofficial Synology Photos API documentation: <https://github.com/zeichensatz/SynologyPhotosAPI>
+- Unofficial Synology Photos API documentation: <https://github.com/zeichensatz/SynologyPhotosAPI>, vendored as a submodule at `docs/SynologyPhotosAPI/` (run `git submodule update --init docs/SynologyPhotosAPI` if the directory is empty)
 - Additional reverse-engineered examples: <https://github.com/N4S4/synology-photos-api>
 
 ## Full-size photo transport

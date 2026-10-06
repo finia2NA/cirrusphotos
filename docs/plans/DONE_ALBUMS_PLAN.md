@@ -44,7 +44,7 @@ Read-only probes against `cirrus` on 2026-10-06 (using the pattern in `scripts/t
 
 ## Unofficial documentation (writes unverified)
 
-`github.com/zeichensatz/SynologyPhotosAPI` documents only `SYNO.Foto.Browse.Album.list` (no parameter-bearing write docs), but its captured `SYNO.Foto.lib` advertises these method families:
+`github.com/zeichensatz/SynologyPhotosAPI` (vendored at `docs/SynologyPhotosAPI/`) documents only `SYNO.Foto.Browse.Album.list` (no parameter-bearing write docs), but its captured `SYNO.Foto.lib` advertises these method families:
 
 - `SYNO.Foto.Browse.Album` v1: `count`, `delete`, `download`, `get`, `list`, `set_cover`, `set_name`, `set_order`.
 - `SYNO.Foto.Browse.NormalAlbum` v1: `add_item`, `copy`, `count`, `create`, `delete_item`, `get`, `list`, `set_unfreeze`.
