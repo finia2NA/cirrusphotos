@@ -9,13 +9,20 @@ struct PhotoTimelineRestorationAnchor: Codable, Equatable {
     let sectionFraction: Double
 }
 
+/// The app-level sidebar destination. Collections within Albums are separate from the
+/// destination itself so the last opened album survives a switch away from Albums.
+enum LibraryDestination: String, Codable, Hashable, Sendable, CaseIterable {
+    case personalLibrary, favorites, albums
+}
+
 struct RestorableAppNavigationState: Codable, Equatable {
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     var version = currentVersion
-    var selectedCollection: PhotoCollectionDescriptor = .personalLibrary
-    var personalLibraryAnchor: PhotoTimelineRestorationAnchor?
-    var favoritesAnchor: PhotoTimelineRestorationAnchor?
+    var selectedDestination: LibraryDestination = .personalLibrary
+    var openedAlbumID: Int64?
+    /// Keyed by `PhotoCollectionDescriptor.rawValue`.
+    var anchors: [String: PhotoTimelineRestorationAnchor] = [:]
 }
 
 @MainActor
@@ -39,28 +46,31 @@ final class NavigationRestorationStore: ObservableObject {
         }
     }
 
-    var selectedCollection: PhotoCollectionDescriptor {
-        state.selectedCollection
+    var selectedDestination: LibraryDestination {
+        state.selectedDestination
     }
 
-    func select(_ collection: PhotoCollectionDescriptor) {
-        state.selectedCollection = collection
+    var openedAlbumID: Int64? {
+        state.openedAlbumID
+    }
+
+    func select(_ destination: LibraryDestination) {
+        state.selectedDestination = destination
+        save()
+    }
+
+    func setOpenedAlbum(_ id: Int64?) {
+        state.openedAlbumID = id
         save()
     }
 
     func timelineAnchor(for collection: PhotoCollectionDescriptor) -> PhotoTimelineRestorationAnchor? {
-        switch collection {
-        case .personalLibrary: state.personalLibraryAnchor
-        case .favorites: state.favoritesAnchor
-        }
+        state.anchors[collection.rawValue]
     }
 
     func setTimelineAnchor(_ anchor: PhotoTimelineRestorationAnchor,
                            for collection: PhotoCollectionDescriptor) {
-        switch collection {
-        case .personalLibrary: state.personalLibraryAnchor = anchor
-        case .favorites: state.favoritesAnchor = anchor
-        }
+        state.anchors[collection.rawValue] = anchor
         save()
     }
 

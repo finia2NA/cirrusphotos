@@ -98,7 +98,7 @@ extension CachedPhotosRepository {
             // Patch cached Personal Library pages by grouping changes per cache key
             // and decoding/encoding each affected page once
             var transaction = BatchFavoriteMutationTransaction()
-            await self.patchPersonalPagesBatch(
+            await self.patchAffectedPagesBatch(
                 action: action,
                 target: target,
                 generation: generation,
@@ -189,7 +189,7 @@ extension CachedPhotosRepository {
         return items.first(where: { $0.id == itemID })
     }
 
-    private func patchPersonalPagesBatch(
+    private func patchAffectedPagesBatch(
         action: SelectionFavoriteAction,
         target: Bool,
         generation: Int,
@@ -197,37 +197,42 @@ extension CachedPhotosRepository {
     ) async {
         let itemIDSet = Set(action.affectedIDs)
         var candidateSections: [TimelineSection] = []
+        let patchCollection: PhotoCollectionDescriptor
 
-        if action.collection == .personalLibrary {
+        if action.collection == .personalLibrary || action.collection.albumID != nil {
+            patchCollection = action.collection
             var seenSections: Set<TimelineSection> = []
             for id in action.affectedIDs {
                 if let sec = action.sectionsByID[id], seenSections.insert(sec).inserted {
                     candidateSections.append(sec)
                 }
             }
-        } else if let snapshot = metadata.latestTimelines[.personalLibrary] {
-            // For favorites collection, find personal library sections by item dates
-            var targetDays: Set<TimelineDay> = []
-            var hadUnknownDay = false
-            for id in action.affectedIDs {
-                if let item = action.itemsByID[id], let day = utcDay(for: item) {
-                    targetDays.insert(day)
-                } else {
-                    hadUnknownDay = true
+        } else {
+            patchCollection = .personalLibrary
+            if let snapshot = metadata.latestTimelines[.personalLibrary] {
+                // For favorites collection, find personal library sections by item dates
+                var targetDays: Set<TimelineDay> = []
+                var hadUnknownDay = false
+                for id in action.affectedIDs {
+                    if let item = action.itemsByID[id], let day = utcDay(for: item) {
+                        targetDays.insert(day)
+                    } else {
+                        hadUnknownDay = true
+                    }
                 }
-            }
-            if hadUnknownDay {
-                candidateSections = snapshot.sections
-            } else {
-                candidateSections = snapshot.sections.filter { section in
-                    section.list.contains(where: { day in targetDays.contains(where: { sameDay($0, day) }) })
+                if hadUnknownDay {
+                    candidateSections = snapshot.sections
+                } else {
+                    candidateSections = snapshot.sections.filter { section in
+                        section.list.contains(where: { day in targetDays.contains(where: { sameDay($0, day) }) })
+                    }
                 }
             }
         }
 
         var seenKeys: Set<String> = []
         for section in candidateSections {
-            guard let key = CacheKey.page(namespace: namespace, section: section, collection: .personalLibrary),
+            guard let key = CacheKey.page(namespace: namespace, section: section, collection: patchCollection),
                   seenKeys.insert(key).inserted,
                   let cached = try? await store.get(key),
                   let items = try? JSONDecoder().decode([PhotoItem].self, from: cached.data) else { continue }

@@ -41,9 +41,11 @@ struct RepositoryMetadataWork {
     var pageJobs: [String: SharedJob<[PhotoItem]>] = [:]
     var pageJobEpochs: [String: UInt64] = [:]
     var pendingPagePromotions: [String] = []
+    var albumListJob: SharedJob<[AlbumSummary]>?
+    var albumListLatest: [AlbumSummary]?
 
     var hasDemand: Bool {
-        !initialSubscribers.isEmpty || !timelineJobs.isEmpty || !pageJobs.isEmpty
+        !initialSubscribers.isEmpty || !timelineJobs.isEmpty || !pageJobs.isEmpty || albumListJob != nil
     }
 }
 

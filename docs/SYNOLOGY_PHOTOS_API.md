@@ -6,6 +6,52 @@ The viewer and Favorites album captures in `docs/captures/favorites.har` and `fa
 
 The web client changes favorite status with a form-encoded `POST /webapi/entry.cgi/SYNO.Foto.Browse.Item`: `api=SYNO.Foto.Browse.Item`, `version=7`, `method=set_favorite`, `id=[<item IDs>]`, and `favorite=true` or `false`. `favorites.har` captured the one-item form. `favoriteunfavorite2photos.har` confirmed that the endpoint accepts several IDs in one request: the web client sent the same two-item array once with `favorite=true` and once with `favorite=false`, and both returned `{"success":true}`. This endpoint is implemented for Personal Space favorites; the accompanying `SYNO.Foto.Udc.send_event` request is telemetry.
 
+## Personal Space albums
+
+`almbumsoverviewandopening.har` captured the album overview and one album open (Synology Photos 1.9.1-10928, 2026-10-06). The overview is a single list request:
+
+```http
+POST /webapi/entry.cgi/SYNO.Foto.Browse.Album
+api=SYNO.Foto.Browse.Album
+version=4
+method=list
+offset=0
+limit=100
+category="normal"
+sort_by="album_name"
+sort_direction="asc"
+additional=["sharing_info","thumbnail"]
+```
+
+Album records carry `id`, `name`, `item_count`, `type`, `sort_by`, `sort_direction`, `create_time`, `start_time`, `end_time`, and `additional.{thumbnail,sharing_info}`. The album thumbnail uses the same `unit_id` / `cache_key` / `sm` / `m` / `xl` shape as item thumbnails. `additional.flex_section` returned by `method=get` is a list of per-section item counts that sums to `item_count`; its grouping meaning is not established and it is not needed for day grouping.
+
+Opening an album does **not** use the timeline endpoint. The web client requests items directly with a scalar `album_id`:
+
+```http
+POST /webapi/entry.cgi/SYNO.Foto.Browse.Item
+api=SYNO.Foto.Browse.Item
+method=list
+version=7
+album_id=54
+offset=0
+limit=28
+sort_by="takentime"
+sort_direction="desc"
+additional=["thumbnail","resolution","orientation","video_convert","video_meta","provider_user_id"]
+```
+
+Read-only probes against `cirrus` on 2026-10-06 established:
+
+- `SYNO.Foto.Browse.Timeline version=6 method=get` accepts `album_id` **without error but silently ignores it**: the response is equivalent to the unfiltered personal timeline (497 sections, 424,170 items, identical day counts). Never use the timeline endpoint to discover album days.
+- `Browse.Item.list` honors `start_time`/`end_time` together with `album_id`: a bounded request for a 112-item album day returned exactly 112 items, all inside the requested day. Album day sections can therefore reuse the same date-bound request shape as timeline sections.
+- Bulk metadata scans work: `album_id` + `offset` + `limit=1000` + `additional=[]` returned a 987-item album in one request (~196 KB); `limit=5000` returned the same 987 items. An `offset` past the end returns an empty `list`, which is the reliable termination signal because no `total` is returned.
+- `favorite_only=true` is accepted alongside `album_id`. The album captures and probes did not include a known-favorited album item, so whether `additional.favorite` is populated for album items exactly like timeline items is unverified; the client treats an absent field as not favorite, matching the documented timeline behavior.
+
+Write endpoints are only partially captured. `albumcreationadditionremovaldeletion.har` contains just `SYNO.Foto.Browse.Album version=1 method=delete id=[<album id>]` (which deletes the album itself). It contains no create, add-item, or remove-item request. The same capture also contains `SYNO.Foto.BackgroundTask.File method=delete`, which permanently deletes a photo from the library; it is not an album-removal request and must not be used as one.
+
+Community reverse engineering (`zeichensatz/SynologyPhotosAPI`'s dumped `SYNO.Foto.lib` and issue #16, plus `fortysix2ahead/synophotos`) records the likely shapes for a future album-management slice; none are confirmed against `cirrus`. Album writes live under `SYNO.Foto.Browse.NormalAlbum` (`create`, `add_item`, `delete_item`, `copy`, `set_unfreeze`, methods v1), while `SYNO.Foto.Browse.Album` advertises `set_name`, `set_cover`, `set_order`, `count`, `download`. The observed parameter pattern is `name=<album name>` plus `item='[<item ids>]'` (a JSON-encoded string list) for create, and `id=<album id>` plus `item='[<item ids>]'` for add/remove. Confirm with a HAR capture before implementing any write.
+
+
 This is the implementation reference for the first Synology Photos client milestone: browsing a large chronological library without loading the whole catalog or all thumbnails into memory.
 
 The conclusions combine:

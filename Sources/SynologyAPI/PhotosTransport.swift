@@ -29,6 +29,8 @@ public struct FullImageResponse: Sendable {
 public protocol PhotosTransport: Sendable {
     func login(credentials: SynologyCredentials) async throws
     func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot
+    func albums() async throws -> [AlbumSummary]
+    func albumTimeline(albumID: Int64) async throws -> TimelineSnapshot
     func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem]
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,

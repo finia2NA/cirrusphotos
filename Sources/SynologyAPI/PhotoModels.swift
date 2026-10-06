@@ -133,7 +133,7 @@ public struct FullImageResource: Hashable, Sendable {
     }
 }
 
-public struct ThumbnailInfo: Codable, Sendable, Equatable {
+public struct ThumbnailInfo: Codable, Sendable, Equatable, Hashable {
     public let unitID: Int64
     public let cacheKey: String
     public let sm: String?
@@ -142,6 +142,14 @@ public struct ThumbnailInfo: Codable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case unitID = "unit_id", cacheKey = "cache_key", sm, m, xl
+    }
+
+    public init(unitID: Int64, cacheKey: String, sm: String? = nil, m: String? = nil, xl: String? = nil) {
+        self.unitID = unitID
+        self.cacheKey = cacheKey
+        self.sm = sm
+        self.m = m
+        self.xl = xl
     }
 
     public func isReady(_ size: ThumbnailSize) -> Bool {
@@ -258,10 +266,58 @@ public struct ExifInfo: Codable, Sendable, Equatable {
 }
 
 /// A server-side item collection that shares the Photos timeline/item APIs.
-public enum PhotoCollectionDescriptor: String, CaseIterable, Codable, Hashable, Sendable {
-    case personalLibrary = "personal"
+public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable {
+    case personalLibrary
     case favorites
+    /// A Personal Space album, identified by its Synology album id.
+    case album(Int64)
+
+    /// Stable cache/restoration identity. Personal Library and Favorites keep their
+    /// historical raw values so existing cache keys do not move.
+    public var rawValue: String {
+        switch self {
+        case .personalLibrary: "personal"
+        case .favorites: "favorites"
+        case .album(let id): "album:\(id)"
+        }
+    }
+
+    public var albumID: Int64? {
+        if case .album(let id) = self { return id }
+        return nil
+    }
 
     public var favoriteOnly: Bool { self == .favorites }
     public var supportsInitialTimeline: Bool { self == .personalLibrary }
+
+    /// Albums are fetched lazily when opened and are never part of eager bootstrap loads.
+    public static var allCases: [PhotoCollectionDescriptor] { [.personalLibrary, .favorites] }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "personal": self = .personalLibrary
+        case "favorites": self = .favorites
+        default:
+            let prefix = "album:"
+            guard rawValue.hasPrefix(prefix),
+                  let id = Int64(rawValue.dropFirst(prefix.count)) else { return nil }
+            self = .album(id)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        guard let value = PhotoCollectionDescriptor(rawValue: raw) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unknown collection descriptor \(raw)")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }

@@ -28,6 +28,14 @@ extension PhotosTransport {
         throw UnexpectedTransportCall()
     }
 
+    func albums() async throws -> [AlbumSummary] {
+        throw UnexpectedTransportCall()
+    }
+
+    func albumTimeline(albumID: Int64) async throws -> TimelineSnapshot {
+        throw UnexpectedTransportCall()
+    }
+
     func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
         throw UnexpectedTransportCall()
     }

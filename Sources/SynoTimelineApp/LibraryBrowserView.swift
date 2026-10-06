@@ -182,6 +182,26 @@ struct LibraryBrowserView: View {
         )
     }
 
+    private var isAlbum: Bool { collection.albumID != nil }
+    private var emptyTitle: String {
+        if isAlbum { return library.albumName(for: collection) ?? "Album" }
+        return collection == .favorites ? "No favorites" : "No photos"
+    }
+    private var emptySymbol: String {
+        if isAlbum { return "rectangle.stack" }
+        return collection == .favorites ? "heart" : "photo"
+    }
+    private var emptyDescription: String {
+        if library.error(for: collection) != nil { return "Cached collection is empty. Connection unavailable." }
+        guard library.timelineVerified(for: collection) else { return "Cached collection is empty. Checking Cirrus…" }
+        if isAlbum { return "This album is empty." }
+        return collection == .favorites ? "No photos are marked as favorites." : "Personal Space is empty."
+    }
+    private var loadingText: String {
+        if isAlbum { return "Opening album…" }
+        return collection == .favorites ? "Opening favorites…" : "Opening library…"
+    }
+
     var body: some View {
         Group {
             if let snapshot = library.snapshot(for: collection), !snapshot.timeline.days.isEmpty,
@@ -224,22 +244,19 @@ struct LibraryBrowserView: View {
                         .padding(.trailing, 6)
                 }
             } else if library.snapshot(for: collection)?.timeline.days.isEmpty == true {
-                ContentUnavailableView(collection == .favorites ? "No favorites" : "No photos",
-                    systemImage: collection == .favorites ? "heart" : "photo",
-                    description: Text(library.error(for: collection) != nil ? "Cached collection is empty. Connection unavailable." :
-                        (library.timelineVerified(for: collection) ?
-                         (collection == .favorites ? "No photos are marked as favorites." : "Personal Space is empty.") :
-                         "Cached collection is empty. Checking Cirrus…")))
+                ContentUnavailableView(emptyTitle, systemImage: emptySymbol,
+                    description: Text(emptyDescription))
             } else if let error = library.error(for: collection), library.snapshot(for: collection) == nil {
                 ContentUnavailableView {
-                    Label("Library unavailable", systemImage: "photo.badge.exclamationmark")
+                    Label(isAlbum ? "Album unavailable" : "Library unavailable",
+                          systemImage: "photo.badge.exclamationmark")
                 } description: {
                     Text(error)
                 } actions: {
                     Button("Try Again") { Task { await library.reload() } }.disabled(library.isLoading)
                 }
             } else {
-                ProgressView(collection == .favorites ? "Opening favorites…" : "Opening library…")
+                ProgressView(loadingText)
             }
         }
         .background(Color(nsColor: .textBackgroundColor))

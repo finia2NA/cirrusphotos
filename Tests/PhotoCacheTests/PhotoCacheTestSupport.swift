@@ -35,6 +35,14 @@ extension PhotosTransport {
         throw TestFailure("Unexpected timeline request")
     }
 
+    func albums() async throws -> [AlbumSummary] {
+        throw TestFailure("Unexpected album-list request")
+    }
+
+    func albumTimeline(albumID: Int64) async throws -> TimelineSnapshot {
+        throw TestFailure("Unexpected album-timeline request")
+    }
+
     func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
         throw TestFailure("Unexpected item-page request")
     }

@@ -72,10 +72,16 @@ final class LibraryModel: ObservableObject {
         }
     }
     @Published private(set) var cacheUsage: Int64 = 0
+    @Published private(set) var albums: [AlbumSummary] = []
+    @Published private(set) var albumsVerified = false
+    @Published private(set) var albumListError: String?
     private(set) var repository: CachedPhotosRepository?
     private var started = false
     private var authenticationTask: Task<Void, Never>?
     private var refreshTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
+    private var albumsTask: Task<Void, Never>?
+    private var openedCollections: Set<PhotoCollectionDescriptor> = []
+    private var collectionFetchTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
 
     init(repository: CachedPhotosRepository? = nil) {
         self.repository = repository
@@ -93,6 +99,29 @@ final class LibraryModel: ObservableObject {
     }
     func timelineVerified(for collection: PhotoCollectionDescriptor) -> Bool { timelineVerifications[collection] == true }
     func error(for collection: PhotoCollectionDescriptor) -> String? { collectionErrors[collection] }
+
+    func albumName(for collection: PhotoCollectionDescriptor) -> String? {
+        guard let albumID = collection.albumID else { return nil }
+        return albums.first(where: { $0.id == albumID })?.name
+    }
+
+    /// Starts loading an album timeline lazily. Non-album collections are ignored;
+    /// Personal Library and Favorites are loaded eagerly by `load()`.
+    func ensureCollectionLoaded(_ collection: PhotoCollectionDescriptor) {
+        guard collection.albumID != nil else { return }
+        openedCollections.insert(collection)
+        startCollectionFetchIfNeeded(collection)
+    }
+
+    private func startCollectionFetchIfNeeded(_ collection: PhotoCollectionDescriptor) {
+        guard let repository, collectionFetchTasks[collection] == nil else { return }
+        collectionFetchTasks[collection] = Task { [weak self] in
+            for await event in await repository.timeline(collection: collection) {
+                guard !Task.isCancelled else { return }
+                self?.receive(event, collection: collection)
+            }
+        }
+    }
 
     private static func persistedItemsPerRow() -> Int {
         guard let value = (UserDefaults.standard.object(forKey: "itemsPerRow") as? NSNumber)?.intValue else { return 6 }
@@ -319,6 +348,17 @@ final class LibraryModel: ObservableObject {
                     }
                 }
             }
+            if albumsTask == nil {
+                albumsTask = Task { [weak self] in
+                    for await event in await repository.albums() {
+                        guard !Task.isCancelled else { return }
+                        self?.receiveAlbums(event)
+                    }
+                }
+            }
+            for collection in openedCollections {
+                startCollectionFetchIfNeeded(collection)
+            }
             await withTaskGroup(of: Void.self) { group in
                 for collection in PhotoCollectionDescriptor.allCases {
                     group.addTask { [weak self] in
@@ -334,6 +374,17 @@ final class LibraryModel: ObservableObject {
             collectionErrors[.personalLibrary] = error.localizedDescription
         }
         isLoading = false
+    }
+
+    private func receiveAlbums(_ event: ResourceEvent<[AlbumSummary]>) {
+        switch event {
+        case .value(let list, let verified):
+            albums = list
+            albumsVerified = verified
+            if verified { albumListError = nil }
+        case .failure(let message):
+            albumListError = message
+        }
     }
 
     private func receive(_ event: ResourceEvent<TimelineSnapshot>, collection: PhotoCollectionDescriptor,
@@ -360,6 +411,10 @@ final class LibraryModel: ObservableObject {
     func reload() async {
         guard !isLoading else { return }
         isLoading = true
+        albumsTask?.cancel()
+        albumsTask = nil
+        for task in collectionFetchTasks.values { task.cancel() }
+        collectionFetchTasks.removeAll()
         if let repository { await repository.retryAuthentication() }
         retryRevision += 1
         started = false

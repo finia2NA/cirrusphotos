@@ -78,6 +78,18 @@ final class InfoPanelModel: ObservableObject {
         refreshBrowser(resolveImmediately: false)
     }
 
+    /// Clears browser state for the albums overview, where no collection is being browsed.
+    func clearBrowserContext() {
+        browserRepository = nil
+        browserSnapshot = nil
+        browserIndex = nil
+        browserSelection = []
+        lastKey = nil
+        generation &+= 1
+        cancelBrowserWork()
+        if !viewerActive { content = InfoPanelContent() }
+    }
+
     func updateViewer(active: Bool, item: PhotoItem?) {
         guard active else {
             guard viewerActive else { return }

@@ -152,7 +152,12 @@ extension CachedPhotosRepository {
             defer { Task { await gate.release(.metadata) } }
             try Task.checkCancellation()
             try await connect()
-            let snapshot = try await client.timeline(collection: collection, initial: false)
+            let snapshot: TimelineSnapshot
+            if let albumID = collection.albumID {
+                snapshot = try await client.albumTimeline(albumID: albumID)
+            } else {
+                snapshot = try await client.timeline(collection: collection, initial: false)
+            }
             try Task.checkCancellation()
             guard validation == validationRun(for: collection),
                   mutationEpoch == metadata.mutationEpochs[collection, default: 0] else {

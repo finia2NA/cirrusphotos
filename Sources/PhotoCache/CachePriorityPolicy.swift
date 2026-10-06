@@ -38,6 +38,7 @@ public enum CachePriorityPolicy {
         case .thumbnail: .configuredThumbnail
         case .page: .metadataPage
         case .timeline: .activeTimeline
+        case .albumList: .activeTimeline
         }
     }
 }

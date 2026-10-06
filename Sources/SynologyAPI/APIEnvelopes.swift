@@ -18,4 +18,5 @@ struct LoginData: Decodable {
 
 struct TimelineData: Decodable { let section: [TimelineSection] }
 struct ItemData: Decodable { let list: [PhotoItem] }
+struct AlbumListData: Decodable { let list: [AlbumSummary] }
 struct EmptyData: Decodable {}

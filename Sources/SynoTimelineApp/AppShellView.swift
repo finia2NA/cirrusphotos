@@ -10,24 +10,55 @@ struct AppShellView: View {
     @ObservedObject var navigationRestoration: NavigationRestorationStore
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var viewer: PhotoViewerPresentation?
-    @State private var selectedCollection: PhotoCollectionDescriptor
+    @State private var selectedDestination: LibraryDestination
+    @State private var openedAlbumID: Int64?
     @State private var chrome = WindowChromeMetrics()
     @State private var lastViewerFollowSelection: PhotoViewerSelection?
     @StateObject private var browserBridge = LibraryBrowserBridge()
 
     init(navigationRestoration: NavigationRestorationStore) {
         self.navigationRestoration = navigationRestoration
-        _selectedCollection = State(initialValue: navigationRestoration.selectedCollection)
+        _selectedDestination = State(initialValue: navigationRestoration.selectedDestination)
+        _openedAlbumID = State(initialValue: navigationRestoration.openedAlbumID)
+    }
+
+    /// The collection currently browsed in the detail area, or nil for the Albums overview.
+    private var selectedCollection: PhotoCollectionDescriptor? {
+        switch selectedDestination {
+        case .personalLibrary: .personalLibrary
+        case .favorites: .favorites
+        case .albums: openedAlbumID.map { .album($0) }
+        }
+    }
+
+    private var isAlbumBrowser: Bool {
+        selectedDestination == .albums && openedAlbumID != nil
+    }
+
+    private var timelineVerified: Bool {
+        selectedCollection.map { model.timelineVerified(for: $0) } ?? false
+    }
+
+    private var viewerSnapshotRevision: Int {
+        selectedCollection.map { model.viewerSnapshotRevision(for: $0) } ?? 0
+    }
+
+    private var snapshotRevision: Int {
+        selectedCollection.map { model.snapshotRevision(for: $0) } ?? 0
     }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            List(selection: Binding(get: { selectedCollection }, set: select)) {
-                Label("Personal Library", systemImage: "photo.on.rectangle.angled")
-                    .tag(PhotoCollectionDescriptor.personalLibrary)
+            List(selection: Binding(get: { selectedDestination }, set: select)) {
+                Label("Library", systemImage: "photo.on.rectangle.angled")
+                    .tag(LibraryDestination.personalLibrary)
                 Section("Collections") {
                     Label("Favorites", systemImage: "heart")
-                        .tag(PhotoCollectionDescriptor.favorites)
+                        .tag(LibraryDestination.favorites)
+                }
+                Section("Albums") {
+                    Label("Albums", systemImage: "rectangle.stack")
+                        .tag(LibraryDestination.albums)
                 }
             }
             .listStyle(.sidebar)
@@ -44,17 +75,26 @@ struct AppShellView: View {
         .onDisappear {
             dismissWindow(id: InfoPanelScene.id)
         }
-        .onChange(of: model.timelineVerified(for: selectedCollection)) { _, verified in
+        .task {
+            if let id = openedAlbumID { model.ensureCollectionLoaded(.album(id)) }
+        }
+        .onChange(of: timelineVerified) { _, verified in
             viewer?.updateAllowNetwork(verified)
         }
         .onChange(of: model.retryRevision) { _, _ in
             viewer?.retry()
         }
-        .onChange(of: model.viewerSnapshotRevision(for: selectedCollection)) { _, revision in
+        .onChange(of: viewerSnapshotRevision) { _, revision in
             if let viewer, viewer.snapshotRevision != revision { viewer.invalidateForNewIndex() }
         }
-        .onChange(of: model.snapshotRevision(for: selectedCollection)) { _, _ in
+        .onChange(of: snapshotRevision) { _, _ in
             updateInfoPanelContext()
+        }
+        .onChange(of: model.albums) { _, albums in
+            guard selectedDestination == .albums, let openedAlbumID,
+                  !albums.isEmpty,
+                  !albums.contains(where: { $0.id == openedAlbumID }) else { return }
+            closeAlbum()
         }
         .alert(
             model.pendingFavoriteConfirmation?.title ?? "",
@@ -89,19 +129,24 @@ struct AppShellView: View {
     private var detail: some View {
         GeometryReader { geometry in
             let topInset = max(chrome.top, geometry.safeAreaInsets.top)
-            let collection = selectedCollection
             ZStack(alignment: .topLeading) {
-                LibraryBrowserView(collection: collection,
-                                   restorationAnchor: navigationRestoration.timelineAnchor(for: collection),
-                                   bridge: browserBridge,
-                                   contentTopInset: topInset,
-                                   onOpenPhoto: openPhoto,
-                                   onRestorationAnchorChanged: { anchor in
-                                       navigationRestoration.setTimelineAnchor(anchor, for: collection)
-                                   })
-                    .id(collection)
-                    .allowsHitTesting(viewer == nil)
-                    .ignoresSafeArea(.container, edges: .top)
+                if let collection = selectedCollection {
+                    LibraryBrowserView(collection: collection,
+                                       restorationAnchor: navigationRestoration.timelineAnchor(for: collection),
+                                       bridge: browserBridge,
+                                       contentTopInset: topInset,
+                                       onOpenPhoto: openPhoto,
+                                       onRestorationAnchorChanged: { anchor in
+                                           navigationRestoration.setTimelineAnchor(anchor, for: collection)
+                                       })
+                        .id(collection)
+                        .allowsHitTesting(viewer == nil)
+                        .ignoresSafeArea(.container, edges: .top)
+                } else {
+                    AlbumsOverviewView(onOpenAlbum: openAlbum, contentTopInset: topInset)
+                        .allowsHitTesting(viewer == nil)
+                        .ignoresSafeArea(.container, edges: .top)
+                }
 
                 if let viewer {
                     PhotoViewerView(viewer: viewer,
@@ -125,8 +170,8 @@ struct AppShellView: View {
         }
     }
 
-    private func select(_ collection: PhotoCollectionDescriptor) {
-        guard collection != selectedCollection else { return }
+    private func select(_ destination: LibraryDestination) {
+        guard destination != selectedDestination else { return }
         if let active = viewer {
             guard active.close() else { return }
             active.canvasController.collapse(to: nil, reduceMotion: reduceMotion) {
@@ -134,21 +179,37 @@ struct AppShellView: View {
                 lastViewerFollowSelection = nil
                 model.setActiveViewer(nil)
                 infoPanel.updateViewer(active: false, item: nil)
-                finishSelection(collection)
+                finishSelection(destination)
             }
             return
         }
-        finishSelection(collection)
+        finishSelection(destination)
     }
 
-    private func finishSelection(_ collection: PhotoCollectionDescriptor) {
-        navigationRestoration.select(collection)
-        selectedCollection = collection
+    private func finishSelection(_ destination: LibraryDestination) {
+        navigationRestoration.select(destination)
+        selectedDestination = destination
+        updateInfoPanelContext()
+    }
+
+    private func openAlbum(_ album: AlbumSummary) {
+        openedAlbumID = album.id
+        navigationRestoration.setOpenedAlbum(album.id)
+        model.ensureCollectionLoaded(.album(album.id))
+        updateInfoPanelContext()
+    }
+
+    private func closeAlbum() {
+        openedAlbumID = nil
+        navigationRestoration.setOpenedAlbum(nil)
         updateInfoPanelContext()
     }
 
     private func updateInfoPanelContext() {
-        let collection = selectedCollection
+        guard let collection = selectedCollection else {
+            infoPanel.clearBrowserContext()
+            return
+        }
         infoPanel.updateBrowserContext(
             repository: model.repository,
             snapshot: model.snapshot(for: collection),
@@ -158,13 +219,14 @@ struct AppShellView: View {
 
     private func openPhoto(_ request: PhotoViewerOpenRequest) {
         guard viewer == nil, let repository = model.repository,
-              let snapshot = model.snapshot(for: selectedCollection) else { return }
-        viewer = PhotoViewerPresentation(repository: repository, collection: selectedCollection,
+              let collection = selectedCollection,
+              let snapshot = model.snapshot(for: collection) else { return }
+        viewer = PhotoViewerPresentation(repository: repository, collection: collection,
                                          index: LibraryIndex(snapshot: snapshot),
                                          request: request, thumbnailSize: model.thumbnailSize,
                                          loadsLargePreviews: model.loadsLargeViewerPreviews,
-                                         allowNetwork: model.timelineVerified(for: selectedCollection),
-                                         snapshotRevision: model.viewerSnapshotRevision(for: selectedCollection))
+                                         allowNetwork: model.timelineVerified(for: collection),
+                                         snapshotRevision: model.viewerSnapshotRevision(for: collection))
         lastViewerFollowSelection = nil
         model.setActiveViewer(viewer)
         model.installViewerCloseHandler(closeViewer)
@@ -233,15 +295,32 @@ struct AppShellView: View {
                 ViewerToolbarTitle(viewer: viewer)
             }
             .sharedBackgroundVisibility(.hidden)
-        } else {
+        } else if let collection = selectedCollection {
+            if isAlbumBrowser {
+                ToolbarItem(placement: .navigation) {
+                    Button(action: closeAlbum) {
+                        Label("Albums", systemImage: "chevron.left")
+                    }
+                    .help("Back to Albums")
+                }
+            }
             ToolbarItem(placement: .navigation) {
                 LibrarySizeControl(value: $model.itemsPerRow)
             }
             ToolbarItem(placement: .primaryAction) {
-                BrowserFavoriteControl(model: model, collection: selectedCollection)
+                BrowserFavoriteControl(model: model, collection: collection)
             }
             ToolbarItem(placement: .primaryAction) {
                 InfoPanelToolbarControl()
+            }
+            if isAlbumBrowser {
+                ToolbarItem(placement: .principal) {
+                    Text(model.albumName(for: collection) ?? "Album")
+                        .font(.headline)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .sharedBackgroundVisibility(.hidden)
             }
         }
 
