@@ -23,7 +23,9 @@ Do not carry forward these unsafe assumptions:
 
 ## Protocol evidence gate
 
-The 2026-10-06 read-only probe established only that `SYNO.Foto.Browse.Diff` is advertised at versions 1–7, `get_version` v1 returns the opaque pair `diff_version`/`version_time`, and `get` with the current pair returns empty item/album modify/delete arrays. Missing cursor fields returned 120; a deliberately mismatched pair returned 700. Error 700 is not yet proven to mean expired cursor. Preserve both fields exactly as issued; do not derive cursors from dates or order them numerically.
+The 2026-10-06 and 2026-10-08 read-only probes establish that `SYNO.Foto.Browse.Diff` is advertised at versions 1–7, `get_version` v1 returns the opaque pair `diff_version`/`version_time`, and `get` returns a deterministic complete-looking interval for an observed two-day-old cursor. That interval contained 67 unique `item.modify` base records and advanced to the current cursor; repeating it returned the same records, and querying the returned cursor was empty. Diff supplied no GPS or thumbnail fields. A v7 item lookup returned all 67 current rows in exact order, and a subsequent quiet-window Diff fence was empty. A mixed lookup silently omitted a nonexistent ID, so lookup omission is not authoritative deletion evidence. Full sanitized conclusions and shapes are recorded in `docs/SYNOLOGY_PHOTOS_API.md`.
+
+Missing cursor fields returned 120; a deliberately mismatched pair and `(0, 0)` returned 700. Error 700 is not yet proven to mean expiry/reset of a once-valid cursor. Preserve both cursor fields exactly as issued; do not derive cursors from dates or order them numerically. The observed interval does not identify which user action created each modify record, so it does not yet prove addition versus metadata-edit coverage.
 
 The vendored `docs/SynologyPhotosAPI/API/SYNO.Foto.lib` advertises Diff but supplies no change semantics. `docs/SynologyPhotosAPI/API/SYNO.Foto/SYNO.Foto.Browse.Item.list.md` describes pagination and optional GPS fields, but establishes no arbitrary-ID batch lookup contract. Do not invent `item_ids`, `getinfo`, continuation fields, or tombstone shapes.
 
@@ -37,6 +39,8 @@ Before enabling the map delta path, add sanitized fixtures and conclusions to `d
 | Read-only lookup of specified item IDs, fields, batch limit, missing/deleted/inaccessible IDs, order, and GPS-absence semantics | Repair needs authoritative metadata or complete feed records. A missing response is not automatically a deletion. |
 | A second Diff call after metadata reads detects changes during those reads; indexing delay between item reads and feed visibility | Establish the consistency fence below. If visibility lags without a reliable fence, leave the optimization disabled. |
 | Rejection/reset of a previously valid cursor and account isolation | Classify known rejection separately from auth, malformed requests, unsupported API, and transient failure. Unknown errors never become empty deltas. |
+
+Current gate status: nonempty modify decoding, deterministic replay, an accepted two-day-old cursor, ordered repair lookup, missing-ID ambiguity, and an empty consistency fence are observed. The gate remains closed until controlled user actions establish addition, deletion, GPS gain/change/removal, capture-time change, thumbnail replacement, repeat/conflict normalization, and large-interval completeness or continuation. A previously valid cursor must also be retested after server rejection/reset; an arbitrary invalid pair is insufficient evidence for that classification.
 
 Cursor retention duration is an operational measurement, not a guessed TTL. Safe rejection handling permits implementation without knowing the maximum age. Shared Space and condition-album semantics are not prerequisites for the map slice.
 

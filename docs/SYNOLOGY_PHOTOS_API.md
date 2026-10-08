@@ -529,7 +529,7 @@ Important details:
 
 `SYNO.API.Info` on `cirrus` advertises `SYNO.Foto.Browse.Diff` and `SYNO.FotoTeam.Browse.Diff` with `minVersion` 1 and `maxVersion` 7.
 
-Read-only probe on 2026-10-06 established the mechanics:
+Read-only probes on 2026-10-06 and 2026-10-08 established the mechanics:
 
 - `method=get_version` (v1) returns a cursor pair, for example `{ "diff_version": 1780603, "version_time": 1791277292636 }`; `version_time` is epoch milliseconds.
 - `method=get` requires **both** cursor fields, exactly as previously issued. A missing field returns error 120 with `errors.name`, and a mismatched pair (for example the current version with an older time) returns error 700.
@@ -544,7 +544,26 @@ Read-only probe on 2026-10-06 established the mechanics:
 }}
 ```
 
-The cursor is opaque and must be stored verbatim; the response echoes the next cursor. Unknown as of this probe: the entry shape inside `modify`/`delete` (IDs versus records, and whether additions appear under item `modify`), how old a cursor the server still accepts, and whether `SYNO.FotoTeam` behaves identically for Shared Space. See `docs/plans/WIP_DIFF_CACHE_PLAN.md` for the intended use.
+The 2026-10-08 probe reused the exact cursor pair issued two days earlier. The server accepted it and returned a current cursor plus 67 unique `item.modify` records, no item deletions, and no album changes. Repeating the old-cursor request returned the same ordered records and cursor; requesting from the returned cursor produced an empty interval. Each modify record had this sanitized shape:
+
+```json
+{
+  "id": 0,
+  "filename": "<redacted>",
+  "filesize": 0,
+  "folder_id": 0,
+  "indexed_time": 0,
+  "owner_user_id": 0,
+  "time": 0,
+  "type": "photo"
+}
+```
+
+The feed records contain no `additional`, GPS, or thumbnail fields, so Map repair requires an authoritative item lookup. A v7 `SYNO.Foto.Browse.Item method=get` lookup of all 67 IDs returned every item in exact request order; all base fields shown above matched the Diff records. The response included thumbnail metadata for every item and GPS for 61. All 67 thumbnail unit IDs differed from item IDs, reinforcing that the identities cannot be interchanged. A cursor obtained immediately before the lookup produced an empty item/album interval afterward, demonstrating the proposed quiet-window fence when no concurrent change occurs.
+
+A mixed lookup `[known, missing, known, duplicate-known]` returned `[known, known, duplicate-known]`: the server silently omitted the missing ID, preserved the relative request order of found IDs, and repeated a duplicate. `data` contained only `list`, with no absence or tombstone field. Consequently, omitted lookup IDs are ambiguous and must not be treated as deletions.
+
+The cursor is opaque and must be stored verbatim; the response echoes the next cursor. `(0, 0)` returned error 700, but this does not distinguish a malformed pair from expiry/reset of a previously valid pair. Still unproven: whether the observed modify records represent additions, metadata edits, or both; deletion record shape; GPS-only changes/removals; capture-time edits; thumbnail replacement; repeated/conflicting changes; truncation or continuation for large intervals; retention beyond the observed two days; and whether `SYNO.FotoTeam` behaves identically for Shared Space. See `docs/plans/WIP_DIFF_CACHE_PLAN.md` for the intended use and remaining evidence gate.
 
 ## Error and refresh behavior
 
@@ -646,6 +665,8 @@ additional=["thumbnail","resolution","orientation","video_convert","video_meta",
 ```
 
 Verified with 100, 500, and 1000 IDs (2.2 s, 7.8 s, 6.7 s). `additional` supports the same fields as `list` (the v5 `get` endpoint rejects some; use v7). One ID must still be wrapped in an array (`id=[12]`). This is the page primitive for client-side filters: one request per page of up to 1000 arbitrary IDs, in order.
+
+The 2026-10-08 Diff probe additionally confirmed missing-ID behavior: a nonexistent ID in a mixed request is omitted without an error or explicit absence marker, while found IDs retain relative request order and duplicate requested IDs produce duplicate rows. Callers therefore cannot distinguish deleted, inaccessible, and otherwise missing items from this response alone.
 
 The client currently does not use this endpoint for map filters. A filtered page instead fetches the complete Personal Library timeline pages covering its day and filters them locally, which keeps the persistent timeline cache behind the filter and avoids a second transport path. This ID-batch primitive remains documented as an available option.
 
