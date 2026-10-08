@@ -11,6 +11,7 @@ private actor PresentationTransport: PhotosTransport {
     let preview: Data
     private var releasedThumbnails: Set<Int64> = [1]
     private(set) var timelineCalls: [(PhotoCollectionDescriptor, Bool)] = []
+    private(set) var albumListCalls = 0
 
     init(preview: Data) { self.preview = preview }
     func releaseThumbnail(_ id: Int64) { releasedThumbnails.insert(id) }
@@ -18,6 +19,10 @@ private actor PresentationTransport: PhotosTransport {
     func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
         timelineCalls.append((collection, initial))
         return TimelineSnapshot(sections: [])
+    }
+    func albums() async throws -> [AlbumSummary] {
+        albumListCalls += 1
+        return []
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
@@ -303,7 +308,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
 
 @MainActor
 final class LibraryModelTests: PhotoViewerPresentationTestCase {
-    func testLibraryModelEagerlyLoadsBothCollectionTimelines() async throws {
+    func testLibraryModelEagerlyLoadsTimelinesAndLazilyLoadsAlbumList() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoModel-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = PresentationTransport(preview: try previewData())
@@ -321,6 +326,19 @@ final class LibraryModelTests: PhotoViewerPresentationTestCase {
         XCTAssertFalse(calls.contains { $0.0 == .favorites && $0.1 })
         XCTAssertNotNil(model.snapshot(for: .personalLibrary))
         XCTAssertNotNil(model.snapshot(for: .favorites))
+        let albumCallsBeforeDemand = await transport.albumListCalls
+        XCTAssertEqual(albumCallsBeforeDemand, 0)
+
+        model.ensureAlbumsLoaded()
+        var loadedAlbums = false
+        for _ in 0..<500 {
+            if await transport.albumListCalls == 1, model.albumsVerified {
+                loadedAlbums = true
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(3))
+        }
+        XCTAssertTrue(loadedAlbums)
     }
 
     func testLocalFavoritesRefreshUpdatesBrowserWithoutInvalidatingViewerIndex() async throws {

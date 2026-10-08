@@ -80,6 +80,7 @@ final class LibraryModel: ObservableObject {
     private var authenticationTask: Task<Void, Never>?
     private var refreshTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
     private var albumsTask: Task<Void, Never>?
+    private var albumListRequested = false
     private var openedCollections: Set<PhotoCollectionDescriptor> = []
     private var collectionFetchTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
 
@@ -103,6 +104,22 @@ final class LibraryModel: ObservableObject {
     func albumName(for collection: PhotoCollectionDescriptor) -> String? {
         guard let albumID = collection.albumID else { return nil }
         return albums.first(where: { $0.id == albumID })?.name
+    }
+
+    /// Starts loading the Personal Space album list on first demand.
+    func ensureAlbumsLoaded() {
+        albumListRequested = true
+        startAlbumListFetchIfNeeded()
+    }
+
+    private func startAlbumListFetchIfNeeded() {
+        guard let repository, albumsTask == nil else { return }
+        albumsTask = Task { [weak self] in
+            for await event in await repository.albums() {
+                guard !Task.isCancelled else { return }
+                self?.receiveAlbums(event)
+            }
+        }
     }
 
     /// Starts loading an album timeline lazily. Non-album collections are ignored;
@@ -348,14 +365,7 @@ final class LibraryModel: ObservableObject {
                     }
                 }
             }
-            if albumsTask == nil {
-                albumsTask = Task { [weak self] in
-                    for await event in await repository.albums() {
-                        guard !Task.isCancelled else { return }
-                        self?.receiveAlbums(event)
-                    }
-                }
-            }
+            if albumListRequested { startAlbumListFetchIfNeeded() }
             for collection in openedCollections {
                 startCollectionFetchIfNeeded(collection)
             }
@@ -413,6 +423,8 @@ final class LibraryModel: ObservableObject {
         isLoading = true
         albumsTask?.cancel()
         albumsTask = nil
+        albumsVerified = false
+        albumListError = nil
         for task in collectionFetchTasks.values { task.cancel() }
         collectionFetchTasks.removeAll()
         if let repository { await repository.retryAuthentication() }

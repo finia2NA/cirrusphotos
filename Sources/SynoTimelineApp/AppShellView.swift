@@ -76,6 +76,8 @@ struct AppShellView: View {
             dismissWindow(id: InfoPanelScene.id)
         }
         .task {
+            guard selectedDestination == .albums else { return }
+            model.ensureAlbumsLoaded()
             if let id = openedAlbumID { model.ensureCollectionLoaded(.album(id)) }
         }
         .onChange(of: timelineVerified) { _, verified in
@@ -91,10 +93,10 @@ struct AppShellView: View {
             updateInfoPanelContext()
         }
         .onChange(of: model.albums) { _, albums in
-            guard selectedDestination == .albums, let openedAlbumID,
-                  !albums.isEmpty,
-                  !albums.contains(where: { $0.id == openedAlbumID }) else { return }
-            closeAlbum()
+            validateOpenedAlbum(in: albums)
+        }
+        .onChange(of: model.albumsVerified) { _, _ in
+            validateOpenedAlbum(in: model.albums)
         }
         .alert(
             model.pendingFavoriteConfirmation?.title ?? "",
@@ -189,7 +191,17 @@ struct AppShellView: View {
     private func finishSelection(_ destination: LibraryDestination) {
         navigationRestoration.select(destination)
         selectedDestination = destination
+        if destination == .albums {
+            model.ensureAlbumsLoaded()
+            if let openedAlbumID { model.ensureCollectionLoaded(.album(openedAlbumID)) }
+        }
         updateInfoPanelContext()
+    }
+
+    private func validateOpenedAlbum(in albums: [AlbumSummary]) {
+        guard selectedDestination == .albums, model.albumsVerified, let openedAlbumID,
+              !albums.contains(where: { $0.id == openedAlbumID }) else { return }
+        closeAlbum()
     }
 
     private func openAlbum(_ album: AlbumSummary) {

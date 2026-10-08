@@ -104,7 +104,7 @@ Routing:
 - `.albums` with `openedAlbumID == nil`: new `AlbumsOverviewView`.
 - `.albums` with an album open: `LibraryBrowserView(collection: .album(id))` plus a navigation-placement back button ("Albums", chevron) and the album name in the toolbar principal slot (falls back to "Album" until `model.albums` resolves the name).
 - Sidebar selection `select(_:)` still closes the viewer first; switching destinations away from `.albums` keeps `openedAlbumID` so returning to Albums reopens the same album, consistent with launch restoration. The back button clears it.
-- If the loaded album list no longer contains `openedAlbumID` (and the list is non-empty), fall back to the overview and persist the clear.
+- After the album list is authoritatively verified, if it no longer contains `openedAlbumID` (including when the list is empty), fall back to the overview and persist the clear. Never clear from an unverified cached list.
 
 Restoration (`NavigationRestoration.swift`) bumps to version 3 (old state is discarded by the existing version check; no migration):
 
@@ -225,7 +225,8 @@ private var openedCollections: Set<PhotoCollectionDescriptor> = []          // a
 private var collectionFetchTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
 ```
 
-- `load()`: after the repository exists, start the `repository.albums()` subscription once (`albumsTask`), and start a `repository.timeline(collection:)` fetch for every collection in `openedCollections` (so `reload()` re-fetches albums too). `receive` updates `albums`/`albumsVerified`/`albumListError` on its events, and album timeline events flow through the existing `receive(_:collection:)` paths (snapshots, revisions, verification, errors are already collection-keyed dictionaries).
+- `ensureAlbumsLoaded()`: record album-list demand and start the `repository.albums()` subscription once (`albumsTask`) when the repository exists. `AppShellView` calls it only when Albums is selected, so ordinary Library/Favorites startup does not fetch album metadata.
+- `load()`: after the repository exists, start the album-list subscription only when it was requested, and start a `repository.timeline(collection:)` fetch for every collection in `openedCollections` (so `reload()` re-fetches demanded albums too). `receive` updates `albums`/`albumsVerified`/`albumListError` on its events, and album timeline events flow through the existing `receive(_:collection:)` paths (snapshots, revisions, verification, errors are already collection-keyed dictionaries).
 - `ensureCollectionLoaded`: ignore non-album collections; insert into `openedCollections`; start the fetch task if the repository exists (otherwise `load()` drains the set).
 - `reload()`: also cancel `albumsTask` and all `collectionFetchTasks`, clear both, then run the existing reload flow so albums re-validate with the rest of the app.
 
