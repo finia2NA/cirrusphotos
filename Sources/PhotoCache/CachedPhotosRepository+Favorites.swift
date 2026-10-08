@@ -95,8 +95,8 @@ extension CachedPhotosRepository {
                 collection: action.collection
             )
 
-            // Patch cached Personal Library pages by grouping changes per cache key
-            // and decoding/encoding each affected page once
+            // Patch cached source-collection pages (or Personal Library pages for a
+            // Favorites action) by decoding/encoding each affected cache key once.
             var transaction = BatchFavoriteMutationTransaction()
             await self.patchAffectedPagesBatch(
                 action: action,
