@@ -47,6 +47,7 @@ public struct ThumbnailBatchSummary: Sendable, Equatable {
     public var reused = 0
     public var unavailable = 0
     public var errors = 0
+    public var interrupted = false
     public var downloadedThumbnails = 0
     public var downloadedBytes: Int64 = 0
     public var downloadElapsedSeconds: TimeInterval = 0
@@ -100,6 +101,13 @@ public struct ThumbnailRangeDownloader: Sendable {
             return empty
         }
         var summary = ThumbnailBatchSummary(estimated: selected.estimatedThumbnailCount(in: snapshot))
+        guard let metadataToken = try? await repository.captureMetadataWorkToken(
+            resource: .transient(.personalLibrary), jobID: UUID(), collection: .personalLibrary
+        ) else {
+            summary.interrupted = true
+            await progress(summary)
+            return summary
+        }
         let index = LibraryIndex(snapshot: snapshot)
         let selectedDays = Set(selected.dayIDs(in: snapshot))
         let sectionIndices = Set(selectedDays.flatMap { index.sectionIndices(forDay: $0) }).sorted()
@@ -107,6 +115,10 @@ public struct ThumbnailRangeDownloader: Sendable {
 
         for sectionIndex in sectionIndices {
             if Task.isCancelled { break }
+            guard await repository.metadataTokenIsCurrent(metadataToken) else {
+                summary.interrupted = true
+                break
+            }
             let descriptor = snapshot.sections[sectionIndex]
             var currentItems: [PhotoItem]?
             var pageFailed = false
@@ -121,6 +133,10 @@ public struct ThumbnailRangeDownloader: Sendable {
                 }
             }
             if Task.isCancelled { break }
+            guard await repository.metadataTokenIsCurrent(metadataToken) else {
+                summary.interrupted = true
+                break
+            }
 
             let selectedOffsets = selectedPageOffsets(index: index, sectionIndex: sectionIndex,
                                                       selectedDays: selectedDays)
@@ -169,6 +185,10 @@ public struct ThumbnailRangeDownloader: Sendable {
                     return values
                 }
                 if Task.isCancelled { break }
+                guard await repository.metadataTokenIsCurrent(metadataToken) else {
+                    summary.interrupted = true
+                    break
+                }
                 var batchDownloadedBytes: Int64 = 0
                 for measurement in outcomes {
                     summary.processed += 1

@@ -52,6 +52,7 @@ struct RepositoryMetadataWork {
     var locationIndexObservers: [UUID: AsyncStream<LocationIndexEvent>.Continuation] = [:]
     var locationRecords: [Int64: PhotoLocationRecord] = [:]
     var locationRevision: UInt64 = 0
+    var mapFilterInvalidationObservers: [UUID: AsyncStream<PhotoCollectionDescriptor>.Continuation] = [:]
     var mapFilters: [UUID: MapFilterState] = [:]
     var mapFilterPages: [String: [PhotoItem]] = [:]
     var mapFilterPageOrder: [String] = []

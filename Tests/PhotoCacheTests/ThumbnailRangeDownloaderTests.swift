@@ -7,12 +7,36 @@ private actor RangeTransport: PhotosTransport {
     var pages: [Int: [PhotoItem]] = [:]
     var blockThumbnails = false
     var thumbnailCalls = 0
+    var blockPages = false
+    var pageCalls = 0
+    private var pageStartWaiters: [CheckedContinuation<Void, Never>] = []
+    private var blockedPageContinuations: [CheckedContinuation<Void, Never>] = []
 
-    func configure(pages: [Int: [PhotoItem]], blockThumbnails: Bool = false) {
+    func configure(pages: [Int: [PhotoItem]], blockThumbnails: Bool = false,
+                   blockPages: Bool = false) {
         self.pages = pages
         self.blockThumbnails = blockThumbnails
+        self.blockPages = blockPages
     }
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] { pages[section.offset] ?? [] }
+    func waitUntilPageRequested() async {
+        if pageCalls > 0 { return }
+        await withCheckedContinuation { pageStartWaiters.append($0) }
+    }
+    func releasePages() {
+        blockPages = false
+        let waiters = blockedPageContinuations
+        blockedPageContinuations.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
+    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
+        pageCalls += 1
+        for waiter in pageStartWaiters { waiter.resume() }
+        pageStartWaiters.removeAll()
+        if blockPages {
+            await withCheckedContinuation { blockedPageContinuations.append($0) }
+        }
+        return pages[section.offset] ?? []
+    }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         thumbnailCalls += 1
@@ -150,5 +174,32 @@ final class ThumbnailRangeDownloaderTests: XCTestCase {
         XCTAssertLessThan(result.processed, result.estimated)
         let finalCalls = await transport.thumbnailCalls
         XCTAssertLessThanOrEqual(finalCalls, 2)
+    }
+
+    func testMetadataResetInterruptsRangeResolutionWithoutStartingThumbnails() async throws {
+        let root = temporaryTestRoot("SynoRangeResetTest")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = RangeTransport()
+        await transport.configure(pages: [0: [try item(1)]], blockPages: true)
+        let snapshot = TimelineSnapshot(sections: [
+            TimelineSection(offset: 0, limit: 1,
+                            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
+        ])
+        let repository = try repository(transport: transport, root: root)
+        let downloader = ThumbnailRangeDownloader(repository: repository)
+        let task = Task {
+            await downloader.download(snapshot: snapshot, range: ThumbnailDateRange(0, 0), size: .m) { _ in }
+        }
+        await transport.waitUntilPageRequested()
+
+        try await repository.clearMetadataCache()
+        await transport.releasePages()
+        let result = await task.value
+
+        XCTAssertTrue(result.interrupted)
+        XCTAssertEqual(result.processed, 0)
+        XCTAssertEqual(result.errors, 0)
+        let thumbnailCalls = await transport.thumbnailCalls
+        XCTAssertEqual(thumbnailCalls, 0)
     }
 }

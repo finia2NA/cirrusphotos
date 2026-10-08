@@ -30,6 +30,8 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var metadataInvalidationRevision: UInt64 = 0
     @Published private(set) var cacheResetInProgress = false
     @Published private(set) var cacheResetError: String?
+    @Published private(set) var mapFilterInvalidationRevision: UInt64 = 0
+    private(set) var invalidatedMapFilter: PhotoCollectionDescriptor?
     private var browserSelectionStates: [PhotoCollectionDescriptor: BrowserSelectionState] = [:]
     private var browserCommandHandler: ((BrowserSelectionCommand) -> Void)?
     private var browserCommandOwner: UUID?
@@ -84,6 +86,7 @@ final class LibraryModel: ObservableObject {
     private var refreshTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
     private var albumsTask: Task<Void, Never>?
     private var metadataResetTask: Task<Void, Never>?
+    private var mapFilterInvalidationTask: Task<Void, Never>?
     private var albumListRequested = false
     private var openedCollections: Set<PhotoCollectionDescriptor> = []
     private var collectionFetchTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
@@ -403,6 +406,14 @@ final class LibraryModel: ObservableObject {
                     }
                 }
             }
+            if mapFilterInvalidationTask == nil {
+                mapFilterInvalidationTask = Task { [weak self] in
+                    for await collection in await repository.mapFilterInvalidations() {
+                        guard !Task.isCancelled else { return }
+                        self?.handleMapFilterInvalidation(collection)
+                    }
+                }
+            }
             if authenticationTask == nil {
                 authenticationTask = Task { [weak self] in
                     for await status in await repository.authentication() {
@@ -548,6 +559,14 @@ final class LibraryModel: ObservableObject {
         }
         if albumListRequested { startAlbumListFetchIfNeeded() }
         Task { [weak self] in await self?.refreshUsage() }
+    }
+
+    private func handleMapFilterInvalidation(_ collection: PhotoCollectionDescriptor) {
+        guard collection.isMapFilter, snapshots[collection] != nil else { return }
+        unregisterSessionCollection(collection)
+        invalidatedMapFilter = collection
+        mapFilterInvalidationRevision &+= 1
+        updateBrowserFavoriteAvailability()
     }
 }
 

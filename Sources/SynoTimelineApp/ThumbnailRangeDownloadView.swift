@@ -196,6 +196,9 @@ struct ThumbnailRangeDownloadView: View {
             }
             if Task.isCancelled {
                 outcomeText = "Cancelled."
+            } else if final.interrupted {
+                summary = final
+                outcomeText = "Interrupted because cached metadata changed. Start again when the library is ready."
             } else {
                 summary = final
                 outcomeText = "Complete."

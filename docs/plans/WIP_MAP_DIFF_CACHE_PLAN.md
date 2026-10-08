@@ -1,6 +1,6 @@
 # Map-only Diff cache validation
 
-Status: alternative implementation plan, not implemented. Reviewed against the source on 2026-10-08. This is an alternative to [whole-app Diff validation](WIP_DIFF_CACHE_PLAN.md), not a prerequisite or an incremental step toward that proposal. Neither alternative is selected by this document.
+Status: non-proof infrastructure implemented on 2026-10-09: strict bounded Diff transport/decoding, conservative pure location merge, shared metadata lifecycle/reset, repository-owned Map-filter dependencies, and cache-only filtered-page delivery. Production Diff validation is intentionally disabled because the mandatory large-interval completeness, cursor reset/rejection, feed visibility delay, positional-scan completeness/stable equal-time ordering, and Personal Space access-change evidence gates remain open. Map retains the conservative fingerprint path and stores no cursor/proof until every gate passes.
 
 Use `SYNO.Foto.Browse.Diff` only to validate and repair the Personal Library location-index payload. Keep other resources cached-first and authoritative once per run. Also implement the requested metadata-only Settings invalidation command across all metadata consumers; that command is deliberately broader than Diff's scope.
 

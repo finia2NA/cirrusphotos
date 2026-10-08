@@ -121,17 +121,7 @@ extension CachedPhotosRepository {
     /// `timeline(collection:)` joins any eager Personal Library request already in
     /// flight, and returns immediately when that resource has already been validated.
     private func verifiedPersonalTimelineFingerprint() async throws -> String {
-        var failure: String?
-        for await event in timeline(collection: .personalLibrary) {
-            try Task.checkCancellation()
-            switch event {
-            case .value(let snapshot, let verified):
-                if verified { return LibraryIndex(snapshot: snapshot).fingerprint }
-            case .failure(let message):
-                failure = message
-            }
-        }
-        throw SynologyAPIError.unsupported(failure ?? "The Personal Library timeline could not be validated.")
+        LibraryIndex(snapshot: try await verifiedTimelineSnapshot(collection: .personalLibrary)).fingerprint
     }
 
     private func registerLocationIndexScan(fingerprint: String,

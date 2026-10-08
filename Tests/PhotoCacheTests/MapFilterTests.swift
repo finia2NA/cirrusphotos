@@ -11,21 +11,30 @@ private actor MapFilterFakeTransport: PhotosTransport {
     var pageFailure: String?
     var blocksPageRequests = false
     var blockedPageContinuations: [CheckedContinuation<Void, Never>] = []
+    var blocksTimelineRequests = false
+    var blockedTimelineContinuations: [CheckedContinuation<Void, Never>] = []
 
     func configure(timelineSnapshot: TimelineSnapshot = TimelineSnapshot(sections: []),
                    pageItemsBySection: [TimelineSection: [PhotoItem]] = [:],
                    pageFailure: String? = nil,
-                   blocksPageRequests: Bool = false) {
+                   blocksPageRequests: Bool = false,
+                   blocksTimelineRequests: Bool = false) {
         self.timelineSnapshot = timelineSnapshot
         self.pageItemsBySection = pageItemsBySection
         self.pageFailure = pageFailure
         self.blocksPageRequests = blocksPageRequests
+        self.blocksTimelineRequests = blocksTimelineRequests
     }
 
     func login(credentials: SynologyCredentials) async throws {}
 
     func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
-        timelineSnapshot
+        if blocksTimelineRequests {
+            await withCheckedContinuation { continuation in
+                blockedTimelineContinuations.append(continuation)
+            }
+        }
+        return timelineSnapshot
     }
 
     func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
@@ -43,6 +52,13 @@ private actor MapFilterFakeTransport: PhotosTransport {
         blocksPageRequests = false
         let continuations = blockedPageContinuations
         blockedPageContinuations.removeAll()
+        for continuation in continuations { continuation.resume() }
+    }
+
+    func releaseTimelineRequests() {
+        blocksTimelineRequests = false
+        let continuations = blockedTimelineContinuations
+        blockedTimelineContinuations.removeAll()
         for continuation in continuations { continuation.resume() }
     }
 
@@ -272,6 +288,56 @@ final class MapFilterTests: XCTestCase {
         await task.value
     }
 
+    func testCachedFilterValueArrivesWhileTimelineValidationIsBlocked() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let personalSection = section(day: 1, limit: 1)
+        let photo = try item(1)
+        let snapshot = TimelineSnapshot(sections: [personalSection])
+
+        let seedingTransport = MapFilterFakeTransport()
+        await seedingTransport.configure(timelineSnapshot: snapshot,
+                                         pageItemsBySection: [personalSection: [photo]])
+        let seedingRepository = try makeRepository(root: root, transport: seedingTransport)
+        for await _ in await seedingRepository.timeline() {}
+        try await seedPersonalPage([photo], section: personalSection,
+                                   validatedRun: nil, repository: seedingRepository)
+
+        let blockedTransport = MapFilterFakeTransport()
+        await blockedTransport.configure(timelineSnapshot: snapshot,
+                                         pageItemsBySection: [personalSection: [photo]],
+                                         blocksTimelineRequests: true)
+        let repository = try makeRepository(root: root, transport: blockedTransport)
+        let cachedTimeline = expectation(description: "cached timeline")
+        let timelineTask = Task {
+            for await event in await repository.timeline() {
+                if case .value(_, false) = event { cachedTimeline.fulfill() }
+            }
+        }
+        await fulfillment(of: [cachedTimeline], timeout: 1)
+
+        let descriptor = PhotoCollectionDescriptor.mapFilter(UUID())
+        try await repository.registerMapFilter(
+            descriptor,
+            source: .personalLibrary,
+            snapshot: snapshot,
+            itemIDsBySection: [[photo.id]]
+        )
+        let cachedFilter = expectation(description: "cached filter")
+        let filterTask = Task {
+            for await event in await repository.page(personalSection, collection: descriptor,
+                                                     allowNetwork: true) {
+                if case .value(let items, false) = event, items.map(\.id) == [photo.id] {
+                    cachedFilter.fulfill()
+                }
+            }
+        }
+        await fulfillment(of: [cachedFilter], timeout: 1)
+
+        await blockedTransport.releaseTimelineRequests()
+        await timelineTask.value
+        await filterTask.value
+    }
+
     func testFilteredPageFansOutAcrossSplitDaySections() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
         let transport = MapFilterFakeTransport()
@@ -464,6 +530,27 @@ final class MapFilterTests: XCTestCase {
         let unknown = await pageValueEvents(repository, section: descriptorSection,
                                             collection: .mapFilter(UUID()), allowNetwork: true)
         XCTAssertNotNil(unknown.failure)
+    }
+
+    func testLocationReplacementPublishesTypedFilterInvalidation() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let repository = try makeRepository(root: root, transport: MapFilterFakeTransport())
+        let descriptor = PhotoCollectionDescriptor.mapFilter(UUID())
+        let filteredSection = section(day: 1, limit: 1)
+        try await repository.registerMapFilter(
+            descriptor,
+            source: .personalLibrary,
+            snapshot: TimelineSnapshot(sections: [filteredSection]),
+            itemIDsBySection: [[1]]
+        )
+        var invalidations = await repository.mapFilterInvalidations().makeAsyncIterator()
+
+        await repository.invalidateMapFiltersForLocationChange()
+
+        let invalidated = await invalidations.next()
+        let snapshot = await repository.latestTimelineSnapshot(collection: descriptor)
+        XCTAssertEqual(invalidated, descriptor)
+        XCTAssertNil(snapshot)
     }
 
     func testBatchFavoriteOnFilterPatchesPersonalPagesByDay() async throws {

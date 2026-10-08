@@ -5,10 +5,12 @@ import SynologyAPI
 
 final class SelectionFavoritesTests: XCTestCase {
 
-    private func makeItem(id: Int64, time: Int64 = 1712102400, isFavorite: Bool = false) -> PhotoItem {
+    private func makeItem(id: Int64, time: Int64 = 1712102400,
+                          isFavorite: Bool = false, filename: String? = nil) -> PhotoItem {
         let favoriteField = isFavorite ? "true" : "false"
+        let filename = filename ?? "IMG_\(id).jpg"
         let json = """
-        {"id":\(id),"filename":"IMG_\(id).jpg","time":\(time),"type":"photo","additional":{"thumbnail":{"unit_id":\(id),"cache_key":"key_\(id)","sm":"ready","m":"ready","xl":"ready"},"resolution":{"width":1000,"height":1000},"orientation":1,"favorite":\(favoriteField)}}
+        {"id":\(id),"filename":"\(filename)","time":\(time),"type":"photo","additional":{"thumbnail":{"unit_id":\(id),"cache_key":"key_\(id)","sm":"ready","m":"ready","xl":"ready"},"resolution":{"width":1000,"height":1000},"orientation":1,"favorite":\(favoriteField)}}
         """
         return try! JSONDecoder().decode(PhotoItem.self, from: Data(json.utf8))
     }
@@ -437,6 +439,47 @@ final class SelectionFavoritesTests: XCTestCase {
         XCTAssertEqual(calls[0].itemIDs, [42])
     }
 
+    func testInFlightPageFetchMergesOverOptimisticCachedPatchWithoutLosingFavorite() async throws {
+        let root = temporaryTestRoot("PageFavoriteCAS")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = SelectionFavoritesMockTransport()
+        let section = TimelineSection(
+            offset: 0,
+            limit: 1,
+            list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)]
+        )
+        let old = makeItem(id: 1, isFavorite: false, filename: "OLD.jpg")
+        let refreshed = makeItem(id: 1, isFavorite: false, filename: "NEW.jpg")
+        await transport.setTimeline(TimelineSnapshot(sections: [section]), for: .personalLibrary)
+        await transport.setPage([refreshed], offset: 0)
+        await transport.setItemsBlocked(true)
+        let repository = try makeRepository(transport: transport, root: root)
+        for await _ in await repository.timeline(collection: .personalLibrary) {}
+        try await seedPage([old], section: section, repository: repository)
+
+        let pageTask = Task {
+            for await _ in await repository.page(section, collection: .personalLibrary,
+                                                  allowNetwork: true) {}
+        }
+        await transport.waitUntilItemRequested()
+        let action = SelectionFavoriteAction(
+            affectedIDs: [old.id],
+            targetFavorite: true,
+            sectionsByID: [old.id: section],
+            collection: .personalLibrary,
+            itemsByID: [old.id: old]
+        )
+        try await repository.setFavoritesBatch(action: action)
+        await transport.releaseItems()
+        await pageTask.value
+
+        let stored = try await cachedPage(section, repository: repository)
+        XCTAssertEqual(stored.first?.filename, "NEW.jpg",
+                       "The authoritative page should win for ordinary metadata")
+        XCTAssertEqual(stored.first?.isFavorite, true,
+                       "The newer durable optimistic patch must survive the page commit")
+    }
+
     func testBatchObserversRewriteEachRetainedPageOnce() async throws {
         let root = temporaryTestRoot("PageWindowBatch")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -633,6 +676,9 @@ actor SelectionFavoritesMockTransport: PhotosTransport {
     private var favoriteWaiters: [CheckedContinuation<Void, Never>] = []
     private var failAllWrites = false
     private var failOnChunkIndex: Int?
+    private var itemsBlocked = false
+    private var itemStartWaiters: [CheckedContinuation<Void, Never>] = []
+    private var itemWaiters: [CheckedContinuation<Void, Never>] = []
 
     func setPage(_ items: [PhotoItem], offset: Int) { pages[offset] = items }
     func setTimeline(_ snapshot: TimelineSnapshot, for collection: PhotoCollectionDescriptor) {
@@ -641,6 +687,17 @@ actor SelectionFavoritesMockTransport: PhotosTransport {
     func setFavoriteBlocked(_ blocked: Bool) { favoriteBlocked = blocked }
     func setFailAllWrites(_ fail: Bool) { failAllWrites = fail }
     func setFailOnChunkIndex(_ index: Int?) { failOnChunkIndex = index }
+    func setItemsBlocked(_ blocked: Bool) { itemsBlocked = blocked }
+    func waitUntilItemRequested() async {
+        if itemCallCount > 0 { return }
+        await withCheckedContinuation { itemStartWaiters.append($0) }
+    }
+    func releaseItems() {
+        itemsBlocked = false
+        let waiters = itemWaiters
+        itemWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
 
     func recordedCounts() -> (thumbnails: Int, fullImages: Int) {
         (thumbnailCount, fullImageCount)
@@ -665,6 +722,11 @@ actor SelectionFavoritesMockTransport: PhotosTransport {
 
     func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
         itemCallCount += 1
+        for waiter in itemStartWaiters { waiter.resume() }
+        itemStartWaiters.removeAll()
+        if itemsBlocked {
+            await withCheckedContinuation { itemWaiters.append($0) }
+        }
         return pages[section.offset] ?? []
     }
 

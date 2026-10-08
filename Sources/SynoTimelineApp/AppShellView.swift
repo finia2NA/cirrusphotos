@@ -111,6 +111,14 @@ struct AppShellView: View {
             infoPanel.clearBrowserContext()
             updateInfoPanelContext()
         }
+        .onChange(of: model.mapFilterInvalidationRevision) { _, _ in
+            guard model.invalidatedMapFilter == openedMapFilter else { return }
+            mapFilterOpenGeneration &+= 1
+            openedMapFilter = nil
+            viewer?.invalidateForNewIndex()
+            infoPanel.clearBrowserContext()
+            updateInfoPanelContext()
+        }
         .onChange(of: viewerSnapshotRevision) { _, revision in
             if let viewer, viewer.snapshotRevision != revision { viewer.invalidateForNewIndex() }
         }

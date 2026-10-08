@@ -36,6 +36,7 @@ final class DiffModelsTests: XCTestCase {
             #"{"success":true,"data":{"diff_version":1,"version_time":2,"item":{"modify":[]},"album":{"modify":[],"delete":[]}}}"#,
             #"{"success":true,"data":{"diff_version":1,"version_time":2,"item":{"modify":[],"delete":[],"move":[]},"album":{"modify":[],"delete":[]}}}"#,
             #"{"success":true,"data":{"diff_version":1,"version_time":2,"item":{"modify":[],"delete":[{"id":9}]},"album":{"modify":[],"delete":[]}}}"#,
+            #"{"success":true,"data":{"diff_version":1,"version_time":2,"has_more":true,"item":{"modify":[],"delete":[]},"album":{"modify":[],"delete":[]}}}"#,
         ]
         for fixture in fixtures {
             XCTAssertThrowsError(try decode(fixture))

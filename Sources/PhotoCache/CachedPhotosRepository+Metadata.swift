@@ -2,6 +2,27 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
+    /// Joins the ordinary cached-first timeline pipeline and returns only a value
+    /// validated in this repository run. Derived resources use this before
+    /// admitting network work based on timeline geometry.
+    func verifiedTimelineSnapshot(
+        collection: PhotoCollectionDescriptor
+    ) async throws -> TimelineSnapshot {
+        var failure: String?
+        for await event in timeline(collection: collection) {
+            try Task.checkCancellation()
+            switch event {
+            case .value(let snapshot, let verified):
+                if verified { return snapshot }
+            case .failure(let message):
+                failure = message
+            }
+        }
+        throw SynologyAPIError.unsupported(
+            failure ?? "The requested timeline could not be validated."
+        )
+    }
+
     public func timeline(collection: PhotoCollectionDescriptor = .personalLibrary) -> AsyncStream<ResourceEvent<TimelineSnapshot>> {
         let subscriber = UUID()
         let producer = StreamProducer()
@@ -236,15 +257,27 @@ extension CachedPhotosRepository {
                   await metadataTokenIsCurrent(token) else {
                 throw CancellationError()
             }
-            let current = favorites.applyingOverrides(items)
-            let commit = try? await commitMetadata(
-                current, key: key, kind: .page, validatedRun: validation,
-                token: token, replacing: rowExpectation(for: prior)
-            )
-            if commit == .superseded || commit == .generationChanged {
-                throw CancellationError()
+            var expectation = rowExpectation(for: prior)
+            for _ in 0..<3 {
+                let current = favorites.applyingOverrides(items)
+                let commit = try? await commitMetadata(
+                    current, key: key, kind: .page, validatedRun: validation,
+                    token: token, replacing: expectation
+                )
+                switch commit {
+                case .superseded:
+                    guard let latest = try? await store.get(key) else {
+                        expectation = .absent
+                        continue
+                    }
+                    expectation = .revision(latest.revision)
+                case .generationChanged:
+                    throw CancellationError()
+                case .stored, .notRetained, nil:
+                    return current
+                }
             }
-            return current
+            throw MetadataAdmissionError.superseded
         }
         metadata.pageJobs[key] = SharedJob(id: id, task: task, subscribers: [subscriber])
         metadata.pageJobEpochs[key] = mutationEpoch

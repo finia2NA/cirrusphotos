@@ -62,6 +62,17 @@ struct PhotoDiffData: Decodable {
     }
 
     init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AnyCodingKey.self)
+        let partialMarkers: Set<String> = [
+            "has_more", "more", "next", "next_offset", "offset", "total",
+            "truncated", "partial", "continuation",
+        ]
+        if dynamic.allKeys.contains(where: { partialMarkers.contains($0.stringValue) }) {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath,
+                      debugDescription: "Diff response reports an unsupported partial interval")
+            )
+        }
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let cursor = DiffCursor(
             diffVersion: try container.decode(Int64.self, forKey: .diffVersion),

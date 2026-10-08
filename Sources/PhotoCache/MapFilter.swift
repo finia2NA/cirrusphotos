@@ -10,6 +10,19 @@ extension CachedPhotosRepository {
     /// Maximum session pages retained per map filter.
     static let mapFilterPageCacheLimit = 12
 
+    /// Session collection invalidations caused by a semantic replacement of the
+    /// location index. Consumers receive the collection identity, never its cache
+    /// revision or validation strategy.
+    public func mapFilterInvalidations() -> AsyncStream<PhotoCollectionDescriptor> {
+        let id = UUID()
+        return AsyncStream(bufferingPolicy: .bufferingNewest(8)) { continuation in
+            metadata.mapFilterInvalidationObservers[id] = continuation
+            continuation.onTermination = { @Sendable _ in
+                Task { await self.removeMapFilterInvalidationObserver(id) }
+            }
+        }
+    }
+
     /// Registers a session-only filtered collection. `itemIDsBySection` must be
     /// parallel to `snapshot.sections`.
     /// Atomically validates the selected location revision, constructs the derived
@@ -137,7 +150,7 @@ extension CachedPhotosRepository {
                     return true
                 }
 
-                func assembledValue() -> (items: [PhotoItem], verified: Bool)? {
+                func assembledValue(requiredSourceCount: Int) -> (items: [PhotoItem], verified: Bool)? {
                     guard !contributions.isEmpty else { return nil }
                     var byID: [Int64: PhotoItem] = [:]
                     for contribution in contributions.values {
@@ -146,7 +159,7 @@ extension CachedPhotosRepository {
                         }
                     }
                     let current = favorites.applyingOverrides(ids.compactMap { byID[$0] })
-                    let allSourcesResolved = contributions.count == candidates.count
+                    let allSourcesResolved = contributions.count == requiredSourceCount
                     let allSourcesVerified = allSourcesResolved && contributions.values.allSatisfy(\.verified)
                     return (current, allSourcesVerified && current.count == ids.count)
                 }
@@ -173,7 +186,7 @@ extension CachedPhotosRepository {
                     if let latest { contributions[candidate] = latest }
                 }
 
-                if let cached = assembledValue() {
+                if let cached = assembledValue(requiredSourceCount: candidates.count) {
                     if cached.verified { insertMapFilterPage(cached.items, key: key) }
                     continuation.yield(.value(cached.items, verified: cached.verified))
                     if cached.verified || !allowNetwork {
@@ -187,10 +200,32 @@ extension CachedPhotosRepository {
                     return
                 }
 
+                // Cached source geometry is sufficient for provisional delivery,
+                // but only a current Personal Library timeline may admit new page
+                // requests. Re-resolve the covering descriptors after validation.
+                do {
+                    _ = try await verifiedTimelineSnapshot(collection: .personalLibrary)
+                } catch {
+                    if failureMessage == nil { failureMessage = error.localizedDescription }
+                    if let failureMessage { continuation.yield(.failure(failureMessage)) }
+                    continuation.finish()
+                    return
+                }
+                guard !Task.isCancelled, registrationIsCurrent() else {
+                    continuation.finish(); return
+                }
+                let validationCandidates = personalSections(covering: section)
+                guard !validationCandidates.isEmpty else {
+                    continuation.yield(.failure("No current Personal Library section covers this day."))
+                    continuation.finish()
+                    return
+                }
+                contributions.removeAll(keepingCapacity: true)
+
                 // Authoritative pass: replace each source contribution with the
                 // latest ordinary page result. Never append a second copy of a cached
                 // contribution when that stream later emits its validated value.
-                for candidate in candidates {
+                for candidate in validationCandidates {
                     if Task.isCancelled { continuation.finish(); return }
                     var latest: (items: [PhotoItem], verified: Bool)?
                     for await event in page(candidate, collection: .personalLibrary,
@@ -208,7 +243,7 @@ extension CachedPhotosRepository {
                     if let latest { contributions[candidate] = latest }
                 }
 
-                if let current = assembledValue() {
+                if let current = assembledValue(requiredSourceCount: validationCandidates.count) {
                     if current.verified { insertMapFilterPage(current.items, key: key) }
                     continuation.yield(.value(current.items, verified: current.verified))
                 }
@@ -253,6 +288,15 @@ extension CachedPhotosRepository {
 
     func invalidateMapFiltersForLocationChange() {
         let descriptors = metadata.mapFilters.keys.map(PhotoCollectionDescriptor.mapFilter)
-        for descriptor in descriptors { unregisterMapFilter(descriptor) }
+        for descriptor in descriptors {
+            unregisterMapFilter(descriptor)
+            for observer in metadata.mapFilterInvalidationObservers.values {
+                observer.yield(descriptor)
+            }
+        }
+    }
+
+    private func removeMapFilterInvalidationObserver(_ id: UUID) {
+        metadata.mapFilterInvalidationObservers.removeValue(forKey: id)
     }
 }
