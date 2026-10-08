@@ -9,13 +9,17 @@ private actor MapFilterFakeTransport: PhotosTransport {
     var pageRequests: [TimelineSection] = []
     var favoriteWrites: [(Int64, Bool)] = []
     var pageFailure: String?
+    var blocksPageRequests = false
+    var blockedPageContinuations: [CheckedContinuation<Void, Never>] = []
 
     func configure(timelineSnapshot: TimelineSnapshot = TimelineSnapshot(sections: []),
                    pageItemsBySection: [TimelineSection: [PhotoItem]] = [:],
-                   pageFailure: String? = nil) {
+                   pageFailure: String? = nil,
+                   blocksPageRequests: Bool = false) {
         self.timelineSnapshot = timelineSnapshot
         self.pageItemsBySection = pageItemsBySection
         self.pageFailure = pageFailure
+        self.blocksPageRequests = blocksPageRequests
     }
 
     func login(credentials: SynologyCredentials) async throws {}
@@ -26,13 +30,37 @@ private actor MapFilterFakeTransport: PhotosTransport {
 
     func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
         pageRequests.append(section)
+        if blocksPageRequests {
+            await withCheckedContinuation { continuation in
+                blockedPageContinuations.append(continuation)
+            }
+        }
         if let pageFailure { throw TestFailure(pageFailure) }
         return pageItemsBySection[section] ?? []
+    }
+
+    func releasePageRequests() {
+        blocksPageRequests = false
+        let continuations = blockedPageContinuations
+        blockedPageContinuations.removeAll()
+        for continuation in continuations { continuation.resume() }
     }
 
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
         favoriteWrites.append(contentsOf: itemIDs.map { ($0, favorite) })
     }
+}
+
+private actor MapFilterEventProbe {
+    private var firstIDs: [Int64]?
+
+    func record(_ ids: [Int64]) -> Bool {
+        guard firstIDs == nil else { return false }
+        firstIDs = ids
+        return true
+    }
+
+    func value() -> [Int64]? { firstIDs }
 }
 
 final class MapFilterTests: XCTestCase {
@@ -198,6 +226,50 @@ final class MapFilterTests: XCTestCase {
         XCTAssertEqual(result.values.last?.verified, false)
         let requests = await transport.pageRequests
         XCTAssertTrue(requests.isEmpty)
+    }
+
+    func testCachedFilterPassPublishesEveryCoveringSectionBeforeBlockedValidation() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = MapFilterFakeTransport()
+        let first = TimelineSection(offset: 0, limit: 1, list: [day(1, count: 2)])
+        let second = TimelineSection(offset: 1, limit: 1, list: [day(1, count: 2)])
+        let firstItem = try item(1)
+        let secondItem = try item(2)
+        await transport.configure(
+            timelineSnapshot: TimelineSnapshot(sections: [first, second]),
+            pageItemsBySection: [first: [firstItem], second: [secondItem]],
+            blocksPageRequests: true
+        )
+        let repository = try makeRepository(root: root, transport: transport)
+        // Load geometry before beginning the blocked page validation.
+        for await _ in await repository.timeline() {}
+        try await seedPersonalPage([firstItem], section: first, validatedRun: nil, repository: repository)
+        try await seedPersonalPage([secondItem], section: second, validatedRun: nil, repository: repository)
+
+        let descriptor = PhotoCollectionDescriptor.mapFilter(UUID())
+        let filtered = TimelineSection(offset: 0, limit: 2, list: [day(1, count: 2)])
+        try await repository.registerMapFilter(
+            descriptor,
+            source: .personalLibrary,
+            snapshot: TimelineSnapshot(sections: [filtered]),
+            itemIDsBySection: [[1, 2]]
+        )
+
+        let cachedValue = expectation(description: "cached filtered value")
+        let probe = MapFilterEventProbe()
+        let task = Task {
+            for await event in await repository.page(filtered, collection: descriptor, allowNetwork: true) {
+                if case .value(let items, let verified) = event, !verified,
+                   await probe.record(items.map(\.id)) {
+                    cachedValue.fulfill()
+                }
+            }
+        }
+        await fulfillment(of: [cachedValue], timeout: 1)
+        let firstIDs = await probe.value()
+        XCTAssertEqual(firstIDs, [1, 2], "The cache-only pass must not stop behind the first network stream")
+        await transport.releasePageRequests()
+        await task.value
     }
 
     func testFilteredPageFansOutAcrossSplitDaySections() async throws {

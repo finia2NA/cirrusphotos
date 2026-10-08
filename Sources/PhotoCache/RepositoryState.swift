@@ -57,6 +57,9 @@ struct RepositoryMetadataWork {
 
 /// Session-only state behind one `.mapFilter` collection.
 struct MapFilterState {
+    /// Distinguishes a registration from a later filter that happens to reuse the
+    /// same descriptor. Suspended page assembly must never publish into the latter.
+    let registrationID: UUID
     let source: PhotoCollectionDescriptor
     let snapshot: TimelineSnapshot
     let itemIDsBySection: [[Int64]]

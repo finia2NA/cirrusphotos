@@ -24,7 +24,8 @@ extension CachedPhotosRepository {
         for (section, ids) in zip(snapshot.sections, itemIDsBySection) {
             idsBySection[section] = ids
         }
-        metadata.mapFilters[filterID] = MapFilterState(source: source, snapshot: snapshot,
+        metadata.mapFilters[filterID] = MapFilterState(registrationID: UUID(),
+                                                       source: source, snapshot: snapshot,
                                                        itemIDsBySection: itemIDsBySection,
                                                        idsBySection: idsBySection)
         metadata.latestTimelines[descriptor] = snapshot
@@ -87,16 +88,36 @@ extension CachedPhotosRepository {
                     return
                 }
                 let wanted = Set(ids)
-                var byID: [Int64: PhotoItem] = [:]
-                var allVerified = true
-                var anyUnresolved = false
-                var anyValue = false
+                let registrationID = state.registrationID
+                var contributions: [TimelineSection: (items: [PhotoItem], verified: Bool)] = [:]
                 var failureMessage: String?
+
+                func registrationIsCurrent() -> Bool {
+                    metadata.mapFilters[filterID]?.registrationID == registrationID
+                }
+
+                func assembledValue() -> (items: [PhotoItem], verified: Bool)? {
+                    guard !contributions.isEmpty else { return nil }
+                    var byID: [Int64: PhotoItem] = [:]
+                    for contribution in contributions.values {
+                        for item in contribution.items where wanted.contains(item.id) {
+                            byID[item.id] = item
+                        }
+                    }
+                    let current = favorites.applyingOverrides(ids.compactMap { byID[$0] })
+                    let allSourcesResolved = contributions.count == candidates.count
+                    let allSourcesVerified = allSourcesResolved && contributions.values.allSatisfy(\.verified)
+                    return (current, allSourcesVerified && current.count == ids.count)
+                }
+
+                // Cache-only pass: visit every covering source section before any
+                // network-backed stream can suspend. This makes cached filtered data
+                // useful immediately even when the first section's validation is slow.
                 for candidate in candidates {
                     if Task.isCancelled { continuation.finish(); return }
                     var latest: (items: [PhotoItem], verified: Bool)?
                     for await event in page(candidate, collection: .personalLibrary,
-                                            allowNetwork: allowNetwork, priority: priority) {
+                                            allowNetwork: false, priority: priority) {
                         if Task.isCancelled { break }
                         switch event {
                         case .value(let items, let verified):
@@ -105,25 +126,50 @@ extension CachedPhotosRepository {
                             if failureMessage == nil { failureMessage = message }
                         }
                     }
-                    if Task.isCancelled { continuation.finish(); return }
-                    guard let latest else {
-                        anyUnresolved = true
-                        continue
+                    guard !Task.isCancelled, registrationIsCurrent() else {
+                        continuation.finish(); return
                     }
-                    anyValue = true
-                    if !latest.verified { allVerified = false }
-                    for item in latest.items where wanted.contains(item.id) && byID[item.id] == nil {
-                        byID[item.id] = item
-                    }
+                    if let latest { contributions[candidate] = latest }
                 }
-                if anyValue {
-                    let current = favorites.applyingOverrides(ids.compactMap { byID[$0] })
-                    // A verified source page can still omit an indexed item after a
-                    // concurrent deletion or a stale location index. Do not bless and
-                    // retain that short result as the complete session page.
-                    let verified = allVerified && !anyUnresolved && current.count == ids.count
-                    if verified { insertMapFilterPage(current, key: key) }
-                    continuation.yield(.value(current, verified: verified))
+
+                if let cached = assembledValue() {
+                    if cached.verified { insertMapFilterPage(cached.items, key: key) }
+                    continuation.yield(.value(cached.items, verified: cached.verified))
+                    if cached.verified || !allowNetwork {
+                        if let failureMessage { continuation.yield(.failure(failureMessage)) }
+                        continuation.finish()
+                        return
+                    }
+                } else if !allowNetwork {
+                    if let failureMessage { continuation.yield(.failure(failureMessage)) }
+                    continuation.finish()
+                    return
+                }
+
+                // Authoritative pass: replace each source contribution with the
+                // latest ordinary page result. Never append a second copy of a cached
+                // contribution when that stream later emits its validated value.
+                for candidate in candidates {
+                    if Task.isCancelled { continuation.finish(); return }
+                    var latest: (items: [PhotoItem], verified: Bool)?
+                    for await event in page(candidate, collection: .personalLibrary,
+                                            allowNetwork: true, priority: priority) {
+                        if Task.isCancelled { break }
+                        switch event {
+                        case .value(let items, let verified): latest = (items, verified)
+                        case .failure(let message):
+                            if failureMessage == nil { failureMessage = message }
+                        }
+                    }
+                    guard !Task.isCancelled, registrationIsCurrent() else {
+                        continuation.finish(); return
+                    }
+                    if let latest { contributions[candidate] = latest }
+                }
+
+                if let current = assembledValue() {
+                    if current.verified { insertMapFilterPage(current.items, key: key) }
+                    continuation.yield(.value(current.items, verified: current.verified))
                 }
                 if let failureMessage {
                     continuation.yield(.failure(failureMessage))
