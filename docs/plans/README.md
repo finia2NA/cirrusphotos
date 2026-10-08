@@ -5,6 +5,8 @@ This directory contains implementation plans, completed design records, and curr
 - `DONE_LIBRARY_SELECTION_PLAN.md` — completed Step 1 fixed-slot grid, selection interactions, and viewer entry changes.
 - `DONE_SELECTION_FAVORITES_PLAN.md` — implemented toolbar and menu favorite actions for selected timeline items, including bulk writes and confirmation.
 - `WIP_CACHING_PLAN.md` — current cache status, constraints, and longer-term direction.
+- `WIP_DIFF_CACHE_PLAN.md` — discovered `SYNO.Foto.Browse.Diff` change feed and the timeline, album, and map cache improvements it enables; a separate ticket, not implemented.
+- `DONE_MAP_PLAN.md` — completed location map destination (client-side clustered Apple Maps over the Personal Library), filtered-location timeline browsing, and info-panel maps.
 - `DONE_ALBUMS_PLAN.md` — completed read-only Albums destination, overview grid, day-grouped album browsing, and album caching integration.
 - `DONE_INFO_PANEL_PLAN.md` — completed floating Cmd+I info panel for the browser selection and viewer, with a manual verification checklist.
 - `DONE_PHOTO_VIEWER_PLAN.md` — completed viewer plan with a still-useful manual verification checklist.

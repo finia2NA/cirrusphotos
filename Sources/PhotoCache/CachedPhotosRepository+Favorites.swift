@@ -183,6 +183,11 @@ extension CachedPhotosRepository {
 
     private func cachedItem(itemID: Int64, section: TimelineSection,
                             collection: PhotoCollectionDescriptor) async -> PhotoItem? {
+        if collection.isMapFilter {
+            guard let key = CacheKey.page(namespace: namespace, section: section, collection: collection),
+                  let items = metadata.mapFilterPages[key] else { return nil }
+            return items.first(where: { $0.id == itemID })
+        }
         guard let key = CacheKey.page(namespace: namespace, section: section, collection: collection),
               let cached = try? await store.get(key),
               let items = try? JSONDecoder().decode([PhotoItem].self, from: cached.data) else { return nil }
@@ -210,7 +215,7 @@ extension CachedPhotosRepository {
         } else {
             patchCollection = .personalLibrary
             if let snapshot = metadata.latestTimelines[.personalLibrary] {
-                // For favorites collection, find personal library sections by item dates
+                // For Favorites and map-filter collections, find personal library sections by item dates
                 var targetDays: Set<TimelineDay> = []
                 var hadUnknownDay = false
                 for id in action.affectedIDs {

@@ -47,6 +47,9 @@ struct InfoPanelView: View {
                     .foregroundStyle(.secondary)
             }
             sizeRow(content)
+            if !content.pins.isEmpty {
+                InfoPanelMapView(pins: content.pins)
+            }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(multipleAccessibilityLabel(content))
@@ -104,6 +107,10 @@ struct InfoPanelView: View {
                     Text(content.exposure.joined(separator: " · "))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+                if !content.pins.isEmpty {
+                    Divider()
+                    InfoPanelMapView(pins: content.pins)
                 }
             }
         }

@@ -9,10 +9,11 @@ struct PhotoTimelineRestorationAnchor: Codable, Equatable {
     let sectionFraction: Double
 }
 
-/// The app-level sidebar destination. Collections within Albums are separate from the
-/// destination itself so the last opened album survives a switch away from Albums.
+/// The app-level sidebar destination. Collections within Albums and Map are separate
+/// from the destination itself so the last opened album or location filter survives a
+/// switch away from it.
 enum LibraryDestination: String, Codable, Hashable, Sendable, CaseIterable {
-    case personalLibrary, favorites, albums
+    case personalLibrary, favorites, albums, map
 }
 
 struct RestorableAppNavigationState: Codable, Equatable {

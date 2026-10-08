@@ -35,6 +35,7 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
     func testGlobalRetentionOrderIsExplicit() {
         XCTAssertEqual(CachePriorityPolicy.highestToLowest, [
             .activeTimeline,
+            .locationIndex,
             .metadataPage,
             .configuredThumbnail,
             .smallerFallbackThumbnail,

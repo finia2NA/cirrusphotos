@@ -39,7 +39,11 @@ public actor CachedPhotosRepository {
 
     public func usage() async throws -> Int64 { try await store.usage() }
 
-    public func clearCache() async throws { try await store.clear() }
+    public func clearCache() async throws {
+        metadata.locationIndexWork?.task.cancel()
+        metadata.locationIndexWork = nil
+        try await store.clear()
+    }
 
     func cancelIdleLogin() {
         guard !metadata.hasDemand && !imageWork.hasDemand else { return }

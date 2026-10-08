@@ -50,6 +50,10 @@ extension CachedPhotosRepository {
     public func page(_ section: TimelineSection, collection: PhotoCollectionDescriptor = .personalLibrary,
                      allowNetwork: Bool = true,
                      priority: RequestPriority = .visible) -> AsyncStream<ResourceEvent<[PhotoItem]>> {
+        if collection.isMapFilter {
+            return mapFilterPage(section, collection: collection,
+                                 allowNetwork: allowNetwork, priority: priority)
+        }
         let subscriber = UUID()
         let producer = StreamProducer()
         return AsyncStream(bufferingPolicy: .bufferingNewest(3)) { continuation in
@@ -118,6 +122,14 @@ extension CachedPhotosRepository {
     public func promotePage(_ section: TimelineSection,
                             collection: PhotoCollectionDescriptor = .personalLibrary) async {
         guard let key = CacheKey.page(namespace: namespace, section: section, collection: collection) else { return }
+        if collection.isMapFilter {
+            for candidate in personalSections(covering: section) {
+                guard let candidateKey = CacheKey.page(namespace: namespace, section: candidate,
+                                                       collection: .personalLibrary) else { continue }
+                if let job = metadata.pageJobs[candidateKey] { await gate.promote(job.id) }
+            }
+            return
+        }
         if let job = metadata.pageJobs[key] {
             await gate.promote(job.id)
         } else if !metadata.pendingPagePromotions.contains(key) {

@@ -47,6 +47,10 @@ extension PhotosTransport {
         throw TestFailure("Unexpected item-page request")
     }
 
+    func locationScanPage(offset: Int, limit: Int) async throws -> [PhotoItem] {
+        throw TestFailure("Unexpected location-scan request")
+    }
+
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
         throw TestFailure("Unexpected favorite write")
     }

@@ -4,7 +4,7 @@ import SQLite3
 import SynologyAPI
 
 public enum CacheKind: Int, Sendable {
-    case previewThumbnail, fullImage, thumbnail, page, timeline, albumList
+    case previewThumbnail, fullImage, thumbnail, page, timeline, albumList, locationIndex
 }
 
 public struct CacheEntry: Sendable {
@@ -36,6 +36,9 @@ public enum CacheKey {
     }
     public static func albumList(namespace: String) -> String {
         digest("\(namespace)|album|v4|list|normal|album_name|asc|sharing_info,thumbnail")
+    }
+    public static func locationIndex(namespace: String) -> String {
+        digest("\(namespace)|personal|location-index|v1")
     }
     public static func page(namespace: String, section: TimelineSection,
                             collection: PhotoCollectionDescriptor = .personalLibrary,

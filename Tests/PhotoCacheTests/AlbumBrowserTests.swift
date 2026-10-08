@@ -6,7 +6,7 @@ import SynologyAPI
 private actor AlbumFakeTransport: PhotosTransport {
     var albumList: [AlbumSummary] = []
     var albumListFailure: String?
-    var albumEntriesByID: [Int64: [AlbumScanEntry]] = [:]
+    var albumEntriesByID: [Int64: [DayTimelineEntry]] = [:]
     var timelineSnapshot = TimelineSnapshot(sections: [])
     var pageItems: [PhotoItem] = []
     var pageFailure: String?
@@ -18,7 +18,7 @@ private actor AlbumFakeTransport: PhotosTransport {
     var favoriteFailure = false
 
     func configure(albumList: [AlbumSummary] = [],
-                   albumEntriesByID: [Int64: [AlbumScanEntry]] = [:],
+                   albumEntriesByID: [Int64: [DayTimelineEntry]] = [:],
                    timelineSnapshot: TimelineSnapshot = TimelineSnapshot(sections: []),
                    pageItems: [PhotoItem] = [],
                    albumListFailure: String? = nil,
@@ -46,7 +46,7 @@ private actor AlbumFakeTransport: PhotosTransport {
 
     func albumTimeline(albumID: Int64) async throws -> TimelineSnapshot {
         albumTimelineCalls.append(albumID)
-        return AlbumTimelineBuilder.snapshot(entries: albumEntriesByID[albumID] ?? [])
+        return DayGroupedTimelineBuilder.build(entries: albumEntriesByID[albumID] ?? []).snapshot
     }
 
     func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
@@ -138,9 +138,9 @@ final class AlbumBrowserTests: XCTestCase {
         let transport = AlbumFakeTransport()
         let day = Int64(1_704_067_200)
         await transport.configure(albumEntriesByID: [54: [
-            AlbumScanEntry(id: 1, time: day + 10),
-            AlbumScanEntry(id: 2, time: day + 20),
-            AlbumScanEntry(id: 3, time: day - 86_400),
+            DayTimelineEntry(id: 1, time: day + 10),
+            DayTimelineEntry(id: 2, time: day + 20),
+            DayTimelineEntry(id: 3, time: day - 86_400),
         ]])
         let repository = try makeRepository(root: root, transport: transport)
         var finalSnapshot: TimelineSnapshot?

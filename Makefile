@@ -1,6 +1,6 @@
 SHELL := /bin/zsh
 .DEFAULT_GOAL := start
-.PHONY: start debug clean
+.PHONY: start debug clean cloc
 
 start:
 	./scripts/run.sh
@@ -12,3 +12,6 @@ debug:
 clean:
 	swift package clean
 	rm -rf -- ".build/Cirrus Photos.app"
+
+cloc:
+	./scripts/cloc.sh

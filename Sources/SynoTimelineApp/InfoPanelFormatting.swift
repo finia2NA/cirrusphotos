@@ -27,6 +27,15 @@ enum InfoPanelFormatting {
         return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(time)))
     }
 
+    static func singleDate(_ time: Int64, locale: Locale = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateStyle = .long
+        formatter.timeStyle = .none
+        return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(time)))
+    }
+
     static func byteCount(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file

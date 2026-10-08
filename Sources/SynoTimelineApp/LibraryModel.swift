@@ -123,11 +123,56 @@ final class LibraryModel: ObservableObject {
     }
 
     /// Starts loading an album timeline lazily. Non-album collections are ignored;
-    /// Personal Library and Favorites are loaded eagerly by `load()`.
+    /// Personal Library and Favorites are loaded eagerly by `load()`, and session
+    /// collections (map filters) own their snapshots.
     func ensureCollectionLoaded(_ collection: PhotoCollectionDescriptor) {
         guard collection.albumID != nil else { return }
         openedCollections.insert(collection)
         startCollectionFetchIfNeeded(collection)
+    }
+
+    // MARK: - Session Collections
+
+    /// Publishes a session-only collection snapshot (a map filter) without fetching.
+    func registerSessionCollection(_ collection: PhotoCollectionDescriptor, snapshot: TimelineSnapshot) {
+        snapshots[collection] = snapshot
+        snapshotRevisions[collection, default: 0] += 1
+        timelineVerifications[collection] = true
+    }
+
+    /// Removes a session-only collection after the repository state is unregistered.
+    func unregisterSessionCollection(_ collection: PhotoCollectionDescriptor) {
+        snapshots.removeValue(forKey: collection)
+        snapshotRevisions.removeValue(forKey: collection)
+        viewerSnapshotRevisions.removeValue(forKey: collection)
+        timelineVerifications.removeValue(forKey: collection)
+        collectionErrors.removeValue(forKey: collection)
+        browserSelectionStates.removeValue(forKey: collection)
+    }
+
+    /// Registers a location-filtered collection for the given records and returns its
+    /// descriptor, or nil without a repository.
+    func openMapFilter(records: [MapPhotoRecord]) async -> PhotoCollectionDescriptor? {
+        guard let repository else { return nil }
+        let descriptor = PhotoCollectionDescriptor.mapFilter(UUID())
+        let built = DayGroupedTimelineBuilder.build(
+            entries: records.map { DayTimelineEntry(id: $0.id, time: $0.time) },
+            sectionLimit: 250)
+        do {
+            try await repository.registerMapFilter(descriptor, source: .personalLibrary,
+                                                   snapshot: built.snapshot,
+                                                   itemIDsBySection: built.itemIDsBySection)
+        } catch {
+            collectionErrors[.personalLibrary] = error.localizedDescription
+            return nil
+        }
+        registerSessionCollection(descriptor, snapshot: built.snapshot)
+        return descriptor
+    }
+
+    func closeMapFilter(_ collection: PhotoCollectionDescriptor) async {
+        if let repository { await repository.unregisterMapFilter(collection) }
+        unregisterSessionCollection(collection)
     }
 
     private func startCollectionFetchIfNeeded(_ collection: PhotoCollectionDescriptor) {

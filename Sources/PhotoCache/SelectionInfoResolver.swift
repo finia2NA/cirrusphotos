@@ -1,5 +1,6 @@
 import Foundation
 import SynologyAPI
+import TimelineCore
 
 /// A summary of the selected items for the info panel.
 public struct SelectionInfo: Sendable, Equatable {
@@ -13,11 +14,13 @@ public struct SelectionInfo: Sendable, Equatable {
     public let isComplete: Bool
     public let hadFailure: Bool
     public let singleItem: PhotoItem?
+    /// Locations of resolved, located items in selection order; empty when none.
+    public let coordinates: [PhotoCoordinate]
 
     public init(itemCount: Int, newestDayID: String?, oldestDayID: String?,
                 resolvedCount: Int, photoCount: Int, videoCount: Int,
                 cumulativeSize: Int64?, isComplete: Bool, hadFailure: Bool,
-                singleItem: PhotoItem?) {
+                singleItem: PhotoItem?, coordinates: [PhotoCoordinate] = []) {
         self.itemCount = itemCount
         self.newestDayID = newestDayID
         self.oldestDayID = oldestDayID
@@ -28,6 +31,7 @@ public struct SelectionInfo: Sendable, Equatable {
         self.isComplete = isComplete
         self.hadFailure = hadFailure
         self.singleItem = singleItem
+        self.coordinates = coordinates
     }
 }
 
@@ -168,6 +172,8 @@ private actor SelectionInfoAccumulator {
         var videoCount = 0
         var sizeTotal: Int64 = 0
         var missingSizeCount = 0
+        /// Locations of located items in this section, in selection order.
+        var coordinates: [PhotoCoordinate] = []
 
         mutating func add(_ other: Contribution) {
             resolvedCount += other.resolvedCount
@@ -217,15 +223,17 @@ private actor SelectionInfoAccumulator {
         switch update {
         case .value(let sectionIndex, let items, let offsets):
             var resolved: [Int: PhotoItem] = [:]
+            var orderedItems: [PhotoItem] = []
             var missing = false
             for offset in offsets {
                 guard items.indices.contains(offset) else { missing = true; continue }
                 resolved[offset] = items[offset]
+                orderedItems.append(items[offset])
             }
             itemsBySection[sectionIndex] = resolved
             if missing { sectionsWithMissingItems.insert(sectionIndex) }
             else { sectionsWithMissingItems.remove(sectionIndex) }
-            install(contribution(from: resolved.values), for: sectionIndex)
+            install(contribution(from: orderedItems), for: sectionIndex)
             settledSections.insert(sectionIndex)
         case .failure(let sectionIndex):
             failedSections.insert(sectionIndex)
@@ -254,6 +262,7 @@ private actor SelectionInfoAccumulator {
             else if item.hasDisplayableStillImage { result.photoCount += 1 }
             if let size = item.filesize { result.sizeTotal += size }
             else { result.missingSizeCount += 1 }
+            if let coordinate = item.coordinate { result.coordinates.append(coordinate) }
         }
         return result
     }
@@ -268,6 +277,10 @@ private actor SelectionInfoAccumulator {
             cumulativeSize = nil
         }
         let singleItem = singleLocation.flatMap { itemsBySection[$0.sectionIndex]?[$0.pageOffset] }
+        var coordinates: [PhotoCoordinate] = []
+        for sectionIndex in contributions.keys.sorted() {
+            coordinates.append(contentsOf: contributions[sectionIndex]?.coordinates ?? [])
+        }
         let info = SelectionInfo(itemCount: itemCount,
                                  newestDayID: newestDayID,
                                  oldestDayID: oldestDayID,
@@ -277,7 +290,8 @@ private actor SelectionInfoAccumulator {
                                  cumulativeSize: cumulativeSize,
                                  isComplete: isComplete,
                                  hadFailure: hadFailure,
-                                 singleItem: singleItem)
+                                 singleItem: singleItem,
+                                 coordinates: coordinates)
         guard info != lastEmitted else { return nil }
         lastEmitted = info
         return info

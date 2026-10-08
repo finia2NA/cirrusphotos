@@ -12,9 +12,12 @@ struct AppShellView: View {
     @State private var viewer: PhotoViewerPresentation?
     @State private var selectedDestination: LibraryDestination
     @State private var openedAlbumID: Int64?
+    @State private var openedMapFilter: PhotoCollectionDescriptor?
+    @State private var mapFilterOpenGeneration: UInt64 = 0
     @State private var chrome = WindowChromeMetrics()
     @State private var lastViewerFollowSelection: PhotoViewerSelection?
     @StateObject private var browserBridge = LibraryBrowserBridge()
+    @StateObject private var mapModel = MapBrowserModel()
 
     init(navigationRestoration: NavigationRestorationStore) {
         self.navigationRestoration = navigationRestoration
@@ -22,17 +25,28 @@ struct AppShellView: View {
         _openedAlbumID = State(initialValue: navigationRestoration.openedAlbumID)
     }
 
-    /// The collection currently browsed in the detail area, or nil for the Albums overview.
+    /// The collection currently browsed in the detail area, or nil for the Albums
+    /// overview and the unfiltered map.
     private var selectedCollection: PhotoCollectionDescriptor? {
         switch selectedDestination {
         case .personalLibrary: .personalLibrary
         case .favorites: .favorites
         case .albums: openedAlbumID.map { .album($0) }
+        case .map: openedMapFilter
         }
     }
 
     private var isAlbumBrowser: Bool {
         selectedDestination == .albums && openedAlbumID != nil
+    }
+
+    private var isMapFilterBrowser: Bool {
+        selectedCollection?.isMapFilter == true
+    }
+
+    private var mapFilterCount: Int {
+        guard isMapFilterBrowser, let collection = selectedCollection else { return 0 }
+        return model.snapshot(for: collection)?.sections.reduce(0) { $0 + $1.limit } ?? 0
     }
 
     private var timelineVerified: Bool {
@@ -55,6 +69,8 @@ struct AppShellView: View {
                 Section("Collections") {
                     Label("Favorites", systemImage: "heart")
                         .tag(LibraryDestination.favorites)
+                    Label("Map", systemImage: "map")
+                        .tag(LibraryDestination.map)
                 }
                 Section("Albums") {
                     Label("Albums", systemImage: "rectangle.stack")
@@ -134,14 +150,22 @@ struct AppShellView: View {
             ZStack(alignment: .topLeading) {
                 if let collection = selectedCollection {
                     LibraryBrowserView(collection: collection,
-                                       restorationAnchor: navigationRestoration.timelineAnchor(for: collection),
+                                       restorationAnchor: collection.isMapFilter
+                                           ? nil : navigationRestoration.timelineAnchor(for: collection),
                                        bridge: browserBridge,
                                        contentTopInset: topInset,
                                        onOpenPhoto: openPhoto,
                                        onRestorationAnchorChanged: { anchor in
+                                           guard !collection.isMapFilter else { return }
                                            navigationRestoration.setTimelineAnchor(anchor, for: collection)
                                        })
                         .id(collection)
+                        .allowsHitTesting(viewer == nil)
+                        .ignoresSafeArea(.container, edges: .top)
+                } else if selectedDestination == .map {
+                    MapBrowserView(model: mapModel, contentTopInset: topInset,
+                                   onOpenPhoto: { openMapGroup([$0]) },
+                                   onOpenGroup: openMapGroup)
                         .allowsHitTesting(viewer == nil)
                         .ignoresSafeArea(.container, edges: .top)
                 } else {
@@ -215,6 +239,37 @@ struct AppShellView: View {
         openedAlbumID = nil
         navigationRestoration.setOpenedAlbum(nil)
         updateInfoPanelContext()
+    }
+
+    /// Opens a map pin or cluster in the filtered timeline. The filter is session-only
+    /// and is never persisted for restoration.
+    private func openMapGroup(_ memberIDs: [Int64]) {
+        let records = mapModel.records(for: memberIDs)
+        guard !records.isEmpty else { return }
+        mapFilterOpenGeneration &+= 1
+        let generation = mapFilterOpenGeneration
+        Task { @MainActor in
+            if let previous = openedMapFilter {
+                openedMapFilter = nil
+                await model.closeMapFilter(previous)
+            }
+            guard mapFilterOpenGeneration == generation else { return }
+            guard let descriptor = await model.openMapFilter(records: records) else { return }
+            guard mapFilterOpenGeneration == generation else {
+                await model.closeMapFilter(descriptor)
+                return
+            }
+            openedMapFilter = descriptor
+            updateInfoPanelContext()
+        }
+    }
+
+    private func closeMapFilter() {
+        mapFilterOpenGeneration &+= 1
+        guard let collection = openedMapFilter else { return }
+        openedMapFilter = nil
+        updateInfoPanelContext()
+        Task { await model.closeMapFilter(collection) }
     }
 
     private func updateInfoPanelContext() {
@@ -315,6 +370,13 @@ struct AppShellView: View {
                     }
                     .help("Back to Albums")
                 }
+            } else if isMapFilterBrowser {
+                ToolbarItem(placement: .navigation) {
+                    Button(action: closeMapFilter) {
+                        Label("Map", systemImage: "chevron.left")
+                    }
+                    .help("Back to Map")
+                }
             }
             ToolbarItem(placement: .navigation) {
                 LibrarySizeControl(value: $model.itemsPerRow)
@@ -331,6 +393,14 @@ struct AppShellView: View {
                         .font(.headline)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            } else if isMapFilterBrowser {
+                ToolbarItem(placement: .principal) {
+                    Text(mapFilterCount == 1 ? "1 Photo at This Location"
+                                             : "\(mapFilterCount) Photos at This Location")
+                        .font(.headline)
+                        .lineLimit(1)
                 }
                 .sharedBackgroundVisibility(.hidden)
             }

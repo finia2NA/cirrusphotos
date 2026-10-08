@@ -1,6 +1,13 @@
 import Foundation
 import PhotoCache
 import SynologyAPI
+import TimelineCore
+
+/// One info-panel map pin. `id` is the item id when known, otherwise the selection index.
+struct InfoPanelPin: Equatable {
+    let id: Int64
+    let coordinate: PhotoCoordinate
+}
 
 struct InfoPanelContent: Equatable {
     enum Kind: Equatable {
@@ -24,6 +31,7 @@ struct InfoPanelContent: Equatable {
     var formatBadge: String?
     var exposure: [String] = []
     var durationText: String?
+    var pins: [InfoPanelPin] = []
 }
 
 @MainActor
@@ -211,8 +219,14 @@ final class InfoPanelModel: ObservableObject {
             next.sizeText = nil
             next.isResolvingSize = true
         }
+        next.pins = info.coordinates.prefix(Self.maximumMultiplePins).enumerated().map {
+            InfoPanelPin(id: Int64($0.offset), coordinate: $0.element)
+        }
         content = next
     }
+
+    /// The rendered pin cap for a multiple selection; the count text stays exact.
+    private static let maximumMultiplePins = 500
 
     private static func countNoun(for info: SelectionInfo) -> String {
         guard info.isComplete, !info.hadFailure, info.resolvedCount == info.itemCount else { return "Items" }
@@ -241,6 +255,7 @@ final class InfoPanelModel: ObservableObject {
         content.dateTimeText = InfoPanelFormatting.singleDateTime(item.time)
         content.formatBadge = item.filename.flatMap(InfoPanelFormatting.formatBadge(filename:))
         content.metrics = metrics(for: item)
+        content.pins = item.coordinate.map { [InfoPanelPin(id: item.id, coordinate: $0)] } ?? []
         if item.isVideo {
             content.durationText = item.additional?.videoMeta?.duration.map(InfoPanelFormatting.duration)
             return content

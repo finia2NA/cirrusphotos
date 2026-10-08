@@ -40,6 +40,10 @@ extension PhotosTransport {
         throw UnexpectedTransportCall()
     }
 
+    func locationScanPage(offset: Int, limit: Int) async throws -> [PhotoItem] {
+        throw UnexpectedTransportCall()
+    }
+
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
         throw UnexpectedTransportCall()
     }

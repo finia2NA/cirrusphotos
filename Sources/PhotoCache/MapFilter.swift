@@ -1,0 +1,160 @@
+import Foundation
+import SynologyAPI
+
+extension CachedPhotosRepository {
+    /// Maximum session pages retained per map filter.
+    static let mapFilterPageCacheLimit = 12
+
+    /// Registers a session-only filtered collection. `itemIDsBySection` must be
+    /// parallel to `snapshot.sections`.
+    public func registerMapFilter(_ descriptor: PhotoCollectionDescriptor,
+                                  source: PhotoCollectionDescriptor,
+                                  snapshot: TimelineSnapshot,
+                                  itemIDsBySection: [[Int64]]) throws {
+        guard let filterID = descriptor.mapFilterID else {
+            throw SynologyAPIError.unsupported("A map filter collection descriptor is required.")
+        }
+        guard itemIDsBySection.count == snapshot.sections.count else {
+            throw SynologyAPIError.unsupported("A map filter snapshot does not match its item IDs.")
+        }
+        var idsBySection: [TimelineSection: [Int64]] = [:]
+        for (section, ids) in zip(snapshot.sections, itemIDsBySection) {
+            idsBySection[section] = ids
+        }
+        metadata.mapFilters[filterID] = MapFilterState(source: source, snapshot: snapshot,
+                                                       itemIDsBySection: itemIDsBySection,
+                                                       idsBySection: idsBySection)
+        metadata.latestTimelines[descriptor] = snapshot
+    }
+
+    public func unregisterMapFilter(_ descriptor: PhotoCollectionDescriptor) {
+        guard let filterID = descriptor.mapFilterID,
+              let state = metadata.mapFilters.removeValue(forKey: filterID) else { return }
+        for section in state.snapshot.sections {
+            guard let key = CacheKey.page(namespace: namespace, section: section,
+                                          collection: descriptor) else { continue }
+            metadata.mapFilterPages.removeValue(forKey: key)
+            metadata.mapFilterPageOrder.removeAll(where: { $0 == key })
+        }
+        metadata.latestTimelines.removeValue(forKey: descriptor)
+        metadata.mutationEpochs.removeValue(forKey: descriptor)
+        cancelIdleLogin()
+    }
+
+    /// A filtered page is built from the complete Personal Library timeline pages
+    /// covering its day. Fetching complete pages keeps the persistent timeline cache
+    /// behind the filter and avoids a second, ID-addressed transport path: the normal
+    /// `page(_:collection:)` pipeline handles cached-first delivery, once-per-run
+    /// validation, request sharing, and persistence, and this method only filters the
+    /// resulting items down to the section's registered IDs.
+    func mapFilterPage(_ section: TimelineSection,
+                       collection: PhotoCollectionDescriptor,
+                       allowNetwork: Bool,
+                       priority: RequestPriority) -> AsyncStream<ResourceEvent<[PhotoItem]>> {
+        let producer = StreamProducer()
+        let key = CacheKey.page(namespace: namespace, section: section, collection: collection)
+        return AsyncStream(bufferingPolicy: .bufferingNewest(3)) { continuation in
+            producer.task = Task {
+                guard let filterID = collection.mapFilterID,
+                      let state = metadata.mapFilters[filterID] else {
+                    continuation.yield(.failure("This location filter is no longer available."))
+                    continuation.finish()
+                    return
+                }
+                guard let key else {
+                    continuation.yield(.failure("The section has no date bounds."))
+                    continuation.finish()
+                    return
+                }
+                guard let ids = state.idsBySection[section] else {
+                    continuation.yield(.failure("This section is no longer part of the location filter."))
+                    continuation.finish()
+                    return
+                }
+                if let cached = metadata.mapFilterPages[key] {
+                    touchMapFilterPage(key)
+                    continuation.yield(.value(favorites.applyingOverrides(cached), verified: true))
+                    continuation.finish()
+                    return
+                }
+                let candidates = personalSections(covering: section)
+                guard !candidates.isEmpty else {
+                    continuation.yield(.failure("No Personal Library timeline section covers this day."))
+                    continuation.finish()
+                    return
+                }
+                let wanted = Set(ids)
+                var byID: [Int64: PhotoItem] = [:]
+                var allVerified = true
+                var anyUnresolved = false
+                var anyValue = false
+                var failureMessage: String?
+                for candidate in candidates {
+                    if Task.isCancelled { continuation.finish(); return }
+                    var latest: (items: [PhotoItem], verified: Bool)?
+                    for await event in page(candidate, collection: .personalLibrary,
+                                            allowNetwork: allowNetwork, priority: priority) {
+                        if Task.isCancelled { break }
+                        switch event {
+                        case .value(let items, let verified):
+                            latest = (items, verified)
+                        case .failure(let message):
+                            if failureMessage == nil { failureMessage = message }
+                        }
+                    }
+                    if Task.isCancelled { continuation.finish(); return }
+                    guard let latest else {
+                        anyUnresolved = true
+                        continue
+                    }
+                    anyValue = true
+                    if !latest.verified { allVerified = false }
+                    for item in latest.items where wanted.contains(item.id) && byID[item.id] == nil {
+                        byID[item.id] = item
+                    }
+                }
+                if anyValue {
+                    let current = favorites.applyingOverrides(ids.compactMap { byID[$0] })
+                    let verified = allVerified && !anyUnresolved
+                    if verified { insertMapFilterPage(current, key: key) }
+                    continuation.yield(.value(current, verified: verified))
+                }
+                if let failureMessage {
+                    continuation.yield(.failure(failureMessage))
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { @Sendable _ in
+                producer.task?.cancel()
+            }
+        }
+    }
+
+    /// The Personal Library sections whose date bounds overlap the filtered section's
+    /// day. Membership is matched later by item ID, so a stale timeline snapshot can
+    /// only cause misses, never a wrong item.
+    func personalSections(covering section: TimelineSection) -> [TimelineSection] {
+        guard let bounds = section.dateBounds,
+              let snapshot = metadata.latestTimelines[.personalLibrary] else { return [] }
+        return snapshot.sections.filter { candidate in
+            guard let candidateBounds = candidate.dateBounds else { return false }
+            return candidateBounds.start <= bounds.end && candidateBounds.end >= bounds.start
+        }
+    }
+
+    private func insertMapFilterPage(_ items: [PhotoItem], key: String) {
+        if metadata.mapFilterPages.updateValue(items, forKey: key) == nil {
+            metadata.mapFilterPageOrder.append(key)
+        }
+        while metadata.mapFilterPageOrder.count > Self.mapFilterPageCacheLimit {
+            let evicted = metadata.mapFilterPageOrder.removeFirst()
+            metadata.mapFilterPages.removeValue(forKey: evicted)
+        }
+    }
+
+    private func touchMapFilterPage(_ key: String) {
+        guard let index = metadata.mapFilterPageOrder.firstIndex(of: key) else { return }
+        metadata.mapFilterPageOrder.remove(at: index)
+        metadata.mapFilterPageOrder.append(key)
+    }
+}

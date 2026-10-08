@@ -1,4 +1,5 @@
 import Foundation
+import TimelineCore
 import XCTest
 @testable import SynologyAPI
 
@@ -200,6 +201,51 @@ final class PhotoItemTests: XCTestCase {
         XCTAssertTrue(updated.isFavorite)
         XCTAssertEqual(updated.filesize, 42)
         XCTAssertNil(updated.additional?.exif)
+    }
+
+    func testGPSDecodesNumbersAndNumericStrings() throws {
+        let numeric = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":1,"time":1700000000,"type":"photo","additional":{"gps":{"latitude":35.6585805555556,"longitude":139.745438888889}}}
+        """.utf8))
+        XCTAssertEqual(numeric.coordinate?.latitude ?? 0, 35.6585805555556, accuracy: 1e-9)
+        XCTAssertEqual(numeric.coordinate?.longitude ?? 0, 139.745438888889, accuracy: 1e-9)
+
+        let strings = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":2,"time":1700000000,"type":"photo","additional":{"gps":{"latitude":"35.5","longitude":"139.25"}}}
+        """.utf8))
+        XCTAssertEqual(strings.coordinate, PhotoCoordinate(latitude: 35.5, longitude: 139.25))
+    }
+
+    func testGPSAccessorRejectsInvalidAndMissingCoordinates() throws {
+        let outOfRange = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":3,"time":1700000000,"type":"photo","additional":{"gps":{"latitude":120,"longitude":10}}}
+        """.utf8))
+        XCTAssertNil(outOfRange.coordinate)
+        XCTAssertNotNil(outOfRange.additional?.gps)
+
+        let missing = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":4,"time":1700000000,"type":"photo","additional":{"resolution":{"width":4,"height":2}}}
+        """.utf8))
+        XCTAssertNil(missing.coordinate)
+        XCTAssertNil(missing.additional?.gps)
+    }
+
+    func testGPSSurvivesFavoriteMutationAndCacheRoundTrip() throws {
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":5,"time":1700000000,"type":"photo","additional":{"gps":{"latitude":48.8584,"longitude":2.2945},"favorite":false}}
+        """.utf8))
+        let updated = item.withFavorite(true)
+        XCTAssertTrue(updated.isFavorite)
+        let restored = try JSONDecoder().decode(PhotoItem.self, from: JSONEncoder().encode(updated))
+        XCTAssertEqual(restored.coordinate, PhotoCoordinate(latitude: 48.8584, longitude: 2.2945))
+        XCTAssertTrue(restored.isFavorite)
+
+        let withoutAdditional = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":6,"time":1700000000,"type":"photo"}
+        """.utf8))
+        let updatedWithout = withoutAdditional.withFavorite(true)
+        XCTAssertNil(updatedWithout.coordinate)
+        XCTAssertTrue(updatedWithout.isFavorite)
     }
 
     private func decode(id: Int = 1, resolution: String, orientation: String) throws -> PhotoItem {

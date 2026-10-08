@@ -1,4 +1,5 @@
 import Foundation
+import TimelineCore
 
 public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
     public let id: Int64
@@ -23,15 +24,21 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
         public let orientation: Int?
         public let videoMeta: VideoMetadata?
         public let exif: ExifInfo?
+        public let gps: PhotoCoordinate?
         public var favorite: Bool?
 
         enum CodingKeys: String, CodingKey {
-            case thumbnail, resolution, orientation, exif, favorite
+            case thumbnail, resolution, orientation, exif, gps, favorite
             case videoMeta = "video_meta"
         }
     }
 
     public var isFavorite: Bool { additional?.favorite == true }
+
+    /// The validated capture location, when the server reported one.
+    public var coordinate: PhotoCoordinate? {
+        additional?.gps.flatMap { $0.isValid ? $0 : nil }
+    }
 
     public func withFavorite(_ favorite: Bool) -> PhotoItem {
         var copy = self
@@ -42,6 +49,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
                 orientation: nil,
                 videoMeta: nil,
                 exif: nil,
+                gps: nil,
                 favorite: favorite
             )
         } else {
@@ -271,6 +279,9 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
     case favorites
     /// A Personal Space album, identified by its Synology album id.
     case album(Int64)
+    /// A session-only timeline filtered to an explicit item set (a map pin or
+    /// cluster). Never persisted; pages come from `Browse.Item get`.
+    case mapFilter(UUID)
 
     /// Stable cache/restoration identity. Personal Library and Favorites keep their
     /// historical raw values so existing cache keys do not move.
@@ -279,6 +290,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
         case .personalLibrary: "personal"
         case .favorites: "favorites"
         case .album(let id): "album:\(id)"
+        case .mapFilter(let id): "map:\(id.uuidString)"
         }
     }
 
@@ -287,10 +299,18 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
         return nil
     }
 
+    public var mapFilterID: UUID? {
+        if case .mapFilter(let id) = self { return id }
+        return nil
+    }
+
+    public var isMapFilter: Bool { mapFilterID != nil }
+
     public var favoriteOnly: Bool { self == .favorites }
     public var supportsInitialTimeline: Bool { self == .personalLibrary }
 
     /// Albums are fetched lazily when opened and are never part of eager bootstrap loads.
+    /// Map filters are session-only and never fetched from the timeline endpoint.
     public static var allCases: [PhotoCollectionDescriptor] { [.personalLibrary, .favorites] }
 
     public init?(rawValue: String) {
@@ -298,10 +318,16 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
         case "personal": self = .personalLibrary
         case "favorites": self = .favorites
         default:
-            let prefix = "album:"
-            guard rawValue.hasPrefix(prefix),
-                  let id = Int64(rawValue.dropFirst(prefix.count)) else { return nil }
-            self = .album(id)
+            let albumPrefix = "album:"
+            if rawValue.hasPrefix(albumPrefix),
+               let id = Int64(rawValue.dropFirst(albumPrefix.count)) {
+                self = .album(id)
+                return
+            }
+            let mapPrefix = "map:"
+            guard rawValue.hasPrefix(mapPrefix),
+                  let id = UUID(uuidString: String(rawValue.dropFirst(mapPrefix.count))) else { return nil }
+            self = .mapFilter(id)
         }
     }
 

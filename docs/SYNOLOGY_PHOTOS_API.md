@@ -525,6 +525,27 @@ Important details:
 - Avoid retaining full-resolution originals anywhere in the grid path.
 - Use placeholders with the item's known aspect ratio from `additional.resolution` to prevent layout jumps before thumbnails arrive.
 
+## Library change feed
+
+`SYNO.API.Info` on `cirrus` advertises `SYNO.Foto.Browse.Diff` and `SYNO.FotoTeam.Browse.Diff` with `minVersion` 1 and `maxVersion` 7.
+
+Read-only probe on 2026-10-06 established the mechanics:
+
+- `method=get_version` (v1) returns a cursor pair, for example `{ "diff_version": 1780603, "version_time": 1791277292636 }`; `version_time` is epoch milliseconds.
+- `method=get` requires **both** cursor fields, exactly as previously issued. A missing field returns error 120 with `errors.name`, and a mismatched pair (for example the current version with an older time) returns error 700.
+- `get` with the current pair returns the (unchanged) cursor plus empty change lists:
+
+```json
+{"success": true, "data": {
+  "diff_version": 1780603,
+  "version_time": 1791277292636,
+  "item":  { "modify": [], "delete": [] },
+  "album": { "modify": [], "delete": [] }
+}}
+```
+
+The cursor is opaque and must be stored verbatim; the response echoes the next cursor. Unknown as of this probe: the entry shape inside `modify`/`delete` (IDs versus records, and whether additions appear under item `modify`), how old a cursor the server still accepts, and whether `SYNO.FotoTeam` behaves identically for Shared Space. See `docs/plans/WIP_DIFF_CACHE_PLAN.md` for the intended use.
+
 ## Error and refresh behavior
 
 - A failed section request should leave the section descriptor intact and expose a retry state.
@@ -560,7 +581,7 @@ Before hardening the production data layer, record or directly test:
 1. Timeline behavior when the user setting groups by month instead of day.
 2. Normal browser caching with DevTools cache disabling turned off.
 3. Thumbnail responses while Synology is still generating a rendition.
-4. Library changes during a session and whether `SYNO.Foto.Browse.Diff` can update the timeline incrementally (deferred beyond the current static-session scope).
+4. `SYNO.Foto.Browse.Diff` cursor retention (how old a version/time pair remains valid) and the entry shape inside `modify`/`delete`; the version-pair mechanics are confirmed in the change-feed section above.
 5. Sort stability for multiple items with identical `time` values.
 6. Session expiry and reauthentication error codes on the Photos endpoints.
 7. Whether `m` is preferable to `sm` on high-density displays at the intended grid cell size.
@@ -576,3 +597,64 @@ Before hardening the production data layer, record or directly test:
 A bounded read-only probe on 2026-10-02 confirmed that Cirrus advertises `SYNO.Foto.Download` versions 1–2 at `entry.cgi`. The viewer uses an authenticated GET with `api=SYNO.Foto.Download`, `version=2`, `method=download`, `unit_id=[<thumbnail.unit_id>]`, and the opaque `cache_key`, plus the existing session authentication. The sampled PNG decoded to 1170 × 2532 pixels, matching the item's full-resolution metadata; this is independent of the `sm`/`m`/`xl` thumbnail renditions. A request targets one photo, not an archive of several items.
 
 Keep authentication out of persistent identity and logs. Use unit ID plus cache revision and endpoint version for the full-image cache key. Treat non-image/error responses as failures; never label an enlarged thumbnail as full resolution. The initial viewer preview continues to use the already displayed thumbnail while the full-image resource is fetched and decoded.
+
+## Photo locations and map data
+
+Read-only probes against `cirrus` on 2026-10-06 established the location data path used by the map implementation (`docs/plans/DONE_MAP_PLAN.md`). The Synology mobile map has no desktop web equivalent, so these shapes were discovered directly rather than from a HAR.
+
+### Item GPS
+
+`SYNO.Foto.Browse.Item` `method=list` honors `additional` including `"gps"`. Located items carry:
+
+```json
+"additional": {
+  "gps": { "latitude": 35.6585805555556, "longitude": 139.745438888889 },
+  "address": { "city": "Nakano", "city_id": "中野区", "country": "Japan", "country_id": "日本",
+               "county": "", "district": "", "landmark": "", "route": "Ome Kaido",
+               "state": "", "town": "", "village": "", "...": "(ids mirror each name)" },
+  "thumbnail": { "unit_id": 238257, "cache_key": "238257_1791227407",
+                 "sm": "ready", "m": "ready", "xl": "ready", "preview": "broken" }
+}
+```
+
+Items without a location omit the `gps` key entirely. GPS coverage is partial (~35% in the newest 5,000 personal-library items); there is no way to request only located items.
+
+### Whole-library scans
+
+`method=list` also works without date bounds: `offset`/`limit=1000` walks the personal library newest-first, and an empty or short `list` ends the scan. No `total` is returned. Measured on the ~58,760-item library:
+
+| `additional` | bytes/item | notes |
+| --- | ---: | --- |
+| `[]` | 191 | base records only |
+| `["gps"]` | 214 | 332/1000 newest items located |
+| `["gps","thumbnail"]` | 345 | enough for map pins |
+| `["gps","thumbnail","resolution","address"]` | 565 | ~10 s per 1000-item page |
+
+Per-page latency was 4.1–4.3 s for 1000 items (`["gps"]`); three concurrent pages completed six pages in 14.8 s. The server generates these pages more slowly than normal bounded section pages, so a full scan takes minutes and should be cached.
+
+### ID batches
+
+`SYNO.Foto.Browse.Item` `method=get` accepts an **`id` array** and returns `data.list` in request order:
+
+```http
+POST /webapi/entry.cgi/SYNO.Foto.Browse.Item
+api=SYNO.Foto.Browse.Item
+version=7
+method=get
+id=[238257,238258,...]
+additional=["thumbnail","resolution","orientation","video_convert","video_meta","address","favorite","exif","gps"]
+```
+
+Verified with 100, 500, and 1000 IDs (2.2 s, 7.8 s, 6.7 s). `additional` supports the same fields as `list` (the v5 `get` endpoint rejects some; use v7). One ID must still be wrapped in an array (`id=[12]`). This is the page primitive for client-side filters: one request per page of up to 1000 arbitrary IDs, in order.
+
+The client currently does not use this endpoint for map filters. A filtered page instead fetches the complete Personal Library timeline pages covering its day and filters them locally, which keeps the persistent timeline cache behind the filter and avoids a second transport path. This ID-batch primitive remains documented as an available option.
+
+### No server-side spatial filter
+
+- `Browse.Item` on `cirrus` advertises max version 7. `method=list_with_filter` (v1.11) and `list_basic_timeline_info` (v1.9+) return error 104; the community dump's newer methods are not deployed.
+- `id`, `geocoding_id`, and `album_id` are silently ignored by `method=list` (requests return the default newest items).
+- `SYNO.Foto.Browse.Geocoding` `method=list` returns 735 place entries (`id`, `name`, `first_level`, `second_level`, `country`, `country_id`, `item_count`) but **no coordinates**; `method=get` requires `id=[..]` and returns the same fields. `method=count` returns 735.
+- `SYNO.Foto.Browse.Timeline` `method=get_geocoding` (v1/v2) returns only level-name aggregates (`first_level: ""`, `second_level: ["Japan", "Germany", "Romania"]`), not places or coordinates.
+- `SYNO.Foto.Search.Search` `method=list_item` accepts a `keyword` and returns items with optional `gps`, but has no documented geographic filter.
+
+Conclusion: a zoomable photo map with per-photo pins must be built client-side from a scan of item locations; the server offers no bounding-box, radius, or coordinate-filtered query. The map plan caches that scan, validates it with the Personal Library timeline fingerprint, and clusters the records locally.

@@ -97,7 +97,7 @@ public actor SynologyClient: PhotosTransport {
         guard let sid else { throw SynologyAPIError.api(119) }
         let pageLimit = 1000
         let pageCap = 2048
-        var entries: [AlbumScanEntry] = []
+        var entries: [DayTimelineEntry] = []
         var offset = 0
         var pages = 0
         while true {
@@ -119,11 +119,11 @@ public actor SynologyClient: PhotosTransport {
             }
             pages += 1
             guard !data.list.isEmpty else { break }
-            entries.append(contentsOf: data.list.map { AlbumScanEntry(id: $0.id, time: $0.time) })
+            entries.append(contentsOf: data.list.map { DayTimelineEntry(id: $0.id, time: $0.time) })
             guard data.list.count == pageLimit else { break }
             offset += pageLimit
         }
-        return AlbumTimelineBuilder.snapshot(entries: entries)
+        return DayGroupedTimelineBuilder.build(entries: entries).snapshot
     }
 
     public func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
@@ -133,7 +133,7 @@ public actor SynologyClient: PhotosTransport {
             "api": "SYNO.Foto.Browse.Item", "version": "7", "method": "list",
             "offset": String(section.offset), "limit": String(section.limit),
             "start_time": String(bounds.start), "end_time": String(bounds.end),
-            "additional": Self.additionalParameter,
+            "additional": Self.additionalParameter(),
             "_sid": sid
         ]
         if collection.favoriteOnly { parameters["favorite_only"] = "true" }
@@ -150,8 +150,27 @@ public actor SynologyClient: PhotosTransport {
         return data.list
     }
 
-    private static var additionalParameter: String {
-        "[" + PhotosRequestFields.pageAdditional.map { "\"\($0)\"" }.joined(separator: ",") + "]"
+    public func locationScanPage(offset: Int, limit: Int) async throws -> [PhotoItem] {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        let response: APIEnvelope<ItemData> = try await post(
+            path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item",
+            parameters: [
+                "api": "SYNO.Foto.Browse.Item", "version": "7", "method": "list",
+                "offset": String(offset), "limit": String(limit),
+                "additional": Self.additionalParameter(for: PhotosRequestFields.locationScanAdditional),
+                "_sid": sid
+            ], authenticated: true
+        )
+        guard response.success, let data = response.data else {
+            throw SynologyAPIError.api(response.error?.code ?? -1)
+        }
+        return data.list
+    }
+
+    private static func additionalParameter(
+        for fields: [String] = PhotosRequestFields.pageAdditional
+    ) -> String {
+        "[" + fields.map { "\"\($0)\"" }.joined(separator: ",") + "]"
     }
 
     public func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {

@@ -1,4 +1,5 @@
 import Foundation
+import TimelineCore
 import XCTest
 import SynologyAPI
 @testable import PhotoCache
@@ -6,10 +7,15 @@ import SynologyAPI
 final class SelectionInfoResolverTests: XCTestCase {
 
     private func makeItem(id: Int64, time: Int64 = 1712102400, type: String = "photo",
-                          filesize: Int64? = nil) -> PhotoItem {
+                          filesize: Int64? = nil, latitude: Double? = nil,
+                          longitude: Double? = nil) -> PhotoItem {
         let size = filesize.map { ",\"filesize\":\($0)" } ?? ""
+        var gps = ""
+        if let latitude, let longitude {
+            gps = ",\"gps\":{\"latitude\":\(latitude),\"longitude\":\(longitude)}"
+        }
         let json = """
-        {"id":\(id),"filename":"IMG_\(id).jpg","time":\(time),"type":"\(type)"\(size),"additional":{"thumbnail":{"unit_id":\(id),"cache_key":"key_\(id)","sm":"ready","m":"ready","xl":"ready"},"resolution":{"width":1000,"height":1000}}}
+        {"id":\(id),"filename":"IMG_\(id).jpg","time":\(time),"type":"\(type)"\(size),"additional":{"thumbnail":{"unit_id":\(id),"cache_key":"key_\(id)","sm":"ready","m":"ready","xl":"ready"},"resolution":{"width":1000,"height":1000}\(gps)}}
         """
         return try! JSONDecoder().decode(PhotoItem.self, from: Data(json.utf8))
     }
@@ -196,6 +202,94 @@ final class SelectionInfoResolverTests: XCTestCase {
         XCTAssertFalse(cached.hadFailure)
 
         await transport.releaseBlocked()
+    }
+
+    func testCoordinatesAccumulateAcrossSectionsInSelectionOrder() async throws {
+        let root = temporaryTestRoot("CoordinatesAcross")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = InfoResolverMockTransport()
+        let sec0 = TimelineSection(offset: 0, limit: 2, list: [day(2024, 4, 3, 2)])
+        let sec1 = TimelineSection(offset: 0, limit: 2, list: [day(2024, 4, 1, 2)])
+        await transport.setPage([makeItem(id: 1, latitude: 10, longitude: 11),
+                                 makeItem(id: 2, latitude: 20, longitude: 21)],
+                                start: start(sec0))
+        await transport.setPage([makeItem(id: 3, latitude: 30, longitude: 31),
+                                 makeItem(id: 4, latitude: 40, longitude: 41)],
+                                start: start(sec1))
+        let snapshot = TimelineSnapshot(sections: [sec0, sec1])
+        let repo = try makeRepository(transport: transport, root: root)
+
+        let stream = SelectionInfoResolver(repository: repo).resolve(
+            collection: .personalLibrary, snapshot: snapshot,
+            selectedOrdinals: IndexSet(integersIn: 0...3))
+        let emissions = await collectAll(stream)
+        let last = try XCTUnwrap(emissions.last)
+        XCTAssertEqual(last.coordinates, [
+            PhotoCoordinate(latitude: 10, longitude: 11),
+            PhotoCoordinate(latitude: 20, longitude: 21),
+            PhotoCoordinate(latitude: 30, longitude: 31),
+            PhotoCoordinate(latitude: 40, longitude: 41),
+        ])
+    }
+
+    func testSectionReEmissionReplacesCoordinatesWithoutDuplicating() async throws {
+        let root = temporaryTestRoot("CoordinatesReplace")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = InfoResolverMockTransport()
+        let sec = TimelineSection(offset: 0, limit: 1, list: [day(2024, 4, 3, 1)])
+        let item = makeItem(id: 1, filesize: 100, latitude: 48.8584, longitude: 2.2945)
+        await transport.setPage([item], start: start(sec))
+        let snapshot = TimelineSnapshot(sections: [sec])
+        let repo = try makeRepository(transport: transport, root: root)
+        try await seedPage([item], section: sec, repository: repo)
+
+        let stream = SelectionInfoResolver(repository: repo).resolve(
+            collection: .personalLibrary, snapshot: snapshot,
+            selectedOrdinals: IndexSet(integer: 0))
+        let emissions = await collectAll(stream)
+        XCTAssertLessThanOrEqual(emissions.map(\.coordinates.count).max() ?? 0, 1)
+        XCTAssertEqual(emissions.last?.coordinates,
+                       [PhotoCoordinate(latitude: 48.8584, longitude: 2.2945)])
+    }
+
+    func testUnlocatedItemsAreSkipped() async throws {
+        let root = temporaryTestRoot("CoordinatesSkipped")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = InfoResolverMockTransport()
+        let sec = TimelineSection(offset: 0, limit: 3, list: [day(2024, 4, 3, 3)])
+        await transport.setPage([makeItem(id: 1, latitude: 1, longitude: 2),
+                                 makeItem(id: 2),
+                                 makeItem(id: 3, latitude: 3, longitude: 4)],
+                                start: start(sec))
+        let snapshot = TimelineSnapshot(sections: [sec])
+        let repo = try makeRepository(transport: transport, root: root)
+
+        let stream = SelectionInfoResolver(repository: repo).resolve(
+            collection: .personalLibrary, snapshot: snapshot,
+            selectedOrdinals: IndexSet(integersIn: 0...2))
+        let emissions = await collectAll(stream)
+        XCTAssertEqual(emissions.last?.coordinates, [
+            PhotoCoordinate(latitude: 1, longitude: 2),
+            PhotoCoordinate(latitude: 3, longitude: 4),
+        ])
+    }
+
+    func testSingleItemSelectionYieldsOneCoordinate() async throws {
+        let root = temporaryTestRoot("CoordinatesSingle")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = InfoResolverMockTransport()
+        let sec = TimelineSection(offset: 0, limit: 1, list: [day(2024, 4, 3, 1)])
+        await transport.setPage([makeItem(id: 1, latitude: 35.697, longitude: 139.681)],
+                                start: start(sec))
+        let snapshot = TimelineSnapshot(sections: [sec])
+        let repo = try makeRepository(transport: transport, root: root)
+
+        let stream = SelectionInfoResolver(repository: repo).resolve(
+            collection: .personalLibrary, snapshot: snapshot,
+            selectedOrdinals: IndexSet(integer: 0))
+        let emissions = await collectAll(stream)
+        XCTAssertEqual(emissions.last?.coordinates,
+                       [PhotoCoordinate(latitude: 35.697, longitude: 139.681)])
     }
 
     func testCancellationStopsFurtherPageRequests() async throws {

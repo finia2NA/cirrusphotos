@@ -1,4 +1,5 @@
 import Foundation
+import TimelineCore
 import XCTest
 import SynologyAPI
 import PhotoCache
@@ -49,6 +50,8 @@ final class InfoPanelTests: XCTestCase {
 
     func testPageCacheKeyDerivesFromSharedRequestFields() throws {
         XCTAssertTrue(PhotosRequestFields.pageAdditional.contains("exif"))
+        XCTAssertTrue(PhotosRequestFields.pageAdditional.contains("gps"))
+        XCTAssertEqual(PhotosRequestFields.locationScanAdditional, ["gps", "thumbnail"])
         let section = TimelineSection(offset: 0, limit: 1,
                                       list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         let namespace = CacheKey.namespace(server: SynologyClient.defaultBaseURL, account: "alice")
@@ -157,6 +160,82 @@ final class InfoPanelTests: XCTestCase {
                 !model.content.isResolvingSize
         }
         XCTAssertTrue(resolved)
+    }
+
+    func testSingleSelectionWithGPSBuildsOnePin() async throws {
+        let item = makeItem(id: 5, latitude: 35.5, longitude: 139.25)
+        let setup = try await makeContext(items: [item])
+        let model = setup.model
+        model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
+                                   collection: .personalLibrary, selection: IndexSet(integer: 0))
+        model.setVisible(true)
+        let resolved = await waitUntil { model.content.kind == .single && !model.content.isLoading }
+        XCTAssertTrue(resolved)
+        XCTAssertEqual(model.content.pins,
+                       [InfoPanelPin(id: 5, coordinate: PhotoCoordinate(latitude: 35.5,
+                                                                        longitude: 139.25))])
+    }
+
+    func testSingleSelectionWithoutGPSHasNoPins() async throws {
+        let item = makeItem(id: 6, filename: "IMG_0006.PNG")
+        let setup = try await makeContext(items: [item])
+        let model = setup.model
+        model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
+                                   collection: .personalLibrary, selection: IndexSet(integer: 0))
+        model.setVisible(true)
+        _ = await waitUntil { model.content.kind == .single && !model.content.isLoading }
+        XCTAssertTrue(model.content.pins.isEmpty)
+    }
+
+    func testMultipleSelectionCoordinatesBecomePins() async throws {
+        let items = [makeItem(id: 1, filesize: 1000, latitude: 10, longitude: 11),
+                     makeItem(id: 2, filesize: 1000, latitude: 20, longitude: 21)]
+        let setup = try await makeContext(items: items)
+        let model = setup.model
+        model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
+                                   collection: .personalLibrary, selection: IndexSet(integersIn: 0...1))
+        model.setVisible(true)
+        let resolved = await waitUntil {
+            model.content.kind == .multiple && !model.content.isResolvingSize
+        }
+        XCTAssertTrue(resolved)
+        XCTAssertEqual(model.content.pins, [
+            InfoPanelPin(id: 0, coordinate: PhotoCoordinate(latitude: 10, longitude: 11)),
+            InfoPanelPin(id: 1, coordinate: PhotoCoordinate(latitude: 20, longitude: 21)),
+        ])
+    }
+
+    func testMultipleSelectionCapsRenderedPins() async throws {
+        let items = (0..<501).map { index in
+            makeItem(id: Int64(index + 1), filesize: 1000,
+                     latitude: 10 + Double(index) * 0.001, longitude: 20)
+        }
+        let setup = try await makeContext(items: items)
+        let model = setup.model
+        model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
+                                   collection: .personalLibrary, selection: IndexSet(integersIn: 0...500))
+        model.setVisible(true)
+        let resolved = await waitUntil {
+            model.content.kind == .multiple && !model.content.isResolvingSize
+        }
+        XCTAssertTrue(resolved)
+        XCTAssertEqual(model.content.countText, "501 Photos")
+        XCTAssertEqual(model.content.pins.count, 500)
+        XCTAssertEqual(model.content.pins.last?.id, 499)
+    }
+
+    func testMultipleSelectionWithoutCoordinatesHasNoPins() async throws {
+        let items = [makeItem(id: 1, filesize: 1000), makeItem(id: 2, filesize: 1000)]
+        let setup = try await makeContext(items: items)
+        let model = setup.model
+        model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
+                                   collection: .personalLibrary, selection: IndexSet(integersIn: 0...1))
+        model.setVisible(true)
+        let resolved = await waitUntil {
+            model.content.kind == .multiple && !model.content.isResolvingSize
+        }
+        XCTAssertTrue(resolved)
+        XCTAssertTrue(model.content.pins.isEmpty)
     }
 
     func testViewerItemOverridesBrowserSelectionAndRevertsOnClose() async throws {
@@ -303,13 +382,17 @@ final class InfoPanelTests: XCTestCase {
     private func makeItem(id: Int64, time: Int64 = 1712102400, type: String = "photo",
                           filename: String? = nil, filesize: Int64? = nil,
                           exif: String? = nil, width: Int = 1000, height: Int = 1000,
-                          durationMilliseconds: Int? = nil) -> PhotoItem {
+                          durationMilliseconds: Int? = nil,
+                          latitude: Double? = nil, longitude: Double? = nil) -> PhotoItem {
         var fields = ["\"id\":\(id)", "\"time\":\(time)", "\"type\":\"\(type)\""]
         if let filename { fields.append("\"filename\":\"\(filename)\"") }
         if let filesize { fields.append("\"filesize\":\(filesize)") }
         var additional = ["\"resolution\":{\"width\":\(width),\"height\":\(height)}"]
         if let exif { additional.append("\"exif\":\(exif)") }
         if let durationMilliseconds { additional.append("\"video_meta\":{\"duration\":\(durationMilliseconds)}") }
+        if let latitude, let longitude {
+            additional.append("\"gps\":{\"latitude\":\(latitude),\"longitude\":\(longitude)}")
+        }
         fields.append("\"additional\":{\(additional.joined(separator: ","))}")
         let json = "{" + fields.joined(separator: ",") + "}"
         return try! JSONDecoder().decode(PhotoItem.self, from: Data(json.utf8))

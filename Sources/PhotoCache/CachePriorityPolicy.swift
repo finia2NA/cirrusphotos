@@ -9,6 +9,7 @@ public enum CacheRetentionClass: String, CaseIterable, Sendable {
     case smallerFallbackThumbnail
     case fullImage
     case optionalThumbnail
+    case locationIndex
 }
 
 /// The single source of truth for disk-cache retention. Entries later in this list are
@@ -16,6 +17,7 @@ public enum CacheRetentionClass: String, CaseIterable, Sendable {
 public enum CachePriorityPolicy {
     public static let highestToLowest: [CacheRetentionClass] = [
         .activeTimeline,
+        .locationIndex,
         .metadataPage,
         .configuredThumbnail,
         .smallerFallbackThumbnail,
@@ -39,6 +41,7 @@ public enum CachePriorityPolicy {
         case .page: .metadataPage
         case .timeline: .activeTimeline
         case .albumList: .activeTimeline
+        case .locationIndex: .locationIndex
         }
     }
 }

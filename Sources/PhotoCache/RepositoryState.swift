@@ -43,10 +43,24 @@ struct RepositoryMetadataWork {
     var pendingPagePromotions: [String] = []
     var albumListJob: SharedJob<[AlbumSummary]>?
     var albumListLatest: [AlbumSummary]?
+    var locationIndexWork: SharedJob<[PhotoLocationRecord]>?
+    var locationIndexObservers: [UUID: AsyncStream<LocationIndexEvent>.Continuation] = [:]
+    var mapFilters: [UUID: MapFilterState] = [:]
+    var mapFilterPages: [String: [PhotoItem]] = [:]
+    var mapFilterPageOrder: [String] = []
 
     var hasDemand: Bool {
-        !initialSubscribers.isEmpty || !timelineJobs.isEmpty || !pageJobs.isEmpty || albumListJob != nil
+        !initialSubscribers.isEmpty || !timelineJobs.isEmpty || !pageJobs.isEmpty ||
+            albumListJob != nil || locationIndexWork != nil
     }
+}
+
+/// Session-only state behind one `.mapFilter` collection.
+struct MapFilterState {
+    let source: PhotoCollectionDescriptor
+    let snapshot: TimelineSnapshot
+    let itemIDsBySection: [[Int64]]
+    let idsBySection: [TimelineSection: [Int64]]
 }
 
 struct RepositoryImageWork {

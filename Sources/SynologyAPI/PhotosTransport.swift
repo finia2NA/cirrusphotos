@@ -32,6 +32,12 @@ public protocol PhotosTransport: Sendable {
     func albums() async throws -> [AlbumSummary]
     func albumTimeline(albumID: Int64) async throws -> TimelineSnapshot
     func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem]
+
+    /// One page of the whole-library location scan: `Browse.Item` list v7 with no
+    /// date bounds, `additional` from `PhotosRequestFields.locationScanAdditional`.
+    /// Returns at most `limit` items newest-first; an empty or short page ends the scan.
+    func locationScanPage(offset: Int, limit: Int) async throws -> [PhotoItem]
+
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse
