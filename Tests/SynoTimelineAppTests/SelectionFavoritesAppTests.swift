@@ -225,17 +225,66 @@ final class SelectionFavoritesAppTests: XCTestCase {
         model.setActiveViewer(nil)
         XCTAssertFalse(model.canToggleViewerFavorite)
     }
+
+    @MainActor
+    func testBrowserFavoriteWriteFailureIsReported() async throws {
+        let root = temporaryTestRoot("FavoriteWriteFailure")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AppMockTransport()
+        await transport.setFavoriteFailure(true)
+        let repo = try makeRepository(transport: transport, root: root)
+
+        let section = TimelineSection(
+            offset: 0,
+            limit: 1,
+            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)]
+        )
+        let timeline = TimelineSnapshot(sections: [section])
+        await transport.setTimeline(timeline)
+        await transport.setPage([makeItem(id: 1)], offset: 0)
+
+        let model = LibraryModel(repository: repo)
+        await model.load()
+        model.installBrowserCommands(
+            snapshot: BrowserCommandSnapshot(
+                owner: UUID(),
+                active: true,
+                canOpen: false,
+                canToggleFavorite: true,
+                collection: .personalLibrary,
+                indexFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
+                selectionGeneration: "generation",
+                selectedOrdinals: IndexSet(integer: 0),
+                knownItemIDsByOrdinal: [0: 1]
+            ),
+            handler: nil
+        )
+
+        model.toggleSelectionFavorite()
+        let reported = await waitUntil { model.browserFavoriteFailure != nil }
+
+        XCTAssertTrue(reported)
+        XCTAssertTrue(model.browserFavoriteFailure?.contains("Favorite update failed") == true)
+        model.dismissBrowserFavoriteFailure()
+        XCTAssertNil(model.browserFavoriteFailure)
+    }
 }
 
 // MARK: - Test Transport Mock for App Tests
+
+private struct AppFavoriteFailure: LocalizedError {
+    var errorDescription: String? { "Favorite write failed for testing." }
+}
 
 actor AppMockTransport: PhotosTransport {
     private var timeline = TimelineSnapshot(sections: [])
     private var pages: [Int: [PhotoItem]] = [:]
     private(set) var setFavoriteCalls: [(itemIDs: [Int64], favorite: Bool)] = []
+    private var favoriteFailure = false
 
     func setTimeline(_ snapshot: TimelineSnapshot) { timeline = snapshot }
     func setPage(_ items: [PhotoItem], offset: Int) { pages[offset] = items }
+    func setFavoriteFailure(_ enabled: Bool) { favoriteFailure = enabled }
 
     func login(credentials: SynologyCredentials) async throws {}
 
@@ -249,6 +298,7 @@ actor AppMockTransport: PhotosTransport {
 
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
         setFavoriteCalls.append((itemIDs, favorite))
+        if favoriteFailure { throw AppFavoriteFailure() }
     }
 
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {

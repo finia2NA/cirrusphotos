@@ -31,19 +31,22 @@ public struct SelectionFavoriteAction: Sendable {
     public let sectionsByID: [Int64: TimelineSection]
     public let collection: PhotoCollectionDescriptor
     public let itemsByID: [Int64: PhotoItem]
+    public let expectedTimelineFingerprint: String?
 
     public init(
         affectedIDs: [Int64],
         targetFavorite: Bool,
         sectionsByID: [Int64: TimelineSection],
         collection: PhotoCollectionDescriptor,
-        itemsByID: [Int64: PhotoItem] = [:]
+        itemsByID: [Int64: PhotoItem] = [:],
+        expectedTimelineFingerprint: String? = nil
     ) {
         self.affectedIDs = affectedIDs
         self.targetFavorite = targetFavorite
         self.sectionsByID = sectionsByID
         self.collection = collection
         self.itemsByID = itemsByID
+        self.expectedTimelineFingerprint = expectedTimelineFingerprint
     }
 }
 

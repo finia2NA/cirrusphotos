@@ -274,7 +274,84 @@ final class SelectionFavoritesTests: XCTestCase {
         XCTAssertNil(action)
     }
 
+    func testCapturedFingerprintMismatchAbortsBeforeResolvingPages() async throws {
+        let root = temporaryTestRoot("CapturedFingerprintAbort")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = SelectionFavoritesMockTransport()
+        await transport.setPage([makeItem(id: 1)], offset: 0)
+        let section = TimelineSection(
+            offset: 0,
+            limit: 1,
+            list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)]
+        )
+        let snapshot = TimelineSnapshot(sections: [section])
+        await transport.setTimeline(snapshot, for: .personalLibrary)
+        let repo = try makeRepository(transport: transport, root: root)
+
+        let staleSection = TimelineSection(
+            offset: 0,
+            limit: 2,
+            list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 2)]
+        )
+        let resolver = SelectionFavoriteResolver(repository: repo)
+        let action = await resolver.resolve(
+            collection: .personalLibrary,
+            snapshot: snapshot,
+            selectedOrdinals: IndexSet(integer: 0),
+            knownItemIDsByOrdinal: [:],
+            expectedTimelineFingerprint: LibraryIndex(
+                snapshot: TimelineSnapshot(sections: [staleSection])
+            ).fingerprint
+        )
+
+        XCTAssertNil(action)
+        let itemCallCount = await transport.itemCallCount
+        XCTAssertEqual(itemCallCount, 0)
+    }
+
     // MARK: - Batch Mutation & Transport Tests
+
+    func testBatchRejectsPreparedActionAfterTimelineFingerprintChanges() async throws {
+        let root = temporaryTestRoot("PreparedFingerprintAbort")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = SelectionFavoritesMockTransport()
+        let currentSection = TimelineSection(
+            offset: 0,
+            limit: 2,
+            list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 2)]
+        )
+        let currentSnapshot = TimelineSnapshot(sections: [currentSection])
+        await transport.setTimeline(currentSnapshot, for: .personalLibrary)
+        let repo = try makeRepository(transport: transport, root: root)
+        for await _ in await repo.timeline(collection: .personalLibrary) {}
+
+        let staleSection = TimelineSection(
+            offset: 0,
+            limit: 1,
+            list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)]
+        )
+        let action = SelectionFavoriteAction(
+            affectedIDs: [1],
+            targetFavorite: true,
+            sectionsByID: [1: currentSection],
+            collection: .personalLibrary,
+            expectedTimelineFingerprint: LibraryIndex(
+                snapshot: TimelineSnapshot(sections: [staleSection])
+            ).fingerprint
+        )
+
+        do {
+            try await repo.setFavoritesBatch(action: action)
+            XCTFail("Expected a stale-selection failure")
+        } catch {
+            XCTAssertEqual(
+                error.localizedDescription,
+                "The collection changed before the favorite update. Try again."
+            )
+        }
+        let favoriteCalls = await transport.setFavoriteCalls
+        XCTAssertTrue(favoriteCalls.isEmpty)
+    }
 
     func testOrdinarySelectionProducesOneTransportCallContainingEveryAffectedID() async throws {
         let root = temporaryTestRoot("OneTransportCall")
@@ -495,6 +572,11 @@ final class SelectionFavoritesTests: XCTestCase {
         let rollbackChange = await changes.next()
         XCTAssertEqual(rollbackChange?.values[10], false)
         XCTAssertEqual(rollbackChange?.values[20], false)
+
+        let refreshed = await waitUntil {
+            await transport.timelineCallCount(for: .favorites) == 1
+        }
+        XCTAssertTrue(refreshed)
     }
 
     func testPartialChunkFailurePreservesCompletedChunksAndRollsBackRemainder() async throws {
@@ -545,6 +627,8 @@ actor SelectionFavoritesMockTransport: PhotosTransport {
     private(set) var setFavoriteCalls: [(itemIDs: [Int64], favorite: Bool)] = []
     private var thumbnailCount = 0
     private var fullImageCount = 0
+    private(set) var itemCallCount = 0
+    private var timelineCallCounts: [PhotoCollectionDescriptor: Int] = [:]
     private var favoriteBlocked = false
     private var favoriteWaiters: [CheckedContinuation<Void, Never>] = []
     private var failAllWrites = false
@@ -562,6 +646,10 @@ actor SelectionFavoritesMockTransport: PhotosTransport {
         (thumbnailCount, fullImageCount)
     }
 
+    func timelineCallCount(for collection: PhotoCollectionDescriptor) -> Int {
+        timelineCallCounts[collection, default: 0]
+    }
+
     func releaseFavorite() {
         favoriteBlocked = false
         for waiter in favoriteWaiters { waiter.resume() }
@@ -571,11 +659,13 @@ actor SelectionFavoritesMockTransport: PhotosTransport {
     func login(credentials: SynologyCredentials) async throws {}
 
     func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
-        timelineSnapshots[collection] ?? TimelineSnapshot(sections: [])
+        timelineCallCounts[collection, default: 0] += 1
+        return timelineSnapshots[collection] ?? TimelineSnapshot(sections: [])
     }
 
     func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
-        pages[section.offset] ?? []
+        itemCallCount += 1
+        return pages[section.offset] ?? []
     }
 
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {

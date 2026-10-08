@@ -23,11 +23,15 @@ public struct SelectionFavoriteResolver: Sendable {
         collection: PhotoCollectionDescriptor,
         snapshot: TimelineSnapshot,
         selectedOrdinals: IndexSet,
-        knownItemIDsByOrdinal: [Int: Int64]
+        knownItemIDsByOrdinal: [Int: Int64],
+        expectedTimelineFingerprint: String? = nil
     ) async -> SelectionFavoriteAction? {
         guard !selectedOrdinals.isEmpty else { return nil }
         let index = LibraryIndex(snapshot: snapshot)
         let expectedFingerprint = index.fingerprint
+        guard expectedTimelineFingerprint == nil || expectedTimelineFingerprint == expectedFingerprint else {
+            return nil
+        }
 
         // 1. Map selected ordinals to LibraryIndex.Location values.
         let locations = selectedOrdinals.compactMap { index.location(forOrdinal: $0) }
@@ -124,7 +128,8 @@ public struct SelectionFavoriteResolver: Sendable {
             targetFavorite: targetFavorite,
             sectionsByID: sectionsByID,
             collection: collection,
-            itemsByID: itemsByID
+            itemsByID: itemsByID,
+            expectedTimelineFingerprint: expectedFingerprint
         )
     }
 }

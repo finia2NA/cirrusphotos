@@ -63,6 +63,19 @@ struct AppShellView: View {
                 model.cancelBrowserFavorite()
             }
         }
+        .alert(
+            "Favorite Update Failed",
+            isPresented: Binding(
+                get: { model.browserFavoriteFailure != nil },
+                set: { if !$0 { model.dismissBrowserFavoriteFailure() } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                model.dismissBrowserFavoriteFailure()
+            }
+        } message: {
+            Text(model.browserFavoriteFailure ?? "The favorite update failed.")
+        }
     }
 
     private var detail: some View {

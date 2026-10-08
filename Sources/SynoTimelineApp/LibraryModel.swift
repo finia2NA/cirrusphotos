@@ -26,6 +26,7 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var canToggleBrowserFavorite = false
     /// Pending confirmation for a large selection-favorite action; nil when no confirmation is needed.
     @Published private(set) var pendingFavoriteConfirmation: SelectionFavoriteConfirmation?
+    @Published private(set) var browserFavoriteFailure: String?
     private var browserSelectionStates: [PhotoCollectionDescriptor: BrowserSelectionState] = [:]
     private var browserCommandHandler: ((BrowserSelectionCommand) -> Void)?
     private var browserCommandOwner: UUID?
@@ -159,6 +160,7 @@ final class LibraryModel: ObservableObject {
 
     private func updateBrowserFavoriteAvailability() {
         let available = browserCommandsActive &&
+            browserCommandSnapshot.canToggleFavorite &&
             !browserCommandSnapshot.selectedOrdinals.isEmpty &&
             pendingFavoriteConfirmation == nil &&
             !browserFavoriteBusy &&
@@ -208,6 +210,7 @@ final class LibraryModel: ObservableObject {
         }
         guard canToggleBrowserFavorite, !browserFavoriteBusy,
               let repository else { return }
+        browserFavoriteFailure = nil
         let snap = browserCommandSnapshot
         guard snap.active, !snap.selectedOrdinals.isEmpty else { return }
         browserFavoriteBusy = true
@@ -229,8 +232,12 @@ final class LibraryModel: ObservableObject {
             collection: snapshot.collection,
             snapshot: timelineSnapshot,
             selectedOrdinals: snapshot.selectedOrdinals,
-            knownItemIDsByOrdinal: snapshot.knownItemIDsByOrdinal
-        ) else { return }
+            knownItemIDsByOrdinal: snapshot.knownItemIDsByOrdinal,
+            expectedTimelineFingerprint: snapshot.indexFingerprint
+        ) else {
+            browserFavoriteFailure = "The selected photos could not be verified. Try again."
+            return
+        }
 
         guard !action.affectedIDs.isEmpty else { return }
 
@@ -267,9 +274,17 @@ final class LibraryModel: ObservableObject {
         updateBrowserFavoriteAvailability()
     }
 
+    func dismissBrowserFavoriteFailure() {
+        browserFavoriteFailure = nil
+    }
+
     private func executeFavoriteAction(_ action: SelectionFavoriteAction,
                                        repository: CachedPhotosRepository) async {
-        try? await repository.setFavoritesBatch(action: action)
+        do {
+            try await repository.setFavoritesBatch(action: action)
+        } catch {
+            browserFavoriteFailure = error.localizedDescription
+        }
     }
 
     // MARK: - Lifecycle

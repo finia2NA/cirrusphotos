@@ -63,6 +63,14 @@ extension CachedPhotosRepository {
             }
             await previous?.value
             self.favorites.refreshTask?.cancel()
+            if let expectedFingerprint = action.expectedTimelineFingerprint {
+                guard let currentSnapshot = self.metadata.latestTimelines[action.collection],
+                      LibraryIndex(snapshot: currentSnapshot).fingerprint == expectedFingerprint else {
+                    throw SynologyAPIError.unsupported(
+                        "The collection changed before the favorite update. Try again."
+                    )
+                }
+            }
             let generation = await self.store.currentGeneration()
 
             // Advance the Favorites mutation epoch once before the action
@@ -106,11 +114,13 @@ extension CachedPhotosRepository {
             var successfulIDs: [Int64] = []
             var failedOrUnsubmittedIDs: [Int64] = []
             var writeError: (any Error)? = nil
+            var attemptedWrite = false
 
             do {
                 try await self.connect()
                 for (chunkIndex, chunk) in chunks.enumerated() {
                     do {
+                        attemptedWrite = true
                         try await self.client.setFavorite(itemIDs: chunk, favorite: target)
                         successfulIDs.append(contentsOf: chunk)
                     } catch {
@@ -149,7 +159,7 @@ extension CachedPhotosRepository {
                 )
 
                 // Refresh authoritative Favorites timeline after any success or ambiguous state
-                if self.favorites.metadataDirty || !successfulIDs.isEmpty {
+                if self.favorites.metadataDirty || !successfulIDs.isEmpty || attemptedWrite {
                     self.scheduleFavoritesRefresh()
                 }
 
