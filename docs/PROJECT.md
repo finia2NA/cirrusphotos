@@ -1,0 +1,55 @@
+# Product
+
+This document is the source of truth for current product behavior and scope. See [ARCHITECTURE.md](ARCHITECTURE.md) for implementation structure and invariants.
+
+## Purpose and constraints
+
+SynoTimeline is a macOS 27+ SwiftUI client for browsing a very large Synology Photos library hosted on `cirrus`. Responsiveness with previously cached data matters more than minimizing request count. The application is an alpha: incompatible preferences and caches are discarded instead of migrated before 1.0.
+
+The Synology Photos service is authoritative. The client does not poll for external changes during a session. Demanded resources are normally validated once per run, while cached content remains usable when the network is slow, unavailable, or validation fails.
+
+## Current product surface
+
+The native split-view sidebar contains Library, Favorites, Map, and Albums destinations. The app restores the last persistent destination and collection-specific photo/date scroll anchors. Session Map filters are not restored.
+
+### Library, Favorites, and albums
+
+- Personal Library and Favorites share a virtualized, day-grouped fixed grid with 3–10 square slots per row and aspect-fitted thumbnails.
+- The compact day navigator gives equal space to each populated day and appears near the pointer or with keyboard focus.
+- Click, Shift-click, marquee, Shift-marquee, and menu-backed arrow commands select across day and page boundaries.
+- Favorites appear as heart badges. The toolbar and Library menu `.` command toggle the active viewer photo or browser selection, with confirmation when more than five items are affected.
+- Albums shows read-only Personal Space album cards with cover, name, and item count. Opening an album reuses the shared browser with collection-scoped restoration.
+- Album creation, rename, deletion, membership changes, and Shared Space browsing are not implemented.
+
+### Map
+
+Map shows geotagged Personal Library photos as thumbnail pins and counted clusters. Opening a pin or cluster creates a session-only filtered collection and reuses the shared browser. Cached covering pages are shown before network validation. The camera remains useful across metadata invalidation; stale cached pins remain visible and are identified as unverified when validation fails.
+
+Location labels and antimeridian-specific clustering are not implemented.
+
+### Viewer and Info panel
+
+Space or double-click opens one photo in the same window. Arrow navigation, zoom, pan, thumbnail-first loading, cached large previews, originals, filename, capture-local date, and favorite mutation are supported. Space, Escape, or Back closes the viewer. Live Photos currently show their still image; video playback is deferred.
+
+The Cmd+I Info utility panel follows the active viewer item or browser selection. It shows selection totals and date range, resolves aggregate size and media counts, and shows single-item filename, capture date, camera/exposure details, dimensions, size, format, and available location context. It is transient and excluded from Mission Control and the normal window cycle.
+
+## Cache and network behavior
+
+- Timelines, exact pages, albums, location records, thumbnails, previews, and originals are delivered cached-first.
+- One repository-owned metadata lifecycle coordinates admission, shared jobs, stale-result rejection, storage generations, atomic same-row commits, and successful invalidation revisions.
+- A metadata-only Settings reset removes timelines, pages, album metadata, locations, and session filters while preserving compressed images, validators, decoded thumbnails, and already admitted image transfers. Full clear removes both metadata and images.
+- The Map location index retains conservative fingerprint validation. Strict Diff transport and merge infrastructure exists, but cross-run Diff proof remains disabled until all recorded evidence gates pass.
+- Thumbnail rendition changes preserve other cached sizes. Compatible fallback renditions remain visible until the selected rendition is available.
+- An optional viewer setting loads cached or network-backed `xl` previews alongside originals when the library rendition is smaller.
+- The Library menu can warm the selected thumbnail rendition for an inclusive populated-day range using bounded, cancellable background work.
+- Settings controls thumbnail rendition, large viewer previews, and a 200 MB–100 GB disk budget.
+
+## Mutations and freshness
+
+Favorite writes are optimistic and serialized. The repository patches affected cached pages, rolls failed or unsubmitted items back, and refreshes authoritative Favorites ordering after successful writes. A Favorites viewer preserves its opening playlist while membership changes. No other Synology Photos write operation is implemented.
+
+Photo capture times are treated as capture-local wall-clock values. Grouping and display preserve the encoded local time without inferring a timezone from the Mac or GPS data.
+
+## Deferred scope
+
+Generated people/subject albums, general client-side filtering, Shared Space browsing, video playback, place names, upload, sharing, album writes, and coordinated session renewal after expiry remain future work. New collection types should reuse the repository and shared browser rather than introduce destination-specific cache systems.

@@ -40,4 +40,4 @@ Use **Library → Download Thumbnails…** after the timeline is current to choo
 
 Open Settings from the app menu or with Command-, to select the small, medium, or large cached thumbnail rendition; set the total cache limit from 200 MB to 100 GB; view current stored payload usage; or clear the cache. The app stores its persistent cache under `.cache/` in this repository; that directory is ignored by Git. Offline data remains visible until Cirrus validates it. Entries are scoped to the server and account.
 
-See [architecture](docs/ARCHITECTURE.md), [cache plan and implementation status](docs/plans/WIP_CACHING_PLAN.md), [cache-location decision](docs/decisions/001-development-cache-location.md), and [API research](docs/SYNOLOGY_PHOTOS_API.md).
+See [product behavior and scope](docs/PROJECT.md), [architecture](docs/ARCHITECTURE.md), [cache plan and implementation status](docs/plans/WIP_CACHING_PLAN.md), [cache-location decision](docs/decisions/001-development-cache-location.md), and [API research](docs/SYNOLOGY_PHOTOS_API.md).

@@ -1,6 +1,6 @@
 # Plans
 
-This directory contains implementation plans, completed design records, and current follow-up work. Current behavior is documented in [`../ARCHITECTURE.md`](../ARCHITECTURE.md) and the root `AGENTS.md`; completed plans may describe earlier states and are not implementation sources of truth.
+This directory contains implementation plans, completed design records, and current follow-up work. Current behavior is documented in [`../PROJECT.md`](../PROJECT.md) and [`../ARCHITECTURE.md`](../ARCHITECTURE.md); completed plans may describe earlier states and are not implementation sources of truth.
 
 - `DONE_LIBRARY_SELECTION_PLAN.md` — completed Step 1 fixed-slot grid, selection interactions, and viewer entry changes.
 - `DONE_SELECTION_FAVORITES_PLAN.md` — implemented toolbar and menu favorite actions for selected timeline items, including bulk writes and confirmation.

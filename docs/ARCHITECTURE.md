@@ -1,6 +1,8 @@
-# Personal Space browser
+# Architecture
 
-## Current implementation
+This document is the source of truth for current technical structure, subsystem boundaries, data flow, and invariants. See [PROJECT.md](PROJECT.md) for user-visible behavior and product scope.
+
+## System and browser
 
 `TimelineCore` contains the platform-independent navigator model. `SynologyAPI` separates wire/domain models and the `PhotosTransport` contract from the concrete authenticated HTTP client, and owns credentials, TOTP login, timeline/page requests, thumbnails, and original-photo downloads. `PhotoCache` owns semantic resource keys, cached-first request coordination, SQLite metadata storage, compressed image files, and eviction. `SynoTimelineApp` is the SwiftUI macOS executable module; its product executable remains `SynoTimeline`.
 
