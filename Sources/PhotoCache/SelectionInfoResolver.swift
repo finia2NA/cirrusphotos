@@ -167,14 +167,14 @@ private actor SelectionInfoAccumulator {
         var photoCount = 0
         var videoCount = 0
         var sizeTotal: Int64 = 0
-        var missingSize = false
+        var missingSizeCount = 0
 
         mutating func add(_ other: Contribution) {
             resolvedCount += other.resolvedCount
             photoCount += other.photoCount
             videoCount += other.videoCount
             sizeTotal += other.sizeTotal
-            missingSize = missingSize || other.missingSize
+            missingSizeCount += other.missingSizeCount
         }
 
         mutating func subtract(_ other: Contribution) {
@@ -182,6 +182,7 @@ private actor SelectionInfoAccumulator {
             photoCount -= other.photoCount
             videoCount -= other.videoCount
             sizeTotal -= other.sizeTotal
+            missingSizeCount -= other.missingSizeCount
         }
     }
 
@@ -252,7 +253,7 @@ private actor SelectionInfoAccumulator {
             if item.isVideo { result.videoCount += 1 }
             else if item.hasDisplayableStillImage { result.photoCount += 1 }
             if let size = item.filesize { result.sizeTotal += size }
-            else { result.missingSize = true }
+            else { result.missingSizeCount += 1 }
         }
         return result
     }
@@ -260,7 +261,8 @@ private actor SelectionInfoAccumulator {
     private func emit(isComplete: Bool) -> SelectionInfo? {
         let hadFailure = !failedSections.isEmpty || !sectionsWithMissingItems.isEmpty || fingerprintChanged
         let cumulativeSize: Int64?
-        if isComplete, !hadFailure, aggregate.resolvedCount == itemCount, !aggregate.missingSize {
+        if isComplete, !hadFailure, aggregate.resolvedCount == itemCount,
+           aggregate.missingSizeCount == 0 {
             cumulativeSize = aggregate.sizeTotal
         } else {
             cumulativeSize = nil

@@ -196,6 +196,20 @@ final class InfoPanelTests: XCTestCase {
         XCTAssertTrue(model.content.isLoading)
     }
 
+    func testViewerRefreshesMetadataForSameItemIdentity() async throws {
+        let model = InfoPanelModel()
+        model.updateViewer(active: true, item: makeItem(id: 9, filename: "IMG_0009.HEIC"))
+        XCTAssertNil(model.content.camera)
+
+        model.updateViewer(
+            active: true,
+            item: makeItem(id: 9, filename: "IMG_0009.HEIC", filesize: 1_000,
+                           exif: "{\"camera\":\"Verified Camera\"}"))
+
+        XCTAssertEqual(model.content.camera, "Verified Camera")
+        XCTAssertTrue(model.content.metrics.contains(InfoPanelFormatting.byteCount(1_000)))
+    }
+
     func testHiddenModelPerformsNoPageReads() async throws {
         let setup = try await makeContext(items: [makeItem(id: 1, filesize: 1000)])
         let model = setup.model
@@ -205,6 +219,30 @@ final class InfoPanelTests: XCTestCase {
         let calls = await setup.transport.recordedItemCalls()
         XCTAssertEqual(calls, 0)
         XCTAssertEqual(model.content.kind, .empty)
+    }
+
+    func testReopeningPanelRestartsCanceledResolutionForSameSelection() async throws {
+        let setup = try await makeContext(items: [makeItem(id: 1, filesize: 1000)])
+        await setup.transport.setBlocked(true)
+        let model = setup.model
+        model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
+                                   collection: .personalLibrary, selection: IndexSet(integer: 0))
+        model.setVisible(true)
+        let initiallyStarted = await waitUntil { await setup.transport.recordedItemCalls() == 1 }
+        XCTAssertTrue(initiallyStarted)
+
+        model.setVisible(false)
+        let canceled = await waitUntil { await setup.transport.recordedCancellations() == 1 }
+        XCTAssertTrue(canceled)
+        model.setVisible(true)
+        let restarted = await waitUntil { await setup.transport.recordedItemCalls() == 2 }
+        XCTAssertTrue(restarted)
+
+        await setup.transport.setBlocked(false)
+        let resolved = await waitUntil {
+            model.content.kind == .single && !model.content.isLoading
+        }
+        XCTAssertTrue(resolved)
     }
 
     func testRapidSelectionUpdatesResolveOnlyOnce() async throws {
@@ -281,12 +319,22 @@ final class InfoPanelTests: XCTestCase {
 actor InfoPanelMockTransport: PhotosTransport {
     private var pages: [Int64: [PhotoItem]] = [:]
     private var itemCalls = 0
+    private var cancellations = 0
+    private var blocked = false
 
     func setPage(_ items: [PhotoItem], start: Int64) { pages[start] = items }
     func recordedItemCalls() -> Int { itemCalls }
+    func recordedCancellations() -> Int { cancellations }
+    func setBlocked(_ value: Bool) { blocked = value }
 
     func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
         itemCalls += 1
+        do {
+            while blocked { try await Task.sleep(for: .milliseconds(10)) }
+        } catch is CancellationError {
+            cancellations += 1
+            throw CancellationError()
+        }
         return section.dateBounds.flatMap { pages[$0.start] } ?? []
     }
 }

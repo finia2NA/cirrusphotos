@@ -101,6 +101,26 @@ final class SelectionInfoResolverTests: XCTestCase {
         XCTAssertEqual(emissions.last?.hadFailure, false)
     }
 
+    func testVerifiedPageCanSupplySizeMissingFromCachedPage() async throws {
+        let root = temporaryTestRoot("CachedMissingSize")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = InfoResolverMockTransport()
+        let sec = TimelineSection(offset: 0, limit: 1, list: [day(2024, 4, 3, 1)])
+        await transport.setPage([makeItem(id: 1, filesize: 250)], start: start(sec))
+        let snapshot = TimelineSnapshot(sections: [sec])
+        let repo = try makeRepository(transport: transport, root: root)
+        try await seedPage([makeItem(id: 1)], section: sec, repository: repo)
+
+        let emissions = await collectAll(SelectionInfoResolver(repository: repo).resolve(
+            collection: .personalLibrary, snapshot: snapshot,
+            selectedOrdinals: IndexSet(integer: 0)))
+
+        XCTAssertEqual(emissions.last?.cumulativeSize, 250)
+        XCTAssertEqual(emissions.last?.resolvedCount, 1)
+        XCTAssertEqual(emissions.last?.isComplete, true)
+        XCTAssertEqual(emissions.last?.hadFailure, false)
+    }
+
     func testSingleOrdinalProducesItem() async throws {
         let root = temporaryTestRoot("SingleOrdinal")
         defer { try? FileManager.default.removeItem(at: root) }

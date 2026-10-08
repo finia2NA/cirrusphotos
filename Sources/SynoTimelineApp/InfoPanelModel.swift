@@ -59,6 +59,9 @@ final class InfoPanelModel: ObservableObject {
             refreshBrowser(resolveImmediately: true)
         } else {
             generation &+= 1
+            // Closing the panel cancels resolution. Force the same context to restart
+            // when the panel reopens instead of treating the canceled key as complete.
+            lastKey = nil
             cancelBrowserWork()
         }
     }
@@ -84,7 +87,10 @@ final class InfoPanelModel: ObservableObject {
             refreshBrowser(resolveImmediately: true)
             return
         }
-        let unchanged = viewerActive && viewerItem?.id == item?.id && item != nil && !content.isLoading
+        // The viewer re-emits the same identity when cached metadata is replaced by
+        // verified metadata. Compare the complete item so EXIF and size updates reach
+        // the panel even though navigation did not change.
+        let unchanged = viewerActive && viewerItem == item
         cancelBrowserWork()
         guard !unchanged else { return }
         generation &+= 1
