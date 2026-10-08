@@ -5,9 +5,9 @@ Status: Implemented.
 ## Execution order
 
 1. `TimelineCore`: `PhotoCoordinate` and the pure cluster builder plus unit tests (step 1).
-2. `SynologyAPI`: decode `additional.gps`, add `gps` to the page field list, add the two location transport methods, and generalize the album day-section builder (step 2).
+2. `SynologyAPI`: decode `additional.gps`, add `gps` to the page field list, add the location-scan transport method, and generalize the album day-section builder (step 2).
 3. `PhotoCache`: cached-first, fingerprint-validated location index built from the personal-library scan, with the new cache kind and retention class plus unit tests (step 3).
-4. `PhotoCache`: session map-filter registry and filtered page pipeline (batch `Browse.Item.get` by ID), plus Favorites integration and unit tests (step 4).
+4. `PhotoCache`: session map-filter registry and a filtered page pipeline over Personal Library pages, plus Favorites integration and unit tests (step 4).
 5. `PhotoCache`: expose coordinates on `SelectionInfo` (step 5).
 6. `SynoTimelineApp`: `MapBrowserModel` and `MapBrowserView` (step 6).
 7. `SynoTimelineApp`: sidebar destination, filtered-browser routing, toolbar back control, session snapshot registration (step 7).
@@ -69,15 +69,15 @@ LibraryModel.openMapFilter(records) -> .mapFilter(UUID) descriptor
 existing LibraryBrowserView / LibraryPageWindow / viewer / info panel / favorites
         |
         v
-repository.page(filter:...) -> Browse.Item.get id=[page IDs] (<=250 IDs per page)
+repository.page(filter:...) -> Personal Library day pages -> exact ID filtering
 ```
 
 Key decisions:
 
-- **Client-side spatial clustering.** No server endpoint can answer "photos near this region". A uniform-grid builder picks the most detailed grid whose occupied cells stay within an annotation cap (~256), so low zoom shows counted clusters, medium zoom splits them, and single-photo cells render a lone thumbnail. Identical coordinates intentionally stay clustered at every zoom.
+- **Client-side spatial clustering.** No server endpoint can answer "photos near this region". A grid-accelerated radius builder starts with a fine radius, raises it to the on-screen pin pitch, and doubles it until the result stays within the annotation cap (~256). It joins a photo only to a nearby representative, so grid boundaries do not split neighbors and transitive chains do not create sprawling clusters. Low zoom shows counted clusters, medium zoom splits them, and single-photo groups render a lone thumbnail. Identical coordinates intentionally stay clustered at every zoom.
 - **One persisted location index.** The scan runs inside `CachedPhotosRepository`, is shared by all subscribers, yields cached records first, and is validated once per run by comparing the stored personal-timeline fingerprint against the fingerprint of the personal timeline already loaded at startup. A matching fingerprint skips the network entirely; a mismatch refreshes in the background while cached pins stay visible.
 - **Filtered browsing reuses the collection descriptor.** A map click registers a session-only `.mapFilter(UUID)` collection whose synthetic `TimelineSnapshot` is structurally identical to album snapshots. All existing machinery (page window, fixed-grid geometry, selection, favorites, viewer, info panel, timeline navigator) works unchanged because filtered pages are served through the same `repository.page(section, collection:)` entry point.
-- **Filtered pages come from `Browse.Item.get`.** The registration stores the exact ID list for every synthetic section (sections are capped at 250 IDs for snappy page loads), so one `get` call per page returns the full metadata in server order. No page-by-page rescanning of the source timeline is needed.
+- **Filtered pages reuse Personal Library day pages.** The registration stores the exact ID list for every synthetic section (sections are capped at 250 IDs). A filtered request resolves every Personal Library section covering that day through the existing cached-first page pipeline, then emits the registered IDs in their original order. This populates and reuses the ordinary timeline cache instead of maintaining a second metadata transport path.
 - **The info panel map reuses decoded `gps`.** `gps` joins the shared page field list, so every page (normal, album, filtered) carries coordinates; `SelectionInfoResolver` already visits exactly the required items.
 
 ### Why the timeline view supports this cheaply
@@ -107,6 +107,11 @@ public struct MapRegion: Sendable, Equatable {
     public let longitudeDelta: Double
 }
 
+public struct MapCellSpan: Sendable, Equatable {
+    public let latitude: Double
+    public let longitude: Double
+}
+
 public struct MapPhotoRecord: Sendable, Equatable {
     public let id: Int64
     public let time: Int64
@@ -124,20 +129,20 @@ public struct MapClusterGroup: Sendable, Equatable {
 }
 
 public enum MapClusterBuilder {
-    /// Uniform-grid clustering: the most detailed grid (largest cell count per
-    /// axis) whose occupied-cell count is <= maxAnnotations.
+    /// Grid-accelerated radius clustering constrained by an annotation cap.
     public static func groups(records: [MapPhotoRecord],
                               in region: MapRegion,
-                              maxAnnotations: Int = 256) -> [MapClusterGroup]
+                              maxAnnotations: Int = 256,
+                              minimumCellSpan: MapCellSpan? = nil) -> [MapClusterGroup]
 }
 ```
 
-Algorithm, deterministic and O(n · log n · iterations):
+Algorithm, deterministic and O(n · iterations) after the initial O(n log n) ordering:
 
 1. Drop invalid coordinates; keep records inside `region` expanded by a 10% margin.
-2. For `cellCount` in 1, 2, 4, 8 … find the largest value whose bucket count is `<= maxAnnotations` (bucket count is monotonic in `cellCount`; cap `cellCount` at 512). Latitude and longitude cell sizes are `region.latitudeDelta / cellCount` and `region.longitudeDelta / cellCount`; a record's cell is the floor of its offset from the region's minimum corner. No antimeridian handling is required for this library; document that assumption.
-3. Each bucket becomes one group: member IDs sorted newest-first (representative first). Output groups sorted by representative time descending, then id.
-4. A bucket of one yields a `.isSingle` group, which the UI renders as a lone photo thumbnail. Records sharing the exact same coordinate never split.
+2. Sort newest-first. Start each axis radius at the viewport span divided by 512, raised to the caller's on-screen pin pitch when supplied.
+3. Visit records in order. Search the record's grid cell and its eight neighbors, joining the nearest open cluster whose newest representative is within one radius on both axes; otherwise open a cluster. Double the radii and rebuild until the group count is `<= maxAnnotations`.
+4. Emit member IDs and groups newest-first. A one-member group yields `.isSingle`; records sharing the exact same coordinate never split. Longitude wrap is not handled.
 
 Tests (`Tests/TimelineCoreTests/MapClusteringTests.swift`): invalid coordinates excluded; region margin; two nearby points cluster at coarse zoom and separate at fine zoom; a single-point bucket is single; max-annotation cap is respected for thousands of synthetic records; representative is the newest member; identical coordinates stay in one group; deterministic output across runs.
 
@@ -160,14 +165,9 @@ Tests (`Tests/TimelineCoreTests/MapClusteringTests.swift`): invalid coordinates 
 /// bounds, `additional` from `PhotosRequestFields.locationScanAdditional`.
 /// Returns at most `limit` items newest-first; an empty or short page ends the scan.
 func locationScanPage(offset: Int, limit: Int) async throws -> [PhotoItem]
-
-/// Full metadata for an explicit ID batch: Browse.Item get v7 with
-/// `id=[...]` and `additional` from `PhotosRequestFields.pageAdditional`.
-/// Preserves request order. Callers chunk (<= 1000 per request, verified).
-func items(ids: [Int64]) async throws -> [PhotoItem]
 ```
 
-`SynologyClient` implements both as form-encoded POSTs to `/webapi/entry.cgi/SYNO.Foto.Browse.Item`, builds the `additional` JSON from the shared field lists (no inline literals), and reuses the existing `post`/`formBody` helpers. `items(ids:)` throws on an empty array and returns `data.list`.
+`SynologyClient` implements the scan as a form-encoded POST to `/webapi/entry.cgi/SYNO.Foto.Browse.Item`, builds the `additional` JSON from the shared field list (no inline literals), and reuses the existing `post`/`formBody` helpers. The verified ID-batch endpoint remains documented in `docs/SYNOLOGY_PHOTOS_API.md`, but the map filter deliberately reuses normal Personal Library pages.
 
 Rename `Sources/SynologyAPI/AlbumTimelineBuilder.swift` to `DayGroupedTimelineBuilder.swift` and generalize it (album call sites are the only existing users):
 
@@ -194,7 +194,7 @@ public enum DayGroupedTimelineBuilder {
 
 `SynologyClient.albumTimeline(albumID:)` keeps its behavior by using `build(entries:).snapshot` (and `AlbumScanEntry` moves to `DayTimelineEntry`). Update `Tests/SynologyAPITests/AlbumTimelineBuilderTests.swift` for the new API and add an assertion for `itemIDsBySection` (including a >1000-item split day).
 
-Add the two new methods to the protocol-extension defaults in both test-support files (`Tests/PhotoCacheTests/PhotoCacheTestSupport.swift`, `Tests/SynoTimelineAppTests/SynoTimelineAppTestSupport.swift`) so existing mocks keep compiling; mocks that need them implement them explicitly.
+Add the new scan method to the protocol-extension defaults in both test-support files (`Tests/PhotoCacheTests/PhotoCacheTestSupport.swift`, `Tests/SynoTimelineAppTests/SynoTimelineAppTestSupport.swift`) so existing mocks keep compiling; mocks that need it implement it explicitly.
 
 ### 3. Location index (`PhotoCache`)
 
@@ -274,20 +274,19 @@ struct MapFilterState {
 var mapFilters: [UUID: MapFilterState] = [:]
 var mapFilterPages: [String: [PhotoItem]] = [:]   // session LRU, cap 12 pages
 var mapFilterPageOrder: [String] = []
-var mapFilterPageJobs: [String: SharedJob<[PhotoItem]>] = [:]
 ```
 
 - `registerMapFilter` validates that the descriptor is `.mapFilter` and that `itemIDsBySection.count == snapshot.sections.count`, stores the state, and also sets `metadata.latestTimelines[descriptor] = snapshot` so `SelectionInfoResolver`'s fingerprint check is meaningful for the filter.
 - `page(_:collection:)` gets a branch before the persistent-store path: when `collection.isMapFilter`, use the session pipeline:
   1. Look up the state; if missing, emit `.failure`.
   2. Build the session key with `CacheKey.page(...)` (synthetic sections have date bounds) and emit a session-cached page as `.value(items, verified: true)` when present.
-  3. With `allowNetwork` and no cached page, join or create a `SharedJob` in `mapFilterPageJobs`: `connect()`, fetch the section's IDs in chunks of at most 1000 with `client.items(ids:)` (sequential chunks, concatenated in order; sections are capped at 250 IDs anyway), apply `favorites.applyingOverrides`, insert into the session LRU (evict oldest beyond 12 pages), and emit `.value(items, verified: true)`.
-  4. `promotePage` promotes the corresponding map-filter job.
+  3. Resolve all Personal Library sections whose date bounds overlap the filtered day. Demand each through `page(_:collection: .personalLibrary)`, collect only registered IDs, and restore the registered order. The underlying pipeline supplies cached-first delivery, shared jobs, validation, persistence, and cancellation.
+  4. Mark the filtered result verified and insert it into the session LRU only when every source section is verified and every registered ID was found. `promotePage` promotes the corresponding underlying Personal Library jobs.
 - `cachedItem(itemID:section:collection:)` (used by the single-item favorite wrapper) falls back to the session LRU for map filters.
 - Favorites compatibility: in `patchAffectedPagesBatch`, treat a map-filter collection like Favorites — patch `.personalLibrary` cached pages by item day (the filter's session pages pick up the change through the favorite-override stream and `LibraryPageWindow.receiveFavorite`). `setFavoritesBatch` itself is unchanged. The viewer favorite path already passes the item, so it works without a store lookup.
-- `validationRun(for:)` returns a per-descriptor value for map filters; it is only reachable if the persistent path is mistakenly used.
+- `validationRun(for:)` remains owned by the underlying Personal Library pages; the map-filter branch does not persist session pages.
 
-Tests (`Tests/PhotoCacheTests/MapFilterTests.swift`): registration validation; a filtered page calls `items(ids:)` with exactly the section's IDs and preserves order; multiple chunks concatenate in order; favorites overrides are applied; `allowNetwork == false` serves only the session cache; the session LRU evicts beyond its cap; unregister clears state and cancels jobs; `page` for an unknown filter fails; the personal pages are patched by a batch favorite write on a filter selection.
+Tests (`Tests/PhotoCacheTests/MapFilterTests.swift`): registration validation; only Personal Library sections covering the filter day are demanded; split-day sections fan in and registered ID order is preserved; verified and offline cached source pages behave correctly; incomplete results are not verified or session-cached; favorites overrides are applied; the session LRU evicts beyond its cap; unregister clears state; an unknown filter fails; and a filter favorite write patches Personal Library pages.
 
 ### 5. Selection info coordinates (`PhotoCache`)
 
@@ -399,7 +398,7 @@ Tests (`Tests/SynoTimelineAppTests/InfoPanelTests.swift`): single item with/with
 ### 9. Documentation
 
 - `docs/SYNOLOGY_PHOTOS_API.md`: the location/map evidence is being recorded with this plan (see "Confirmed data availability"); keep it current if the implementation discovers differences.
-- `docs/ARCHITECTURE.md`: add a "Locations and map" section covering the persisted location index and fingerprint validation, client-side grid clustering, session `.mapFilter` collections and the `Browse.Item.get` ID-batch page path, and the info-panel pin map.
+- `docs/ARCHITECTURE.md`: add a "Locations and map" section covering the persisted location index and fingerprint validation, client-side clustering, session `.mapFilter` collections and Personal Library page filtering, and the info-panel pin map.
 - `AGENTS.md` "Project overview": extend the current UI-scope and application/cache paragraphs with the Map destination, filtered-location browsing, the location index cache, and the info-panel map.
 - `docs/plans/README.md`: add this plan as `WIP_MAP_PLAN.md`; rename to `DONE_MAP_PLAN.md` when implemented.
 
@@ -422,14 +421,14 @@ Manual (run `bash scripts/run.sh`):
 - Clicking a cluster and a single photo both open the filtered timeline with the "Map" back button and a correct count title; Back returns to the map with the camera region preserved.
 - Inside the filtered timeline: selection clicks/marquee, Space/double-click viewer navigation, `.` favorites (heart badges update), scroll and the day navigator, and the info panel all behave like Personal Library.
 - Cmd+I on a located photo shows a pin in the info panel map; a PNG/screenshot without GPS shows no map; a multi-selection shows multiple pins; the viewer follows selection changes.
-- Offline start (disable the network): cached pins and thumbnails still render, with a refresh warning, and no scan is attempted.
+- Offline start (disable the network): cached pins and thumbnails still render. A matching timeline fingerprint skips the scan; a mismatch attempts validation and leaves the cached pins visible with a refresh warning if the request fails.
 - A library with no located photos shows the empty map state.
 
 ## Risks, limits, and follow-ups
 
 - **First build cost.** ~20 MB of transfer and roughly 1.5–3 minutes at the measured page latency, running at `.prefetch` priority with two pages in flight. It persists only on completion; cancellation loses progress. It intentionally continues if the map view closes so the next open is instant.
 - **Page cache invalidation.** Adding `gps` to `pageAdditional` changes every page cache key once. Old entries become unreferenced and are reclaimed by the existing LRU/budget trimming.
-- **`Browse.Item.get` batch cap.** 1000 IDs is verified; the repository chunks at 1000 and synthetic filter sections cap at 250 IDs, so one request per page. If the server ever returns fewer records than requested (for example a concurrently deleted item), the page is short and the grid leaves a gap; acceptable.
+- **Stale filter membership.** A concurrent deletion or a stale location index can leave a registered ID absent from otherwise verified Personal Library pages. That short result is emitted as unverified and is not retained in the session LRU, so later demand can retry instead of making the gap permanent.
 - **Identical coordinates never split.** Two photos shot at the exact same location stay one counted cluster at maximum zoom; clicking it still opens both in the filtered timeline.
 - **Session-only state.** The map camera, the `.mapFilter` descriptor, and session pages live only for the app run; restoration keeps working for Library/Favorites/Albums and deliberately writes nothing for map filters.
 - **Fingerprint validation** catches additions/removals through section-limit changes, not in-place thumbnail/EXIF edits; edited thumbnails may 404 within a run and show a placeholder until the next fingerprint change.

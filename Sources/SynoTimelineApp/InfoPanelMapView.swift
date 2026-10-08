@@ -8,7 +8,7 @@ struct InfoPanelMapView: View {
 
     var body: some View {
         if !pins.isEmpty {
-            Map(initialPosition: .region(region)) {
+            Map(initialPosition: .region(region), interactionModes: []) {
                 ForEach(pins, id: \.id) { pin in
                     Marker("", coordinate: CLLocationCoordinate2D(latitude: pin.coordinate.latitude,
                                                                   longitude: pin.coordinate.longitude))

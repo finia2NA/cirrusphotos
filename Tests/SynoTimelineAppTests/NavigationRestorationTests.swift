@@ -64,6 +64,20 @@ final class NavigationRestorationTests: XCTestCase {
         XCTAssertNil(NavigationRestorationStore(defaults: defaults, key: key).openedAlbumID)
     }
 
+    func testMapDestinationRoundTripsWithoutPersistentFilterState() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let key = "state"
+        let store = NavigationRestorationStore(defaults: defaults, key: key)
+
+        store.select(.map)
+
+        let restored = NavigationRestorationStore(defaults: defaults, key: key)
+        XCTAssertEqual(restored.selectedDestination, .map)
+        XCTAssertNil(restored.openedAlbumID)
+        XCTAssertEqual(restored.state.anchors, [:])
+    }
+
     func testOldVersionIsDiscardedCompletely() {
         assertInvalidPayloadFallsBack(#"{"version":2,"selectedDestination":"favorites"}"#)
     }

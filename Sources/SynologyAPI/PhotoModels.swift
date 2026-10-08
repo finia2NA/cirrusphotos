@@ -280,7 +280,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
     /// A Personal Space album, identified by its Synology album id.
     case album(Int64)
     /// A session-only timeline filtered to an explicit item set (a map pin or
-    /// cluster). Never persisted; pages come from `Browse.Item get`.
+    /// cluster). Never persisted; pages are filtered from Personal Library pages.
     case mapFilter(UUID)
 
     /// Stable cache/restoration identity. Personal Library and Favorites keep their

@@ -101,6 +101,11 @@ final class MapFilterTests: XCTestCase {
             XCTFail("A non-map descriptor must be rejected")
         } catch {}
         do {
+            try await repository.registerMapFilter(descriptor, source: .favorites,
+                                                   snapshot: snapshot, itemIDsBySection: [[1]])
+            XCTFail("A non-personal source must be rejected")
+        } catch {}
+        do {
             try await repository.registerMapFilter(descriptor, source: .personalLibrary,
                                                    snapshot: snapshot, itemIDsBySection: [])
             XCTFail("A mismatched section count must be rejected")
@@ -218,6 +223,40 @@ final class MapFilterTests: XCTestCase {
         XCTAssertEqual(result.values.last?.verified, true)
         let requests = await transport.pageRequests
         XCTAssertEqual(requests, [first, second])
+    }
+
+    func testFilteredPageMissingRegisteredIDIsNotVerifiedOrSessionCached() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = MapFilterFakeTransport()
+        let personalSection = section(day: 1, limit: 2)
+        await transport.configure(timelineSnapshot: TimelineSnapshot(sections: [personalSection]),
+                                  pageItemsBySection: [personalSection: [try item(1)]])
+        let repository = try makeRepository(root: root, transport: transport)
+        for await _ in await repository.timeline() {}
+
+        let descriptor = PhotoCollectionDescriptor.mapFilter(UUID())
+        let descriptorSection = section(day: 1, limit: 2)
+        try await repository.registerMapFilter(descriptor, source: .personalLibrary,
+                                               snapshot: TimelineSnapshot(sections: [descriptorSection]),
+                                               itemIDsBySection: [[1, 2]])
+
+        let first = await pageValueEvents(repository, section: descriptorSection,
+                                          collection: descriptor, allowNetwork: true)
+        XCTAssertEqual(first.values.last?.items.map(\.id), [1])
+        XCTAssertEqual(first.values.last?.verified, false)
+
+        let namespace = CacheKey.namespace(server: server, account: credentials.username)
+        let personalKey = try XCTUnwrap(CacheKey.page(namespace: namespace,
+                                                      section: personalSection,
+                                                      collection: .personalLibrary))
+        try await repository.store.remove(personalKey)
+        let requestsBeforeRetry = await transport.pageRequests.count
+        let retry = await pageValueEvents(repository, section: descriptorSection,
+                                          collection: descriptor, allowNetwork: true)
+        XCTAssertEqual(retry.values.last?.verified, false)
+        let requestsAfterRetry = await transport.pageRequests.count
+        XCTAssertGreaterThan(requestsAfterRetry, requestsBeforeRetry,
+                             "An incomplete result must not become a verified session-cache hit")
     }
 
     func testFilteredPageSessionCacheServesRepeatedRequests() async throws {

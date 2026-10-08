@@ -73,8 +73,11 @@ extension CachedPhotosRepository {
                     let records = try await task.value
                     continuation.yield(.completed(records, verified: true))
                 } catch {
-                    if !Task.isCancelled && !(error is CancellationError) {
-                        continuation.yield(.failure(error.localizedDescription))
+                    if !Task.isCancelled {
+                        let message = error is CancellationError
+                            ? "The location scan was canceled. Retry to rebuild the map index."
+                            : error.localizedDescription
+                        continuation.yield(.failure(message))
                     }
                 }
                 removeLocationIndexSubscriber(subscriber)
@@ -116,6 +119,12 @@ extension CachedPhotosRepository {
         var offset = 0
         var current: Task<[PhotoItem], Error>? = locationScanPageTask(offset: 0)
         var next: Task<[PhotoItem], Error>? = locationScanPageTask(offset: Self.locationScanPageLimit)
+        // These page tasks are deliberately unstructured so two offsets can overlap.
+        // Cancel either outstanding sibling on every exit, including a thrown page.
+        defer {
+            current?.cancel()
+            next?.cancel()
+        }
         while let pageTask = current {
             let items = try await pageTask.value
             pages += 1

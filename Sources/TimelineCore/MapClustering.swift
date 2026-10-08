@@ -138,18 +138,30 @@ public enum MapClusterBuilder {
             if lhs.time != rhs.time { return lhs.time > rhs.time }
             return lhs.id > rhs.id
         }
-        var latitudeCell = max(region.latitudeDelta / 512, minimumCellSpan?.latitude ?? 0)
-        var longitudeCell = max(region.longitudeDelta / 512, minimumCellSpan?.longitude ?? 0)
+        let requestedLatitudeCell = minimumCellSpan?.latitude
+        let requestedLongitudeCell = minimumCellSpan?.longitude
+        let minimumLatitudeCell = requestedLatitudeCell.flatMap {
+            $0.isFinite && $0 > 0 ? $0 : nil
+        } ?? 0
+        let minimumLongitudeCell = requestedLongitudeCell.flatMap {
+            $0.isFinite && $0 > 0 ? $0 : nil
+        } ?? 0
+        var latitudeCell = max(region.latitudeDelta / 512, minimumLatitudeCell)
+        var longitudeCell = max(region.longitudeDelta / 512, minimumLongitudeCell)
         while true {
             let groups = cluster(ordered: ordered, minLatitude: minLatitude,
                                  minLongitude: minLongitude,
                                  latitudeCell: latitudeCell, longitudeCell: longitudeCell)
             if groups.count <= cap { return groups }
-            if latitudeCell >= region.latitudeDelta && longitudeCell >= region.longitudeDelta {
+            // Candidates span at most 1.2x the visible region because of the
+            // margin. A 2x radius therefore collapses everything to one group,
+            // preserving the annotation cap even for maxAnnotations == 1.
+            if latitudeCell >= region.latitudeDelta * 2,
+               longitudeCell >= region.longitudeDelta * 2 {
                 return groups
             }
-            latitudeCell = min(latitudeCell * 2, region.latitudeDelta)
-            longitudeCell = min(longitudeCell * 2, region.longitudeDelta)
+            latitudeCell = min(latitudeCell * 2, region.latitudeDelta * 2)
+            longitudeCell = min(longitudeCell * 2, region.longitudeDelta * 2)
         }
     }
 

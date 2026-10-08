@@ -14,6 +14,9 @@ extension CachedPhotosRepository {
         guard let filterID = descriptor.mapFilterID else {
             throw SynologyAPIError.unsupported("A map filter collection descriptor is required.")
         }
+        guard source == .personalLibrary else {
+            throw SynologyAPIError.unsupported("Map filters require the Personal Library source.")
+        }
         guard itemIDsBySection.count == snapshot.sections.count else {
             throw SynologyAPIError.unsupported("A map filter snapshot does not match its item IDs.")
         }
@@ -115,7 +118,10 @@ extension CachedPhotosRepository {
                 }
                 if anyValue {
                     let current = favorites.applyingOverrides(ids.compactMap { byID[$0] })
-                    let verified = allVerified && !anyUnresolved
+                    // A verified source page can still omit an indexed item after a
+                    // concurrent deletion or a stale location index. Do not bless and
+                    // retain that short result as the complete session page.
+                    let verified = allVerified && !anyUnresolved && current.count == ids.count
                     if verified { insertMapFilterPage(current, key: key) }
                     continuation.yield(.value(current, verified: verified))
                 }

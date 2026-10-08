@@ -123,6 +123,17 @@ final class MapClusteringTests: XCTestCase {
         XCTAssertEqual(groups.flatMap(\.memberIDs).count, records.count)
     }
 
+    func testAnnotationCapOfOneIncludesOppositeMarginEdges() {
+        let records = [
+            record(1, lat: -5.9, lon: -5.9, time: 2),
+            record(2, lat: 5.9, lon: 5.9, time: 1),
+        ]
+        let groups = MapClusterBuilder.groups(records: records, in: region,
+                                               maxAnnotations: 1)
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups.first?.count, 2)
+    }
+
     func testRepresentativeIsNewestMemberAndMembersAreOrdered() {
         let records = [
             record(1, lat: 2, lon: 2, time: 300),
