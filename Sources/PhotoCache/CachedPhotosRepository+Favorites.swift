@@ -71,10 +71,11 @@ extension CachedPhotosRepository {
                     )
                 }
             }
-            let generation = await self.store.currentGeneration()
-
             // Advance the Favorites mutation epoch once before the action
             self.metadata.mutationEpochs[.favorites, default: 0] &+= 1
+            let metadataToken = try await self.captureMetadataWorkToken(
+                resource: .mutation, jobID: UUID()
+            )
 
             // Record previous values for all affected IDs
             var previousValues: [Int64: Bool] = [:]
@@ -101,7 +102,7 @@ extension CachedPhotosRepository {
             await self.patchAffectedPagesBatch(
                 action: action,
                 target: target,
-                generation: generation,
+                token: metadataToken,
                 transaction: &transaction
             )
 
@@ -155,7 +156,7 @@ extension CachedPhotosRepository {
                     transaction: transaction,
                     failedIDs: Set(failedOrUnsubmittedIDs),
                     previousValues: previousValues,
-                    generation: generation
+                    token: metadataToken
                 )
 
                 // Refresh authoritative Favorites timeline after any success or ambiguous state
@@ -197,7 +198,7 @@ extension CachedPhotosRepository {
     private func patchAffectedPagesBatch(
         action: SelectionFavoriteAction,
         target: Bool,
-        generation: Int,
+        token: MetadataWorkToken,
         transaction: inout BatchFavoriteMutationTransaction
     ) async {
         let itemIDSet = Set(action.affectedIDs)
@@ -238,25 +239,28 @@ extension CachedPhotosRepository {
         var seenKeys: Set<String> = []
         for section in candidateSections {
             guard let key = CacheKey.page(namespace: namespace, section: section, collection: patchCollection),
-                  seenKeys.insert(key).inserted,
-                  let cached = try? await store.get(key),
-                  let items = try? JSONDecoder().decode([PhotoItem].self, from: cached.data) else { continue }
+                  seenKeys.insert(key).inserted else { continue }
+            for _ in 0..<3 {
+                guard await metadataTokenIsCurrent(token),
+                      let cached = try? await store.get(key),
+                      let items = try? JSONDecoder().decode([PhotoItem].self, from: cached.data),
+                      items.contains(where: { itemIDSet.contains($0.id) }) else { break }
 
-            let hasAffectedItems = items.contains { itemIDSet.contains($0.id) }
-            guard hasAffectedItems else { continue }
-
-            transaction.cacheBackups[key] = BatchFavoriteCacheBackup(kind: .page, entry: cached)
-            let updatedItems = items.map { item -> PhotoItem in
-                if itemIDSet.contains(item.id) {
-                    return item.withFavorite(target)
+                if transaction.cacheBackups[key] == nil {
+                    transaction.cacheBackups[key] = BatchFavoriteCacheBackup(kind: .page, entry: cached)
                 }
-                return item
+                let updatedItems = items.map { item -> PhotoItem in
+                    itemIDSet.contains(item.id) ? item.withFavorite(target) : item
+                }
+                let result = try? await commitMetadata(
+                    updatedItems, key: key, kind: .page,
+                    validatedRun: cached.validatedRun,
+                    token: token,
+                    replacing: .revision(cached.revision)
+                )
+                if case .superseded = result { continue }
+                break
             }
-            guard let bytes = try? JSONEncoder().encode(updatedItems) else { continue }
-            try? await store.put(key, kind: .page, data: bytes,
-                                 validatedRun: cached.validatedRun,
-                                 etag: cached.etag, lastModified: cached.lastModified,
-                                 expectedGeneration: generation)
         }
     }
 
@@ -264,30 +268,33 @@ extension CachedPhotosRepository {
         transaction: BatchFavoriteMutationTransaction,
         failedIDs: Set<Int64>,
         previousValues: [Int64: Bool],
-        generation: Int
+        token: MetadataWorkToken
     ) async {
-        guard await store.currentGeneration() == generation else { return }
         for (key, backup) in transaction.cacheBackups {
             guard let originalEntry = backup.entry,
                   let items = try? JSONDecoder().decode([PhotoItem].self, from: originalEntry.data) else { continue }
             let hasFailedItems = items.contains { failedIDs.contains($0.id) }
             guard hasFailedItems else { continue }
 
-            let currentStored = (try? await store.get(key))?.data
-            let currentItems = (currentStored.flatMap { try? JSONDecoder().decode([PhotoItem].self, from: $0) }) ?? items
-
-            let rolledBackItems = currentItems.map { item -> PhotoItem in
-                if failedIDs.contains(item.id) {
-                    let prev = previousValues[item.id] ?? item.isFavorite
-                    return item.withFavorite(prev)
+            for _ in 0..<3 {
+                guard await metadataTokenIsCurrent(token),
+                      let current = try? await store.get(key),
+                      let currentItems = try? JSONDecoder().decode([PhotoItem].self, from: current.data) else { break }
+                let rolledBackItems = currentItems.map { item -> PhotoItem in
+                    if failedIDs.contains(item.id) {
+                        return item.withFavorite(previousValues[item.id] ?? item.isFavorite)
+                    }
+                    return item
                 }
-                return item
+                let result = try? await commitMetadata(
+                    rolledBackItems, key: key, kind: backup.kind,
+                    validatedRun: current.validatedRun,
+                    token: token,
+                    replacing: .revision(current.revision)
+                )
+                if case .superseded = result { continue }
+                break
             }
-            guard let bytes = try? JSONEncoder().encode(rolledBackItems) else { continue }
-            try? await store.put(key, kind: backup.kind, data: bytes,
-                                 validatedRun: originalEntry.validatedRun,
-                                 etag: originalEntry.etag, lastModified: originalEntry.lastModified,
-                                 expectedGeneration: generation)
         }
     }
 
@@ -306,19 +313,27 @@ extension CachedPhotosRepository {
         metadata.timelineJobs.removeValue(forKey: collection)?.task.cancel()
         let id = UUID()
         do {
+            let token = try await captureMetadataWorkToken(
+                resource: .transient(collection), jobID: id, collection: collection
+            )
+            let key = CacheKey.timeline(namespace: namespace, collection: collection)
+            let prior = try? await store.get(key)
             try await gate.acquire(.metadata, priority: .visible, id: id)
             defer { Task { await gate.release(.metadata) } }
             try await connect()
             let snapshot = try await client.timeline(collection: collection, initial: false)
-            guard epoch == metadata.mutationEpochs[collection, default: 0] else { return }
-            let generation = await store.currentGeneration()
-            metadata.latestTimelines[collection] = snapshot
-            if let bytes = try? JSONEncoder().encode(snapshot) {
-                try? await store.put(CacheKey.timeline(namespace: namespace, collection: collection),
-                                     kind: .timeline, data: bytes,
-                                     validatedRun: validationRun(for: collection),
-                                     expectedGeneration: generation)
+            guard epoch == metadata.mutationEpochs[collection, default: 0],
+                  await metadataTokenIsCurrent(token) else { return }
+            let commit = try? await commitMetadata(
+                snapshot, key: key, kind: .timeline,
+                validatedRun: validationRun(for: collection),
+                token: token, replacing: rowExpectation(for: prior)
+            )
+            if commit == .superseded || commit == .generationChanged {
+                favorites.refreshTask = nil
+                return
             }
+            metadata.latestTimelines[collection] = snapshot
             publishTimelineProjection(snapshot, collection: collection)
             favorites.metadataDirty = false
             favorites.refreshTask = nil

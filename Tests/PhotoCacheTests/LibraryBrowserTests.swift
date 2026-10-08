@@ -459,7 +459,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         XCTAssertEqual(loginCalls, 1)
     }
 
-    func testClearDuringTransferKeepsLiveResultButNotLateCacheWrite() async throws {
+    func testClearDuringTransferRejectsLatePublicationAndCacheWrite() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
         let fake = FakeTransport()
         await fake.configure(itemBlocked: true, items: [try item(42)])
@@ -476,7 +476,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         try await repository.clearCache()
         await fake.releaseItems()
         let live = await result.value
-        XCTAssertEqual(live, [42])
+        XCTAssertTrue(live.isEmpty, "A pre-reset metadata result must not paint after invalidation")
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
         let key = try XCTUnwrap(CacheKey.page(namespace: namespace, section: descriptor))
         let cached = try await repository.store.get(key)

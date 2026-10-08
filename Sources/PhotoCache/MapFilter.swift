@@ -1,16 +1,48 @@
 import Foundation
 import SynologyAPI
 
+public struct MapFilterRegistration: Sendable {
+    public let descriptor: PhotoCollectionDescriptor
+    public let snapshot: TimelineSnapshot
+}
+
 extension CachedPhotosRepository {
     /// Maximum session pages retained per map filter.
     static let mapFilterPageCacheLimit = 12
 
     /// Registers a session-only filtered collection. `itemIDsBySection` must be
     /// parallel to `snapshot.sections`.
-    public func registerMapFilter(_ descriptor: PhotoCollectionDescriptor,
-                                  source: PhotoCollectionDescriptor,
-                                  snapshot: TimelineSnapshot,
-                                  itemIDsBySection: [[Int64]]) throws {
+    /// Atomically validates the selected location revision, constructs the derived
+    /// collection, and registers its dependencies inside the repository.
+    public func registerMapFilter(itemIDs: [Int64],
+                                  locationRevision: LocationIndexRevision) throws -> MapFilterRegistration {
+        guard locationRevision.rawValue == metadata.locationRevision else {
+            throw SynologyAPIError.unsupported("The map changed before this location opened. Try again.")
+        }
+        guard Set(itemIDs).count == itemIDs.count else {
+            throw SynologyAPIError.unsupported("The selected map photos contain duplicate IDs.")
+        }
+        let records = itemIDs.compactMap { metadata.locationRecords[$0] }
+        guard records.count == itemIDs.count else {
+            throw SynologyAPIError.unsupported("Some selected map photos are no longer available.")
+        }
+        let descriptor = PhotoCollectionDescriptor.mapFilter(UUID())
+        let built = DayGroupedTimelineBuilder.build(
+            entries: records.map { DayTimelineEntry(id: $0.id, time: $0.time) },
+            sectionLimit: 250
+        )
+        try registerMapFilter(descriptor, source: .personalLibrary,
+                              snapshot: built.snapshot,
+                              itemIDsBySection: built.itemIDsBySection,
+                              locationRevision: locationRevision.rawValue)
+        return MapFilterRegistration(descriptor: descriptor, snapshot: built.snapshot)
+    }
+
+    func registerMapFilter(_ descriptor: PhotoCollectionDescriptor,
+                           source: PhotoCollectionDescriptor,
+                           snapshot: TimelineSnapshot,
+                           itemIDsBySection: [[Int64]],
+                           locationRevision: UInt64? = nil) throws {
         guard let filterID = descriptor.mapFilterID else {
             throw SynologyAPIError.unsupported("A map filter collection descriptor is required.")
         }
@@ -24,7 +56,10 @@ extension CachedPhotosRepository {
         for (section, ids) in zip(snapshot.sections, itemIDsBySection) {
             idsBySection[section] = ids
         }
+        guard !metadata.resetInProgress else { throw MetadataAdmissionError.resetInProgress }
         metadata.mapFilters[filterID] = MapFilterState(registrationID: UUID(),
+                                                       metadataEpoch: metadata.admissionEpoch,
+                                                       locationRevision: locationRevision,
                                                        source: source, snapshot: snapshot,
                                                        itemIDsBySection: itemIDsBySection,
                                                        idsBySection: idsBySection)
@@ -89,11 +124,17 @@ extension CachedPhotosRepository {
                 }
                 let wanted = Set(ids)
                 let registrationID = state.registrationID
+                let metadataEpoch = state.metadataEpoch
                 var contributions: [TimelineSection: (items: [PhotoItem], verified: Bool)] = [:]
                 var failureMessage: String?
 
                 func registrationIsCurrent() -> Bool {
-                    metadata.mapFilters[filterID]?.registrationID == registrationID
+                    guard metadata.admissionEpoch == metadataEpoch else { return false }
+                    guard metadata.mapFilters[filterID]?.registrationID == registrationID else { return false }
+                    if let sourceRevision = state.locationRevision {
+                        return sourceRevision == metadata.locationRevision
+                    }
+                    return true
                 }
 
                 func assembledValue() -> (items: [PhotoItem], verified: Bool)? {
@@ -208,5 +249,10 @@ extension CachedPhotosRepository {
         guard let index = metadata.mapFilterPageOrder.firstIndex(of: key) else { return }
         metadata.mapFilterPageOrder.remove(at: index)
         metadata.mapFilterPageOrder.append(key)
+    }
+
+    func invalidateMapFiltersForLocationChange() {
+        let descriptors = metadata.mapFilters.keys.map(PhotoCollectionDescriptor.mapFilter)
+        for descriptor in descriptors { unregisterMapFilter(descriptor) }
     }
 }

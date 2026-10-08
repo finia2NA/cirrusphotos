@@ -13,6 +13,22 @@ public struct CacheEntry: Sendable {
     public let etag: String?
     public let lastModified: String?
     public let validatedRun: String?
+    /// Monotonic identity for this row version. Unlike the content digest, this
+    /// changes even when a row briefly changes and is restored to identical bytes.
+    public let revision: Int64
+}
+
+public enum MetadataRowExpectation: Sendable, Equatable {
+    case absent
+    case revision(Int64)
+    case unconditional
+}
+
+public enum MetadataCommitResult: Sendable, Equatable {
+    case stored(revision: Int64)
+    case generationChanged
+    case superseded
+    case notRetained
 }
 
 public struct ThumbnailCacheIdentity: Sendable, Equatable {
@@ -78,13 +94,14 @@ public enum CacheBudget {
 }
 
 public actor DiskCache {
-    private static let schemaVersion = 1
+    private static let schemaVersion = 2
     private let root: URL
     private let images: URL
     nonisolated(unsafe) private var db: OpaquePointer?
     private var budget: Int64
     private let protectedTimelineKey: String
     private var generation = 0
+    private var metadataGeneration = 0
     private var configuredThumbnailSize: ThumbnailSize = .m
 
     public init(root: URL, budget: Int64, protectedTimelineKey: String) throws {
@@ -110,7 +127,7 @@ public actor DiskCache {
         if db == nil {
             guard sqlite3_open(path, &db) == SQLITE_OK else { throw CacheError.storage }
         }
-        guard sqlite3_exec(db, "PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS entries (key TEXT PRIMARY KEY, kind INTEGER NOT NULL, payload BLOB, file TEXT, cost INTEGER NOT NULL, accessed REAL NOT NULL, validated_run TEXT, etag TEXT, last_modified TEXT, digest TEXT, retention_class TEXT, retention_rank INTEGER, thumbnail_family TEXT, thumbnail_size TEXT); CREATE INDEX IF NOT EXISTS entries_retention ON entries(retention_rank,accessed); CREATE INDEX IF NOT EXISTS entries_thumbnail_family ON entries(thumbnail_family,thumbnail_size);", nil, nil, nil) == SQLITE_OK else {
+        guard sqlite3_exec(db, "PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS entries (key TEXT PRIMARY KEY, kind INTEGER NOT NULL, payload BLOB, file TEXT, cost INTEGER NOT NULL, accessed REAL NOT NULL, validated_run TEXT, etag TEXT, last_modified TEXT, digest TEXT, retention_class TEXT, retention_rank INTEGER, thumbnail_family TEXT, thumbnail_size TEXT, row_revision INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS entries_retention ON entries(retention_rank,accessed); CREATE INDEX IF NOT EXISTS entries_thumbnail_family ON entries(thumbnail_family,thumbnail_size);", nil, nil, nil) == SQLITE_OK else {
             throw CacheError.storage
         }
         if needsSchema {
@@ -127,7 +144,7 @@ public actor DiskCache {
         guard sqlite3_step(version) == SQLITE_ROW,
               sqlite3_column_int(version, 0) == schemaVersion else { return false }
         var entries: OpaquePointer?
-        let query = "SELECT key,kind,payload,file,cost,accessed,validated_run,etag,last_modified,digest,retention_class,retention_rank,thumbnail_family,thumbnail_size FROM entries LIMIT 0"
+        let query = "SELECT key,kind,payload,file,cost,accessed,validated_run,etag,last_modified,digest,retention_class,retention_rank,thumbnail_family,thumbnail_size,row_revision FROM entries LIMIT 0"
         guard sqlite3_prepare_v2(db, query, -1, &entries, nil) == SQLITE_OK else { return false }
         sqlite3_finalize(entries)
         return true
@@ -144,7 +161,7 @@ public actor DiskCache {
     deinit { sqlite3_close(db) }
 
     public func get(_ key: String) throws -> CacheEntry? {
-        let sql = "SELECT payload,file,etag,last_modified,validated_run,digest,kind FROM entries WHERE key=?"
+        let sql = "SELECT payload,file,etag,last_modified,validated_run,digest,kind,row_revision FROM entries WHERE key=?"
         let statement = try prepare(sql)
         defer { sqlite3_finalize(statement) }
         bind(key, at: 1, in: statement)
@@ -171,8 +188,10 @@ public actor DiskCache {
             try? remove(key)
             return nil
         }
+        let revision = sqlite3_column_int64(statement, 7)
         let result = CacheEntry(data: data, kind: kind, etag: columnString(statement, 2),
-                                lastModified: columnString(statement, 3), validatedRun: columnString(statement, 4))
+                                lastModified: columnString(statement, 3),
+                                validatedRun: columnString(statement, 4), revision: revision)
         let touch = try prepare("UPDATE entries SET accessed=? WHERE key=?")
         defer { sqlite3_finalize(touch) }
         sqlite3_bind_double(touch, 1, Date().timeIntervalSince1970)
@@ -182,6 +201,8 @@ public actor DiskCache {
     }
 
     public func currentGeneration() -> Int { generation }
+
+    public func currentMetadataGeneration() -> Int { metadataGeneration }
 
     public func setConfiguredThumbnailSize(_ size: ThumbnailSize) throws {
         guard configuredThumbnailSize != size else { return }
@@ -234,7 +255,22 @@ public actor DiskCache {
         }
         let retention = try identity.map { try retentionClass(for: $0) }
             ?? CachePriorityPolicy.defaultClass(for: storedKind)
-        let statement = try prepare("INSERT OR REPLACE INTO entries (key,kind,payload,file,cost,accessed,validated_run,etag,last_modified,digest,retention_class,retention_rank,thumbnail_family,thumbnail_size) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        let statement = try prepare("""
+            INSERT INTO entries
+                (key,kind,payload,file,cost,accessed,validated_run,etag,last_modified,digest,
+                 retention_class,retention_rank,thumbnail_family,thumbnail_size,row_revision)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+            ON CONFLICT(key) DO UPDATE SET
+                kind=excluded.kind, payload=excluded.payload, file=excluded.file,
+                cost=excluded.cost, accessed=excluded.accessed,
+                validated_run=excluded.validated_run, etag=excluded.etag,
+                last_modified=excluded.last_modified, digest=excluded.digest,
+                retention_class=excluded.retention_class,
+                retention_rank=excluded.retention_rank,
+                thumbnail_family=excluded.thumbnail_family,
+                thumbnail_size=excluded.thumbnail_size,
+                row_revision=entries.row_revision+1
+            """)
         defer { sqlite3_finalize(statement) }
         bind(key, at: 1, in: statement)
         sqlite3_bind_int(statement, 2, Int32(storedKind.rawValue))
@@ -254,6 +290,42 @@ public actor DiskCache {
         guard sqlite3_step(statement) == SQLITE_DONE else { throw CacheError.storage }
         if let identity { try reclassifyThumbnailFamily(identity.family) }
         try trim()
+    }
+
+    /// Atomically rejects a metadata write when either cache generation changed or
+    /// another writer replaced the same row after it was read.
+    public func putMetadata(
+        _ key: String,
+        kind: CacheKind,
+        data: Data,
+        validatedRun: String?,
+        etag: String? = nil,
+        lastModified: String? = nil,
+        expectedGeneration: Int,
+        expectedMetadataGeneration: Int,
+        replacing expectation: MetadataRowExpectation
+    ) throws -> MetadataCommitResult {
+        guard expectedGeneration == generation,
+              expectedMetadataGeneration == metadataGeneration else {
+            return .generationChanged
+        }
+        guard kind != .thumbnail, kind != .previewThumbnail, kind != .fullImage else {
+            throw CacheError.storage
+        }
+        let currentRevision = try storedRevision(for: key)
+        switch expectation {
+        case .absent where currentRevision != nil:
+            return .superseded
+        case .revision(let expected) where currentRevision != expected:
+            return .superseded
+        case .absent, .revision, .unconditional:
+            break
+        }
+        try put(key, kind: kind, data: data, validatedRun: validatedRun,
+                etag: etag, lastModified: lastModified,
+                expectedGeneration: expectedGeneration)
+        guard let newRevision = try storedRevision(for: key) else { return .notRetained }
+        return .stored(revision: newRevision)
     }
 
     public func markValidated(_ key: String, run: String, expectedGeneration: Int? = nil) throws {
@@ -298,6 +370,7 @@ public actor DiskCache {
 
     public func clear() throws {
         generation += 1
+        metadataGeneration += 1
         let statement = try prepare("SELECT file FROM entries WHERE file IS NOT NULL")
         defer { sqlite3_finalize(statement) }
         while sqlite3_step(statement) == SQLITE_ROW {
@@ -306,6 +379,25 @@ public actor DiskCache {
             }
         }
         guard sqlite3_exec(db, "DELETE FROM entries", nil, nil, nil) == SQLITE_OK else { throw CacheError.storage }
+    }
+
+    /// Removes only semantic metadata. The generation advances before SQL work and
+    /// is intentionally never rolled back, so pre-reset writers stay invalid even
+    /// when the transaction fails.
+    @discardableResult
+    public func clearMetadata() throws -> Int {
+        metadataGeneration += 1
+        guard sqlite3_exec(db, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK else {
+            throw CacheError.storage
+        }
+        let imageKinds = [CacheKind.previewThumbnail, .fullImage, .thumbnail]
+            .map { String($0.rawValue) }.joined(separator: ",")
+        guard sqlite3_exec(db, "DELETE FROM entries WHERE kind NOT IN (\(imageKinds))", nil, nil, nil) == SQLITE_OK,
+              sqlite3_exec(db, "COMMIT", nil, nil, nil) == SQLITE_OK else {
+            _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            throw CacheError.storage
+        }
+        return metadataGeneration
     }
 
     private func trim() throws {
@@ -428,6 +520,13 @@ public actor DiskCache {
         bind(key, at: 1, in: statement)
         guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
         return CacheKind(rawValue: Int(sqlite3_column_int(statement, 0)))
+    }
+    private func storedRevision(for key: String) throws -> Int64? {
+        let statement = try prepare("SELECT row_revision FROM entries WHERE key=?")
+        defer { sqlite3_finalize(statement) }
+        bind(key, at: 1, in: statement)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return sqlite3_column_int64(statement, 0)
     }
     private func bind(_ value: String?, at index: Int32, in statement: OpaquePointer?) {
         if let value { _ = value.withCString { sqlite3_bind_text(statement, index, $0, -1, sqliteTransient) } }

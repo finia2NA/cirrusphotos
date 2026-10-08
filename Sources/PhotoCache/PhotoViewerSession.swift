@@ -29,6 +29,8 @@ public actor PhotoViewerSession {
     var favoriteFailures: [Int64: String] = [:]
     var favoriteValues: [Int64: Bool] = [:]
     var favoriteTask: Task<Void, Never>?
+    var metadataResetTask: Task<Void, Never>?
+    var appliedMetadataResetRevision: UInt64 = 0
     var playlist = ViewerPlaylist()
     var playlistRevision: UInt64 = 0
 
@@ -127,6 +129,7 @@ public actor PhotoViewerSession {
         images.cancelAll()
         metadata.cancelJobs()
         favoriteTask?.cancel()
+        metadataResetTask?.cancel()
         publish()
         for observer in observers.values { observer.finish() }
         observers.removeAll()
@@ -146,6 +149,12 @@ public actor PhotoViewerSession {
             for await change in await repository.favoriteChanges() {
                 guard !Task.isCancelled else { return }
                 await self?.applyFavorites(change.values)
+            }
+        }
+        metadataResetTask = Task { [weak self] in
+            for await revision in await repository.metadataCacheResets() {
+                guard !Task.isCancelled else { return }
+                await self?.resetMetadata(revision: revision)
             }
         }
         startAssetsForCurrentMetadata()
@@ -203,6 +212,21 @@ public actor PhotoViewerSession {
     }
 
     func removeObserver(_ id: UUID) { observers.removeValue(forKey: id) }
+
+    func resetMetadata(revision: UInt64) {
+        guard revision > appliedMetadataResetRevision else { return }
+        appliedMetadataResetRevision = revision
+        generation &+= 1
+        metadata.cancelJobs()
+        metadata.pages.removeAll()
+        images.cancelAll()
+        metadataVerified = false
+        allowNetwork = false
+        metadataStatus = .failure("Metadata cache cleared. Return to the library and reopen this photo.")
+        playlist = ViewerPlaylist()
+        playlistRevision &+= 1
+        publish()
+    }
 
     static func identity(of item: PhotoItem) -> String {
         let thumbnail = item.additional?.thumbnail

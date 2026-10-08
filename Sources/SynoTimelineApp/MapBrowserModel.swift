@@ -8,6 +8,7 @@ import TimelineCore
 final class MapBrowserModel: ObservableObject {
     enum Status: Equatable {
         case idle
+        case cachedUnverified
         case building(scanned: Int, total: Int?)
         case ready
         case failed(String)
@@ -19,6 +20,7 @@ final class MapBrowserModel: ObservableObject {
     @Published var camera: MapCameraPosition = .automatic
     @Published private(set) var records: [MapPhotoRecord] = []
     @Published private(set) var thumbnailsByID: [Int64: ThumbnailInfo] = [:]
+    private(set) var locationRevision: LocationIndexRevision?
 
     /// Minimum on-screen distance between pins, in points.
     private static let pinPitch: CGFloat = 52
@@ -50,6 +52,23 @@ final class MapBrowserModel: ObservableObject {
         indexTask = nil
         status = .idle
         start(repository: repository)
+    }
+
+    /// Releases every metadata-derived value while preserving the user's camera.
+    func invalidateMetadata(restart: Bool) {
+        indexTask?.cancel()
+        indexTask = nil
+        reclusterTask?.cancel()
+        reclusterTask = nil
+        status = .idle
+        groups = []
+        locatedCount = 0
+        records = []
+        thumbnailsByID = [:]
+        recordIndices = [:]
+        locationRevision = nil
+        hasFitInitialCamera = currentRegion != nil
+        if restart { start(repository: repository) }
     }
 
     /// Debounced recluster for a user-driven camera change. The full camera is kept
@@ -84,19 +103,28 @@ final class MapBrowserModel: ObservableObject {
         ids.compactMap { id in recordIndices[id].map { records[$0] } }
     }
 
+    func filterSelection(for ids: [Int64]) -> (ids: [Int64], revision: LocationIndexRevision)? {
+        guard let locationRevision else { return nil }
+        let available = ids.filter { recordIndices[$0] != nil }
+        guard !available.isEmpty else { return nil }
+        return (available, locationRevision)
+    }
+
     func thumbnail(for record: MapPhotoRecord) -> ThumbnailInfo? {
         thumbnailsByID[record.id]
     }
 
     private func receive(_ event: LocationIndexEvent) {
         switch event {
-        case .cached(let locationRecords):
-            apply(locationRecords)
-            status = .ready
+        case .cached(let value):
+            locationRevision = value.revision
+            apply(value.records)
+            status = .cachedUnverified
         case .progress(let scanned, let total):
             status = .building(scanned: scanned, total: total)
-        case .completed(let locationRecords, _):
-            apply(locationRecords)
+        case .completed(let value, _):
+            locationRevision = value.revision
+            apply(value.records)
             status = .ready
         case .failure(let message):
             status = .failed(message)

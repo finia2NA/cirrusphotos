@@ -9,14 +9,14 @@ extension CachedPhotosRepository {
             producer.task = Task {
                 let key = CacheKey.timeline(namespace: namespace, collection: collection)
                 let validation = validationRun(for: collection)
-                let cached = try? await store.get(key)
+                let cached = try? await readCachedMetadata(TimelineSnapshot.self, key: key)
                 guard !Task.isCancelled else { continuation.finish(); return }
-                let snapshot = cached.flatMap { try? JSONDecoder().decode(TimelineSnapshot.self, from: $0.data) }
+                let snapshot = cached?.value
                 if let snapshot {
                     metadata.latestTimelines[collection] = snapshot
-                    continuation.yield(.value(snapshot, verified: cached?.validatedRun == validation))
+                    continuation.yield(.value(snapshot, verified: cached?.entry.validatedRun == validation))
                 }
-                if cached?.validatedRun == validation, snapshot != nil { continuation.finish(); return }
+                if cached?.entry.validatedRun == validation, snapshot != nil { continuation.finish(); return }
                 var phase = "Initial timeline"
                 do {
                     if snapshot == nil, collection.supportsInitialTimeline {
@@ -61,13 +61,12 @@ extension CachedPhotosRepository {
                 guard let key = CacheKey.page(namespace: namespace, section: section, collection: collection) else {
                     continuation.yield(.failure("The section has no date bounds.")); continuation.finish(); return
                 }
-                let cached = try? await store.get(key)
+                let cached = try? await readCachedMetadata([PhotoItem].self, key: key)
                 guard !Task.isCancelled else { continuation.finish(); return }
-                let items = cached.flatMap { try? JSONDecoder().decode([PhotoItem].self, from: $0.data) }
-                    .map { favorites.applyingOverrides($0) }
+                let items = cached.map { favorites.applyingOverrides($0.value) }
                 let validation = validationRun(for: collection)
-                if let items { continuation.yield(.value(items, verified: cached?.validatedRun == validation)) }
-                guard allowNetwork && !(cached?.validatedRun == validation && items != nil) else {
+                if let items { continuation.yield(.value(items, verified: cached?.entry.validatedRun == validation)) }
+                guard allowNetwork && !(cached?.entry.validatedRun == validation && items != nil) else {
                     continuation.finish(); return
                 }
                 do {
@@ -100,10 +99,14 @@ extension CachedPhotosRepository {
                        collection: PhotoCollectionDescriptor,
                        priority: RequestPriority) async throws -> [PhotoItem] {
         let id = UUID()
+        let token = try await captureMetadataWorkToken(
+            resource: .transient(collection), jobID: id
+        )
         try await gate.acquire(.metadata, priority: priority, id: id)
         defer { Task { await gate.release(.metadata) } }
         try await connect()
         let items = try await client.items(in: section, collection: collection)
+        guard await metadataTokenIsCurrent(token) else { throw CancellationError() }
         return favorites.applyingOverrides(items)
     }
 
@@ -141,11 +144,16 @@ extension CachedPhotosRepository {
     private func initialTimeline(id: UUID, collection: PhotoCollectionDescriptor) async throws -> TimelineSnapshot {
         metadata.initialSubscribers.insert(id)
         defer { metadata.initialSubscribers.remove(id); cancelIdleLogin() }
+        let token = try await captureMetadataWorkToken(
+            resource: .transient(collection), jobID: id, collection: collection
+        )
         try await gate.acquire(.metadata, priority: .visible, id: id)
         defer { Task { await gate.release(.metadata) } }
         try Task.checkCancellation()
         try await connect()
-        return try await client.timeline(collection: collection, initial: true)
+        let snapshot = try await client.timeline(collection: collection, initial: true)
+        guard await metadataTokenIsCurrent(token) else { throw CancellationError() }
+        return snapshot
     }
 
     private func registerTimeline(collection: PhotoCollectionDescriptor,
@@ -159,7 +167,11 @@ extension CachedPhotosRepository {
         let validation = validationRun(for: collection)
         let mutationEpoch = metadata.mutationEpochs[collection, default: 0]
         let task = Task<TimelineSnapshot, Error> {
-            let generation = await store.currentGeneration()
+            let token = try await captureMetadataWorkToken(
+                resource: .timeline(collection), jobID: id, collection: collection
+            )
+            let key = CacheKey.timeline(namespace: namespace, collection: collection)
+            let prior = try? await store.get(key)
             try await gate.acquire(.metadata, priority: .visible, id: id)
             defer { Task { await gate.release(.metadata) } }
             try Task.checkCancellation()
@@ -172,13 +184,16 @@ extension CachedPhotosRepository {
             }
             try Task.checkCancellation()
             guard validation == validationRun(for: collection),
-                  mutationEpoch == metadata.mutationEpochs[collection, default: 0] else {
+                  mutationEpoch == metadata.mutationEpochs[collection, default: 0],
+                  await metadataTokenIsCurrent(token) else {
                 throw CancellationError()
             }
-            if let bytes = try? JSONEncoder().encode(snapshot) {
-                try? await store.put(CacheKey.timeline(namespace: namespace, collection: collection), kind: .timeline,
-                                     data: bytes, validatedRun: validation,
-                                     expectedGeneration: generation)
+            let commit = try? await commitMetadata(
+                snapshot, key: key, kind: .timeline, validatedRun: validation,
+                token: token, replacing: rowExpectation(for: prior)
+            )
+            if commit == .superseded || commit == .generationChanged {
+                throw CancellationError()
             }
             return snapshot
         }
@@ -204,7 +219,12 @@ extension CachedPhotosRepository {
         let id = UUID()
         let validation = validationRun(for: collection)
         let task = Task<[PhotoItem], Error> {
-            let generation = await store.currentGeneration()
+            let token = try await captureMetadataWorkToken(
+                resource: .page(key: key, collection: collection),
+                jobID: id,
+                collection: collection
+            )
+            let prior = try? await store.get(key)
             try await gate.acquire(.metadata, priority: effectivePriority, id: id)
             defer { Task { await gate.release(.metadata) } }
             try Task.checkCancellation()
@@ -212,16 +232,19 @@ extension CachedPhotosRepository {
             let items = try await client.items(in: section, collection: collection)
             try Task.checkCancellation()
             guard validation == validationRun(for: collection),
-                  mutationEpoch == metadata.mutationEpochs[collection, default: 0] else {
+                  mutationEpoch == metadata.mutationEpochs[collection, default: 0],
+                  await metadataTokenIsCurrent(token) else {
                 throw CancellationError()
             }
             let current = favorites.applyingOverrides(items)
-            if let bytes = try? JSONEncoder().encode(current) {
-                try? await store.put(key, kind: .page, data: bytes,
-                                     validatedRun: validation,
-                                     expectedGeneration: generation)
+            let commit = try? await commitMetadata(
+                current, key: key, kind: .page, validatedRun: validation,
+                token: token, replacing: rowExpectation(for: prior)
+            )
+            if commit == .superseded || commit == .generationChanged {
+                throw CancellationError()
             }
-            return favorites.applyingOverrides(current)
+            return current
         }
         metadata.pageJobs[key] = SharedJob(id: id, task: task, subscribers: [subscriber])
         metadata.pageJobEpochs[key] = mutationEpoch
@@ -247,7 +270,7 @@ extension CachedPhotosRepository {
     }
 
     func validationRun(for collection: PhotoCollectionDescriptor) -> String {
-        "\(runID):\(collection.rawValue):\(metadata.mutationEpochs[collection, default: 0])"
+        "\(runID):\(metadata.admissionEpoch):\(collection.rawValue):\(metadata.mutationEpochs[collection, default: 0])"
     }
 
     public func latestTimelineSnapshot(collection: PhotoCollectionDescriptor) -> TimelineSnapshot? {

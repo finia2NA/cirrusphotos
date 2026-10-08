@@ -164,6 +164,7 @@ extension CachedPhotosRepository {
         let id = UUID()
         let identity = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: size)
         let task = Task<ImageResolution, Error> {
+            defer { finishImageJob(key: key, id: id) }
             let generation = await store.currentGeneration()
             try await gate.acquire(.thumbnail, priority: priority, id: id)
             defer { Task { await gate.release(.thumbnail) } }
@@ -201,7 +202,17 @@ extension CachedPhotosRepository {
     private func releaseImage(key: String, subscriber: UUID) {
         guard var job = imageWork.thumbnailJobs[key] else { return }
         job.subscribers.remove(subscriber)
-        if job.subscribers.isEmpty { job.task.cancel(); imageWork.thumbnailJobs.removeValue(forKey: key); cancelIdleLogin() }
+        if job.subscribers.isEmpty && !imageWork.thumbnailFinishWithoutSubscribers.contains(key) {
+            job.task.cancel(); imageWork.thumbnailJobs.removeValue(forKey: key); cancelIdleLogin()
+        }
         else { imageWork.thumbnailJobs[key] = job }
+    }
+
+    private func finishImageJob(key: String, id: UUID) {
+        imageWork.thumbnailFinishWithoutSubscribers.remove(key)
+        guard let job = imageWork.thumbnailJobs[key], job.id == id,
+              job.subscribers.isEmpty else { return }
+        imageWork.thumbnailJobs.removeValue(forKey: key)
+        cancelIdleLogin()
     }
 }

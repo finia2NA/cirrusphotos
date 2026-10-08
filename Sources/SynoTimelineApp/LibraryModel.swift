@@ -27,6 +27,9 @@ final class LibraryModel: ObservableObject {
     /// Pending confirmation for a large selection-favorite action; nil when no confirmation is needed.
     @Published private(set) var pendingFavoriteConfirmation: SelectionFavoriteConfirmation?
     @Published private(set) var browserFavoriteFailure: String?
+    @Published private(set) var metadataInvalidationRevision: UInt64 = 0
+    @Published private(set) var cacheResetInProgress = false
+    @Published private(set) var cacheResetError: String?
     private var browserSelectionStates: [PhotoCollectionDescriptor: BrowserSelectionState] = [:]
     private var browserCommandHandler: ((BrowserSelectionCommand) -> Void)?
     private var browserCommandOwner: UUID?
@@ -80,6 +83,7 @@ final class LibraryModel: ObservableObject {
     private var authenticationTask: Task<Void, Never>?
     private var refreshTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
     private var albumsTask: Task<Void, Never>?
+    private var metadataResetTask: Task<Void, Never>?
     private var albumListRequested = false
     private var openedCollections: Set<PhotoCollectionDescriptor> = []
     private var collectionFetchTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
@@ -152,22 +156,19 @@ final class LibraryModel: ObservableObject {
 
     /// Registers a location-filtered collection for the given records and returns its
     /// descriptor, or nil without a repository.
-    func openMapFilter(records: [MapPhotoRecord]) async -> PhotoCollectionDescriptor? {
+    func openMapFilter(itemIDs: [Int64],
+                       locationRevision: LocationIndexRevision) async -> PhotoCollectionDescriptor? {
         guard let repository else { return nil }
-        let descriptor = PhotoCollectionDescriptor.mapFilter(UUID())
-        let built = DayGroupedTimelineBuilder.build(
-            entries: records.map { DayTimelineEntry(id: $0.id, time: $0.time) },
-            sectionLimit: 250)
         do {
-            try await repository.registerMapFilter(descriptor, source: .personalLibrary,
-                                                   snapshot: built.snapshot,
-                                                   itemIDsBySection: built.itemIDsBySection)
+            let registration = try await repository.registerMapFilter(
+                itemIDs: itemIDs, locationRevision: locationRevision
+            )
+            registerSessionCollection(registration.descriptor, snapshot: registration.snapshot)
+            return registration.descriptor
         } catch {
             collectionErrors[.personalLibrary] = error.localizedDescription
             return nil
         }
-        registerSessionCollection(descriptor, snapshot: built.snapshot)
-        return descriptor
     }
 
     func closeMapFilter(_ collection: PhotoCollectionDescriptor) async {
@@ -393,6 +394,15 @@ final class LibraryModel: ObservableObject {
             }
             guard let repository else { return }
             try await repository.setConfiguredThumbnailSize(thumbnailSize)
+            if metadataResetTask == nil {
+                metadataResetTask = Task { [weak self] in
+                    for await revision in await repository.metadataCacheResets() {
+                        guard !Task.isCancelled else { return }
+                        guard revision > 0 else { continue }
+                        self?.handleMetadataInvalidation(revision)
+                    }
+                }
+            }
             if authenticationTask == nil {
                 authenticationTask = Task { [weak self] in
                     for await status in await repository.authentication() {
@@ -414,15 +424,11 @@ final class LibraryModel: ObservableObject {
             for collection in openedCollections {
                 startCollectionFetchIfNeeded(collection)
             }
-            await withTaskGroup(of: Void.self) { group in
-                for collection in PhotoCollectionDescriptor.allCases {
-                    group.addTask { [weak self] in
-                        for await event in await repository.timeline(collection: collection) {
-                            guard !Task.isCancelled else { return }
-                            await self?.receive(event, collection: collection)
-                        }
-                    }
-                }
+            for collection in PhotoCollectionDescriptor.allCases {
+                startCollectionFetchIfNeeded(collection)
+            }
+            for collection in PhotoCollectionDescriptor.allCases {
+                await collectionFetchTasks[collection]?.value
             }
             await refreshUsage()
         } catch {
@@ -483,11 +489,65 @@ final class LibraryModel: ObservableObject {
     }
 
     func clearCache() async {
-        if let repository {
-            try? await repository.clearCache()
+        guard let repository, !cacheResetInProgress else { return }
+        cacheResetInProgress = true
+        cacheResetError = nil
+        defer { cacheResetInProgress = false }
+        do {
+            try await repository.clearCache()
             DecodedImages.shared.clear()
             await refreshUsage()
+        } catch {
+            cacheResetError = error.localizedDescription
         }
+    }
+
+    func clearMetadataCache() async {
+        guard let repository, !cacheResetInProgress else { return }
+        cacheResetInProgress = true
+        cacheResetError = nil
+        defer { cacheResetInProgress = false }
+        do {
+            try await repository.clearMetadataCache()
+            await refreshUsage()
+        } catch {
+            cacheResetError = error.localizedDescription
+        }
+    }
+
+    private func handleMetadataInvalidation(_ revision: UInt64) {
+        guard revision > metadataInvalidationRevision else { return }
+        albumsTask?.cancel()
+        albumsTask = nil
+        for task in collectionFetchTasks.values { task.cancel() }
+        collectionFetchTasks.removeAll()
+        let affected = Set(snapshots.keys).union(PhotoCollectionDescriptor.allCases)
+        snapshots.removeAll()
+        for collection in affected {
+            snapshotRevisions[collection, default: 0] += 1
+            viewerSnapshotRevisions[collection, default: 0] += 1
+        }
+        timelineVerifications.removeAll()
+        collectionErrors.removeAll()
+        albums = []
+        albumsVerified = false
+        albumListError = nil
+        browserSelectionStates.removeAll()
+        pendingFavoriteConfirmation = nil
+        browserFavoriteFailure = nil
+        browserFavoriteBusy = false
+        metadataInvalidationRevision = revision
+        updateBrowserFavoriteAvailability()
+
+        guard repository != nil else { return }
+        for collection in PhotoCollectionDescriptor.allCases {
+            startCollectionFetchIfNeeded(collection)
+        }
+        for collection in openedCollections where collection.albumID != nil {
+            startCollectionFetchIfNeeded(collection)
+        }
+        if albumListRequested { startAlbumListFetchIfNeeded() }
+        Task { [weak self] in await self?.refreshUsage() }
     }
 }
 

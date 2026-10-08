@@ -27,7 +27,15 @@ struct CacheSettingsView: View {
                 Text("Stored data")
                 Spacer()
                 Text(ByteCountFormatter.string(fromByteCount: library.cacheUsage, countStyle: .file))
+                Button("Clear Metadata Cache") { Task { await library.clearMetadataCache() } }
+                    .disabled(library.cacheResetInProgress)
+                    .help("Remove timelines, loaded sections, album metadata and the map index. Keep thumbnails, previews and originals.")
                 Button("Clear Cache") { Task { await library.clearCache() } }
+                    .disabled(library.cacheResetInProgress)
+            }
+            if library.cacheResetInProgress { ProgressView("Clearing cache…") }
+            if let error = library.cacheResetError {
+                Text(error).foregroundStyle(.red)
             }
         }
         .padding(24)

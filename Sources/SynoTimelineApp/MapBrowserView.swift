@@ -72,6 +72,17 @@ struct MapBrowserView: View {
         switch model.status {
         case .idle, .ready:
             EmptyView()
+        case .cachedUnverified:
+            HStack(spacing: 10) {
+                Label("Showing cached locations; changes are not verified.",
+                      systemImage: "clock.arrow.circlepath")
+                    .font(.callout)
+                Button("Retry") { model.retry() }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .shadow(radius: 4)
         case .building(let scanned, let total):
             HStack(spacing: 8) {
                 ProgressView()

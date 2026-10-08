@@ -10,14 +10,14 @@ extension CachedPhotosRepository {
             producer.task = Task {
                 let key = CacheKey.albumList(namespace: namespace)
                 let validation = albumListValidationRun()
-                let cached = try? await store.get(key)
+                let cached = try? await readCachedMetadata([AlbumSummary].self, key: key)
                 guard !Task.isCancelled else { continuation.finish(); return }
-                let list = cached.flatMap { try? JSONDecoder().decode([AlbumSummary].self, from: $0.data) }
+                let list = cached?.value
                 if let list {
                     metadata.albumListLatest = list
-                    continuation.yield(.value(list, verified: cached?.validatedRun == validation))
+                    continuation.yield(.value(list, verified: cached?.entry.validatedRun == validation))
                 }
-                if cached?.validatedRun == validation, list != nil { continuation.finish(); return }
+                if cached?.entry.validatedRun == validation, list != nil { continuation.finish(); return }
                 do {
                     let requestedValidation = albumListValidationRun()
                     let task = registerAlbumList(subscriber: subscriber)
@@ -49,18 +49,23 @@ extension CachedPhotosRepository {
         let id = UUID()
         let validation = albumListValidationRun()
         let task = Task<[AlbumSummary], Error> {
-            let generation = await store.currentGeneration()
+            let token = try await captureMetadataWorkToken(resource: .albumList, jobID: id)
+            let key = CacheKey.albumList(namespace: namespace)
+            let prior = try? await store.get(key)
             try await gate.acquire(.metadata, priority: .visible, id: id)
             defer { Task { await gate.release(.metadata) } }
             try Task.checkCancellation()
             try await connect()
             let list = try await client.albums()
             try Task.checkCancellation()
-            guard validation == albumListValidationRun() else { throw CancellationError() }
-            if let bytes = try? JSONEncoder().encode(list) {
-                try? await store.put(CacheKey.albumList(namespace: namespace), kind: .albumList,
-                                     data: bytes, validatedRun: validation,
-                                     expectedGeneration: generation)
+            guard validation == albumListValidationRun(),
+                  await metadataTokenIsCurrent(token) else { throw CancellationError() }
+            let commit = try? await commitMetadata(
+                list, key: key, kind: .albumList, validatedRun: validation,
+                token: token, replacing: rowExpectation(for: prior)
+            )
+            if commit == .superseded || commit == .generationChanged {
+                throw CancellationError()
             }
             return list
         }
@@ -80,5 +85,5 @@ extension CachedPhotosRepository {
         }
     }
 
-    func albumListValidationRun() -> String { "\(runID):albums" }
+    func albumListValidationRun() -> String { "\(runID):\(metadata.admissionEpoch):albums" }
 }

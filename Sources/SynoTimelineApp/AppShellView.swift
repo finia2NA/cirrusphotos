@@ -102,6 +102,15 @@ struct AppShellView: View {
         .onChange(of: model.retryRevision) { _, _ in
             viewer?.retry()
         }
+        .onChange(of: model.metadataInvalidationRevision) { _, revision in
+            guard revision > 0 else { return }
+            mapFilterOpenGeneration &+= 1
+            openedMapFilter = nil
+            viewer?.invalidateForNewIndex()
+            mapModel.invalidateMetadata(restart: selectedDestination == .map)
+            infoPanel.clearBrowserContext()
+            updateInfoPanelContext()
+        }
         .onChange(of: viewerSnapshotRevision) { _, revision in
             if let viewer, viewer.snapshotRevision != revision { viewer.invalidateForNewIndex() }
         }
@@ -248,8 +257,7 @@ struct AppShellView: View {
     /// Opens a map pin or cluster in the filtered timeline. The filter is session-only
     /// and is never persisted for restoration.
     private func openMapGroup(_ memberIDs: [Int64]) {
-        let records = mapModel.records(for: memberIDs)
-        guard !records.isEmpty else { return }
+        guard let selection = mapModel.filterSelection(for: memberIDs) else { return }
         mapFilterOpenGeneration &+= 1
         let generation = mapFilterOpenGeneration
         Task { @MainActor in
@@ -258,7 +266,9 @@ struct AppShellView: View {
                 await model.closeMapFilter(previous)
             }
             guard mapFilterOpenGeneration == generation else { return }
-            guard let descriptor = await model.openMapFilter(records: records) else { return }
+            guard let descriptor = await model.openMapFilter(
+                itemIDs: selection.ids, locationRevision: selection.revision
+            ) else { return }
             guard mapFilterOpenGeneration == generation else {
                 await model.closeMapFilter(descriptor)
                 return

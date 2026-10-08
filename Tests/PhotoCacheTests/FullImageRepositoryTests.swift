@@ -13,6 +13,7 @@ private actor FullImageTransport: PhotosTransport {
     private(set) var validators: [(String?, String?)] = []
     private(set) var cancelled: Set<Int64> = []
     private var released: Set<Int64> = []
+    private var callWaiters: [Int64: [CheckedContinuation<Void, Never>]] = [:]
 
     func configure(fail: Bool = false, block: Bool = false, data: Data = Data([1, 2, 3]),
                    etag: String? = "revision", notModified: Bool = false) {
@@ -24,9 +25,14 @@ private actor FullImageTransport: PhotosTransport {
     }
 
     func release(_ unitID: Int64) { released.insert(unitID) }
+    func waitUntilCalled(_ unitID: Int64) async {
+        if calls.contains(unitID) { return }
+        await withCheckedContinuation { callWaiters[unitID, default: []].append($0) }
+    }
     func fullImage(_ resource: FullImageResource,
                    etag: String?, lastModified: String?) async throws -> FullImageResponse {
         calls.append(resource.unitID)
+        for waiter in callWaiters.removeValue(forKey: resource.unitID) ?? [] { waiter.resume() }
         validators.append((etag, lastModified))
         if shouldFail { throw TestFailure("Original image unavailable") }
         do {
@@ -104,6 +110,30 @@ final class FullImageRepositoryTests: XCTestCase {
         if case .value(let cached, false) = offlineEvents[0] { XCTAssertEqual(cached, Data([9, 8, 7])) }
         else { XCTFail("Offline access did not yield the cached original first") }
         if case .failure = offlineEvents[1] {} else { XCTFail("Expected the offline validation failure") }
+    }
+
+    func testMetadataResetLetsAdmittedOriginalFinishAfterLastSubscriberLeaves() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let image = resource(15)
+        let transport = FullImageTransport()
+        await transport.configure(block: true, data: Data([8, 6, 7, 5, 3, 0, 9]))
+        let repository = try repository(root: cacheRoot, transport: transport)
+
+        let first = consume(repository, image)
+        await transport.waitUntilCalled(image.unitID)
+        try await repository.clearMetadataCache()
+        first.cancel()
+
+        await transport.release(image.unitID)
+        let secondEvents = await consume(repository, image).value
+        guard case .value(let bytes, true) = secondEvents.last else {
+            return XCTFail("The admitted original did not survive metadata-only invalidation")
+        }
+        XCTAssertEqual(bytes, Data([8, 6, 7, 5, 3, 0, 9]))
+        let calls = await transport.calls
+        XCTAssertEqual(calls, [15], "The surviving transfer should be joined or reused, not restarted")
+        let cancelled = await transport.cancelled
+        XCTAssertFalse(cancelled.contains(15))
     }
 
     func testCoalescingSpeculativeLimitPromotionAndCancellation() async throws {

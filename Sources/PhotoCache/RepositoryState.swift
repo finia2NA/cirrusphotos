@@ -33,6 +33,11 @@ struct RepositoryAuthenticationState {
 }
 
 struct RepositoryMetadataWork {
+    var admissionEpoch: UInt64 = 0
+    var resetInProgress = false
+    var successfulResetRevision: UInt64 = 0
+    var resetObservers: [UUID: AsyncStream<UInt64>.Continuation] = [:]
+    var resetJob: MetadataResetJob?
     var timelineJobs: [PhotoCollectionDescriptor: SharedJob<TimelineSnapshot>] = [:]
     var latestTimelines: [PhotoCollectionDescriptor: TimelineSnapshot] = [:]
     var initialSubscribers: Set<UUID> = []
@@ -45,6 +50,8 @@ struct RepositoryMetadataWork {
     var albumListLatest: [AlbumSummary]?
     var locationIndexWork: SharedJob<[PhotoLocationRecord]>?
     var locationIndexObservers: [UUID: AsyncStream<LocationIndexEvent>.Continuation] = [:]
+    var locationRecords: [Int64: PhotoLocationRecord] = [:]
+    var locationRevision: UInt64 = 0
     var mapFilters: [UUID: MapFilterState] = [:]
     var mapFilterPages: [String: [PhotoItem]] = [:]
     var mapFilterPageOrder: [String] = []
@@ -55,11 +62,24 @@ struct RepositoryMetadataWork {
     }
 }
 
+enum MetadataResetScope: Sendable {
+    case metadata
+    case all
+}
+
+struct MetadataResetJob {
+    let id: UUID
+    let scope: MetadataResetScope
+    let task: Task<UInt64, Error>
+}
+
 /// Session-only state behind one `.mapFilter` collection.
 struct MapFilterState {
     /// Distinguishes a registration from a later filter that happens to reuse the
     /// same descriptor. Suspended page assembly must never publish into the latter.
     let registrationID: UUID
+    let metadataEpoch: UInt64
+    let locationRevision: UInt64?
     let source: PhotoCollectionDescriptor
     let snapshot: TimelineSnapshot
     let itemIDsBySection: [[Int64]]
@@ -69,6 +89,8 @@ struct MapFilterState {
 struct RepositoryImageWork {
     var thumbnailJobs: [String: SharedJob<ImageResolution>] = [:]
     var fullImageJobs: [String: SharedJob<FullImageResolution>] = [:]
+    var thumbnailFinishWithoutSubscribers: Set<String> = []
+    var fullImageFinishWithoutSubscribers: Set<String> = []
 
     var hasDemand: Bool { !thumbnailJobs.isEmpty || !fullImageJobs.isEmpty }
 }

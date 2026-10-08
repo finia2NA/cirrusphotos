@@ -17,11 +17,24 @@ public struct PhotoLocationRecord: Codable, Sendable, Equatable {
     }
 }
 
+/// Opaque dependency identity for a published location record set. Consumers may
+/// only return it when registering a derived Map collection.
+public struct LocationIndexRevision: Sendable, Equatable, Hashable {
+    let rawValue: UInt64
+
+    init(_ rawValue: UInt64) { self.rawValue = rawValue }
+}
+
+public struct LocationIndexValue: Sendable, Equatable {
+    public let records: [PhotoLocationRecord]
+    public let revision: LocationIndexRevision
+}
+
 /// Progress and results of the shared whole-library location scan.
 public enum LocationIndexEvent: Sendable {
-    case cached([PhotoLocationRecord])
+    case cached(LocationIndexValue)
     case progress(scanned: Int, total: Int?)
-    case completed([PhotoLocationRecord], verified: Bool)
+    case completed(LocationIndexValue, verified: Bool)
     case failure(String)
 }
 
@@ -53,12 +66,11 @@ extension CachedPhotosRepository {
             producer.task = Task {
                 metadata.locationIndexObservers[subscriber] = continuation
                 let key = CacheKey.locationIndex(namespace: namespace)
-                let cachedEntry = try? await store.get(key)
-                let cachedPayload = cachedEntry
-                    .flatMap { try? JSONDecoder().decode(LocationIndexPayload.self, from: $0.data) }
-                    .flatMap { $0.schemaVersion == LocationIndexPayload.currentSchemaVersion ? $0 : nil }
+                let cached = try? await readCachedMetadata(LocationIndexPayload.self, key: key)
+                let cachedPayload = cached?.value.schemaVersion == LocationIndexPayload.currentSchemaVersion
+                    ? cached?.value : nil
                 if let cachedPayload {
-                    continuation.yield(.cached(cachedPayload.records))
+                    continuation.yield(.cached(acceptLocationRecords(cachedPayload.records)))
                 }
                 // A cached timeline from an earlier run is useful for immediate UI,
                 // but it cannot validate the location index until this run has checked
@@ -77,7 +89,8 @@ extension CachedPhotosRepository {
                     return
                 }
                 if fingerprint == cachedPayload?.sourceTimelineFingerprint {
-                    continuation.yield(.completed(cachedPayload?.records ?? [], verified: true))
+                    let value = acceptLocationRecords(cachedPayload?.records ?? [])
+                    continuation.yield(.completed(value, verified: true))
                     removeLocationIndexSubscriber(subscriber)
                     continuation.finish()
                     return
@@ -85,7 +98,7 @@ extension CachedPhotosRepository {
                 let task = registerLocationIndexScan(fingerprint: fingerprint, subscriber: subscriber)
                 do {
                     let records = try await task.value
-                    continuation.yield(.completed(records, verified: true))
+                    continuation.yield(.completed(acceptLocationRecords(records), verified: true))
                 } catch {
                     if !Task.isCancelled {
                         let message = error is CancellationError
@@ -130,17 +143,21 @@ extension CachedPhotosRepository {
         }
         let id = UUID()
         let task = Task<[PhotoLocationRecord], Error> {
-            let generation = await store.currentGeneration()
             defer { finishLocationIndexScan(id: id) }
+            let token = try await captureMetadataWorkToken(resource: .locationIndex, jobID: id)
+            let key = CacheKey.locationIndex(namespace: namespace)
+            let prior = try? await store.get(key)
             return try await runLocationIndexScan(sourceFingerprint: fingerprint,
-                                                  generation: generation)
+                                                  token: token,
+                                                  replacing: rowExpectation(for: prior))
         }
         metadata.locationIndexWork = SharedJob(id: id, task: task, subscribers: [subscriber])
         return task
     }
 
     private func runLocationIndexScan(sourceFingerprint: String,
-                                      generation: Int) async throws -> [PhotoLocationRecord] {
+                                      token: MetadataWorkToken,
+                                      replacing expectation: MetadataRowExpectation) async throws -> [PhotoLocationRecord] {
         let total = metadata.latestTimelines[.personalLibrary].map {
             $0.sections.reduce(0) { $0 + max(0, $1.limit) }
         }
@@ -159,7 +176,7 @@ extension CachedPhotosRepository {
         while let pageTask = current {
             let items = try await pageTask.value
             pages += 1
-            guard await store.currentGeneration() == generation else {
+            guard await metadataTokenIsCurrent(token) else {
                 next?.cancel()
                 throw CancellationError()
             }
@@ -188,10 +205,16 @@ extension CachedPhotosRepository {
         let payload = LocationIndexPayload(sourceTimelineFingerprint: sourceFingerprint,
                                            scannedItemCount: scanned,
                                            records: records)
-        if let bytes = try? JSONEncoder().encode(payload) {
-            try? await store.put(CacheKey.locationIndex(namespace: namespace), kind: .locationIndex,
-                                 data: bytes, validatedRun: nil,
-                                 expectedGeneration: generation)
+        let commit = try? await commitMetadata(
+            payload,
+            key: CacheKey.locationIndex(namespace: namespace),
+            kind: .locationIndex,
+            validatedRun: nil,
+            token: token,
+            replacing: expectation
+        )
+        if commit == .superseded || commit == .generationChanged {
+            throw CancellationError()
         }
         return records
     }
@@ -222,5 +245,21 @@ extension CachedPhotosRepository {
     private func removeLocationIndexSubscriber(_ id: UUID) {
         metadata.locationIndexObservers.removeValue(forKey: id)
         metadata.locationIndexWork?.subscribers.remove(id)
+    }
+
+    private func acceptLocationRecords(_ records: [PhotoLocationRecord]) -> LocationIndexValue {
+        let previous = metadata.locationRecords
+        let next = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        let semanticChanged = previous.count != next.count || next.contains { id, record in
+            guard let old = previous[id] else { return true }
+            return old.time != record.time || old.coordinate != record.coordinate
+        }
+        metadata.locationRecords = next
+        if semanticChanged {
+            metadata.locationRevision &+= 1
+            invalidateMapFiltersForLocationChange()
+        }
+        return LocationIndexValue(records: records,
+                                  revision: LocationIndexRevision(metadata.locationRevision))
     }
 }

@@ -56,6 +56,7 @@ extension CachedPhotosRepository {
         }
         let id = UUID()
         let task = Task<FullImageResolution, Error> {
+            defer { finishFullImageJob(key: key, id: id) }
             let generation = await store.currentGeneration()
             try await fullImageGate.acquire(priority: priority, id: id)
             do {
@@ -93,7 +94,7 @@ extension CachedPhotosRepository {
     private func releaseFullImage(key: String, subscriber: UUID) {
         guard var job = imageWork.fullImageJobs[key] else { return }
         job.subscribers.remove(subscriber)
-        if job.subscribers.isEmpty {
+        if job.subscribers.isEmpty && !imageWork.fullImageFinishWithoutSubscribers.contains(key) {
             job.task.cancel()
             imageWork.fullImageJobs.removeValue(forKey: key)
             Task { await fullImageGate.release(job.id) }
@@ -101,5 +102,13 @@ extension CachedPhotosRepository {
         } else {
             imageWork.fullImageJobs[key] = job
         }
+    }
+
+    private func finishFullImageJob(key: String, id: UUID) {
+        imageWork.fullImageFinishWithoutSubscribers.remove(key)
+        guard let job = imageWork.fullImageJobs[key], job.id == id,
+              job.subscribers.isEmpty else { return }
+        imageWork.fullImageJobs.removeValue(forKey: key)
+        cancelIdleLogin()
     }
 }

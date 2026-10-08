@@ -100,7 +100,7 @@ final class LocationIndexTests: XCTestCase {
     }
 
     private func completedRecords(_ events: [LocationIndexEvent]) -> [PhotoLocationRecord] {
-        for case .completed(let records, _) in events { return records }
+        for case .completed(let value, _) in events { return value.records }
         return []
     }
 
@@ -186,11 +186,11 @@ final class LocationIndexTests: XCTestCase {
         var completed = false
         for await event in await second.locationIndex() {
             switch event {
-            case .cached(let records): cached = records
-            case .completed(let records, let verified):
+            case .cached(let value): cached = value.records
+            case .completed(let value, let verified):
                 completed = true
                 XCTAssertTrue(verified)
-                XCTAssertEqual(records.map(\.id), [1])
+                XCTAssertEqual(value.records.map(\.id), [1])
             case .progress, .failure:
                 XCTFail("A verified cached index must not scan")
             }
@@ -305,7 +305,7 @@ final class LocationIndexTests: XCTestCase {
         var completed = false
         for await event in await second.locationIndex() {
             switch event {
-            case .cached(let records): cached = records
+            case .cached(let value): cached = value.records
             case .failure(let message): failure = message
             case .completed: completed = true
             case .progress: break
