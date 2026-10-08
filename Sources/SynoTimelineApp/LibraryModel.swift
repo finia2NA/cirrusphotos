@@ -20,6 +20,7 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var retryRevision = 0
     @Published private(set) var canToggleViewerFavorite = false
     @Published private(set) var canCloseViewer = false
+    @Published private(set) var canNavigateBack = false
     @Published private(set) var canOpenSelectedPhoto = false
     @Published private(set) var browserCommandsActive = false
     /// Whether the browser selection-favorite action may begin (selection non-empty, no active write).
@@ -38,6 +39,7 @@ final class LibraryModel: ObservableObject {
     private var browserCommandSnapshot: BrowserCommandSnapshot = .inactive
     private weak var activeViewer: PhotoViewerPresentation?
     private var viewerCloseHandler: (() -> Void)?
+    private var backHandler: (() -> Void)?
     private var thumbnailPolicyRevision: UInt64 = 0
     /// True while a selection-favorite write (or resolution) is in progress.
     private(set) var browserFavoriteBusy = false
@@ -268,6 +270,16 @@ final class LibraryModel: ObservableObject {
         browserCommandHandler?(command)
     }
 
+    func installBackHandler(_ handler: (() -> Void)?) {
+        backHandler = handler
+        if canNavigateBack != (handler != nil) { canNavigateBack = handler != nil }
+    }
+
+    func navigateBack() {
+        guard canNavigateBack else { return }
+        backHandler?()
+    }
+
     func setActiveViewer(_ viewer: PhotoViewerPresentation?) {
         activeViewer = viewer
         if viewer == nil { installViewerCloseHandler(nil) }
@@ -322,6 +334,8 @@ final class LibraryModel: ObservableObject {
             updateBrowserFavoriteAvailability()
         }
         guard let timelineSnapshot = snapshots[snapshot.collection] else { return }
+        let selectedEntireCollection = !snapshot.selectedOrdinals.isEmpty &&
+            snapshot.selectedOrdinals.count == LibraryIndex(snapshot: timelineSnapshot).totalCount
         let resolver = SelectionFavoriteResolver(repository: repository)
         guard let action = await resolver.resolve(
             collection: snapshot.collection,
@@ -336,7 +350,7 @@ final class LibraryModel: ObservableObject {
 
         guard !action.affectedIDs.isEmpty else { return }
 
-        if action.affectedIDs.count > 5 {
+        if selectedEntireCollection || action.affectedIDs.count > 5 {
             let confirmation = SelectionFavoriteConfirmation(action: action)
             pendingFavoriteConfirmation = confirmation
             return

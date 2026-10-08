@@ -16,9 +16,9 @@ The native split-view sidebar contains Library, Favorites, Map, and Albums desti
 
 - Personal Library and Favorites share a virtualized, day-grouped fixed grid with 3–10 square slots per row and aspect-fitted thumbnails.
 - The compact day navigator gives equal space to each populated day and appears near the pointer or with keyboard focus.
-- Click, Shift-click, marquee, Shift-marquee, and menu-backed arrow commands select across day and page boundaries.
-- Favorites appear as heart badges. The toolbar and Library menu `.` command toggle the active viewer photo or browser selection, with confirmation when more than five items are affected.
-- Albums shows read-only Personal Space album cards with cover, name, and item count. Opening an album reuses the shared browser with collection-scoped restoration.
+- Click, Shift-click, Shift-Option-click range selection, marquee, Shift-marquee, Cmd+A, and menu-backed arrow commands select across day and page boundaries.
+- Favorites appear as heart badges. The toolbar and Library menu `.` command toggle the active viewer photo or browser selection, with confirmation when more than five items are affected or the entire collection is selected.
+- Albums shows read-only Personal Space album cards with cover, name, and item count. Opening an album reuses the shared browser with collection-scoped restoration; Escape returns from an opened album or map result just as its Back button does.
 - Album creation, rename, deletion, membership changes, and Shared Space browsing are not implemented.
 
 ### Map
@@ -31,7 +31,7 @@ Location labels and antimeridian-specific clustering are not implemented.
 
 Space or double-click opens one photo in the same window. Arrow navigation, zoom, pan, thumbnail-first loading, cached large previews, originals, filename, capture-local date, and favorite mutation are supported. Space, Escape, or Back closes the viewer. Live Photos currently show their still image; video playback is deferred.
 
-The Cmd+I Info utility panel follows the active viewer item or browser selection. It shows selection totals and date range, resolves aggregate size and media counts, and shows single-item filename, capture date, camera/exposure details, dimensions, size, format, and available location context. It is transient and excluded from Mission Control and the normal window cycle.
+The Cmd+I Info utility panel follows the active viewer item or browser selection. It shows selection totals and date range, resolves aggregate size and media counts, and shows single-item filename, copyable item ID and available Synology folder path, capture date, camera/exposure details, dimensions, size, format, and available location context. It is transient and excluded from Mission Control and the normal window cycle.
 
 ## Cache and network behavior
 

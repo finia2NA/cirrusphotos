@@ -833,7 +833,7 @@ extension PhotoViewerAssetLifecycleTests {
     func testLivePhotoLoadsStillImageInsteadOfReportingUnsupportedVideo() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let livePhoto = try JSONDecoder().decode(PhotoItem.self, from: Data("""
-        {"id":15,"filename":"15.HEIC","time":1711929600,"type":"live","live_type":"photo","additional":{"thumbnail":{"unit_id":15,"cache_key":"key-15","sm":"ready","m":"ready","xl":"ready"}}}
+        {"id":15,"filename":"15.HEIC","time":1711929600,"type":"live","live_type":"live","additional":{"thumbnail":{"unit_id":15,"cache_key":"key-15","sm":"ready","m":"ready","xl":"ready"}}}
         """.utf8))
         let transport = ViewerTransport()
         await transport.configure(pages: [0: [livePhoto]])

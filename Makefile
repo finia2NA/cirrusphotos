@@ -7,6 +7,7 @@ start:
 
 debug:
 	./scripts/run.sh --build-only
+	open -na Console
 	./.build/Cirrus\ Photos.app/Contents/MacOS/SynoTimeline
 
 clean:

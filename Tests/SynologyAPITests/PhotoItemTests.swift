@@ -65,6 +65,20 @@ final class PhotoItemTests: XCTestCase {
         XCTAssertTrue(restored.hasDisplayableStillImage)
     }
 
+    func testLiveContainerProvidesFullImageResourceWhenLiveTypeIsLive() throws {
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":14,"filename":"IMG_0014.HEIC","time":1700000000,"type":"live","live_type":"live","additional":{"thumbnail":{"unit_id":24,"cache_key":"24_revision","sm":"ready"}}}
+        """.utf8))
+
+        XCTAssertEqual(item.liveType, "live")
+        XCTAssertTrue(item.hasDisplayableStillImage)
+        XCTAssertFalse(item.isVideo)
+        let resource = try XCTUnwrap(item.fullImageResource)
+        XCTAssertEqual(resource.unitID, 24)
+        XCTAssertEqual(resource.cacheKey, "24_revision")
+        XCTAssertEqual(resource.filename, "IMG_0014.HEIC")
+    }
+
     func testStandaloneVideoDoesNotProvideFullImageResource() throws {
         let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
         {"id":13,"filename":"clip.mov","time":1700000000,"type":"video","additional":{"thumbnail":{"unit_id":23,"cache_key":"23_revision","sm":"ready"}}}

@@ -44,6 +44,7 @@ final class LibraryInputRoutingTests: XCTestCase {
             switch command {
             case .move(.left, false): received.append("left")
             case .move(.down, true): received.append("shift-down")
+            case .selectAll: received.append("select-all")
             case .openSelected: received.append("open")
             default: received.append("other")
             }
@@ -51,9 +52,10 @@ final class LibraryInputRoutingTests: XCTestCase {
         document.keyDown(with: try event(keyCode: 123))
         document.keyDown(with: try event(keyCode: 125, modifiers: .shift))
         document.keyDown(with: try event(keyCode: 49))
+        document.keyDown(with: try event(keyCode: 0, modifiers: .command))
         document.keyDown(with: try event(keyCode: 123, modifiers: .option))
         document.keyDown(with: try event(keyCode: 49, modifiers: .control))
-        XCTAssertEqual(received, ["left", "shift-down", "open"])
+        XCTAssertEqual(received, ["left", "shift-down", "open", "select-all"])
     }
 
     @MainActor
@@ -140,6 +142,30 @@ final class LibraryInputRoutingTests: XCTestCase {
         XCTAssertEqual(closes, 1)
         model.installViewerCloseHandler(nil)
         XCTAssertFalse(model.canCloseViewer)
+    }
+
+    @MainActor
+    func testSharedBackCommandUsesTheCurrentlyInstalledPageHandler() {
+        let model = LibraryModel()
+        var destinations: [String] = []
+        XCTAssertFalse(model.canNavigateBack)
+        model.navigateBack()
+        model.installBackHandler { destinations.append("album") }
+        XCTAssertTrue(model.canNavigateBack)
+        model.navigateBack()
+        model.installBackHandler { destinations.append("map") }
+        model.navigateBack()
+        model.installBackHandler(nil)
+        model.navigateBack()
+        XCTAssertEqual(destinations, ["album", "map"])
+        XCTAssertFalse(model.canNavigateBack)
+    }
+
+    @MainActor
+    func testCommandAHasASelectionCommandAndRejectsExtraModifiers() throws {
+        XCTAssertNotNil(try event(keyCode: 0, modifiers: .command).browserSelectionCommand)
+        XCTAssertNil(try event(keyCode: 0, modifiers: [.command, .shift]).browserSelectionCommand)
+        XCTAssertNil(try event(keyCode: 0, modifiers: [.command, .option]).browserSelectionCommand)
     }
 
     @MainActor

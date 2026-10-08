@@ -14,13 +14,13 @@ This builds and opens a local `.app` inside the ignored `.build` directory. Pass
 swift run SynoTimeline
 ```
 
-To build the app bundle and run it in the foreground with debug output visible in the terminal, use:
+To build the app bundle, open macOS Console, and run the app in the foreground, use:
 
 ```sh
 make debug
 ```
 
-Press Control-C in that terminal to stop the app. `make start` builds and opens the app normally without attaching its output to the terminal.
+In Console, use `s:local.cirrus.syno-timeline` as a subsystem search and save it for reuse. Its category column distinguishes viewer asset coordination, original repository work, original transport, and decoding; those categories can be added to narrower Console filters. Press Control-C in the terminal to stop the app. `make start` builds and opens the app normally without opening Console.
 
 To remove build artifacts so the next `make` or `make debug` performs a clean build, use:
 

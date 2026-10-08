@@ -77,4 +77,27 @@ final class LibrarySelectionTests: XCTestCase {
         selection.bind(to: "b")
         XCTAssertTrue(selection.indexes.isEmpty)
     }
+
+    func testRangeClickUsesClosestSelectionAndKeepsExistingItems() {
+        var selection = LibrarySelection(); selection.bind(to: "a")
+        selection.replace(with: IndexSet([2, 10, 20]))
+        selection.addRangeFromClosestSelection(to: 7)
+        XCTAssertEqual(selection.indexes, IndexSet([2, 7, 8, 9, 10, 20]))
+
+        selection.replace(with: IndexSet([2, 10]))
+        selection.addRangeFromClosestSelection(to: 6)
+        XCTAssertEqual(selection.indexes, IndexSet([2, 3, 4, 5, 6, 10]))
+    }
+
+    func testRangeClickWithoutAnchorSelectsTargetAndSelectAllUsesCompactRange() {
+        var selection = LibrarySelection(); selection.bind(to: "a")
+        selection.addRangeFromClosestSelection(to: 12)
+        XCTAssertEqual(selection.indexes, IndexSet(integer: 12))
+
+        selection.selectAll(count: 1_000_000)
+        XCTAssertEqual(selection.count, 1_000_000)
+        XCTAssertEqual(selection.indexes.rangeView.count, 1)
+        selection.selectAll(count: 0)
+        XCTAssertTrue(selection.indexes.isEmpty)
+    }
 }

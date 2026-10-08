@@ -24,6 +24,9 @@ extension PhotoViewerSession {
                                request: expensive, allowNetwork: false)
             }
         } else {
+            SynologyDiagnostics.viewer.error(
+                "Preview unavailable before request item_id=\(item.id, privacy: .public) type=\(item.type, privacy: .public) live_type=\(item.liveType ?? "nil", privacy: .public) has_additional=\(item.additional != nil, privacy: .public)"
+            )
             images.thumbnailStatus = .unsupported("A preview is unavailable for this item.")
         }
 
@@ -33,9 +36,15 @@ extension PhotoViewerSession {
             resource = nil
         } else if let available = item.fullImageResource {
             resource = available
+            SynologyDiagnostics.viewer.debug(
+                "Full-size resource admitted item_id=\(item.id, privacy: .public) unit_id=\(available.unitID, privacy: .public) network_allowed=\(network, privacy: .public)"
+            )
             // Read a cached original immediately without authorizing a network transfer.
             startFullImage(resource: available, allowNetwork: false)
         } else {
+            SynologyDiagnostics.viewer.error(
+                "Full-size image unavailable before request item_id=\(item.id, privacy: .public) type=\(item.type, privacy: .public) live_type=\(item.liveType ?? "nil", privacy: .public) has_additional=\(item.additional != nil, privacy: .public) has_thumbnail=\(item.additional?.thumbnail != nil, privacy: .public)"
+            )
             images.fullImageStatus = .unsupported("A full-size image is unavailable for this item.")
             resource = nil
         }
@@ -157,6 +166,9 @@ extension PhotoViewerSession {
     }
 
     func startFullImage(resource: FullImageResource, allowNetwork: Bool) {
+        SynologyDiagnostics.viewer.debug(
+            "Starting full-size subscription item_id=\(self.currentItem?.id ?? -1, privacy: .public) unit_id=\(resource.unitID, privacy: .public) network_allowed=\(allowNetwork, privacy: .public)"
+        )
         let key = Self.resourceKey(resource)
         if let prefetched = images.fullJobs.removeValue(forKey: key) {
             images.fullTask?.cancel()
@@ -217,10 +229,16 @@ extension PhotoViewerSession {
               currentItem?.fullImageResource.map(Self.resourceKey) == Self.resourceKey(resource) else { return }
         switch event {
         case .value(let data, let verified):
+            SynologyDiagnostics.viewer.info(
+                "Full-size bytes received item_id=\(itemID ?? -1, privacy: .public) unit_id=\(resource.unitID, privacy: .public) bytes=\(data.count, privacy: .public) verified=\(verified, privacy: .public)"
+            )
             images.fullImageData = data
             images.fullImageStatus = .ready(verified: verified, validationFailure: nil)
             enablePrefetchAfterCurrentSuccess()
         case .failure(let message):
+            SynologyDiagnostics.viewer.error(
+                "Full-size subscription failed item_id=\(itemID ?? -1, privacy: .public) unit_id=\(resource.unitID, privacy: .public) error=\(message, privacy: .public)"
+            )
             if images.fullImageData != nil {
                 images.fullImageStatus = .ready(verified: false, validationFailure: message)
             } else {

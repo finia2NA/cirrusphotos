@@ -6,6 +6,7 @@ import TimelineCore
 
 enum BrowserSelectionCommand {
     case move(LibrarySelectionDirection, extending: Bool)
+    case selectAll
     case openSelected
     case toggleFavorite
     case endExtension
@@ -280,7 +281,7 @@ final class FlippedDocumentView: NSView {
     private var downPoint: CGPoint?
 
     enum InteractionPhase {
-        case down(CGPoint, clickCount: Int, shift: Bool)
+        case down(CGPoint, clickCount: Int, shift: Bool, option: Bool)
         case drag(CGPoint)
         case up(CGPoint)
     }
@@ -290,7 +291,8 @@ final class FlippedDocumentView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         downPoint = point
         interaction?(.down(point, clickCount: event.clickCount,
-                           shift: event.modifierFlags.contains(.shift)))
+                           shift: event.modifierFlags.contains(.shift),
+                           option: event.modifierFlags.contains(.option)))
     }
     override func mouseDragged(with event: NSEvent) {
         interaction?(.drag(convert(event.locationInWindow, from: nil)))
@@ -328,6 +330,8 @@ final class FlippedDocumentView: NSView {
 
 extension NSEvent {
     var browserSelectionCommand: BrowserSelectionCommand? {
+        let relevant = modifierFlags.intersection([.command, .option, .control, .shift])
+        if keyCode == 0, relevant == .command { return .selectAll }
         let disallowed = modifierFlags.intersection([.command, .option, .control])
         guard disallowed.isEmpty else { return nil }
         switch keyCode {
@@ -597,6 +601,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private let commandOwner = UUID()
         private var pointer = BrowserPointerInteraction()
         private var pointerShift = false
+        private var pointerOption = false
         private var marqueeSelection: BrowserMarqueeSelection?
         private var autoscrollTask: Task<Void, Never>?
         private var pendingOpen: BrowserPendingOpen?
@@ -1031,6 +1036,10 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             case .openSelected:
                 guard selection.count == 1, let ordinal = selection.first else { return }
                 open(ordinal: ordinal)
+            case .selectAll:
+                guard let index else { return }
+                selection.selectAll(count: index.totalCount)
+                publishSelection()
             case .toggleFavorite:
                 break  // Routed through LibraryModel; the browser handler is not invoked for this.
             case .endExtension:
@@ -1042,9 +1051,9 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         func interact(_ phase: FlippedDocumentView.InteractionPhase) {
             guard let scroll, let geometry else { return }
             switch phase {
-            case .down(let point, let clickCount, let shift):
+            case .down(let point, let clickCount, let shift, let option):
                 (scroll as? TimelineScrollView)?.focusTimeline()
-                pointer.begin(at: point); pointerShift = shift
+                pointer.begin(at: point); pointerShift = shift; pointerOption = option
                 marqueeSelection = BrowserMarqueeSelection(baseline: selection.indexes, toggles: shift)
                 if clickCount >= 2, let ordinal = geometry.ordinal(at: point) {
                     selection.replace(with: ordinal)
@@ -1062,7 +1071,13 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 if let rectangle = pointer.finish(at: point) { updateMarquee(rectangle, geometry: geometry) }
                 else {
                     if let ordinal = geometry.ordinal(at: point) {
-                        if pointerShift { selection.add(ordinal) } else { selection.replace(with: ordinal) }
+                        if pointerShift && pointerOption {
+                            selection.addRangeFromClosestSelection(to: ordinal)
+                        } else if pointerShift {
+                            selection.add(ordinal)
+                        } else {
+                            selection.replace(with: ordinal)
+                        }
                     } else if !pointerShift { selection.replace(with: nil) }
                     publishSelection()
                 }
@@ -1199,6 +1214,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
 
         private func cancelPointerInteraction() {
             pointer.cancel()
+            pointerShift = false
+            pointerOption = false
             marqueeSelection = nil
             autoscrollTask?.cancel(); autoscrollTask = nil
             document?.marquee = nil

@@ -11,10 +11,33 @@ extension CachedPhotosRepository {
         return AsyncStream(bufferingPolicy: .bufferingNewest(3)) { continuation in
             producer.task = Task {
                 let key = CacheKey.fullImage(namespace: namespace, resource: resource)
-                let cached = try? await store.get(key)
+                let cached: CacheEntry?
+                do {
+                    cached = try await store.get(key)
+                } catch {
+                    cached = nil
+                    SynologyDiagnostics.originals.error(
+                        "Original cache read failed unit_id=\(resource.unitID, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                    )
+                }
                 guard !Task.isCancelled else { continuation.finish(); return }
-                if let cached { continuation.yield(.value(cached.data, verified: cached.validatedRun == runID)) }
-                guard allowNetwork && cached?.validatedRun != runID else { continuation.finish(); return }
+                if let cached {
+                    SynologyDiagnostics.originals.debug(
+                        "Original cache hit unit_id=\(resource.unitID, privacy: .public) bytes=\(cached.data.count, privacy: .public) validated_this_run=\(cached.validatedRun == self.runID, privacy: .public)"
+                    )
+                    continuation.yield(.value(cached.data, verified: cached.validatedRun == runID))
+                } else {
+                    SynologyDiagnostics.originals.debug(
+                        "Original cache miss unit_id=\(resource.unitID, privacy: .public)"
+                    )
+                }
+                guard allowNetwork && cached?.validatedRun != runID else {
+                    SynologyDiagnostics.originals.debug(
+                        "Original network request skipped unit_id=\(resource.unitID, privacy: .public) network_allowed=\(allowNetwork, privacy: .public) already_validated=\(cached?.validatedRun == self.runID, privacy: .public)"
+                    )
+                    continuation.finish()
+                    return
+                }
                 do {
                     let task = registerFullImage(resource, key: key, subscriber: subscriber,
                                                  priority: priority)
@@ -24,7 +47,14 @@ extension CachedPhotosRepository {
                 } catch {
                     if !Task.isCancelled && !(error is CancellationError) &&
                         !(error is NetworkGateError && priority == .prefetch) {
+                        SynologyDiagnostics.originals.error(
+                            "Original request failed unit_id=\(resource.unitID, privacy: .public) priority=\(String(describing: priority), privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                        )
                         continuation.yield(.failure(error.localizedDescription))
+                    } else if error is CancellationError || Task.isCancelled {
+                        SynologyDiagnostics.originals.debug(
+                            "Original request cancelled unit_id=\(resource.unitID, privacy: .public)"
+                        )
                     }
                 }
                 continuation.finish()
@@ -63,6 +93,9 @@ extension CachedPhotosRepository {
                 try Task.checkCancellation()
                 try await connect()
                 let prior = try? await store.get(key)
+                SynologyDiagnostics.originals.info(
+                    "Downloading or validating original unit_id=\(resource.unitID, privacy: .public) priority=\(String(describing: priority), privacy: .public) has_etag=\(prior?.etag != nil, privacy: .public) has_last_modified=\(prior?.lastModified != nil, privacy: .public)"
+                )
                 var response = try await client.fullImage(resource, etag: prior?.etag,
                                                           lastModified: prior?.lastModified)
                 if response.notModified && prior == nil {
@@ -71,13 +104,31 @@ extension CachedPhotosRepository {
                 try Task.checkCancellation()
                 let result: FullImageResolution
                 if response.notModified, let prior {
-                    try? await store.markValidated(key, run: runID, expectedGeneration: generation)
+                    SynologyDiagnostics.originals.info(
+                        "Original validated without replacement unit_id=\(resource.unitID, privacy: .public) bytes=\(prior.data.count, privacy: .public)"
+                    )
+                    do {
+                        try await store.markValidated(key, run: runID, expectedGeneration: generation)
+                    } catch {
+                        SynologyDiagnostics.originals.error(
+                            "Original validation could not be persisted unit_id=\(resource.unitID, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                        )
+                    }
                     result = FullImageResolution(data: prior.data)
                 } else {
                     guard let data = response.data else { throw SynologyAPIError.invalidResponse }
-                    try? await store.put(key, kind: .fullImage, data: data, validatedRun: runID,
-                                         etag: response.etag, lastModified: response.lastModified,
-                                         expectedGeneration: generation)
+                    SynologyDiagnostics.originals.info(
+                        "Original downloaded unit_id=\(resource.unitID, privacy: .public) bytes=\(data.count, privacy: .public)"
+                    )
+                    do {
+                        try await store.put(key, kind: .fullImage, data: data, validatedRun: runID,
+                                            etag: response.etag, lastModified: response.lastModified,
+                                            expectedGeneration: generation)
+                    } catch {
+                        SynologyDiagnostics.originals.error(
+                            "Original download could not be cached unit_id=\(resource.unitID, privacy: .public) bytes=\(data.count, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                        )
+                    }
                     result = FullImageResolution(data: data)
                 }
                 await fullImageGate.release(id)

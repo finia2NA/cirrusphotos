@@ -86,8 +86,12 @@ struct AppShellView: View {
         .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         .toolbar { applicationToolbar }
         .onExitCommand {
-            if viewer != nil { closeViewer() }
+            model.navigateBack()
         }
+        .onAppear { updateBackHandler() }
+        .onChange(of: selectedDestination) { _, _ in updateBackHandler() }
+        .onChange(of: openedAlbumID) { _, _ in updateBackHandler() }
+        .onChange(of: openedMapFilter) { _, _ in updateBackHandler() }
         .onDisappear {
             dismissWindow(id: InfoPanelScene.id)
         }
@@ -253,12 +257,14 @@ struct AppShellView: View {
         openedAlbumID = album.id
         navigationRestoration.setOpenedAlbum(album.id)
         model.ensureCollectionLoaded(.album(album.id))
+        updateBackHandler()
         updateInfoPanelContext()
     }
 
     private func closeAlbum() {
         openedAlbumID = nil
         navigationRestoration.setOpenedAlbum(nil)
+        updateBackHandler()
         updateInfoPanelContext()
     }
 
@@ -282,6 +288,7 @@ struct AppShellView: View {
                 return
             }
             openedMapFilter = descriptor
+            updateBackHandler()
             updateInfoPanelContext()
         }
     }
@@ -290,6 +297,7 @@ struct AppShellView: View {
         mapFilterOpenGeneration &+= 1
         guard let collection = openedMapFilter else { return }
         openedMapFilter = nil
+        updateBackHandler()
         updateInfoPanelContext()
         Task { await model.closeMapFilter(collection) }
     }
@@ -319,6 +327,7 @@ struct AppShellView: View {
         lastViewerFollowSelection = nil
         model.setActiveViewer(viewer)
         model.installViewerCloseHandler(closeViewer)
+        updateBackHandler()
         infoPanel.updateViewer(active: true, item: request.seed.item)
         let panel = infoPanel
         viewer?.onInfoItemChanged = { [weak panel] item in
@@ -336,12 +345,25 @@ struct AppShellView: View {
                 if viewer === active { viewer = nil }
                 lastViewerFollowSelection = nil
                 model.setActiveViewer(nil)
+                updateBackHandler()
                 infoPanel.updateViewer(active: false, item: nil)
                 browserBridge.focusTimeline()
             }
         }
         if let request { browserBridge.reveal(request, completion: finish) }
         else { finish(nil) }
+    }
+
+    private func updateBackHandler() {
+        if viewer != nil {
+            model.installBackHandler(closeViewer)
+        } else if isAlbumBrowser {
+            model.installBackHandler(closeAlbum)
+        } else if isMapFilterBrowser {
+            model.installBackHandler(closeMapFilter)
+        } else {
+            model.installBackHandler(nil)
+        }
     }
 
     private func followViewer(_ state: PhotoViewerState) {

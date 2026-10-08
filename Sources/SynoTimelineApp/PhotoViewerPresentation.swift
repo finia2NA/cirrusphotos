@@ -228,10 +228,16 @@ final class PhotoViewerPresentation: ObservableObject {
     private func decodeFull(_ data: Data, selection: PhotoViewerSelection) {
         decodeTask?.cancel()
         isDecodingFullImage = true
+        SynologyDiagnostics.decoding.debug(
+            "Starting full-size decode item_id=\(selection.itemID ?? -1, privacy: .public) bytes=\(data.count, privacy: .public) generation=\(selection.generation, privacy: .public)"
+        )
         decodeTask = Task { [weak self] in
             do {
                 let bitmap = try await FullImageDecoder.shared.decode(data)
                 guard !Task.isCancelled, self?.state?.selection == selection else { return }
+                SynologyDiagnostics.decoding.info(
+                    "Full-size decode succeeded item_id=\(selection.itemID ?? -1, privacy: .public) width=\(bitmap.image.width, privacy: .public) height=\(bitmap.image.height, privacy: .public) generation=\(selection.generation, privacy: .public)"
+                )
                 self?.image = NSImage(cgImage: bitmap.image,
                                       size: NSSize(width: bitmap.image.width, height: bitmap.image.height))
                 self?.hasDisplayedFullImage = true
@@ -239,9 +245,15 @@ final class PhotoViewerPresentation: ObservableObject {
                 self?.decodeFailure = nil
                 self?.isDecodingFullImage = false
             } catch is CancellationError {
+                SynologyDiagnostics.decoding.debug(
+                    "Full-size decode cancelled item_id=\(selection.itemID ?? -1, privacy: .public) generation=\(selection.generation, privacy: .public)"
+                )
                 return
             } catch {
                 guard !Task.isCancelled, self?.state?.selection == selection else { return }
+                SynologyDiagnostics.decoding.error(
+                    "Full-size decode failed item_id=\(selection.itemID ?? -1, privacy: .public) generation=\(selection.generation, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                )
                 self?.decodeFailure = error.localizedDescription
                 self?.isDecodingFullImage = false
             }

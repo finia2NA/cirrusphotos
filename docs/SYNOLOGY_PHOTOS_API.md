@@ -288,9 +288,17 @@ additional
   address                 optional
   video_convert           optional
   video_meta              optional
+  folder                  optional full Personal Space folder path when requested
 ```
 
 Requested `additional` fields may be absent when they do not apply or have no value. Models should therefore make nested additions optional and should tolerate future keys.
+
+A read-only probe on 2026-10-09 confirmed that item `method=list` and `method=get`
+v7 accept `additional=["folder"]` and return the item's complete slash-prefixed
+Personal Space folder path as `additional.folder`. The ordinary page request
+includes this field so single-item Info can display the path without a separate folder lookup.
+`SYNO.Foto.Browse.Folder method=get` with the scalar `folder_id` returns the same
+path in `data.folder.name`; an array-shaped ID is rejected.
 
 Observed `additional.video_meta.duration` values are milliseconds (for example, `49000` represents 49 seconds). Keep this unit when serializing cached item responses and convert to seconds for display.
 
@@ -319,10 +327,12 @@ The captured list record contains no timezone or offset. It also has no GPS or a
 
 For display and day grouping, extract Gregorian components using GMT so the encoded wall time remains unchanged: a photo recorded at 21:00 in Germany and one recorded at 21:00 in Japan should both display 21:00. This matches the timeline API's GMT-derived day boundaries. The API is undocumented, so retain a focused regression fixture and decode future optional timezone fields defensively if Synology adds them.
 
-Synology represents an iPhone Live Photo's still member with `type: "live"` and
-`live_type: "photo"`. Treat that item as a photo when requesting and displaying
-the original image; only items with `type: "video"` should enter the unsupported
-video-playback path.
+Synology represents Live Photos with `type: "live"`. Both `live_type: "photo"`
+and `live_type: "live"` have been observed. A bounded read-only probe of the
+latter shape used its thumbnail `unit_id` and `cache_key` with the ordinary
+`SYNO.Foto.Download` v2 request and returned a 4.35 MB HEIC that decoded at full
+resolution. Treat every `type: "live"` item as having a displayable still image;
+only `type: "video"` enters the unsupported video-playback path.
 
 The section identity should include space plus the values supplied by the server, rather than only the array index:
 

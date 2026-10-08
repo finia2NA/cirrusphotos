@@ -73,10 +73,24 @@ struct InfoPanelView: View {
         let content = infoPanel.content
         return VStack(alignment: .leading, spacing: 8) {
             if let filename = content.filename {
-                Text(filename)
+                copyButton(label: filename, value: filename, help: "Copy filename")
                     .font(.headline)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+            }
+            if content.itemIDText != nil || content.folderPath != nil {
+                HStack(spacing: 4) {
+                    if let itemID = content.itemIDText {
+                        copyButton(label: "ID \(itemID)", value: itemID, help: "Copy item ID")
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    if content.itemIDText != nil, content.folderPath != nil {
+                        Text("·")
+                    }
+                    if let folderPath = content.folderPath {
+                        copyButton(label: folderPath, value: folderPath, help: "Copy Synology path")
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             }
             if content.isLoading {
                 HStack(spacing: 6) {
@@ -114,8 +128,21 @@ struct InfoPanelView: View {
                 }
             }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(singleAccessibilityLabel(content))
+    }
+
+    private func copyButton(label: String, value: String, help: String) -> some View {
+        Button {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(value, forType: .string)
+        } label: {
+            Text(label)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(help)
     }
 
     private func metricsRow(_ content: InfoPanelContent) -> some View {
@@ -145,12 +172,6 @@ struct InfoPanelView: View {
         return parts.joined(separator: ", ")
     }
 
-    private func singleAccessibilityLabel(_ content: InfoPanelContent) -> String {
-        var parts = ["Info"]
-        if let filename = content.filename { parts.append(filename) }
-        if let dateTimeText = content.dateTimeText { parts.append(dateTimeText) }
-        return parts.joined(separator: ", ")
-    }
 }
 
 struct InfoPanelWindowConfigurator: NSViewRepresentable {

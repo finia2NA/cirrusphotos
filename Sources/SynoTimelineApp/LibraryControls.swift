@@ -170,6 +170,10 @@ struct LibraryCommands: Commands {
 
     var body: some Commands {
         CommandMenu("Library") {
+            Button("Back") { model.navigateBack() }
+                .keyboardShortcut(.cancelAction)
+                .disabled(!model.canNavigateBack)
+            Divider()
             Button("Increase Thumbnail Size") { model.adjustItemsPerRow(by: -1) }
                 .keyboardShortcut("+", modifiers: .command)
                 .disabled(model.itemsPerRow <= 3)
@@ -200,6 +204,9 @@ struct LibraryCommands: Commands {
                 .disabled(!model.browserCommandsActive)
             Button("Extend Selection Down") { model.performBrowserCommand(.move(.down, extending: true)) }
                 .keyboardShortcut(.downArrow, modifiers: [.shift])
+                .disabled(!model.browserCommandsActive)
+            Button("Select All") { model.performBrowserCommand(.selectAll) }
+                .keyboardShortcut("a", modifiers: [.command])
                 .disabled(!model.browserCommandsActive)
             Button(model.canCloseViewer ? "Close Viewer" : "Open Selected Photo") {
                 if model.canCloseViewer { model.closeViewer() }

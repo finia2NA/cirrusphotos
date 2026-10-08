@@ -43,6 +43,39 @@ public struct LibrarySelection: Equatable, Sendable {
         endExtension()
     }
 
+    /// Adds the inclusive reading-order range from the selected item nearest to
+    /// `ordinal`. If there is no existing selection, the target becomes selected.
+    public mutating func addRangeFromClosestSelection(to ordinal: Int) {
+        guard !indexes.isEmpty else {
+            add(ordinal)
+            return
+        }
+        if indexes.contains(ordinal) {
+            endExtension()
+            return
+        }
+        let lower = indexes.integerLessThan(ordinal)
+        let upper = indexes.integerGreaterThan(ordinal)
+        let anchor: Int
+        switch (lower, upper) {
+        case let (lower?, upper?):
+            anchor = ordinal - lower <= upper - ordinal ? lower : upper
+        case let (lower?, nil):
+            anchor = lower
+        case let (nil, upper?):
+            anchor = upper
+        case (nil, nil):
+            anchor = ordinal
+        }
+        indexes.insert(integersIn: min(anchor, ordinal)...max(anchor, ordinal))
+        endExtension()
+    }
+
+    public mutating func selectAll(count: Int) {
+        indexes = count > 0 ? IndexSet(integersIn: 0..<count) : IndexSet()
+        endExtension()
+    }
+
     public mutating func replace(with values: IndexSet) {
         indexes = values
         endExtension()

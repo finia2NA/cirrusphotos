@@ -51,6 +51,7 @@ final class InfoPanelTests: XCTestCase {
     func testPageCacheKeyDerivesFromSharedRequestFields() throws {
         XCTAssertTrue(PhotosRequestFields.pageAdditional.contains("exif"))
         XCTAssertTrue(PhotosRequestFields.pageAdditional.contains("gps"))
+        XCTAssertTrue(PhotosRequestFields.pageAdditional.contains("folder"))
         XCTAssertEqual(PhotosRequestFields.locationScanAdditional, ["gps", "thumbnail"])
         let section = TimelineSection(offset: 0, limit: 1,
                                       list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
@@ -79,7 +80,8 @@ final class InfoPanelTests: XCTestCase {
         {"aperture":"F2.8","camera":"iPhone 13 Pro","exposure_time":"1/25 s","focal_length":"9.0 mm","iso":"1250","lens":"iPhone 13 Pro back triple camera 9mm f/2.8"}
         """
         let item = makeItem(id: 5, filename: "IMG_3905.HEIC", filesize: 1_768_222,
-                            exif: exif, width: 4032, height: 3024)
+                            exif: exif, width: 4032, height: 3024,
+                            folderPath: "/MobileBackup/iPhone/2024/11")
         let setup = try await makeContext(items: [item])
         let model = setup.model
         model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
@@ -88,6 +90,8 @@ final class InfoPanelTests: XCTestCase {
         let resolved = await waitUntil { model.content.kind == .single && !model.content.isLoading }
         XCTAssertTrue(resolved)
         XCTAssertEqual(model.content.filename, "IMG_3905.HEIC")
+        XCTAssertEqual(model.content.itemIDText, "5")
+        XCTAssertEqual(model.content.folderPath, "/MobileBackup/iPhone/2024/11")
         XCTAssertEqual(model.content.camera, "iPhone 13 Pro")
         XCTAssertEqual(model.content.lens, "iPhone 13 Pro back triple camera 9mm f/2.8")
         XCTAssertEqual(model.content.exposure, ["ISO 1250", "9.0 mm", "f/2.8", "1/25 s"])
@@ -145,6 +149,8 @@ final class InfoPanelTests: XCTestCase {
         XCTAssertEqual(model.content.sizeText, InfoPanelFormatting.byteCount(2000))
         XCTAssertEqual(model.content.dateRangeText,
                        InfoPanelFormatting.dayRange(newest: "2024-04-03", oldest: "2024-04-03"))
+        XCTAssertNil(model.content.itemIDText)
+        XCTAssertNil(model.content.folderPath)
     }
 
     func testMixedSelectionUsesItemsNoun() async throws {
@@ -383,7 +389,8 @@ final class InfoPanelTests: XCTestCase {
                           filename: String? = nil, filesize: Int64? = nil,
                           exif: String? = nil, width: Int = 1000, height: Int = 1000,
                           durationMilliseconds: Int? = nil,
-                          latitude: Double? = nil, longitude: Double? = nil) -> PhotoItem {
+                          latitude: Double? = nil, longitude: Double? = nil,
+                          folderPath: String? = nil) -> PhotoItem {
         var fields = ["\"id\":\(id)", "\"time\":\(time)", "\"type\":\"\(type)\""]
         if let filename { fields.append("\"filename\":\"\(filename)\"") }
         if let filesize { fields.append("\"filesize\":\(filesize)") }
@@ -392,6 +399,10 @@ final class InfoPanelTests: XCTestCase {
         if let durationMilliseconds { additional.append("\"video_meta\":{\"duration\":\(durationMilliseconds)}") }
         if let latitude, let longitude {
             additional.append("\"gps\":{\"latitude\":\(latitude),\"longitude\":\(longitude)}")
+        }
+        if let folderPath {
+            let encoded = try! JSONEncoder().encode(folderPath)
+            additional.append("\"folder\":\(String(decoding: encoded, as: UTF8.self))")
         }
         fields.append("\"additional\":{\(additional.joined(separator: ","))}")
         let json = "{" + fields.joined(separator: ",") + "}"

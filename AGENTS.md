@@ -13,7 +13,6 @@
 ## Required project reading
 
 - Before planning or implementing product/code changes, read `docs/PROJECT.md` and `docs/ARCHITECTURE.md`. They are the current product and technical sources of truth; `AGENTS.md` is only the orientation and rule set.
-- For cache work, also read `docs/plans/WIP_CACHING_PLAN.md`. For Map Diff work, additionally read both Diff plans and `docs/SYNOLOGY_PHOTOS_API.md`.
 - Plans describe proposed or completed work and are not current-behavior sources unless explicitly stated. Prefer source, `docs/PROJECT.md`, and `docs/ARCHITECTURE.md` when they differ.
 
 # Rules for agents

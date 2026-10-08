@@ -99,7 +99,7 @@ final class SelectionFavoritesAppTests: XCTestCase {
         let snapshot = TimelineSnapshot(sections: [sec])
         await transport.setTimeline(snapshot)
 
-        // Selection of 100 items: 96 are already favorites, only 4 are non-favorites -> affected count = 4!
+        // Partial selection of 99 items: 95 are already favorites, only 4 are non-favorites.
         var items: [PhotoItem] = []
         for id in 0..<96 { items.append(makeItem(id: Int64(id), isFavorite: true)) }
         for id in 96..<100 { items.append(makeItem(id: Int64(id), isFavorite: false)) }
@@ -112,8 +112,8 @@ final class SelectionFavoritesAppTests: XCTestCase {
         let commandSnapshot = BrowserCommandSnapshot(
             owner: owner, active: true, canOpen: false, canToggleFavorite: true,
             collection: .personalLibrary, indexFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
-            selectionGeneration: "gen:0", selectedOrdinals: IndexSet(integersIn: 0...99),
-            knownItemIDsByOrdinal: Dictionary(uniqueKeysWithValues: (0..<100).map { ($0, Int64($0)) })
+            selectionGeneration: "gen:0", selectedOrdinals: IndexSet(integersIn: 1...99),
+            knownItemIDsByOrdinal: Dictionary(uniqueKeysWithValues: (1..<100).map { ($0, Int64($0)) })
         )
         model.installBrowserCommands(snapshot: commandSnapshot, handler: nil)
         model.toggleSelectionFavorite()
@@ -121,11 +121,39 @@ final class SelectionFavoritesAppTests: XCTestCase {
         // Wait for execution
         _ = await waitUntil { await transport.setFavoriteCalls.count == 1 || model.pendingFavoriteConfirmation != nil }
 
-        // Affected count is 4 (<= 5) -> MUST bypass confirmation despite 100 selected items!
+        // Affected count is 4 (<= 5), and this is not Select All, so confirmation is bypassed.
         XCTAssertNil(model.pendingFavoriteConfirmation)
         let calls = await transport.setFavoriteCalls
         XCTAssertEqual(calls.count, 1)
         XCTAssertEqual(calls[0].itemIDs.count, 4)
+    }
+
+    @MainActor
+    func testEntireCollectionSelectionRequiresConfirmationEvenWhenSmall() async throws {
+        let root = temporaryTestRoot("SmallSelectAllConfirmation")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AppMockTransport()
+        let repo = try makeRepository(transport: transport, root: root)
+        let section = TimelineSection(offset: 0, limit: 3,
+            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 3)])
+        let snapshot = TimelineSnapshot(sections: [section])
+        await transport.setTimeline(snapshot)
+        await transport.setPage((0..<3).map { makeItem(id: Int64($0)) }, offset: 0)
+        let model = LibraryModel(repository: repo)
+        await model.load()
+        model.installBrowserCommands(snapshot: BrowserCommandSnapshot(
+            owner: UUID(), active: true, canOpen: false, canToggleFavorite: true,
+            collection: .personalLibrary, indexFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
+            selectionGeneration: "gen:0", selectedOrdinals: IndexSet(integersIn: 0..<3),
+            knownItemIDsByOrdinal: Dictionary(uniqueKeysWithValues: (0..<3).map { ($0, Int64($0)) })
+        ), handler: nil)
+
+        model.toggleSelectionFavorite()
+        _ = await waitUntil { model.pendingFavoriteConfirmation != nil }
+
+        XCTAssertEqual(model.pendingFavoriteConfirmation?.action.affectedIDs.count, 3)
+        let calls = await transport.setFavoriteCalls
+        XCTAssertTrue(calls.isEmpty)
     }
 
     @MainActor
@@ -261,6 +289,8 @@ final class SelectionFavoritesAppTests: XCTestCase {
         )
 
         model.toggleSelectionFavorite()
+        _ = await waitUntil { model.pendingFavoriteConfirmation != nil }
+        model.confirmBrowserFavorite()
         let reported = await waitUntil { model.browserFavoriteFailure != nil }
 
         XCTAssertTrue(reported)

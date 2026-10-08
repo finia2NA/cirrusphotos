@@ -25,11 +25,13 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
         public let videoMeta: VideoMetadata?
         public let exif: ExifInfo?
         public let gps: PhotoCoordinate?
+        public let folderPath: String?
         public var favorite: Bool?
 
         enum CodingKeys: String, CodingKey {
             case thumbnail, resolution, orientation, exif, gps, favorite
             case videoMeta = "video_meta"
+            case folderPath = "folder"
         }
     }
 
@@ -50,6 +52,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
                 videoMeta: nil,
                 exif: nil,
                 gps: nil,
+                folderPath: nil,
                 favorite: favorite
             )
         } else {
@@ -113,10 +116,10 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
 
     public var fullImageResource: FullImageResource? { FullImageResource(self) }
 
-    /// Live Photos are returned as `type: "live"`; `live_type` identifies the
-    /// still-image member that should use the normal original-photo path.
+    /// Live Photos use the normal original-photo path for their still image.
+    /// Cirrus has returned both `photo` and `live` for `live_type`.
     public var hasDisplayableStillImage: Bool {
-        type == "photo" || (type == "live" && liveType == "photo")
+        type == "photo" || type == "live"
     }
 
     public var isVideo: Bool { type == "video" }

@@ -309,20 +309,47 @@ public actor SynologyClient: PhotosTransport {
         else if let lastModified { request.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since") }
         let data: Data
         let response: URLResponse
+        SynologyDiagnostics.transport.debug(
+            "Sending original request unit_id=\(resource.unitID, privacy: .public) conditional=\(etag != nil || lastModified != nil, privacy: .public)"
+        )
         do { (data, response) = try await session.data(for: request) }
-        catch is CancellationError { throw CancellationError() }
-        catch { throw SynologyAPIError.transport(error.localizedDescription) }
+        catch is CancellationError {
+            SynologyDiagnostics.transport.debug(
+                "Original transport cancelled unit_id=\(resource.unitID, privacy: .public)"
+            )
+            throw CancellationError()
+        }
+        catch {
+            SynologyDiagnostics.transport.error(
+                "Original transport failed unit_id=\(resource.unitID, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+            throw SynologyAPIError.transport(error.localizedDescription)
+        }
         guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
         if http.statusCode == 304 {
+            SynologyDiagnostics.transport.info(
+                "Original response unit_id=\(resource.unitID, privacy: .public) status=304"
+            )
             return FullImageResponse(data: nil, etag: http.value(forHTTPHeaderField: "ETag"),
                                      lastModified: http.value(forHTTPHeaderField: "Last-Modified"))
         }
-        guard http.statusCode == 200 else { throw SynologyAPIError.http(http.statusCode) }
+        guard http.statusCode == 200 else {
+            SynologyDiagnostics.transport.error(
+                "Original response rejected unit_id=\(resource.unitID, privacy: .public) status=\(http.statusCode, privacy: .public) content_type=\(http.value(forHTTPHeaderField: "Content-Type") ?? "nil", privacy: .public) bytes=\(data.count, privacy: .public)"
+            )
+            throw SynologyAPIError.http(http.statusCode)
+        }
         guard !data.isEmpty, CGImageSourceCreateWithData(data as CFData, nil) != nil else {
+            SynologyDiagnostics.transport.error(
+                "Original response was not a decodable image unit_id=\(resource.unitID, privacy: .public) status=200 content_type=\(http.value(forHTTPHeaderField: "Content-Type") ?? "nil", privacy: .public) bytes=\(data.count, privacy: .public)"
+            )
             if let envelope = try? JSONDecoder().decode(APIEnvelope<EmptyData>.self, from: data),
                let error = envelope.error { throw SynologyAPIError.api(error.code) }
             throw SynologyAPIError.invalidResponse
         }
+        SynologyDiagnostics.transport.info(
+            "Original response unit_id=\(resource.unitID, privacy: .public) status=200 bytes=\(data.count, privacy: .public)"
+        )
         return FullImageResponse(data: data, etag: http.value(forHTTPHeaderField: "ETag"),
                                  lastModified: http.value(forHTTPHeaderField: "Last-Modified"))
     }
