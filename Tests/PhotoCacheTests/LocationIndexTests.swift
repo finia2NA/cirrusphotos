@@ -201,6 +201,61 @@ final class LocationIndexTests: XCTestCase {
         XCTAssertTrue(secondCalls.isEmpty, "A matching fingerprint must skip the network entirely")
     }
 
+    func testIndexOpenedBeforeLibraryLoadValidatesTimelineBeforeReusingCachedPayload() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let snapshot = TimelineSnapshot(sections: [section(limit: 2)])
+        let firstTransport = LocationFakeTransport()
+        await firstTransport.configure(timelineSnapshot: snapshot,
+                                       pages: [0: [try item(1, lat: 1, lon: 1)]])
+        let first = try makeRepository(root: root, transport: firstTransport)
+        await loadTimeline(first)
+        _ = await runIndex(first)
+
+        let secondTransport = LocationFakeTransport()
+        await secondTransport.configure(timelineSnapshot: snapshot,
+                                        pages: [0: [try item(9, lat: 9, lon: 9)]])
+        let second = try makeRepository(root: root, transport: secondTransport)
+
+        // Deliberately open Map before the app's eager timeline load. The location
+        // pipeline must validate/join that resource itself before trusting the old
+        // fingerprint, rather than scanning with a nil fingerprint or blessing a
+        // merely cached timeline from this run.
+        let events = await runIndex(second)
+        XCTAssertEqual(completedRecords(events).map(\.id), [1])
+        let timelineCalls = await secondTransport.timelineCalls
+        let scanCalls = await secondTransport.scanCalls
+        XCTAssertEqual(timelineCalls, 1)
+        XCTAssertTrue(scanCalls.isEmpty)
+
+        let namespace = CacheKey.namespace(server: server, account: credentials.username)
+        let stored = try await second.store.get(CacheKey.locationIndex(namespace: namespace))
+        let payload = try JSONDecoder().decode(LocationIndexPayload.self,
+                                               from: try XCTUnwrap(stored).data)
+        XCTAssertEqual(payload.sourceTimelineFingerprint,
+                       LibraryIndex(snapshot: snapshot).fingerprint)
+    }
+
+    func testIndexOpenedBeforeLibraryLoadStoresTheAuthoritativeChangedFingerprint() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = LocationFakeTransport()
+        let changed = TimelineSnapshot(sections: [section(limit: 3)])
+        await transport.configure(timelineSnapshot: changed,
+                                  pages: [0: [try item(2, lat: 2, lon: 2)]])
+        let repository = try makeRepository(root: root, transport: transport)
+
+        let events = await runIndex(repository)
+        XCTAssertEqual(completedRecords(events).map(\.id), [2])
+        let timelineCalls = await transport.timelineCalls
+        XCTAssertEqual(timelineCalls, 2, "A cold Personal Library validates through initial and full timeline requests")
+
+        let namespace = CacheKey.namespace(server: server, account: credentials.username)
+        let stored = try await repository.store.get(CacheKey.locationIndex(namespace: namespace))
+        let payload = try JSONDecoder().decode(LocationIndexPayload.self,
+                                               from: try XCTUnwrap(stored).data)
+        XCTAssertEqual(payload.sourceTimelineFingerprint,
+                       LibraryIndex(snapshot: changed).fingerprint)
+    }
+
     func testDifferingFingerprintRescansAndReplacesPayload() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
         let firstTransport = LocationFakeTransport()

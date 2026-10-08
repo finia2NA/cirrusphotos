@@ -30,7 +30,7 @@ struct LocationIndexPayload: Codable, Sendable {
     static let currentSchemaVersion = 1
 
     var schemaVersion: Int = currentSchemaVersion
-    var sourceTimelineFingerprint: String?
+    var sourceTimelineFingerprint: String
     var scannedItemCount: Int
     var records: [PhotoLocationRecord]
 }
@@ -60,9 +60,23 @@ extension CachedPhotosRepository {
                 if let cachedPayload {
                     continuation.yield(.cached(cachedPayload.records))
                 }
-                let fingerprint = metadata.latestTimelines[.personalLibrary]
-                    .map { LibraryIndex(snapshot: $0).fingerprint }
-                if let fingerprint, fingerprint == cachedPayload?.sourceTimelineFingerprint {
+                // A cached timeline from an earlier run is useful for immediate UI,
+                // but it cannot validate the location index until this run has checked
+                // that timeline with the server. Join the ordinary timeline pipeline so
+                // opening Map during startup cannot bless a stale index and then miss a
+                // later authoritative timeline replacement.
+                let fingerprint: String
+                do {
+                    fingerprint = try await verifiedPersonalTimelineFingerprint()
+                } catch {
+                    if !Task.isCancelled {
+                        continuation.yield(.failure("Location index validation: \(error.localizedDescription)"))
+                    }
+                    removeLocationIndexSubscriber(subscriber)
+                    continuation.finish()
+                    return
+                }
+                if fingerprint == cachedPayload?.sourceTimelineFingerprint {
                     continuation.yield(.completed(cachedPayload?.records ?? [], verified: true))
                     removeLocationIndexSubscriber(subscriber)
                     continuation.finish()
@@ -90,7 +104,24 @@ extension CachedPhotosRepository {
         }
     }
 
-    private func registerLocationIndexScan(fingerprint: String?,
+    /// Returns only a fingerprint validated in this repository run. Calling
+    /// `timeline(collection:)` joins any eager Personal Library request already in
+    /// flight, and returns immediately when that resource has already been validated.
+    private func verifiedPersonalTimelineFingerprint() async throws -> String {
+        var failure: String?
+        for await event in timeline(collection: .personalLibrary) {
+            try Task.checkCancellation()
+            switch event {
+            case .value(let snapshot, let verified):
+                if verified { return LibraryIndex(snapshot: snapshot).fingerprint }
+            case .failure(let message):
+                failure = message
+            }
+        }
+        throw SynologyAPIError.unsupported(failure ?? "The Personal Library timeline could not be validated.")
+    }
+
+    private func registerLocationIndexScan(fingerprint: String,
                                            subscriber: UUID) -> Task<[PhotoLocationRecord], Error> {
         if var job = metadata.locationIndexWork {
             job.subscribers.insert(subscriber)
@@ -108,7 +139,7 @@ extension CachedPhotosRepository {
         return task
     }
 
-    private func runLocationIndexScan(sourceFingerprint: String?,
+    private func runLocationIndexScan(sourceFingerprint: String,
                                       generation: Int) async throws -> [PhotoLocationRecord] {
         let total = metadata.latestTimelines[.personalLibrary].map {
             $0.sections.reduce(0) { $0 + max(0, $1.limit) }
@@ -140,10 +171,15 @@ extension CachedPhotosRepository {
             }
             scanned += items.count
             publishLocationIndexProgress(scanned: scanned, total: total)
-            guard !items.isEmpty, items.count == Self.locationScanPageLimit,
-                  pages < Self.locationScanPageCap else {
+            guard !items.isEmpty, items.count == Self.locationScanPageLimit else {
                 next?.cancel()
                 break
+            }
+            guard pages < Self.locationScanPageCap else {
+                next?.cancel()
+                throw SynologyAPIError.unsupported(
+                    "The location scan exceeds the \(Self.locationScanPageCap)-page safety cap."
+                )
             }
             offset += Self.locationScanPageLimit
             current = next

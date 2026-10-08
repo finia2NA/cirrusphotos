@@ -1071,4 +1071,79 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         XCTAssertTrue(collections.allSatisfy { $0 == .favorites })
         await session.close()
     }
+
+    func testFavoritesViewerUsesPreWriteOffsetsWhileRemovalIsPending() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let items = try (0..<8).map { try item(80 + $0).withFavorite(true) }
+        let day = TimelineDay(year: 2024, month: 4, day: 3, itemCount: 8)
+        let sections = [
+            TimelineSection(offset: 0, limit: 4, list: [day]),
+            TimelineSection(offset: 4, limit: 4, list: [day]),
+        ]
+        let transport = ViewerTransport()
+        await transport.configure(pages: [4: Array(items[4...7])])
+        await transport.setFavoriteBlocked(true)
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+                                         collection: .favorites,
+                                         index: LibraryIndex(snapshot: TimelineSnapshot(sections: sections)),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1,
+                                                               item: items[1], page: Array(items[0...3]),
+                                                               pageVerified: true), allowNetwork: true)
+        _ = await session.state()
+
+        let toggle = Task { await session.toggleFavorite() }
+        let writeStarted = await waitUntil { await transport.favoriteRequests.count == 1 }
+        XCTAssertTrue(writeStarted)
+        await session.navigateNext()
+        await session.navigateNext()
+        await session.navigateNext()
+
+        let reachedNextPage = await waitUntil { await session.state().item?.id == items[4].id }
+        XCTAssertTrue(reachedNextPage)
+        let calls = await transport.pageCalls
+        XCTAssertTrue(calls.contains(4), "Pending removal must query the server's still-unmodified page offset")
+        XCTAssertFalse(calls.contains(3), "Optimistic status must not be mistaken for committed membership")
+
+        await transport.releaseFavoriteWrite()
+        await toggle.value
+        await session.close()
+    }
+
+    func testFavoritesViewerReplansInflightPageWhenRemovalCommits() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let items = try (0..<8).map { try item(100 + $0).withFavorite(true) }
+        let day = TimelineDay(year: 2024, month: 4, day: 3, itemCount: 8)
+        let sections = [
+            TimelineSection(offset: 0, limit: 4, list: [day]),
+            TimelineSection(offset: 4, limit: 4, list: [day]),
+        ]
+        let transport = ViewerTransport()
+        await transport.configure(pages: [3: Array(items[4...7]), 4: Array(items[4...7])],
+                                  blockedPages: [4])
+        await transport.setFavoriteBlocked(true)
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+                                         collection: .favorites,
+                                         index: LibraryIndex(snapshot: TimelineSnapshot(sections: sections)),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1,
+                                                               item: items[1], page: Array(items[0...3]),
+                                                               pageVerified: true), allowNetwork: true)
+        _ = await session.state()
+
+        let toggle = Task { await session.toggleFavorite() }
+        let writeStarted = await waitUntil { await transport.favoriteRequests.count == 1 }
+        XCTAssertTrue(writeStarted)
+        await session.navigate(by: 3)
+        let pendingPageStarted = await waitUntil { await transport.pageCalls.contains(4) }
+        XCTAssertTrue(pendingPageStarted)
+
+        await transport.releaseFavoriteWrite()
+        await toggle.value
+
+        let reachedReplannedPage = await waitUntil { await session.state().item?.id == items[4].id }
+        XCTAssertTrue(reachedReplannedPage,
+                      "Committing membership must restart a page canceled under the pending translation")
+        let calls = await transport.pageCalls
+        XCTAssertTrue(calls.contains(3), "Committed removal should translate the original page past the tombstone")
+        await session.close()
+    }
 }

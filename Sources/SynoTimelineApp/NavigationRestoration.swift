@@ -65,6 +65,16 @@ final class NavigationRestorationStore: ObservableObject {
         save()
     }
 
+    /// Clears a nested album destination only after an authoritative list proves
+    /// that it no longer exists. Returns true when persisted state changed.
+    @discardableResult
+    func clearOpenedAlbumIfMissing(in albums: [AlbumSummary], verified: Bool) -> Bool {
+        guard verified, let id = state.openedAlbumID,
+              !albums.contains(where: { $0.id == id }) else { return false }
+        setOpenedAlbum(nil)
+        return true
+    }
+
     func timelineAnchor(for collection: PhotoCollectionDescriptor) -> PhotoTimelineRestorationAnchor? {
         state.anchors[collection.rawValue]
     }

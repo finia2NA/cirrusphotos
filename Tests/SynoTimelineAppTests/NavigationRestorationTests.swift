@@ -1,4 +1,5 @@
 import Foundation
+import SynologyAPI
 import XCTest
 @testable import SynoTimelineApp
 
@@ -61,6 +62,21 @@ final class NavigationRestorationTests: XCTestCase {
         store.setOpenedAlbum(11)
         XCTAssertEqual(NavigationRestorationStore(defaults: defaults, key: key).openedAlbumID, 11)
         store.setOpenedAlbum(nil)
+        XCTAssertNil(NavigationRestorationStore(defaults: defaults, key: key).openedAlbumID)
+    }
+
+    func testMissingOpenedAlbumClearsOnlyAfterVerifiedList() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let key = "state"
+        let store = NavigationRestorationStore(defaults: defaults, key: key)
+        store.setOpenedAlbum(11)
+        let other = AlbumSummary(id: 12, name: "Other", itemCount: 1)
+
+        XCTAssertFalse(store.clearOpenedAlbumIfMissing(in: [other], verified: false))
+        XCTAssertEqual(store.openedAlbumID, 11)
+        XCTAssertTrue(store.clearOpenedAlbumIfMissing(in: [other], verified: true))
+        XCTAssertNil(store.openedAlbumID)
         XCTAssertNil(NavigationRestorationStore(defaults: defaults, key: key).openedAlbumID)
     }
 

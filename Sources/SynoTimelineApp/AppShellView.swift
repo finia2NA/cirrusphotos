@@ -217,15 +217,19 @@ struct AppShellView: View {
         selectedDestination = destination
         if destination == .albums {
             model.ensureAlbumsLoaded()
+            validateOpenedAlbum(in: model.albums)
             if let openedAlbumID { model.ensureCollectionLoaded(.album(openedAlbumID)) }
         }
         updateInfoPanelContext()
     }
 
     private func validateOpenedAlbum(in albums: [AlbumSummary]) {
-        guard selectedDestination == .albums, model.albumsVerified, let openedAlbumID,
-              !albums.contains(where: { $0.id == openedAlbumID }) else { return }
-        closeAlbum()
+        guard selectedDestination == .albums,
+              navigationRestoration.clearOpenedAlbumIfMissing(
+                in: albums, verified: model.albumsVerified
+              ) else { return }
+        openedAlbumID = nil
+        updateInfoPanelContext()
     }
 
     private func openAlbum(_ album: AlbumSummary) {

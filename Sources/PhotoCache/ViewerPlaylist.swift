@@ -8,7 +8,12 @@ struct ViewerPlaylist: Sendable {
         let item: PhotoItem
         let dayID: String
         let dayOffset: Int
+        /// Optimistic heart value shown by the viewer.
         var isFavorite: Bool
+        /// Membership the live Favorites endpoint is expected to expose. This only
+        /// advances after the write succeeds; pending writes still read the server's
+        /// previous filtered ordering.
+        var serverMembership: Bool
     }
 
     struct PagePlan: Sendable {
@@ -28,8 +33,16 @@ struct ViewerPlaylist: Sendable {
             entries[item.id] = existing
         } else {
             entries[item.id] = Entry(item: item, dayID: dayID,
-                                     dayOffset: dayOffset, isFavorite: isFavorite)
+                                     dayOffset: dayOffset, isFavorite: isFavorite,
+                                     serverMembership: item.isFavorite)
         }
+    }
+
+    mutating func commit(itemID: Int64, isFavorite: Bool) {
+        guard var existing = entries[itemID] else { return }
+        existing.isFavorite = isFavorite
+        existing.serverMembership = isFavorite
+        entries[itemID] = existing
     }
 
     mutating func restore(_ previous: Entry?, itemID: Int64) {
@@ -56,13 +69,13 @@ struct ViewerPlaylist: Sendable {
         for (itemID, entry) in entries {
             guard let dayBase = dayBases[entry.dayID] else { continue }
             let position = dayBase + entry.dayOffset
-            // Favorites is a filter over the underlying chronological order. Once a
-            // member is re-favorited it returns to that stable order, so only current
-            // removals shift live offsets. We still exclude/reinsert a re-favorited
-            // entry when its frozen position is inside this page to avoid duplicates.
-            if !entry.isFavorite, position < lower { displacedBefore += 1 }
+            // Favorites is a filter over the underlying chronological order. Only
+            // entries absent from the server's current membership shift live offsets.
+            // We still exclude/reinsert a present entry when its frozen position is
+            // inside this page to preserve status and avoid duplicates.
+            if !entry.serverMembership, position < lower { displacedBefore += 1 }
             guard lower..<upper ~= position else { continue }
-            if !entry.isFavorite { displacedWithin += 1 }
+            if !entry.serverMembership { displacedWithin += 1 }
             insertions.append((position - lower, entry.item.withFavorite(entry.isFavorite)))
             excluded.insert(itemID)
         }
