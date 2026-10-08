@@ -37,6 +37,9 @@ public protocol PhotosTransport: Sendable {
     /// date bounds, `additional` from `PhotosRequestFields.locationScanAdditional`.
     /// Returns at most `limit` items newest-first; an empty or short page ends the scan.
     func locationScanPage(offset: Int, limit: Int) async throws -> [PhotoItem]
+    func diffVersion() async throws -> DiffCursor
+    func changes(since cursor: DiffCursor) async throws -> PhotoDiff
+    func locationItems(ids: [Int64]) async throws -> LocationItemLookup
 
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,

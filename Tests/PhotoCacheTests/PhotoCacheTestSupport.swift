@@ -51,6 +51,18 @@ extension PhotosTransport {
         throw TestFailure("Unexpected location-scan request")
     }
 
+    func diffVersion() async throws -> DiffCursor {
+        throw TestFailure("Unexpected Diff version request")
+    }
+
+    func changes(since cursor: DiffCursor) async throws -> PhotoDiff {
+        throw TestFailure("Unexpected Diff request")
+    }
+
+    func locationItems(ids: [Int64]) async throws -> LocationItemLookup {
+        throw TestFailure("Unexpected location lookup")
+    }
+
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
         throw TestFailure("Unexpected favorite write")
     }

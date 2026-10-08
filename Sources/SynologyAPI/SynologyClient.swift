@@ -167,6 +167,61 @@ public actor SynologyClient: PhotosTransport {
         return data.list
     }
 
+    public func diffVersion() async throws -> DiffCursor {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        let response: APIEnvelope<DiffVersionData> = try await postBounded(
+            path: "/webapi/entry.cgi/SYNO.Foto.Browse.Diff",
+            parameters: [
+                "api": "SYNO.Foto.Browse.Diff", "version": "1",
+                "method": "get_version", "_sid": sid,
+            ],
+            authenticated: true,
+            maximumBytes: 4 * 1_024 * 1_024
+        )
+        guard response.success, let data = response.data else {
+            throw SynologyAPIError.api(response.error?.code ?? -1)
+        }
+        return data.cursor
+    }
+
+    public func changes(since cursor: DiffCursor) async throws -> PhotoDiff {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        let response: APIEnvelope<PhotoDiffData> = try await postBounded(
+            path: "/webapi/entry.cgi/SYNO.Foto.Browse.Diff",
+            parameters: [
+                "api": "SYNO.Foto.Browse.Diff", "version": "1", "method": "get",
+                "diff_version": String(cursor.diffVersion),
+                "version_time": String(cursor.versionTime), "_sid": sid,
+            ],
+            authenticated: true,
+            maximumBytes: 4 * 1_024 * 1_024
+        )
+        guard response.success, let data = response.data else {
+            throw SynologyAPIError.api(response.error?.code ?? -1)
+        }
+        return data.value
+    }
+
+    public func locationItems(ids: [Int64]) async throws -> LocationItemLookup {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        guard !ids.isEmpty, ids.count <= 100 else {
+            throw SynologyAPIError.unsupported("Location lookup requires 1–100 item IDs.")
+        }
+        let response: APIEnvelope<ItemData> = try await post(
+            path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item",
+            parameters: [
+                "api": "SYNO.Foto.Browse.Item", "version": "7", "method": "get",
+                "id": "[" + ids.map(String.init).joined(separator: ",") + "]",
+                "additional": Self.additionalParameter(for: PhotosRequestFields.locationScanAdditional),
+                "_sid": sid,
+            ], authenticated: true
+        )
+        guard response.success, let data = response.data else {
+            throw SynologyAPIError.api(response.error?.code ?? -1)
+        }
+        return LocationItemLookup(requestedIDs: ids, items: data.list)
+    }
+
     private static func additionalParameter(
         for fields: [String] = PhotosRequestFields.pageAdditional
     ) -> String {
@@ -290,6 +345,54 @@ public actor SynologyClient: PhotosTransport {
         catch { throw SynologyAPIError.transport(error.localizedDescription) }
         guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else { throw SynologyAPIError.http(http.statusCode) }
+        do { return try JSONDecoder().decode(Response.self, from: data) }
+        catch { throw SynologyAPIError.invalidResponse }
+    }
+
+    private func postBounded<Response: Decodable>(
+        path: String,
+        parameters: [String: String],
+        authenticated: Bool,
+        maximumBytes: Int
+    ) async throws -> Response {
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+        components.path = path
+        guard let url = components.url else { throw SynologyAPIError.invalidResponse }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        if authenticated, let synoToken { request.setValue(synoToken, forHTTPHeaderField: "X-SYNO-TOKEN") }
+        request.httpBody = formBody(parameters)
+
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do { (bytes, response) = try await session.bytes(for: request) }
+        catch is CancellationError { throw CancellationError() }
+        catch { throw SynologyAPIError.transport(error.localizedDescription) }
+        guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else { throw SynologyAPIError.http(http.statusCode) }
+        if let expected = http.value(forHTTPHeaderField: "Content-Length").flatMap(Int.init),
+           expected > maximumBytes {
+            throw SynologyAPIError.responseTooLarge(maximumBytes)
+        }
+        var data = Data()
+        data.reserveCapacity(min(maximumBytes, 64 * 1_024))
+        do {
+            for try await byte in bytes {
+                guard data.count < maximumBytes else {
+                    throw SynologyAPIError.responseTooLarge(maximumBytes)
+                }
+                data.append(byte)
+            }
+        } catch let error as SynologyAPIError {
+            throw error
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw SynologyAPIError.transport(error.localizedDescription)
+        }
         do { return try JSONDecoder().decode(Response.self, from: data) }
         catch { throw SynologyAPIError.invalidResponse }
     }

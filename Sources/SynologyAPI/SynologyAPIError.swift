@@ -7,6 +7,7 @@ public enum SynologyAPIError: LocalizedError, Sendable {
     case http(Int)
     case api(Int)
     case unsupported(String)
+    case responseTooLarge(Int)
 
     public var errorDescription: String? {
         switch self {
@@ -24,6 +25,7 @@ public enum SynologyAPIError: LocalizedError, Sendable {
             default: "Synology API error \(code)."
             }
         case .unsupported(let message): message
+        case .responseTooLarge(let limit): "Cirrus returned more than the \(limit)-byte safety limit."
         }
     }
 }

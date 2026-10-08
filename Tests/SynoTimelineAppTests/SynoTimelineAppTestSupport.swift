@@ -44,6 +44,16 @@ extension PhotosTransport {
         throw UnexpectedTransportCall()
     }
 
+    func diffVersion() async throws -> DiffCursor { throw UnexpectedTransportCall() }
+
+    func changes(since cursor: DiffCursor) async throws -> PhotoDiff {
+        throw UnexpectedTransportCall()
+    }
+
+    func locationItems(ids: [Int64]) async throws -> LocationItemLookup {
+        throw UnexpectedTransportCall()
+    }
+
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
         throw UnexpectedTransportCall()
     }
