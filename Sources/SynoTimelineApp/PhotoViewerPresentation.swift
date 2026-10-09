@@ -24,8 +24,9 @@ final class PhotoViewerPresentation: ObservableObject {
     var onInfoItemChanged: ((PhotoItem?) -> Void)?
     private let initialItem: PhotoItem
     private let index: LibraryIndex
-    private let repository: CachedPhotosRepository
+    let repository: CachedPhotosRepository
     private let collection: PhotoCollectionDescriptor
+    private let videoQuality: VideoQualityPreference
 
     private var stateTask: Task<Void, Never>?
     private var decodeTask: Task<Void, Never>?
@@ -38,6 +39,7 @@ final class PhotoViewerPresentation: ObservableObject {
     init(repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor = .personalLibrary,
          index: LibraryIndex, request: PhotoViewerOpenRequest,
          thumbnailSize: ThumbnailSize, loadsLargePreviews: Bool = false,
+         videoQuality: VideoQualityPreference = .automatic,
          allowNetwork: Bool, snapshotRevision: Int) {
         source = request.source
         originalItemID = request.seed.item.id
@@ -45,12 +47,14 @@ final class PhotoViewerPresentation: ObservableObject {
         self.index = index
         self.repository = repository
         self.collection = collection
+        self.videoQuality = videoQuality
         self.snapshotRevision = snapshotRevision
         image = request.source.image
         session = PhotoViewerSession(repository: repository, collection: collection,
                                      index: index, seed: request.seed,
                                      thumbnailSize: thumbnailSize,
                                      loadsLargePreviews: loadsLargePreviews,
+                                     videoQuality: videoQuality,
                                      allowNetwork: allowNetwork,
                                      maximumPages: 3)
         let session = session
@@ -87,7 +91,20 @@ final class PhotoViewerPresentation: ObservableObject {
         else if state.favoriteUpdating { status = "Updating favorite…" }
         else if let decodeFailure { status = decodeFailure }
         else if state.item == nil, case .failure(let message) = state.metadataStatus { status = message }
-        else {
+        else if let video = state.videoResource {
+            switch video.variant {
+            case .converted(let chosen):
+                if let target = videoQuality.targetQuality, chosen != target {
+                    status = "\(chosen.displayName) · \(target.displayName) unavailable"
+                } else {
+                    status = chosen.displayName
+                }
+            case .original:
+                status = videoQuality == .original
+                    ? video.variant.displayName
+                    : "Original · No converted quality available"
+            }
+        } else {
             switch state.fullImageStatus {
             case .idle: status = "Waiting for full resolution"
             case .loading:
@@ -119,7 +136,7 @@ final class PhotoViewerPresentation: ObservableObject {
         return false
     }
 
-    var showsUnsupportedVideo: Bool { state?.item?.isVideo == true }
+    var showsUnsupportedVideo: Bool { state?.item?.isVideo == true && state?.videoResource == nil }
 
     var canToggleFavorite: Bool {
         invalidationMessage == nil && !isClosing && state?.item != nil &&

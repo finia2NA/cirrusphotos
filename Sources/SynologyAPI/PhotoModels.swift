@@ -27,6 +27,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
         public let resolution: Resolution?
         public let orientation: Int?
         public let orientationOriginal: Int?
+        public let videoConvert: [VideoRendition]?
         public let videoMeta: VideoMetadata?
         public let exif: ExifInfo?
         public let gps: PhotoCoordinate?
@@ -36,6 +37,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
         enum CodingKeys: String, CodingKey {
             case thumbnail, resolution, orientation, exif, gps, favorite
             case orientationOriginal = "orientation_original"
+            case videoConvert = "video_convert"
             case videoMeta = "video_meta"
             case folderPath = "folder"
         }
@@ -56,6 +58,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
                 resolution: nil,
                 orientation: nil,
                 orientationOriginal: nil,
+                videoConvert: nil,
                 videoMeta: nil,
                 exif: nil,
                 gps: nil,
@@ -80,6 +83,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
                 resolution: Resolution(width: resolution.height, height: resolution.width),
                 orientation: Self.rotatedOrientation(additional.orientation, direction),
                 orientationOriginal: additional.orientationOriginal,
+                videoConvert: additional.videoConvert,
                 videoMeta: additional.videoMeta,
                 exif: additional.exif,
                 gps: additional.gps,
@@ -91,7 +95,8 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
                 thumbnail: additional.thumbnail, resolution: nil,
                 orientation: Self.rotatedOrientation(additional.orientation, direction),
                 orientationOriginal: additional.orientationOriginal,
-                videoMeta: additional.videoMeta, exif: additional.exif, gps: additional.gps,
+                videoConvert: additional.videoConvert, videoMeta: additional.videoMeta,
+                exif: additional.exif, gps: additional.gps,
                 folderPath: additional.folderPath, favorite: additional.favorite
             )
         }
@@ -117,27 +122,93 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
     public struct VideoMetadata: Codable, Sendable, Equatable {
         private let durationMilliseconds: Double?
         public var duration: TimeInterval? { durationMilliseconds.map { $0 / 1_000 } }
+        public let audioBitrate: Double?
+        public let audioChannel: Int?
+        public let audioCodec: String?
+        public let audioFrequency: Double?
+        public let containerType: String?
+        public let frameBitrate: Double?
+        public let framerate: Double?
+        public let orientation: Int?
+        public let resolutionX: Int?
+        public let resolutionY: Int?
+        public let videoBitrate: Double?
+        public let videoCodec: String?
 
-        enum CodingKeys: String, CodingKey { case duration }
+        enum CodingKeys: String, CodingKey {
+            case duration, orientation, framerate
+            case audioBitrate = "audio_bitrate"
+            case audioChannel = "audio_channel"
+            case audioCodec = "audio_codec"
+            case audioFrequency = "audio_frequency"
+            case containerType = "container_type"
+            case frameBitrate = "frame_bitrate"
+            case resolutionX = "resolution_x"
+            case resolutionY = "resolution_y"
+            case videoBitrate = "video_bitrate"
+            case videoCodec = "video_codec"
+        }
 
         public init(from decoder: Decoder) throws {
             guard let container = try? decoder.container(keyedBy: CodingKeys.self) else {
                 durationMilliseconds = nil
+                audioBitrate = nil; audioChannel = nil; audioCodec = nil
+                audioFrequency = nil; containerType = nil; frameBitrate = nil
+                framerate = nil; orientation = nil; resolutionX = nil; resolutionY = nil
+                videoBitrate = nil; videoCodec = nil
                 return
             }
-            if let value = try? container.decode(Double.self, forKey: .duration) {
-                durationMilliseconds = value
-            } else if let value = try? container.decode(String.self, forKey: .duration) {
-                durationMilliseconds = Double(value)
-            } else {
-                durationMilliseconds = nil
-            }
+            durationMilliseconds = Self.double(container, .duration)
+            audioBitrate = Self.double(container, .audioBitrate)
+            audioChannel = Self.int(container, .audioChannel)
+            audioCodec = try? container.decodeIfPresent(String.self, forKey: .audioCodec)
+            audioFrequency = Self.double(container, .audioFrequency)
+            containerType = try? container.decodeIfPresent(String.self, forKey: .containerType)
+            frameBitrate = Self.double(container, .frameBitrate)
+            framerate = Self.double(container, .framerate)
+            orientation = Self.int(container, .orientation)
+            resolutionX = Self.int(container, .resolutionX)
+            resolutionY = Self.int(container, .resolutionY)
+            videoBitrate = Self.double(container, .videoBitrate)
+            videoCodec = try? container.decodeIfPresent(String.self, forKey: .videoCodec)
         }
 
         public func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encodeIfPresent(durationMilliseconds, forKey: .duration)
+            try container.encodeIfPresent(audioBitrate, forKey: .audioBitrate)
+            try container.encodeIfPresent(audioChannel, forKey: .audioChannel)
+            try container.encodeIfPresent(audioCodec, forKey: .audioCodec)
+            try container.encodeIfPresent(audioFrequency, forKey: .audioFrequency)
+            try container.encodeIfPresent(containerType, forKey: .containerType)
+            try container.encodeIfPresent(frameBitrate, forKey: .frameBitrate)
+            try container.encodeIfPresent(framerate, forKey: .framerate)
+            try container.encodeIfPresent(orientation, forKey: .orientation)
+            try container.encodeIfPresent(resolutionX, forKey: .resolutionX)
+            try container.encodeIfPresent(resolutionY, forKey: .resolutionY)
+            try container.encodeIfPresent(videoBitrate, forKey: .videoBitrate)
+            try container.encodeIfPresent(videoCodec, forKey: .videoCodec)
         }
+
+        private static func double(_ container: KeyedDecodingContainer<CodingKeys>,
+                                   _ key: CodingKeys) -> Double? {
+            if let value = try? container.decodeIfPresent(Double.self, forKey: key) { return value }
+            if let value = try? container.decode(String.self, forKey: key) { return Double(value) }
+            return nil
+        }
+
+        private static func int(_ container: KeyedDecodingContainer<CodingKeys>,
+                                _ key: CodingKeys) -> Int? {
+            if let value = try? container.decodeIfPresent(Int.self, forKey: key) { return value }
+            if let value = try? container.decode(String.self, forKey: key) { return Int(value) }
+            return nil
+        }
+    }
+
+    public struct VideoRendition: Codable, Sendable, Equatable {
+        public let quality: String
+        public let metadata: VideoMetadata
+        public var knownQuality: VideoQuality? { VideoQuality(rawValue: quality) }
     }
 
     /// The server-provided resolution already describes the displayed orientation.
@@ -169,6 +240,24 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
 
     public var isVideo: Bool { type == "video" }
 
+    public func videoPlaybackResource(preference: VideoQualityPreference) -> VideoPlaybackResource? {
+        guard isVideo, let thumbnail = additional?.thumbnail else { return nil }
+        let variant: VideoPlaybackVariant
+        if preference == .original {
+            variant = .original
+        } else {
+            let target = preference.targetQuality ?? .high
+            let available = Set((additional?.videoConvert ?? []).compactMap(\.knownQuality))
+            if let chosen = VideoQuality.closest(to: target, in: available) {
+                variant = .converted(chosen)
+            } else {
+                variant = .original
+            }
+        }
+        return VideoPlaybackResource(unitID: thumbnail.unitID, cacheKey: thumbnail.cacheKey,
+                                     filename: filename, variant: variant)
+    }
+
     /// Additional clockwise quarter turns required after ImageIO has applied the
     /// stored original's EXIF orientation. Synology normal rotation changes
     /// `orientation` while leaving `orientation_original` and original bytes intact.
@@ -184,6 +273,97 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
             return clockwise == 3 ? -1 : clockwise
         }
         return 0
+    }
+}
+
+public enum VideoQuality: String, Codable, CaseIterable, Sendable, Hashable {
+    case mobile, low, medium, high
+    case originalH264 = "orig_h264"
+
+    public var rank: Int {
+        switch self {
+        case .mobile: 0
+        case .low: 1
+        case .medium: 2
+        case .high: 3
+        case .originalH264: 4
+        }
+    }
+
+    public var displayName: String {
+        switch self {
+        case .mobile: "Mobile"
+        case .low: "Low"
+        case .medium: "Medium"
+        case .high: "High"
+        case .originalH264: "Original Resolution (Compatible)"
+        }
+    }
+
+    public static func closest(to target: VideoQuality, in available: Set<VideoQuality>) -> VideoQuality? {
+        available.min {
+            let left = (abs($0.rank - target.rank), $0.rank > target.rank ? 1 : 0, $0.rank)
+            let right = (abs($1.rank - target.rank), $1.rank > target.rank ? 1 : 0, $1.rank)
+            return left < right
+        }
+    }
+}
+
+public enum VideoQualityPreference: String, Codable, CaseIterable, Sendable, Hashable {
+    case automatic, original, high, medium, low, mobile
+
+    public var targetQuality: VideoQuality? {
+        switch self {
+        case .automatic, .high: .high
+        case .medium: .medium
+        case .low: .low
+        case .mobile: .mobile
+        case .original: nil
+        }
+    }
+
+    public var displayName: String {
+        switch self {
+        case .automatic: "Automatic"
+        case .original: "Original"
+        case .high: "High"
+        case .medium: "Medium"
+        case .low: "Low"
+        case .mobile: "Mobile"
+        }
+    }
+}
+
+public enum VideoPlaybackVariant: Hashable, Codable, Sendable {
+    case original
+    case converted(VideoQuality)
+
+    public var cacheComponent: String {
+        switch self {
+        case .original: "original"
+        case .converted(let quality): quality.rawValue
+        }
+    }
+
+    public var displayName: String {
+        switch self {
+        case .original: "Original"
+        case .converted(let quality): quality.displayName
+        }
+    }
+}
+
+public struct VideoPlaybackResource: Hashable, Codable, Sendable {
+    public let unitID: Int64
+    public let cacheKey: String
+    public let filename: String?
+    public let variant: VideoPlaybackVariant
+
+    public init(unitID: Int64, cacheKey: String, filename: String?, variant: VideoPlaybackVariant) {
+        self.unitID = unitID
+        self.cacheKey = cacheKey
+        self.filename = filename
+        self.variant = variant
     }
 }
 

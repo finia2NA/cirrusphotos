@@ -22,7 +22,17 @@ struct PhotoViewerView: View {
                               onClose: onClose) { viewer.zoom = Double($0) }
                 .accessibilityLabel(viewer.filename)
 
-            if viewer.image == nil, !viewer.showsUnsupportedVideo,
+            if let state = viewer.state, let resource = state.videoResource {
+                VideoPlayerView(repository: viewer.repository, resource: resource,
+                                selectionGeneration: state.selection.generation,
+                                allowNetwork: state.allowNetwork && state.metadataVerified,
+                                poster: viewer.image, toolbarInset: toolbarInset,
+                                onPrevious: viewer.navigatePrevious,
+                                onNext: viewer.navigateNext, onClose: onClose)
+                    .accessibilityLabel(viewer.filename)
+            }
+
+            if viewer.image == nil, viewer.state?.item?.isVideo != true,
                viewer.invalidationMessage == nil {
                 if let message = viewer.emptyStateMessage {
                     Label(message, systemImage: "photo.badge.exclamationmark")
@@ -36,10 +46,10 @@ struct PhotoViewerView: View {
                 }
             }
 
-            if viewer.showsUnsupportedVideo {
+            if viewer.state?.item?.isVideo == true, viewer.state?.videoResource == nil {
                 VStack(spacing: 8) {
                     Image(systemName: "video.slash")
-                    Text("Video playback is not supported.")
+                    Text("This video has no playable resource.")
                 }
                 .font(.callout)
                 .padding(16)

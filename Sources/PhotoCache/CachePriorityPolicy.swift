@@ -9,6 +9,7 @@ public enum CacheRetentionClass: String, CaseIterable, Sendable {
     case smallerFallbackThumbnail
     case fullImage
     case optionalThumbnail
+    case videoPlayback
     case locationIndex
 }
 
@@ -23,6 +24,7 @@ public enum CachePriorityPolicy {
         .smallerFallbackThumbnail,
         .fullImage,
         .optionalThumbnail,
+        .videoPlayback,
     ]
 
     static var lowestToHighest: [CacheRetentionClass] {
@@ -42,6 +44,7 @@ public enum CachePriorityPolicy {
         case .timeline: .activeTimeline
         case .albumList: .activeTimeline
         case .locationIndex: .locationIndex
+        case .videoSegment: .videoPlayback
         }
     }
 }

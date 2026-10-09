@@ -142,6 +142,34 @@ Consequences:
 - Retrieve the stored original through `SYNO.Foto.Download`, not by inventing an `original` streaming quality.
 - Range support and validators must be checked per resource response rather than inferred from `Accept-Ranges` alone.
 
+## Stored-original request and response
+
+The stored original was requested from `SYNO.Foto.Download` v2 using the same `unit_id` array and `cache_key` contract already used for original photos. Two bounded requests returned:
+
+```text
+Range: bytes=0-1023
+HTTP 206
+Content-Type: video/mp4
+Content-Length: 1024
+Content-Range: bytes 0-1023/4510092
+ETag: present
+Last-Modified: present
+Content-Disposition: present
+```
+
+```text
+Range: bytes=1048576-1049599
+HTTP 206
+Content-Type: video/mp4
+Content-Length: 1024
+Content-Range: bytes 1048576-1049599/4510092
+ETag: present
+Last-Modified: present
+Content-Disposition: present
+```
+
+The original download endpoint therefore supports the same custom resource-loader design and arbitrary seeking. As with converted streaming, it omitted `Accept-Ranges`; the `206` and exact `Content-Range` are authoritative.
+
 ## Remaining bounded probes
 
-Before completing the transport, repeat the 1 KiB range check for `medium` and `orig_h264` items and confirm nonzero-range seeking. Confirm whether `SYNO.Foto.Download` honors Range for stored videos. These checks do not block decoding the item contract or implementing advertised-quality resolution.
+Repeat the 1 KiB range check for advertised `medium` and `orig_h264` items as transport integration coverage. Their request contract is the same observed `SYNO.Foto.Streaming` contract and does not block implementation.

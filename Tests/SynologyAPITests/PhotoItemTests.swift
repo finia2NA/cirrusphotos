@@ -4,6 +4,33 @@ import XCTest
 @testable import SynologyAPI
 
 final class PhotoItemTests: XCTestCase {
+    func testObservedVideoConversionAndClosestQualitySelection() throws {
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":41,"filename":"clip.mov","time":1700000000,"type":"video","additional":{"thumbnail":{"unit_id":51,"cache_key":"revision"},"video_convert":[{"quality":"low","metadata":{"duration":5000,"container_type":"mp4","video_codec":"h264"}},{"quality":"high","metadata":{"duration":"5000","resolution_x":1920,"resolution_y":1080}}],"video_meta":{"duration":5000,"video_codec":"hevc"}}}
+        """.utf8))
+        XCTAssertEqual(item.additional?.videoConvert?.count, 2)
+        XCTAssertEqual(item.additional?.videoConvert?.first?.metadata.duration, 5)
+        XCTAssertEqual(item.videoPlaybackResource(preference: .medium)?.variant, .converted(.low))
+        XCTAssertEqual(item.videoPlaybackResource(preference: .high)?.variant, .converted(.high))
+        XCTAssertEqual(item.videoPlaybackResource(preference: .mobile)?.variant, .converted(.low))
+        XCTAssertEqual(item.videoPlaybackResource(preference: .original)?.variant, .original)
+        XCTAssertEqual(VideoQualityPreference(rawValue: "mobile"), .mobile)
+    }
+
+    func testClosestQualityPrefersDownOnTieAndMovesUpWhenNecessary() {
+        XCTAssertEqual(VideoQuality.closest(to: .medium, in: [.low, .high]), .low)
+        XCTAssertEqual(VideoQuality.closest(to: .high, in: [.medium, .originalH264]), .medium)
+        XCTAssertEqual(VideoQuality.closest(to: .low, in: [.medium]), .medium)
+        XCTAssertNil(VideoQuality.closest(to: .high, in: []))
+    }
+
+    func testVideoWithoutAdvertisedConversionFallsBackToOriginal() throws {
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":42,"time":1700000000,"type":"video","additional":{"thumbnail":{"unit_id":52,"cache_key":"revision"},"video_convert":[],"video_meta":{"duration":8000}}}
+        """.utf8))
+        XCTAssertEqual(item.videoPlaybackResource(preference: .automatic)?.variant, .original)
+    }
+
     func testOptimisticQuarterTurnSwapsResolutionAndMapsOrientation() throws {
         let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
         {"id":1,"time":1700000000,"type":"photo","additional":{"resolution":{"width":400,"height":300},"orientation":1,"orientation_original":1}}

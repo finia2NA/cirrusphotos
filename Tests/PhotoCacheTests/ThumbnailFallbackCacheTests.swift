@@ -41,6 +41,7 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
             .smallerFallbackThumbnail,
             .fullImage,
             .optionalThumbnail,
+            .videoPlayback,
         ])
     }
 

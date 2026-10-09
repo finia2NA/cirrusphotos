@@ -14,6 +14,7 @@ public actor PhotoViewerSession {
     let index: LibraryIndex
     let thumbnailSize: ThumbnailSize
     let loadsLargePreviews: Bool
+    let videoQuality: VideoQualityPreference
 
     var allowNetwork: Bool
     var desired: PhotoViewerLocation
@@ -41,12 +42,14 @@ public actor PhotoViewerSession {
                 index: LibraryIndex,
                 seed: PhotoViewerSeed, thumbnailSize: ThumbnailSize = .xl,
                 loadsLargePreviews: Bool = false,
+                videoQuality: VideoQualityPreference = .automatic,
                 allowNetwork: Bool, maximumPages: Int = 3) {
         self.repository = repository
         self.collection = collection
         self.index = index
         self.thumbnailSize = thumbnailSize
         self.loadsLargePreviews = loadsLargePreviews
+        self.videoQuality = videoQuality
         self.allowNetwork = allowNetwork
         metadata = ViewerMetadataWindow(index: index, maximumPages: maximumPages)
         desired = metadata.seedLocation(sectionIndex: seed.sectionIndex, pageOffset: seed.pageOffset)
@@ -201,6 +204,7 @@ public actor PhotoViewerSession {
             metadataVerified: metadataVerified,
             thumbnailData: images.thumbnailData,
             fullImageData: images.fullImageData,
+            videoResource: currentItem?.videoPlaybackResource(preference: videoQuality),
             metadataStatus: metadataStatus,
             thumbnailStatus: images.thumbnailStatus,
             fullImageStatus: images.fullImageStatus,

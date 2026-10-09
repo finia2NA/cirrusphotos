@@ -336,6 +336,7 @@ struct AppShellView: View {
                                          index: LibraryIndex(snapshot: snapshot),
                                          request: request, thumbnailSize: model.thumbnailSize,
                                          loadsLargePreviews: model.loadsLargeViewerPreviews,
+                                         videoQuality: model.videoQuality,
                                          allowNetwork: model.timelineVerified(for: collection),
                                          snapshotRevision: model.viewerSnapshotRevision(for: collection))
         lastViewerFollowSelection = nil
@@ -413,8 +414,10 @@ struct AppShellView: View {
                 .help("Back to Library")
             }
             .sharedBackgroundVisibility(.hidden)
-            ToolbarItem(placement: .navigation) {
-                ViewerZoomControl(viewer: viewer)
+            if viewer.state?.item?.isVideo != true {
+                ToolbarItem(placement: .navigation) {
+                    ViewerZoomControl(viewer: viewer)
+                }
             }
             ToolbarItem(placement: .principal) {
                 ViewerToolbarTitle(viewer: viewer)
@@ -422,8 +425,10 @@ struct AppShellView: View {
             .sharedBackgroundVisibility(.hidden)
             ToolbarSpacer(.flexible, placement: .primaryAction)
             ToolbarItemGroup(placement: .primaryAction) {
-                ViewerRotationControls(viewer: viewer)
-                    .frame(height: ToolbarMetrics.controlHeight)
+                if viewer.state?.item?.isVideo != true {
+                    ViewerRotationControls(viewer: viewer)
+                        .frame(height: ToolbarMetrics.controlHeight)
+                }
                 ViewerFavoriteControl(viewer: viewer)
                     .frame(height: ToolbarMetrics.controlHeight)
                 InfoPanelToolbarControl()

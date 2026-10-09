@@ -146,6 +146,11 @@ struct FullImageResolution: Sendable {
     let data: Data
 }
 
+struct VideoSegmentJob: Sendable {
+    let id: UUID
+    let task: Task<CachedVideoSegment, Error>
+}
+
 public enum ThumbnailCacheOutcome: Sendable, Equatable {
     case fetched
     case reused

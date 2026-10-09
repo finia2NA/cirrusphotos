@@ -69,6 +69,11 @@ final class LibraryModel: ObservableObject {
     @Published var loadsLargeViewerPreviews: Bool = UserDefaults.standard.bool(forKey: "loadsLargeViewerPreviews") {
         didSet { UserDefaults.standard.set(loadsLargeViewerPreviews, forKey: "loadsLargeViewerPreviews") }
     }
+    @Published var videoQuality: VideoQualityPreference = VideoQualityPreference(
+        rawValue: UserDefaults.standard.string(forKey: "videoQuality") ?? "automatic"
+    ) ?? .automatic {
+        didSet { UserDefaults.standard.set(videoQuality.rawValue, forKey: "videoQuality") }
+    }
     @Published var itemsPerRow: Int = LibraryModel.persistedItemsPerRow() {
         didSet {
             let valid = min(10, max(3, itemsPerRow))

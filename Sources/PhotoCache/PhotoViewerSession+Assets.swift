@@ -32,8 +32,42 @@ extension PhotoViewerSession {
 
         let resource: FullImageResource?
         if item.isVideo {
-            images.fullImageStatus = .unsupported("Video playback is not supported.")
+            images.fullImageStatus = .idle
             resource = nil
+            let requestedPreference = videoQuality
+            let isMetadataVerified = metadataVerified
+            let knownQualities = (item.additional?.videoConvert ?? [])
+                .compactMap(\.knownQuality)
+                .sorted { $0.rank < $1.rank }
+                .map(\.rawValue)
+                .joined(separator: ",")
+            if let playback = item.videoPlaybackResource(preference: requestedPreference) {
+                let target = requestedPreference.targetQuality?.rawValue ?? "original"
+                let chosen = playback.variant.cacheComponent
+                let reason: String
+                switch playback.variant {
+                case .original:
+                    reason = requestedPreference == .original
+                        ? "explicit_original"
+                        : "no_converted_rendition_available"
+                case .converted(let quality):
+                    if quality == requestedPreference.targetQuality {
+                        reason = "exact_match"
+                    } else if let targetQuality = requestedPreference.targetQuality,
+                              quality.rank < targetQuality.rank {
+                        reason = "requested_not_available_closest_lower"
+                    } else {
+                        reason = "requested_not_available_closest_higher"
+                    }
+                }
+                SynologyDiagnostics.videoPlayer.info(
+                    "Video quality selected item_id=\(item.id, privacy: .public) unit_id=\(playback.unitID, privacy: .public) settings=\(requestedPreference.rawValue, privacy: .public) target=\(target, privacy: .public) chosen=\(chosen, privacy: .public) reason=\(reason, privacy: .public) advertised=\(knownQualities, privacy: .public) metadata_verified=\(isMetadataVerified, privacy: .public) network_allowed=\(network, privacy: .public)"
+                )
+            } else {
+                SynologyDiagnostics.videoPlayer.error(
+                    "Video quality unavailable item_id=\(item.id, privacy: .public) settings=\(requestedPreference.rawValue, privacy: .public) target=\(requestedPreference.targetQuality?.rawValue ?? "original", privacy: .public) chosen=none reason=missing_playback_identity advertised=\(knownQualities, privacy: .public) has_thumbnail=\(descriptor != nil, privacy: .public)"
+                )
+            }
         } else if let available = item.fullImageResource {
             resource = available
             SynologyDiagnostics.viewer.debug(

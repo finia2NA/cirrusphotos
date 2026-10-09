@@ -14,6 +14,7 @@ public actor CachedPhotosRepository {
     let runID = UUID().uuidString
     let gate = NetworkGate()
     let fullImageGate = FullImageGate()
+    let videoTransferGate = VideoTransferGate()
     var authenticationState = RepositoryAuthenticationState()
     var metadata = RepositoryMetadataWork()
     var imageWork = RepositoryImageWork()

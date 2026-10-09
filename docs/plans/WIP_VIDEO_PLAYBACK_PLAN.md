@@ -1,6 +1,6 @@
 # Video playback support
 
-Status: proposed. A read-only protocol probe against `cirrus` captured the item conversion shape and a working ranged streaming request; see [the sanitized capture](../captures/video-streaming-probe-2026-10-09.md). A few bounded range checks remain in the transport checkpoint.
+Status: in progress. The initial playback slice is implemented: advertised-quality resolution, converted/original ranged transport, lowest-priority segment caching, the Settings default, ordinary-video viewer opening, and the native player bridge. Read-only protocol probes against `cirrus` captured the item conversion shape plus working initial and nonzero ranged requests for converted and stored-original videos; see [the sanitized capture](../captures/video-streaming-probe-2026-10-09.md). Manual playback acceptance and the remaining enhancements in this plan are still open.
 
 ## Outcome
 
@@ -16,13 +16,14 @@ Captured evidence:
 
 - `cirrus` reports `SYNO.Foto.Streaming` through `SYNO.API.Info`, with API versions 1 through 2 and `entry.cgi` as its path.
 - Synology Photos' own UI strings contain Original, High, Medium, Low, and Mobile video-quality labels.
-- Item pages already request `video_convert` and `video_meta`, but `PhotoItem.Additional` currently discards `video_convert`. A live response shows `video_convert` is an array of `{quality, metadata}` objects and that an empty array represents no advertised conversion.
+- Item pages request and decode `video_convert` and `video_meta`. A live response shows `video_convert` is an array of `{quality, metadata}` objects and that an empty array represents no advertised conversion.
 - Among the 1,000 newest videos, the observed advertised sets were High (765), `orig_h264` (170), none (32), High + `orig_h264` (17), and Medium + `orig_h264` (16). Low and Mobile were not advertised in that sample.
 - A GET to `SYNO.Foto.Streaming` v2 with item unit ID, `type="unit"`, cache key, and an advertised `quality="high"` honored `Range: bytes=0-1023` with `206`, an exact `Content-Range`, `video/mp4`, an MP4 `ftyp` prefix, ETag, and Last-Modified.
 - Asking for an unadvertised converted quality returned 404. Asking the streaming endpoint for `quality="original"` returned API error 120 (`quality`/`condition`). Quality fallback must therefore happen in the client, and the raw original must use the download endpoint.
+- `SYNO.Foto.Download` v2 honored both initial and nonzero 1 KiB video ranges with `206`, exact `Content-Range`, `video/mp4`, ETag, and Last-Modified. It can back arbitrary seeking for the stored Original.
 - The existing authenticated URL session has a host-scoped certificate exception. A raw authenticated playback URL handed directly to `AVPlayer` would bypass that session and cannot be assumed to pass TLS or session authentication.
 
-The capture is sufficient to specify the item model, converted-stream endpoint, and quality resolver without a user-provided HAR. During the transport checkpoint, use the same bounded probe to confirm nonzero ranges plus advertised Medium and `orig_h264` responses, and whether `SYNO.Foto.Download` honors Range for stored originals. Record sanitized observed fixtures in `Tests/SynologyAPITests/Fixtures/`. If later observations contradict the capture, update this plan before adding compatibility guesses.
+The capture is sufficient to specify the item model, converted/original transport, range cache, and quality resolver without a user-provided HAR. During transport integration, repeat a bounded request for advertised Medium and `orig_h264` items as coverage. Record sanitized observed fixtures in `Tests/SynologyAPITests/Fixtures/`. If later observations contradict the capture, update this plan before adding compatibility guesses.
 
 ## Product decisions
 
@@ -33,8 +34,9 @@ Add a Settings picker named **Default video quality** with:
 - **Automatic** (default): target High and apply the same closest-available rule as an explicit High choice. Use Original only when no compatible converted rendition is advertised. This prioritizes quick startup and avoids making the largest source file the normal remote path.
 - **Original**: request the stored file without a quality downgrade. Report an actionable playback error if AVFoundation cannot decode it; do not silently switch quality after an explicit Original choice.
 - **High**, **Medium**, and **Low**: target that converted quality. If it is unavailable, select the closest advertised converted rendition. At equal distance, choose the lower rendition rather than the higher one. Use Original only when no compatible converted rendition is advertised.
+- **Mobile**: target the smallest converted quality, moving upward only when Mobile is not advertised.
 
-Use the ordered server-quality ladder `mobile < low < medium < high < orig_h264`. `orig_h264` is an observed streaming rendition and is not the stored Original. Keep Mobile and `orig_h264` internal: Mobile can satisfy a closest-available fallback, while `orig_h264` is the next step above High. The stored Original is a separate explicit policy/resource and is not part of converted-distance selection.
+Use the ordered server-quality ladder `mobile < low < medium < high < orig_h264`. `orig_h264` is an observed streaming rendition and is not the stored Original. Keep `orig_h264` internal; it is the next step above High. The stored Original is a separate explicit policy/resource and is not part of converted-distance selection.
 
 Resolve a target only from the current item's `video_convert` array:
 
@@ -66,7 +68,7 @@ The viewer toolbar should show the effective rendition (for example, `High · Pl
 
 Use one cache budget and one LRU. Do not create a separate unbounded AVFoundation or `URLCache` store.
 
-Recommended implementation: fixed-size persistent video segments (initially 4 MiB, adjustable after measuring request patterns), keyed by account namespace, video resource revision, effective quality, and byte-range index. The resource's small content descriptor records length, MIME type, validators, and the completed segment map. Coalesce overlapping requests so AVFoundation, a retry, and another viewer do not download the same range twice.
+The implementation uses fixed-size persistent 64 KiB video segments keyed by account namespace, video resource revision, effective quality, and byte-range index. This is intentionally much smaller than the original 4 MiB proposal: an observed 1 MiB response took 171.98 seconds, and buffered `URLSession.data(for:)` withheld that range from AVFoundation until completion, causing its resource loader to time out. Coalesce overlapping requests so AVFoundation, a retry, and another viewer do not download the same range twice.
 
 Retention order becomes highest to lowest:
 
@@ -187,7 +189,7 @@ Add a toolbar quality menu only for videos. If a play/pause keyboard shortcut is
 
 Each checkpoint should build and have focused tests before continuing:
 
-1. **Protocol evidence:** use the existing sanitized capture, add its response shapes as fixtures, and finish the bounded Medium/`orig_h264`, nonzero-range, and original-download checks. No user HAR is required for the currently observed contract.
+1. **Protocol evidence:** use the existing sanitized capture, add its response shapes as fixtures, and repeat bounded Medium/`orig_h264` requests as integration coverage. No user HAR is required for the currently observed contract.
 2. **Transport spike:** play one known video through an authenticated, certificate-safe AVFoundation resource loader with no persistent video cache. Verify startup, seek, cancellation, and every quality on `cirrus`. Delete spike-only code or turn it into the typed transport path.
 3. **Models and transport:** land strict observed decoding, semantic quality selection, bounded ranged responses, diagnostics, and fake transports.
 4. **Cache:** land descriptor/segment persistence, shared range jobs, validator invalidation, leases, eviction rank, reset behavior, and cache usage accounting.
@@ -232,7 +234,7 @@ Run `swift test` after the focused suites. The opt-in live test must use a small
 ## Manual acceptance on `cirrus`
 
 - Open short and long H.264 and HEVC videos, plus MOV and MP4 containers. Confirm poster-first display, correct orientation/aspect ratio, audio, duration, scrubber, and end behavior.
-- Compare Automatic, Original, High, Medium, and Low startup time and network bytes. Confirm the toolbar reports the actual fallback rendition.
+- Compare Automatic, Original, High, Medium, Low, and Mobile startup time and network bytes. Confirm the toolbar reports the actual fallback rendition and unavailable requested quality.
 - Seek repeatedly and watch the same interval again; confirm cached intervals avoid repeat transfers and memory stays bounded.
 - Throttle the network and confirm a converted quality begins substantially earlier than Original where the NAS provides it.
 - Disconnect after caching selected intervals. Confirm those intervals play, missing intervals report offline status, and no item is falsely marked fully offline-ready.

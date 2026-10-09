@@ -803,7 +803,7 @@ extension PhotoViewerAssetLifecycleTests {
         XCTAssertEqual(speculativeOriginals, 0)
     }
 
-    func testVideoUsesPreviewAndReportsUnsupportedPlayback() async throws {
+    func testVideoUsesPreviewAndPublishesPlaybackResourceWithoutPhotoOriginal() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let video = try item(12, type: "video")
         let transport = ViewerTransport()
@@ -820,11 +820,9 @@ extension PhotoViewerAssetLifecycleTests {
         _ = await session.state()
         let preview = await waitUntil { await session.state().thumbnailData != nil }
         XCTAssertTrue(preview)
-        if case .unsupported(let message) = await session.state().fullImageStatus {
-            XCTAssertTrue(message.contains("Video"))
-        } else {
-            XCTFail("Video playback should be explicitly unsupported")
-        }
+        let state = await session.state()
+        XCTAssertEqual(state.videoResource?.variant, .original)
+        XCTAssertEqual(state.fullImageStatus, .idle)
         let fullCalls = await transport.fullImageCalls
         XCTAssertTrue(fullCalls.isEmpty)
         await session.close()

@@ -4,7 +4,7 @@ import SQLite3
 import SynologyAPI
 
 public enum CacheKind: Int, Sendable {
-    case previewThumbnail, fullImage, thumbnail, page, timeline, albumList, locationIndex
+    case previewThumbnail, fullImage, thumbnail, page, timeline, albumList, locationIndex, videoSegment
 }
 
 public struct CacheEntry: Sendable {
@@ -44,7 +44,7 @@ public enum CacheBudget {
 }
 
 public actor DiskCache {
-    private static let schemaVersion = 2
+    private static let schemaVersion = 3
     private let root: URL
     private let images: URL
     nonisolated(unsafe) private var db: OpaquePointer?
@@ -198,8 +198,12 @@ public actor DiskCache {
         } else {
             storedKind = kind
         }
-        let filename = (storedKind == .previewThumbnail || storedKind == .thumbnail || storedKind == .fullImage)
-            ? key + ".img" : nil
+        let filename: String?
+        switch storedKind {
+        case .previewThumbnail, .thumbnail, .fullImage: filename = key + ".img"
+        case .videoSegment: filename = key + ".video"
+        default: filename = nil
+        }
         if let filename {
             try data.write(to: images.appendingPathComponent(filename), options: .atomic)
         }
@@ -259,7 +263,8 @@ public actor DiskCache {
               expectedMetadataGeneration == metadataGeneration else {
             return .generationChanged
         }
-        guard kind != .thumbnail, kind != .previewThumbnail, kind != .fullImage else {
+        guard kind != .thumbnail, kind != .previewThumbnail, kind != .fullImage,
+              kind != .videoSegment else {
             throw CacheError.storage
         }
         let currentRevision = try storedRevision(for: key)
@@ -340,7 +345,7 @@ public actor DiskCache {
         guard sqlite3_exec(db, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK else {
             throw CacheError.storage
         }
-        let imageKinds = [CacheKind.previewThumbnail, .fullImage, .thumbnail]
+        let imageKinds = [CacheKind.previewThumbnail, .fullImage, .thumbnail, .videoSegment]
             .map { String($0.rawValue) }.joined(separator: ",")
         guard sqlite3_exec(db, "DELETE FROM entries WHERE kind NOT IN (\(imageKinds))", nil, nil, nil) == SQLITE_OK,
               sqlite3_exec(db, "COMMIT", nil, nil, nil) == SQLITE_OK else {

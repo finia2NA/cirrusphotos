@@ -30,20 +30,23 @@ Location labels and antimeridian-specific clustering are not implemented.
 
 ### Viewer and Info panel
 
-Space or double-click opens one photo in the same window. Arrow navigation, zoom, pan, thumbnail-first loading, cached large previews, originals, filename, capture-local date, and favorite mutation are supported. Space, Escape, or Back closes the viewer. Live Photos currently show their still image; video playback is deferred.
+Space or double-click opens a photo or ordinary video in the same window. Photos support arrow navigation, zoom, pan, thumbnail-first loading, cached large previews, and originals. Videos retain the thumbnail as a poster until playback begins, use native playback controls, and stream authenticated byte ranges without first downloading the whole file. Arrow navigation remains previous/next and Space, Escape, or Back closes the viewer. Filename, capture-local date, favorite mutation, and the Info panel remain available for both media types. Live Photos currently show their still image; their video component is not played.
+
+Settings provides Automatic, Original, High, Medium, Low, and Mobile default video quality choices. Automatic targets High. For a converted choice, the app uses only renditions advertised by the current item; if the requested quality is absent, it chooses the closest advertised quality and prefers the lower one when equally distant. If no converted rendition is advertised, it streams the stored original. The toolbar reports the effective rendition and identifies an unavailable requested quality when fallback occurs.
 
 The Cmd+I Info utility panel follows the active viewer item or browser selection. It shows selection totals and date range, resolves aggregate size and media counts, and shows single-item filename, copyable item ID and available Synology folder path, capture date, camera/exposure details, dimensions, size, format, and available location context. It is transient and excluded from Mission Control and the normal window cycle.
 
 ## Cache and network behavior
 
-- Timelines, exact pages, albums, location records, thumbnails, previews, and originals are delivered cached-first.
+- Timelines, exact pages, albums, location records, thumbnails, previews, originals, and previously fetched video ranges are delivered cached-first.
 - One repository-owned metadata lifecycle coordinates admission, shared jobs, stale-result rejection, storage generations, atomic same-row commits, and successful invalidation revisions.
-- A metadata-only Settings reset removes timelines, pages, album metadata, locations, and session filters while preserving compressed images, validators, decoded thumbnails, and already admitted image transfers. Full clear removes both metadata and images.
+- A metadata-only Settings reset removes timelines, pages, album metadata, locations, and session filters while preserving compressed media, validators, decoded thumbnails, and already admitted media transfers. Full clear removes metadata and media.
 - The Map location index retains conservative fingerprint validation. Strict Diff transport and merge infrastructure exists, but cross-run Diff proof remains disabled until all recorded evidence gates pass.
 - Thumbnail rendition changes preserve other cached sizes. Compatible fallback renditions remain visible until the selected rendition is available.
 - An optional viewer setting loads cached or network-backed `xl` previews alongside originals when the library rendition is smaller.
 - The Library menu can warm the selected thumbnail rendition for an inclusive populated-day range using bounded, cancellable background work.
-- Settings controls thumbnail rendition, large viewer previews, and a 200 MB–100 GB disk budget.
+- Demanded video bytes are persisted in fixed-size segments under the same disk budget. They have lower retention priority than every photo rendition, use a separate two-transfer lane, and are never prefetched for adjacent videos. A partially cached video is not presented as fully available offline.
+- Settings controls thumbnail rendition, large viewer previews, default video quality, and a 200 MB–100 GB disk budget.
 
 ## Mutations and freshness
 
@@ -55,4 +58,4 @@ Photo capture times are treated as capture-local wall-clock values. Grouping and
 
 ## Deferred scope
 
-Generated people/subject albums, general client-side filtering, Shared Space browsing, video playback, place names, upload, sharing, album writes, and coordinated session renewal after expiry remain future work. New collection types should reuse the repository and shared browser rather than introduce destination-specific cache systems.
+Generated people/subject albums, general client-side filtering, Shared Space browsing, Live Photo motion playback, place names, upload, sharing, album writes, and coordinated session renewal after expiry remain future work. New collection types should reuse the repository and shared browser rather than introduce destination-specific cache systems.

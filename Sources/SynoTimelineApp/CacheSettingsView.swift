@@ -14,6 +14,14 @@ struct CacheSettingsView: View {
             }
             Toggle("Load large previews in viewer", isOn: $library.loadsLargeViewerPreviews)
                 .disabled(library.thumbnailSize == .xl)
+            Picker("Default video quality", selection: $library.videoQuality) {
+                ForEach(VideoQualityPreference.allCases, id: \.self) { quality in
+                    Text(quality.displayName).tag(quality)
+                }
+            }
+            Text("Converted qualities start faster and use less bandwidth. Original may be slower or unsupported by the Mac.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             HStack {
                 Text("Maximum cache")
                 Slider(value: $library.budgetFraction, in: 0...1)
@@ -29,7 +37,7 @@ struct CacheSettingsView: View {
                 Text(ByteCountFormatter.string(fromByteCount: library.cacheUsage, countStyle: .file))
                 Button("Clear Metadata Cache") { Task { await library.clearMetadataCache() } }
                     .disabled(library.cacheResetInProgress)
-                    .help("Remove timelines, loaded sections, album metadata and the map index. Keep thumbnails, previews and originals.")
+                    .help("Remove timelines, loaded sections, album metadata and the map index. Keep thumbnails, previews, originals and cached video ranges.")
                 Button("Clear Cache") { Task { await library.clearCache() } }
                     .disabled(library.cacheResetInProgress)
             }

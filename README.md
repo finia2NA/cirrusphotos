@@ -20,7 +20,7 @@ To build the app bundle, open macOS Console, and run the app in the foreground, 
 make debug
 ```
 
-In Console, use `s:local.cirrus.syno-timeline` as a subsystem search and save it for reuse. Its category column distinguishes viewer asset coordination, original and rotation repository/transport work, and decoding; those categories can be added to narrower Console filters. Press Control-C in the terminal to stop the app. `make start` builds and opens the app normally without opening Console.
+In Console, use `s:local.cirrus.syno-timeline` as a subsystem search and save it for reuse. For video playback, the useful categories are `viewer.video`, `repository.video`, and `transport.video`: they show AVPlayer state, cache/range assembly, and NAS request status and timing respectively. The logs include item/unit IDs, effective quality, byte ranges, HTTP status, and sanitized error domain/code, but exclude filenames, cache keys, credentials, session data, authenticated URLs, and response bodies. Press Control-C in the terminal to stop the app. `make start` builds and opens the app normally without opening Console.
 
 To remove build artifacts so the next `make` or `make debug` performs a clean build, use:
 

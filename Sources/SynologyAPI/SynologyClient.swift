@@ -590,6 +590,103 @@ public actor SynologyClient: PhotosTransport {
                                  lastModified: http.value(forHTTPHeaderField: "Last-Modified"))
     }
 
+    public func videoRange(_ resource: VideoPlaybackResource,
+                           range: ClosedRange<Int64>) async throws -> VideoRangeResponse {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        guard range.lowerBound >= 0, range.upperBound >= range.lowerBound,
+              range.upperBound - range.lowerBound < 8 * 1_024 * 1_024 else {
+            throw SynologyAPIError.invalidResponse
+        }
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+        switch resource.variant {
+        case .original:
+            components.path = "/webapi/entry.cgi"
+            components.queryItems = [
+                URLQueryItem(name: "api", value: "SYNO.Foto.Download"),
+                URLQueryItem(name: "version", value: "2"),
+                URLQueryItem(name: "method", value: "download"),
+                URLQueryItem(name: "unit_id", value: "[\(resource.unitID)]"),
+                URLQueryItem(name: "cache_key", value: resource.cacheKey),
+                URLQueryItem(name: "_sid", value: sid),
+            ]
+        case .converted(let quality):
+            components.path = "/webapi/entry.cgi/SYNO.Foto.Streaming"
+            components.queryItems = [
+                URLQueryItem(name: "api", value: "SYNO.Foto.Streaming"),
+                URLQueryItem(name: "version", value: "2"),
+                URLQueryItem(name: "method", value: "streaming"),
+                URLQueryItem(name: "id", value: String(resource.unitID)),
+                URLQueryItem(name: "type", value: "\"unit\""),
+                URLQueryItem(name: "quality", value: "\"\(quality.rawValue)\""),
+                URLQueryItem(name: "cache_key", value: resource.cacheKey),
+                URLQueryItem(name: "_sid", value: sid),
+            ]
+        }
+        if let synoToken { components.queryItems?.append(URLQueryItem(name: "SynoToken", value: synoToken)) }
+        guard let url = components.url else { throw SynologyAPIError.invalidResponse }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 60
+        request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
+        request.setValue("bytes=\(range.lowerBound)-\(range.upperBound)", forHTTPHeaderField: "Range")
+        request.setValue("video/*,application/octet-stream;q=0.8", forHTTPHeaderField: "Accept")
+        let data: Data
+        let response: URLResponse
+        let started = Date()
+        SynologyDiagnostics.videoTransport.info(
+            "Video range request started unit_id=\(resource.unitID, privacy: .public) quality=\(resource.variant.cacheComponent, privacy: .public) lower=\(range.lowerBound, privacy: .public) upper=\(range.upperBound, privacy: .public)"
+        )
+        do { (data, response) = try await session.data(for: request) }
+        catch is CancellationError {
+            SynologyDiagnostics.videoTransport.debug(
+                "Video range request cancelled unit_id=\(resource.unitID, privacy: .public) quality=\(resource.variant.cacheComponent, privacy: .public) lower=\(range.lowerBound, privacy: .public) upper=\(range.upperBound, privacy: .public)"
+            )
+            throw CancellationError()
+        }
+        catch {
+            let nsError = error as NSError
+            SynologyDiagnostics.videoTransport.error(
+                "Video range transport failed unit_id=\(resource.unitID, privacy: .public) quality=\(resource.variant.cacheComponent, privacy: .public) lower=\(range.lowerBound, privacy: .public) upper=\(range.upperBound, privacy: .public) error_domain=\(nsError.domain, privacy: .public) error_code=\(nsError.code, privacy: .public)"
+            )
+            throw SynologyAPIError.transport(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
+        guard http.statusCode == 206,
+              let contentRange = http.value(forHTTPHeaderField: "Content-Range"),
+              let parsed = Self.parseContentRange(contentRange),
+              parsed.range.lowerBound == range.lowerBound,
+              parsed.range.upperBound <= range.upperBound,
+              parsed.total > parsed.range.upperBound,
+              data.count == Int(parsed.range.upperBound - parsed.range.lowerBound + 1),
+              let contentType = http.value(forHTTPHeaderField: "Content-Type")?.lowercased(),
+              contentType.hasPrefix("video/") || contentType.hasPrefix("application/octet-stream") else {
+            SynologyDiagnostics.videoTransport.error(
+                "Video range rejected unit_id=\(resource.unitID, privacy: .public) quality=\(resource.variant.cacheComponent, privacy: .public) status=\(http.statusCode, privacy: .public) bytes=\(data.count, privacy: .public) content_range=\(http.value(forHTTPHeaderField: "Content-Range") ?? "nil", privacy: .public) content_type=\(http.value(forHTTPHeaderField: "Content-Type") ?? "nil", privacy: .public)"
+            )
+            throw SynologyAPIError.invalidResponse
+        }
+        let elapsedMS = Int(Date().timeIntervalSince(started) * 1_000)
+        SynologyDiagnostics.videoTransport.info(
+            "Video range response accepted unit_id=\(resource.unitID, privacy: .public) quality=\(resource.variant.cacheComponent, privacy: .public) status=\(http.statusCode, privacy: .public) lower=\(parsed.range.lowerBound, privacy: .public) upper=\(parsed.range.upperBound, privacy: .public) bytes=\(data.count, privacy: .public) total=\(parsed.total, privacy: .public) elapsed_ms=\(elapsedMS, privacy: .public)"
+        )
+        return VideoRangeResponse(data: data, range: parsed.range, totalLength: parsed.total,
+                                  contentType: contentType,
+                                  etag: http.value(forHTTPHeaderField: "ETag"),
+                                  lastModified: http.value(forHTTPHeaderField: "Last-Modified"))
+    }
+
+    private static func parseContentRange(_ value: String) -> (range: ClosedRange<Int64>, total: Int64)? {
+        let pieces = value.split(separator: " ", maxSplits: 1)
+        guard pieces.count == 2, pieces[0].lowercased() == "bytes" else { return nil }
+        let values = pieces[1].split(separator: "/", maxSplits: 1)
+        let bounds = values.first?.split(separator: "-", maxSplits: 1)
+        guard values.count == 2, bounds?.count == 2,
+              let lower = bounds.flatMap({ Int64($0[0]) }),
+              let upper = bounds.flatMap({ Int64($0[1]) }),
+              let total = Int64(values[1]), lower <= upper else { return nil }
+        return (lower...upper, total)
+    }
+
     private func post<Response: Decodable>(path: String, parameters: [String: String], authenticated: Bool) async throws -> Response {
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
         components.path = path

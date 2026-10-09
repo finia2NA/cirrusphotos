@@ -26,6 +26,25 @@ public struct FullImageResponse: Sendable {
     }
 }
 
+public struct VideoRangeResponse: Sendable, Equatable {
+    public let data: Data
+    public let range: ClosedRange<Int64>
+    public let totalLength: Int64
+    public let contentType: String
+    public let etag: String?
+    public let lastModified: String?
+
+    public init(data: Data, range: ClosedRange<Int64>, totalLength: Int64,
+                contentType: String, etag: String?, lastModified: String?) {
+        self.data = data
+        self.range = range
+        self.totalLength = totalLength
+        self.contentType = contentType
+        self.etag = etag
+        self.lastModified = lastModified
+    }
+}
+
 public enum PhotoRotationDirection: String, Codable, Sendable, CaseIterable {
     case clockwise
     case counterClockwise = "counter_clockwise"
@@ -101,6 +120,8 @@ public protocol PhotosTransport: Sendable {
         _ resource: FullImageResource, etag: String?, lastModified: String?,
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> FullImageResponse
+    func videoRange(_ resource: VideoPlaybackResource,
+                    range: ClosedRange<Int64>) async throws -> VideoRangeResponse
 }
 
 public extension PhotosTransport {
@@ -116,5 +137,10 @@ public extension PhotosTransport {
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> FullImageResponse {
         try await fullImage(resource, etag: etag, lastModified: lastModified)
+    }
+
+    func videoRange(_ resource: VideoPlaybackResource,
+                    range: ClosedRange<Int64>) async throws -> VideoRangeResponse {
+        throw SynologyAPIError.unsupported("Video range transport is unavailable.")
     }
 }

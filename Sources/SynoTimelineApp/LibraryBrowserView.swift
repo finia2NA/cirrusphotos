@@ -993,7 +993,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         func publishCommandState(active: Bool) {
             let active = active && (scroll as? TimelineScrollView)?.browserCommandContextActive == true
             if !active { cancelPointerInteraction(); selection.endExtension(); pendingOpen = nil }
-            let canOpen = active && selection.count == 1 && selection.first.flatMap(loadedItem)?.photo.type != "video"
+            let canOpen = active && selection.count == 1
             let canToggleFavorite = active && !selection.indexes.isEmpty && allowNetwork
             let callback = onCommandStateChanged, owner = commandOwner
             let handler: ((BrowserSelectionCommand) -> Void)? = active ? { [weak self] in self?.perform($0) } : nil
@@ -1119,7 +1119,6 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         }
 
         private func openFromAccessibility(_ ordinal: Int, request: PhotoViewerOpenRequest) {
-            guard loadedItem(ordinal)?.photo.type != "video" else { return }
             selectFromAccessibility(ordinal)
             onOpenPhoto?(request)
         }
@@ -1133,7 +1132,6 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         }
 
         private func open(ordinal: Int) {
-            if loadedItem(ordinal)?.photo.type == "video" { pendingOpen = nil; return }
             guard let item = loadedItem(ordinal), let document,
                   let frame = geometry?.frame(forItem: item.photo.id) else {
                 pendingOpen = BrowserPendingOpen(ordinal: ordinal, generation: selectionState.generation,

@@ -60,6 +60,11 @@ public enum CacheKey {
         digest("\(namespace)|personal|download|v2|unit|\(resource.unitID)|\(resource.cacheKey)")
     }
 
+    public static func videoSegment(namespace: String, resource: VideoPlaybackResource,
+                                    index: Int64) -> String {
+        digest("\(namespace)|personal|video|v3|segment-65536|unit|\(resource.unitID)|\(resource.cacheKey)|\(resource.variant.cacheComponent)|segment|\(index)")
+    }
+
     private static func digest(_ value: String) -> String {
         SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }

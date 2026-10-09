@@ -59,6 +59,8 @@ extension CachedPhotosRepository {
             }
             imageWork.thumbnailJobs.removeAll()
             imageWork.fullImageJobs.removeAll()
+            for job in imageWork.videoSegmentJobs.values { job.task.cancel() }
+            imageWork.videoSegmentJobs.removeAll()
             imageWork.thumbnailFinishWithoutSubscribers.removeAll()
             imageWork.fullImageFinishWithoutSubscribers.removeAll()
         }

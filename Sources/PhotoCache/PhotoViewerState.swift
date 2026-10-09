@@ -57,6 +57,7 @@ public struct PhotoViewerState: Sendable {
     public let metadataVerified: Bool
     public let thumbnailData: Data?
     public let fullImageData: Data?
+    public let videoResource: VideoPlaybackResource?
     public let metadataStatus: PhotoViewerResourceStatus
     public let thumbnailStatus: PhotoViewerResourceStatus
     public let fullImageStatus: PhotoViewerResourceStatus

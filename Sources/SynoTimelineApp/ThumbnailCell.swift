@@ -66,7 +66,7 @@ struct ThumbnailCell: View {
             if let onActivate {
                 ThumbnailActivationSurface(itemID: item.id, image: image,
                                            isSelected: isSelected,
-                                           label: (item.filename ?? "Photo") +
+                                           label: "\(item.isVideo ? "Video" : "Photo"): \(item.filename ?? "Untitled")" +
                                                (item.isFavorite ? ", favorite" : ""),
                                            onSelect: onSelect ?? {},
                                            onCommand: onCommand ?? { _ in },
