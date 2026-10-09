@@ -11,7 +11,7 @@ struct ThumbnailCell: View {
     let repository: CachedPhotosRepository?
     let size: ThumbnailSize
     let allowNetwork: Bool
-    var cropsToSquare = false
+    var fillsFrame = false
     var isSelected = false
     var onSelect: (() -> Void)? = nil
     var onCommand: ((BrowserSelectionCommand) -> Void)? = nil
@@ -34,7 +34,7 @@ struct ThumbnailCell: View {
             RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.08))
             if let image, displayedRendition?.hasPrefix(familyIdentity) == true {
                 Image(nsImage: image).resizable()
-                    .aspectRatio(contentMode: cropsToSquare ? .fill : .fit)
+                    .aspectRatio(contentMode: fillsFrame ? .fill : .fit)
                     .rotationEffect(.degrees(Double(item.pendingRotationQuarterTurns * 90)))
             } else if failed, displayedRendition == renditionIdentity {
                 Image(systemName: "photo.badge.exclamationmark").foregroundStyle(.secondary)

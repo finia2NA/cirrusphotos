@@ -169,6 +169,7 @@ struct LibraryBrowserView: View {
     @EnvironmentObject private var infoPanel: InfoPanelModel
     @EnvironmentObject private var libraryFilter: LibraryFilterModel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedDay: String?
     @State private var jumpRequest: DayJumpRequest?
 
@@ -224,6 +225,7 @@ struct LibraryBrowserView: View {
                                              jumpToDay: jumpRequest,
                                              unavailableOffline: library.error(for: collection) != nil || library.authenticationFailed,
                                              colorScheme: colorScheme,
+                                             reduceMotion: reduceMotion,
                                              contentTopInset: contentTopInset,
                                              onOpenPhoto: onOpenPhoto,
                                              onSelectionStateChanged: { state in
@@ -402,6 +404,51 @@ final class BrowserSelectionObservation: ObservableObject {
     @Published var indexes = IndexSet()
 }
 
+/// Shared, retained presentation state for the square/aspect-fit thumbnail morph. Every
+/// hosted row observes the same instance, so a mode change animates the visible frame of
+/// already-attached rows without replacing their `AnyView` roots or reissuing media work.
+@MainActor
+final class BrowserThumbnailPresentation: ObservableObject {
+    static let transitionDuration: TimeInterval = 0.22
+
+    @Published private(set) var cropsToSquare: Bool
+    @Published private(set) var isTransitioning = false
+    private let transitionDuration: TimeInterval
+    private var transitionTask: Task<Void, Never>?
+
+    init(cropsToSquare: Bool, transitionDuration: TimeInterval = BrowserThumbnailPresentation.transitionDuration) {
+        self.cropsToSquare = cropsToSquare
+        self.transitionDuration = transitionDuration
+    }
+
+    /// Whether the current frame should aspect-fill. Filling is used at rest in square
+    /// mode and for the whole morph in either direction.
+    var fillsFrame: Bool {
+        FixedPhotoGrid.fillsFrame(cropsToSquare: cropsToSquare, isTransitioning: isTransitioning)
+    }
+
+    /// Applies the requested presentation and, when animated, marks a transition in flight
+    /// for a fixed duration. Rapid toggles supersede earlier completions, so the state
+    /// always settles on the latest target.
+    func setCropsToSquare(_ newValue: Bool, animated: Bool) {
+        transitionTask?.cancel()
+        transitionTask = nil
+        cropsToSquare = newValue
+        guard animated else {
+            isTransitioning = false
+            return
+        }
+        isTransitioning = true
+        transitionTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: .seconds(self.transitionDuration))
+            guard !Task.isCancelled else { return }
+            self.isTransitioning = false
+            self.transitionTask = nil
+        }
+    }
+}
+
 struct LibraryFilterEdgeDemandGeometry {
     static func resolve(direction: LibraryFilterScanDirection, top: CGFloat,
                         viewportHeight: CGFloat, documentHeight: CGFloat) -> LibraryFilterScanDirection? {
@@ -493,11 +540,11 @@ private struct HostedRow: View {
     let repository: CachedPhotosRepository
     let size: ThumbnailSize
     let pages: [Int: LibraryPage]
-    let cropsToSquare: Bool
     let onSelect: (Int) -> Void
     let onCommand: (BrowserSelectionCommand) -> Void
     let onOpenPhoto: (Int, PhotoViewerOpenRequest) -> Void
     @ObservedObject var selection: BrowserSelectionObservation
+    @ObservedObject var presentation: BrowserThumbnailPresentation
 
     var body: some View {
         HStack(alignment: .top, spacing: row.layout.gap) {
@@ -506,10 +553,11 @@ private struct HostedRow: View {
                 if let item = row.slots[position] {
                     let slot = CGRect(x: cell.x, y: 0, width: cell.width, height: row.layout.height)
                     let visible = FixedPhotoGrid.visibleFrame(in: slot,
-                        aspectRatio: item.photo.displayAspectRatio, cropsToSquare: cropsToSquare)
+                        aspectRatio: item.photo.displayAspectRatio,
+                        cropsToSquare: presentation.cropsToSquare)
                     ThumbnailCell(item: item.photo, repository: repository,
                                   size: size, allowNetwork: item.verified,
-                                  cropsToSquare: cropsToSquare,
+                                  fillsFrame: presentation.fillsFrame,
                                   isSelected: selection.indexes.contains(item.ordinal),
                                   onSelect: { onSelect(item.ordinal) },
                                   onCommand: onCommand) { source in
@@ -556,6 +604,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let jumpToDay: DayJumpRequest?
     let unavailableOffline: Bool
     let colorScheme: ColorScheme
+    let reduceMotion: Bool
     let contentTopInset: CGFloat
     let onOpenPhoto: (PhotoViewerOpenRequest) -> Void
     let onSelectionStateChanged: (BrowserSelectionState) -> Void
@@ -657,6 +706,9 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             set { selectionState.selection = newValue }
         }
         private let selectionObservation = BrowserSelectionObservation()
+        private let presentation = BrowserThumbnailPresentation(cropsToSquare: false)
+        private var presentationRequest = 0
+        private var reduceMotion = false
         private let commandOwner = UUID()
         private var pointer = BrowserPointerInteraction()
         private var pointerShift = false
@@ -704,6 +756,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             thumbnailSize = input.thumbnailSize
             if colorScheme != input.colorScheme { viewRevision += 1 }
             colorScheme = input.colorScheme
+            reduceMotion = input.reduceMotion
             let width = availableWidth(in: scroll)
             let rebuilding = revision != input.revision
             if rebuilding {
@@ -717,6 +770,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 geometry = LibraryViewportGeometry(index: newIndex, width: width,
                                                    itemsPerRow: input.itemsPerRow,
                                                    cropsThumbnailsToSquare: input.cropsThumbnailsToSquare)
+                snapPresentation(input.cropsThumbnailsToSquare)
                 selectionState = input.selectionState
                 selectionState.bind(to: newIndex.fingerprint)
                 publishSelection()
@@ -740,19 +794,31 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     demandedVisible = []
                     demandedPrefetch = []
                 }
-                if let current = geometry,
-                   abs(current.width - width) > 0.5 || current.itemsPerRow != input.itemsPerRow ||
-                   current.cropsThumbnailsToSquare != input.cropsThumbnailsToSquare {
-                    let anchor = current.anchor(at: visibleTop(in: scroll))
-                    geometry?.setLayout(width: width, itemsPerRow: input.itemsPerRow,
-                                        cropsThumbnailsToSquare: input.cropsThumbnailsToSquare,
-                                        pages: pages)
-                    selection.endExtension()
-                    cancelPointerInteraction()
-                    pendingOpen = nil
-                    viewRevision += 1
-                    updateDocumentHeight()
-                    if let anchor, let target = geometry?.y(for: anchor) { scrollTo(target) }
+                if let current = geometry {
+                    let widthChanged = abs(current.width - width) > 0.5
+                    let columnsChanged = current.itemsPerRow != input.itemsPerRow
+                    let presentationChanged = current.cropsThumbnailsToSquare != input.cropsThumbnailsToSquare
+                    if widthChanged || columnsChanged || presentationChanged {
+                        let anchor = current.anchor(at: visibleTop(in: scroll))
+                        geometry?.setLayout(width: width, itemsPerRow: input.itemsPerRow,
+                                            cropsThumbnailsToSquare: input.cropsThumbnailsToSquare,
+                                            pages: pages)
+                        selection.endExtension()
+                        cancelPointerInteraction()
+                        pendingOpen = nil
+                        if widthChanged || columnsChanged {
+                            // Window resizing and items-per-row changes stay instant; the
+                            // presentation snaps and rows rebuild with final geometry.
+                            viewRevision += 1
+                            snapPresentation(input.cropsThumbnailsToSquare)
+                        } else {
+                            // A clean user-driven square preference change only morphs the
+                            // visible frame inside the stable slots, so no row is rebuilt.
+                            applySquarePresentation(input.cropsThumbnailsToSquare)
+                        }
+                        updateDocumentHeight()
+                        if let anchor, let target = geometry?.y(for: anchor) { scrollTo(target) }
+                    }
                 }
             }
             updateDocumentHeight()
@@ -780,6 +846,32 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             }
             viewportChanged()
             publishCommandState(active: (scroll as? TimelineScrollView)?.browserCommandContextActive == true)
+        }
+
+        /// Applies the square preference with a short ease-in-out morph. Geometry is
+        /// already final, so only the visible thumbnail frame animates. The mutation is
+        /// deferred out of the SwiftUI update cycle, and a deferred request is ignored if
+        /// a newer snap or toggle supersedes it.
+        private func applySquarePresentation(_ cropsToSquare: Bool) {
+            presentationRequest &+= 1
+            let request = presentationRequest
+            let animated = !reduceMotion
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.presentationRequest == request else { return }
+                let animation: Animation? = animated
+                    ? .easeInOut(duration: BrowserThumbnailPresentation.transitionDuration)
+                    : nil
+                withAnimation(animation) {
+                    self.presentation.setCropsToSquare(cropsToSquare, animated: animated)
+                }
+            }
+        }
+
+        /// Applies the square preference immediately, invalidating any pending animated
+        /// request. Used for initial construction, relayout, and Reduce Motion.
+        private func snapPresentation(_ cropsToSquare: Bool) {
+            presentationRequest &+= 1
+            presentation.setCropsToSquare(cropsToSquare, animated: false)
         }
 
         func stop() {
@@ -949,13 +1041,13 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                             frame: CGRect(x: 0, y: rowY, width: geometry.width, height: row.layout.height),
                             content: AnyView(HostedRow(row: row, repository: repository,
                                                        size: thumbnailSize, pages: pages,
-                                                       cropsToSquare: geometry.cropsThumbnailsToSquare,
                                                        onSelect: { [weak self] in self?.selectFromAccessibility($0) },
                                                        onCommand: { [weak self] in self?.perform($0) },
                                                        onOpenPhoto: { [weak self] ordinal, request in
                                                            self?.openFromAccessibility(ordinal, request: request)
                                                        },
-                                                       selection: selectionObservation)),
+                                                       selection: selectionObservation,
+                                                       presentation: presentation)),
                             revision: (viewRevision, rowRevisions[section] ?? 0),
                             wanted: &wanted, document: document, passThrough: true)
                 }

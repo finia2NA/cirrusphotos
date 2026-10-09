@@ -46,4 +46,14 @@ final class FixedPhotoGridTests: XCTestCase {
         XCTAssertEqual(FixedPhotoGrid.visibleFrame(in: slot, aspectRatio: .nan, cropsToSquare: false),
                        FixedPhotoGrid.fittedFrame(in: slot, aspectRatio: .nan))
     }
+
+    func testFillDuringTransitionCoversMorphInBothDirections() {
+        // Rest states use the true presentation.
+        XCTAssertTrue(FixedPhotoGrid.fillsFrame(cropsToSquare: true, isTransitioning: false))
+        XCTAssertFalse(FixedPhotoGrid.fillsFrame(cropsToSquare: false, isTransitioning: false))
+        // Both directions fill while the inner frame morphs, so a shrinking frame never
+        // flashes letterbox bars.
+        XCTAssertTrue(FixedPhotoGrid.fillsFrame(cropsToSquare: true, isTransitioning: true))
+        XCTAssertTrue(FixedPhotoGrid.fillsFrame(cropsToSquare: false, isTransitioning: true))
+    }
 }

@@ -55,4 +55,12 @@ public enum FixedPhotoGrid {
                                     cropsToSquare: Bool) -> CGRect {
         cropsToSquare ? slot : fittedFrame(in: slot, aspectRatio: aspectRatio)
     }
+
+    /// Whether image content should aspect-fill its visible frame. Square cropping fills
+    /// at rest. While a square/aspect-fit transition is in flight, filling keeps the
+    /// morphing frame covered instead of flashing letterbox bars in the aspect-fit
+    /// direction; at the fitted rest frame fill and fit coincide for a known aspect ratio.
+    public static func fillsFrame(cropsToSquare: Bool, isTransitioning: Bool) -> Bool {
+        cropsToSquare || isTransitioning
+    }
 }

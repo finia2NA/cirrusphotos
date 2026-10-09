@@ -70,7 +70,9 @@ struct BrowserThumbnailShapeControl: View {
             model.cropsThumbnailsToSquare.toggle()
         } label: {
             Label(model.cropsThumbnailsToSquare ? "Use Aspect-Fit Thumbnails" : "Crop Thumbnails to Square",
-                  systemImage: model.cropsThumbnailsToSquare ? "square.fill" : "square")
+                  systemImage: model.cropsThumbnailsToSquare
+                      ? "rectangle.arrowtriangle.2.inward"
+                      : "rectangle.arrowtriangle.2.outward")
         }
         .accessibilityLabel(model.cropsThumbnailsToSquare ? "Use Aspect-Fit Thumbnails" : "Crop Thumbnails to Square")
         .help(model.cropsThumbnailsToSquare

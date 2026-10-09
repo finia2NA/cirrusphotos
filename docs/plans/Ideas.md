@@ -28,3 +28,6 @@ Ideas for future features:
 - Edit in:
   - Right click on photo and select "Edit in..." and then choose an app to open the photo in.
   - If raw loading from the picture download step is available, offer to edit the normal or the raw file. In this case, there are 2 entries in the right click menu, one for each file.
+- Search for filenames
+- Browse by folders
+- Filter within GPS box/polygon
