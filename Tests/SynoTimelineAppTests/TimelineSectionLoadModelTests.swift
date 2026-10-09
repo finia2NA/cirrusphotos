@@ -112,6 +112,21 @@ final class TimelineSectionLoadModelTests: XCTestCase {
         _ = filter
     }
 
+    func testPreparingTargetDoesNotStartPageLoading() async throws {
+        let (library, filter, model, transport, root) = try await makeModels()
+        defer { try? FileManager.default.removeItem(at: root) }
+        model.updateSource(collection: .favorites)
+        XCTAssertTrue(model.prepareCurrentTarget())
+
+        try await Task.sleep(for: .milliseconds(100))
+        let requests = await transport.itemRequestCount()
+        XCTAssertEqual(requests, 0)
+        XCTAssertEqual(model.progress.state, .idle)
+        XCTAssertEqual(model.progress.processed, 0)
+        _ = library
+        _ = filter
+    }
+
     func testFavoritesRevisionChangeCancelsActiveCapturedGeometry() async throws {
         let (library, _, model, transport, root) = try await makeModels(delay: .seconds(1))
         defer { try? FileManager.default.removeItem(at: root) }

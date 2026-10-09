@@ -34,7 +34,6 @@ struct TimelineSectionLoadView: View {
                                 .disabled(model.staleTimelineMessage != nil)
                         }
                         Button("Start") { model.start(useCachedPages: useCachedPages) }
-                            .keyboardShortcut(.defaultAction)
                             .disabled(model.staleTimelineMessage != nil)
                     }
                 }
