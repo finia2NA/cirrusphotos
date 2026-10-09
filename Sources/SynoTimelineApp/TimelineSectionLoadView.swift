@@ -23,7 +23,7 @@ struct TimelineSectionLoadView: View {
             }
             Toggle("Use Cached Pages", isOn: $useCachedPages)
                 .disabled(model.progress.state == .running)
-            if model.progress.state == .running || model.progress.remaining > 0 {
+            if model.progress.state != .finished || model.progress.failed > 0 {
                 HStack {
                     Spacer()
                     if model.progress.state == .running {

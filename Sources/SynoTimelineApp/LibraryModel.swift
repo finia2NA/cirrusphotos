@@ -3,6 +3,18 @@ import SwiftUI
 import SynologyAPI
 import TimelineCore
 
+struct TimelineWarmingTarget {
+    let collection: PhotoCollectionDescriptor
+    let snapshot: TimelineSnapshot
+    let revision: Int
+    let title: String
+}
+
+struct TimelineWarmingTargetDiscovery {
+    let targets: [TimelineWarmingTarget]
+    let failures: [String]
+}
+
 @MainActor
 final class LibraryModel: ObservableObject {
     private enum TimelineUpdateReason: Equatable {
@@ -153,6 +165,56 @@ final class LibraryModel: ObservableObject {
         guard collection.albumID != nil else { return }
         openedCollections.insert(collection)
         startCollectionFetchIfNeeded(collection)
+    }
+
+    /// Resolves every persistent collection that participates in explicit metadata
+    /// warming. Album discovery and unopened album timeline scans begin only after
+    /// the user presses Start in the warming window.
+    func discoverTimelineWarmingTargets() async -> TimelineWarmingTargetDiscovery {
+        guard repository != nil else {
+            return .init(targets: [], failures: ["The photo repository is unavailable."])
+        }
+
+        for collection in PhotoCollectionDescriptor.allCases {
+            startCollectionFetchIfNeeded(collection)
+        }
+        for collection in PhotoCollectionDescriptor.allCases {
+            await collectionFetchTasks[collection]?.value
+        }
+
+        ensureAlbumsLoaded()
+        await albumsTask?.value
+
+        let albumCollections = albums.map { PhotoCollectionDescriptor.album($0.id) }
+        for collection in albumCollections {
+            guard !Task.isCancelled else { break }
+            ensureCollectionLoaded(collection)
+            await collectionFetchTasks[collection]?.value
+        }
+
+        let persistentCollections = PhotoCollectionDescriptor.allCases + albumCollections
+        var targets: [TimelineWarmingTarget] = []
+        var failures: [String] = []
+        for collection in persistentCollections {
+            guard !Task.isCancelled else { break }
+            let title: String
+            switch collection {
+            case .personalLibrary: title = "Personal Library"
+            case .favorites: title = "Favorites"
+            case .album(let id): title = albumName(for: collection) ?? "Album \(id)"
+            case .mapFilter, .libraryFilter: continue
+            }
+            if timelineVerified(for: collection), let snapshot = snapshot(for: collection) {
+                targets.append(.init(collection: collection, snapshot: snapshot,
+                                     revision: snapshotRevision(for: collection), title: title))
+            } else {
+                failures.append("\(title): \(error(for: collection) ?? "timeline could not be loaded")")
+            }
+        }
+        if !albumsVerified {
+            failures.append("Albums: \(albumListError ?? "album list could not be loaded")")
+        }
+        return .init(targets: targets, failures: failures)
     }
 
     // MARK: - Session Collections

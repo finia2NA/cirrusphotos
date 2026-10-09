@@ -378,7 +378,7 @@ struct LibraryCommands: Commands {
                           !model.timelineVerified)
             Divider()
             Button("Load All Timeline Sections") {
-                if timelineSectionLoad.prepareCurrentTarget() {
+                if timelineSectionLoad.prepare() {
                     openWindow(id: "timeline-section-load")
                 }
             }

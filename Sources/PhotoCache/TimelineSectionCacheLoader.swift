@@ -19,6 +19,18 @@ public struct TimelineSectionCacheProgress: Equatable, Sendable {
     public let failures: [String]
 
     public var processed: Int { verified + cached + provisional + failed }
+
+    public init(total: Int, verified: Int, cached: Int, provisional: Int,
+                failed: Int, remaining: Int, state: State, failures: [String]) {
+        self.total = total
+        self.verified = verified
+        self.cached = cached
+        self.provisional = provisional
+        self.failed = failed
+        self.remaining = remaining
+        self.state = state
+        self.failures = failures
+    }
 }
 
 public struct TimelineSectionCacheEmission: Equatable, Sendable {
@@ -36,6 +48,12 @@ public struct TimelineSectionCacheEmission: Equatable, Sendable {
 public struct TimelineSectionCacheLoaderEvent: Equatable, Sendable {
     public let progress: TimelineSectionCacheProgress
     public let emission: TimelineSectionCacheEmission?
+
+    public init(progress: TimelineSectionCacheProgress,
+                emission: TimelineSectionCacheEmission?) {
+        self.progress = progress
+        self.emission = emission
+    }
 }
 
 /// Explicitly warms every item-metadata page described by one captured,
@@ -82,7 +100,9 @@ public actor TimelineSectionCacheLoader {
 
     public func observe() -> AsyncStream<TimelineSectionCacheLoaderEvent> {
         let id = UUID()
-        return AsyncStream(bufferingPolicy: .bufferingNewest(2)) { continuation in
+        // Page emissions are semantic input for Personal Library filtering, not
+        // merely presentation snapshots, so observers must receive every one.
+        return AsyncStream(bufferingPolicy: .unbounded) { continuation in
             observers[id] = continuation
             continuation.yield(.init(progress: makeProgress(), emission: nil))
             continuation.onTermination = { @Sendable _ in

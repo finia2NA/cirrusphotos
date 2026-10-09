@@ -39,13 +39,13 @@ final class TimelineSectionLoadModelTests: XCTestCase {
         return (library, filter, coordinator, transport, root)
     }
 
-    func testLibraryFilterNormalizesToPersonalLibraryAndForwardsPageEmissions() async throws {
+    func testAppWideRunLoadsLibraryFavoritesAndEveryAlbumAndForwardsLibraryEmissions() async throws {
         let (library, filter, model, transport, root) = try await makeModels()
         defer { try? FileManager.default.removeItem(at: root) }
-        model.updateSource(collection: .libraryFilter(UUID()))
+        model.refreshAvailability()
         XCTAssertTrue(model.canPresent)
-        XCTAssertTrue(model.prepareCurrentTarget())
-        XCTAssertEqual(model.targetTitle, "Personal Library")
+        XCTAssertTrue(model.prepare())
+        XCTAssertEqual(model.targetTitle, "Personal Library, Favorites, and All Albums")
 
         model.start(useCachedPages: false)
         let finished = await waitUntil { @MainActor in model.progress.state == .finished }
@@ -53,74 +53,51 @@ final class TimelineSectionLoadModelTests: XCTestCase {
         XCTAssertTrue(finished)
         XCTAssertTrue(ingested)
         let collections = await transport.itemCollections()
-        XCTAssertEqual(collections, [.personalLibrary])
+        XCTAssertEqual(collections, [.personalLibrary, .favorites, .album(54), .album(55)])
         XCTAssertNotNil(library.snapshot(for: .personalLibrary))
     }
 
-    func testFavoritesAndAlbumPrepareTheirOwnTitlesAndCollections() async throws {
+    func testCurrentDestinationDoesNotChangeAppWideScope() async throws {
         let (library, filter, model, transport, root) = try await makeModels()
         defer { try? FileManager.default.removeItem(at: root) }
-        model.updateSource(collection: .favorites)
-        XCTAssertTrue(model.prepareCurrentTarget())
-        XCTAssertEqual(model.targetTitle, "Favorites")
-        model.start(useCachedPages: false)
-        let favoritesFinished = await waitUntil { @MainActor in model.progress.state == .finished }
-        XCTAssertTrue(favoritesFinished)
-
-        library.ensureAlbumsLoaded()
-        let albumsLoaded = await waitUntil { @MainActor in library.albumsVerified }
-        XCTAssertTrue(albumsLoaded)
-        library.ensureCollectionLoaded(.album(54))
-        let albumLoaded = await waitUntil { @MainActor in library.timelineVerified(for: .album(54)) }
-        XCTAssertTrue(albumLoaded)
-        model.updateSource(collection: .album(54))
-        XCTAssertTrue(model.prepareCurrentTarget())
-        XCTAssertEqual(model.targetTitle, "Trip")
-        model.start(useCachedPages: false)
-        let albumFinished = await waitUntil { @MainActor in model.progress.state == .finished }
-        XCTAssertTrue(albumFinished)
-
-        let collections = await transport.itemCollections()
-        XCTAssertEqual(collections, [.favorites, .album(54)])
-        _ = filter
-    }
-
-    func testAlbumsOverviewAndMapTargetsCannotPresent() async throws {
-        let (library, _, model, _, root) = try await makeModels()
-        defer { try? FileManager.default.removeItem(at: root) }
-        model.updateSource(collection: nil)
-        XCTAssertFalse(model.canPresent)
-        let map = PhotoCollectionDescriptor.mapFilter(UUID())
-        library.registerSessionCollection(map, snapshot: TimelineSnapshot(sections: [section()]))
-        model.updateSource(collection: map)
-        XCTAssertFalse(model.canPresent)
-    }
-
-    func testChangingDestinationDoesNotRetargetPreparedOperation() async throws {
-        let (library, filter, model, transport, root) = try await makeModels()
-        defer { try? FileManager.default.removeItem(at: root) }
-        model.updateSource(collection: .favorites)
-        XCTAssertTrue(model.prepareCurrentTarget())
-        model.updateSource(collection: .personalLibrary)
-        XCTAssertEqual(model.targetTitle, "Favorites")
+        model.refreshAvailability()
+        XCTAssertTrue(model.prepare())
+        model.refreshAvailability()
+        XCTAssertEqual(model.targetTitle, "Personal Library, Favorites, and All Albums")
         model.start(useCachedPages: false)
         let finished = await waitUntil { @MainActor in model.progress.state == .finished }
-        let collections = await transport.itemCollections()
         XCTAssertTrue(finished)
-        XCTAssertEqual(collections, [.favorites])
+
+        let collections = await transport.itemCollections()
+        XCTAssertEqual(collections, [.personalLibrary, .favorites, .album(54), .album(55)])
         _ = library
         _ = filter
+    }
+
+    func testAlbumsOverviewAndMapStillPresentAppWideCommand() async throws {
+        let (library, _, model, _, root) = try await makeModels()
+        defer { try? FileManager.default.removeItem(at: root) }
+        model.refreshAvailability()
+        XCTAssertTrue(model.canPresent)
+        let map = PhotoCollectionDescriptor.mapFilter(UUID())
+        library.registerSessionCollection(map, snapshot: TimelineSnapshot(sections: [section()]))
+        model.refreshAvailability()
+        XCTAssertTrue(model.canPresent)
     }
 
     func testPreparingTargetDoesNotStartPageLoading() async throws {
         let (library, filter, model, transport, root) = try await makeModels()
         defer { try? FileManager.default.removeItem(at: root) }
-        model.updateSource(collection: .favorites)
-        XCTAssertTrue(model.prepareCurrentTarget())
+        model.refreshAvailability()
+        XCTAssertTrue(model.prepare())
 
         try await Task.sleep(for: .milliseconds(100))
         let requests = await transport.itemRequestCount()
+        let albumRequests = await transport.albumRequestCount()
+        let albumTimelineRequests = await transport.albumTimelineRequestCount()
         XCTAssertEqual(requests, 0)
+        XCTAssertEqual(albumRequests, 0)
+        XCTAssertEqual(albumTimelineRequests, 0)
         XCTAssertEqual(model.progress.state, .idle)
         XCTAssertEqual(model.progress.processed, 0)
         _ = library
@@ -130,8 +107,8 @@ final class TimelineSectionLoadModelTests: XCTestCase {
     func testFavoritesRevisionChangeCancelsActiveCapturedGeometry() async throws {
         let (library, _, model, transport, root) = try await makeModels(delay: .seconds(1))
         defer { try? FileManager.default.removeItem(at: root) }
-        model.updateSource(collection: .favorites)
-        XCTAssertTrue(model.prepareCurrentTarget())
+        model.refreshAvailability()
+        XCTAssertTrue(model.prepare())
         model.start(useCachedPages: false)
         let admitted = await waitUntil { await transport.itemRequestCount() == 1 }
         XCTAssertTrue(admitted)
@@ -151,6 +128,8 @@ private actor LoadModelTransport: PhotosTransport {
     let item: PhotoItem
     let delay: Duration
     private var requestedCollections: [PhotoCollectionDescriptor] = []
+    private var requestedAlbums = 0
+    private var requestedAlbumTimelines = 0
 
     init(snapshot: TimelineSnapshot, item: PhotoItem, delay: Duration) {
         self.snapshot = snapshot
@@ -163,10 +142,17 @@ private actor LoadModelTransport: PhotosTransport {
     }
 
     func albums() async throws -> [AlbumSummary] {
-        [.init(id: 54, name: "Trip", itemCount: 1)]
+        requestedAlbums += 1
+        return [
+            .init(id: 54, name: "Trip", itemCount: 1),
+            .init(id: 55, name: "Archive", itemCount: 1),
+        ]
     }
 
-    func albumTimeline(albumID: Int64) async throws -> TimelineSnapshot { snapshot }
+    func albumTimeline(albumID: Int64) async throws -> TimelineSnapshot {
+        requestedAlbumTimelines += 1
+        return snapshot
+    }
 
     func items(in section: TimelineSection,
                collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
@@ -177,4 +163,6 @@ private actor LoadModelTransport: PhotosTransport {
 
     func itemCollections() -> [PhotoCollectionDescriptor] { requestedCollections }
     func itemRequestCount() -> Int { requestedCollections.count }
+    func albumRequestCount() -> Int { requestedAlbums }
+    func albumTimelineRequestCount() -> Int { requestedAlbumTimelines }
 }

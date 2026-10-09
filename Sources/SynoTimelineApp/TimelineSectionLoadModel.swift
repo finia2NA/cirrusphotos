@@ -21,11 +21,10 @@ struct TimelineSectionLoadPresentationProgress: Equatable {
 
 @MainActor
 final class TimelineSectionLoadModel: ObservableObject {
-    private struct Target {
-        let collection: PhotoCollectionDescriptor
-        let snapshot: TimelineSnapshot
-        let revision: Int
-        let title: String
+    private struct TargetRun {
+        let target: TimelineWarmingTarget
+        let loader: TimelineSectionCacheLoader
+        var progress: TimelineSectionCacheProgress
     }
 
     @Published private(set) var canPresent = false
@@ -35,13 +34,13 @@ final class TimelineSectionLoadModel: ObservableObject {
 
     private weak var library: LibraryModel?
     private weak var filter: LibraryFilterModel?
-    private var sourceTarget: Target?
-    private var capturedTarget: Target?
-    private var loader: TimelineSectionCacheLoader?
-    private var loaderObserver: Task<Void, Never>?
+    private var prepared = false
+    private var targetRuns: [TargetRun] = []
+    private var discoveryFailures: [String] = []
+    private var operationTask: Task<Void, Never>?
     private var libraryObserver: AnyCancellable?
     private var runActive = false
-    private var runRequestPending = false
+    private var lastUseCachedPages = false
 
     func configure(library: LibraryModel, filter: LibraryFilterModel) {
         if self.library !== library {
@@ -49,152 +48,185 @@ final class TimelineSectionLoadModel: ObservableObject {
             libraryObserver = library.objectWillChange.sink { [weak self] _ in
                 Task { @MainActor in
                     await Task.yield()
-                    self?.checkCapturedRevision()
+                    self?.refreshAvailabilityAndCheckRevisions()
                 }
             }
         }
         if self.filter !== filter {
             self.filter = filter
         }
+        refreshAvailabilityAndCheckRevisions()
     }
 
-    /// Updates command eligibility without changing an already prepared operation.
-    func updateSource(collection: PhotoCollectionDescriptor?) {
-        guard let library else {
-            sourceTarget = nil
-            canPresent = false
-            return
-        }
-        checkCapturedRevision()
-        let normalized: PhotoCollectionDescriptor?
-        switch collection {
-        case .some(.libraryFilter): normalized = .personalLibrary
-        case .some(.personalLibrary), .some(.favorites), .some(.album): normalized = collection
-        case .some(.mapFilter), .none: normalized = nil
-        }
-        guard let normalized,
-              let snapshot = library.snapshot(for: normalized),
-              library.timelineVerified(for: normalized),
-              library.repository != nil else {
-            sourceTarget = nil
-            canPresent = false
-            return
-        }
-        sourceTarget = Target(collection: normalized, snapshot: snapshot,
-                              revision: library.snapshotRevision(for: normalized),
-                              title: Self.title(for: normalized, library: library))
-        canPresent = true
+    /// Refreshes app-wide command eligibility. Map remains excluded from target
+    /// discovery, regardless of the current browser destination.
+    func refreshAvailability() {
+        refreshAvailabilityAndCheckRevisions()
     }
 
-    /// Freezes the currently eligible source before the load window is opened.
+    /// Prepares an idle app-wide operation before the load window is opened.
     @discardableResult
-    func prepareCurrentTarget() -> Bool {
-        guard let target = sourceTarget, let library, let repository = library.repository else { return false }
+    func prepare() -> Bool {
+        guard canPresent, let library else { return false }
         if runActive { return true }
-
-        let oldLoader = loader
-        loaderObserver?.cancel()
-        loaderObserver = nil
-        loader = nil
-        if let oldLoader { Task { await oldLoader.shutdown() } }
-
-        capturedTarget = target
+        shutdownPreparedLoaders()
+        prepared = true
         runActive = false
-        runRequestPending = false
-        targetTitle = target.title
+        targetTitle = "Personal Library, Favorites, and All Albums"
         staleTimelineMessage = nil
-        progress = .init(total: target.snapshot.sections.count,
-                         remaining: target.snapshot.sections.count)
-        if target.collection == .personalLibrary {
-            filter?.configure(library: library)
-        }
-        let loader = TimelineSectionCacheLoader(repository: repository,
-                                                collection: target.collection,
-                                                snapshot: target.snapshot)
-        self.loader = loader
-        loaderObserver = Task { [weak self] in
-            for await event in await loader.observe() {
-                guard !Task.isCancelled else { return }
-                await self?.receive(event)
-            }
-        }
+        progress = .init()
+        filter?.configure(library: library)
         return true
     }
 
     func start(useCachedPages: Bool) {
-        guard staleTimelineMessage == nil, capturedTarget != nil else { return }
-        if let loader {
-            runActive = true
-            runRequestPending = true
-            progress.state = .running
-            Task { await loader.loadAll(useCachedPages: useCachedPages) }
+        guard staleTimelineMessage == nil, prepared, !runActive else { return }
+        if !targetRuns.isEmpty || !discoveryFailures.isEmpty {
+            shutdownPreparedLoaders()
         }
+        lastUseCachedPages = useCachedPages
+        runActive = true
+        progress.state = .running
+        progress.currentSectionLabel = "Discovering albums and timelines"
+        operationTask = Task { [weak self] in await self?.runAll(useCachedPages: useCachedPages) }
     }
 
     func cancel() {
-        guard capturedTarget != nil else { return }
-        if let loader {
-            runActive = false
-            runRequestPending = false
-            Task { await loader.cancel() }
-        }
+        guard prepared else { return }
+        operationTask?.cancel()
+        operationTask = nil
+        runActive = false
+        progress.state = .cancelled
+        progress.currentSectionLabel = nil
+        let loaders = targetRuns.map(\.loader)
+        Task { for loader in loaders { await loader.cancel() } }
     }
 
     func retryFailed() {
-        guard staleTimelineMessage == nil, capturedTarget != nil else { return }
-        if let loader {
-            runActive = true
-            runRequestPending = true
-            progress.state = .running
-            Task { await loader.retryFailed() }
+        guard staleTimelineMessage == nil, prepared, !runActive else { return }
+        if !discoveryFailures.isEmpty {
+            shutdownPreparedLoaders()
+            start(useCachedPages: lastUseCachedPages)
+            return
+        }
+        let failedIndices = targetRuns.indices.filter { targetRuns[$0].progress.failed > 0 }
+        guard !failedIndices.isEmpty else { return }
+        runActive = true
+        progress.state = .running
+        operationTask = Task { [weak self] in await self?.retry(indices: failedIndices) }
+    }
+
+    private func runAll(useCachedPages: Bool) async {
+        guard let library, let repository = library.repository else { return }
+        let discovery = await library.discoverTimelineWarmingTargets()
+        guard !Task.isCancelled else { return }
+        discoveryFailures = discovery.failures
+        targetRuns = discovery.targets.map { target in
+            let loader = TimelineSectionCacheLoader(repository: repository,
+                                                    collection: target.collection,
+                                                    snapshot: target.snapshot)
+            return TargetRun(target: target, loader: loader,
+                             progress: TimelineSectionCacheProgress(
+                                total: target.snapshot.sections.count, verified: 0, cached: 0,
+                                provisional: 0, failed: 0,
+                                remaining: target.snapshot.sections.count, state: .idle, failures: []))
+        }
+        publishAggregate(state: .running)
+        for index in targetRuns.indices {
+            guard !Task.isCancelled else { return }
+            await execute(index: index, retry: false, useCachedPages: useCachedPages)
+        }
+        finishOperation()
+    }
+
+    private func retry(indices: [Int]) async {
+        for index in indices {
+            guard !Task.isCancelled else { return }
+            await execute(index: index, retry: true, useCachedPages: lastUseCachedPages)
+        }
+        finishOperation()
+    }
+
+    private func execute(index: Int, retry: Bool, useCachedPages: Bool) async {
+        guard targetRuns.indices.contains(index) else { return }
+        let loader = targetRuns[index].loader
+        let stream = await loader.observe()
+        if retry { await loader.retryFailed() }
+        else { await loader.loadAll(useCachedPages: useCachedPages) }
+        var sawRunning = false
+        for await event in stream {
+            guard !Task.isCancelled, staleTimelineMessage == nil else { return }
+            if event.progress.state == .running { sawRunning = true }
+            await receive(event, index: index)
+            if sawRunning && event.progress.state != .running { break }
+            if !sawRunning && event.progress.state == .finished { break }
         }
     }
 
-    private func receive(_ event: TimelineSectionCacheLoaderEvent) async {
-        guard staleTimelineMessage == nil else { return }
-        if capturedTarget?.collection == .personalLibrary, let emission = event.emission,
+    private func receive(_ event: TimelineSectionCacheLoaderEvent, index: Int) async {
+        guard staleTimelineMessage == nil, targetRuns.indices.contains(index) else { return }
+        let target = targetRuns[index].target
+        if target.collection == .personalLibrary, let emission = event.emission,
            let ingestion = filter?.ingest(sectionIndex: emission.sectionIndex,
                                           items: emission.items, verified: emission.verified) {
             await ingestion.value
         }
-        let value = event.progress
-        if runRequestPending, value.state == .idle { return }
-        runRequestPending = false
-        runActive = value.state == .running
-        progress = .init(total: value.total, processed: value.processed,
-                         verified: value.verified, cached: value.cached,
-                         provisional: value.provisional,
-                         failed: value.failed, remaining: value.remaining,
-                         currentSectionLabel: value.state == .running
-                             ? "Loading \(targetTitle ?? "collection") sections" : nil,
-                         matchCount: nil, state: Self.presentation(value.state),
-                         failures: value.failures)
+        targetRuns[index].progress = event.progress
+        publishAggregate(state: .running, currentTitle: target.title)
     }
 
-    private func checkCapturedRevision() {
-        guard let target = capturedTarget, runActive, let library,
-              library.snapshotRevision(for: target.collection) != target.revision else { return }
-        staleTimelineMessage = "The \(target.title) timeline changed. Close this window and reopen it to load the latest sections."
-        progress.state = .cancelled
+    private func publishAggregate(state: TimelineSectionLoadPresentationProgress.State,
+                                  currentTitle: String? = nil) {
+        let values = targetRuns.map(\.progress)
+        let loaderFailures = zip(targetRuns, values).flatMap { run, value in
+            value.failures.map { "\(run.target.title): \($0)" }
+        }
+        progress = .init(
+            total: values.reduce(0) { $0 + $1.total } + discoveryFailures.count,
+            processed: values.reduce(0) { $0 + $1.processed } + discoveryFailures.count,
+            verified: values.reduce(0) { $0 + $1.verified },
+            cached: values.reduce(0) { $0 + $1.cached },
+            provisional: values.reduce(0) { $0 + $1.provisional },
+            failed: values.reduce(0) { $0 + $1.failed } + discoveryFailures.count,
+            remaining: values.reduce(0) { $0 + $1.remaining },
+            currentSectionLabel: currentTitle.map { "Loading \($0)" },
+            matchCount: nil, state: state,
+            failures: discoveryFailures + loaderFailures
+        )
+    }
+
+    private func finishOperation() {
+        operationTask = nil
+        runActive = false
+        let hasFailures = !discoveryFailures.isEmpty || targetRuns.contains { $0.progress.failed > 0 }
+        publishAggregate(state: hasFailures ? .idle : .finished)
+    }
+
+    private func refreshAvailabilityAndCheckRevisions() {
+        if let library {
+            canPresent = library.repository != nil &&
+                library.timelineVerified(for: .personalLibrary) &&
+                library.timelineVerified(for: .favorites)
+        } else {
+            canPresent = false
+        }
+        guard runActive, let library,
+              let changed = targetRuns.first(where: {
+                  library.snapshotRevision(for: $0.target.collection) != $0.target.revision
+              }) else { return }
+        staleTimelineMessage = "The \(changed.target.title) timeline changed. Close this window and reopen it to load the latest sections."
         cancel()
     }
 
-    private static func title(for collection: PhotoCollectionDescriptor,
-                              library: LibraryModel) -> String {
-        switch collection {
-        case .personalLibrary: "Personal Library"
-        case .favorites: "Favorites"
-        case .album(let id): library.albumName(for: collection) ?? "Album \(id)"
-        case .mapFilter, .libraryFilter: "Personal Library"
+    private func shutdownPreparedLoaders() {
+        operationTask?.cancel()
+        operationTask = nil
+        let loaders = targetRuns.map(\.loader)
+        if !loaders.isEmpty {
+            Task { for loader in loaders { await loader.shutdown() } }
         }
+        targetRuns = []
+        discoveryFailures = []
     }
 
-    private static func presentation(_ value: TimelineSectionCacheProgress.State) -> TimelineSectionLoadPresentationProgress.State {
-        switch value {
-        case .idle: .idle
-        case .running: .running
-        case .canceling: .cancelled
-        case .finished: .finished
-        }
-    }
 }

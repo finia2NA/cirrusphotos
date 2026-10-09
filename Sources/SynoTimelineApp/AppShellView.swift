@@ -207,7 +207,7 @@ struct AppShellView: View {
 
     private func updateTimelineSectionLoadSource() {
         timelineSectionLoad.configure(library: model, filter: libraryFilter)
-        timelineSectionLoad.updateSource(collection: selectedCollection)
+        timelineSectionLoad.refreshAvailability()
     }
 
     private var detail: some View {
