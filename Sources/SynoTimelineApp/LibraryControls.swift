@@ -258,19 +258,23 @@ struct LibraryCommands: Commands {
             Divider()
             Button { model.rotateSelection(.counterClockwise) } label: {
                 Label("Rotate Photo Left", systemImage: "rotate.left")
+                    .labelStyle(.titleAndIcon)
             }
             .disabled(!model.canRotate)
             Button { model.rotateSelection(.clockwise) } label: {
                 Label("Rotate Photo Right", systemImage: "rotate.right")
+                    .labelStyle(.titleAndIcon)
             }
             .disabled(!model.canRotate)
             Divider()
             Button { model.rotateThumbnailPreviews(.counterClockwise) } label: {
                 Label("Rotate Thumbnail Previews Left…", systemImage: "rotate.left")
+                    .labelStyle(.titleAndIcon)
             }
             .disabled(!model.canRotate || model.thumbnailRotationProgress != nil)
             Button { model.rotateThumbnailPreviews(.clockwise) } label: {
                 Label("Rotate Thumbnail Previews Right…", systemImage: "rotate.right")
+                    .labelStyle(.titleAndIcon)
             }
             .disabled(!model.canRotate || model.thumbnailRotationProgress != nil)
         }
