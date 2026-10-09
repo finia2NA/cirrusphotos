@@ -69,7 +69,7 @@ private struct LibraryFilterRecord: Sendable {
 public actor LibraryFilterController {
     private struct QueuedRead: Sendable {
         let index: Int
-        var useCachedPages: Bool
+        let useCachedPages: Bool
     }
 
     private struct ReadResult: Sendable {
@@ -168,21 +168,6 @@ public actor LibraryFilterController {
         enqueue(states.indices.filter { states[$0] != .failed }, useCachedPages: true, limit: 8)
     }
 
-    public func loadAll(useCachedPages: Bool = false) async {
-        await indexCachedPages()
-        enqueue(Array(states.indices), useCachedPages: useCachedPages, limit: nil, upgradePolicy: true)
-    }
-
-    public func cancelScan() async {
-        pending.removeAll()
-        let active = scheduler
-        active?.cancel()
-        if let active { await active.value }
-        scheduler = nil
-        activeIndices.removeAll()
-        publish()
-    }
-
     public func retryFailed() {
         failureMessages.removeAll()
         for index in states.indices where states[index] == .failed {
@@ -226,14 +211,11 @@ public actor LibraryFilterController {
         publish()
     }
 
-    private func enqueue(_ indices: [Int], useCachedPages: Bool, limit: Int?, upgradePolicy: Bool = false) {
+    private func enqueue(_ indices: [Int], useCachedPages: Bool, limit: Int?) {
         var admitted = 0
         for index in indices where states.indices.contains(index) && states[index] != .verified {
             if activeIndices.contains(index) { continue }
-            if let position = pending.firstIndex(where: { $0.index == index }) {
-                if upgradePolicy && !useCachedPages { pending[position].useCachedPages = false }
-                continue
-            }
+            if pending.contains(where: { $0.index == index }) { continue }
             if let limit, admitted >= limit { break }
             pending.append(.init(index: index, useCachedPages: useCachedPages))
             admitted += 1

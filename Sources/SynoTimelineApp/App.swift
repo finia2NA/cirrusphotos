@@ -8,6 +8,7 @@ struct SynoTimelineApp: App {
     @StateObject private var navigationRestoration = NavigationRestorationStore()
     @StateObject private var infoPanel = InfoPanelModel()
     @StateObject private var libraryFilter = LibraryFilterModel()
+    @StateObject private var timelineSectionLoad = TimelineSectionLoadModel()
 
     var body: some Scene {
         WindowGroup("Cirrus Photos") {
@@ -15,12 +16,16 @@ struct SynoTimelineApp: App {
                 .environmentObject(model)
                 .environmentObject(infoPanel)
                 .environmentObject(libraryFilter)
+                .environmentObject(timelineSectionLoad)
                 .frame(minWidth: 560, minHeight: 420)
                 .task { await model.load() }
         }
         .windowToolbarStyle(.unified)
         .defaultSize(width: 860, height: 820)
-        .commands { LibraryCommands(model: model, infoPanel: infoPanel, filter: libraryFilter) }
+        .commands {
+            LibraryCommands(model: model, infoPanel: infoPanel, filter: libraryFilter,
+                            timelineSectionLoad: timelineSectionLoad)
+        }
         Settings { CacheSettingsView().environmentObject(model) }
         Window("Download Thumbnails", id: "thumbnail-download") {
             ThumbnailRangeDownloadView().environmentObject(model)
@@ -28,7 +33,7 @@ struct SynoTimelineApp: App {
         .commandsRemoved()
         .windowResizability(.contentSize)
         Window("Load Timeline Sections", id: "timeline-section-load") {
-            TimelineSectionLoadView().environmentObject(libraryFilter)
+            TimelineSectionLoadView().environmentObject(timelineSectionLoad)
         }
         .commandsRemoved()
         .windowResizability(.contentSize)

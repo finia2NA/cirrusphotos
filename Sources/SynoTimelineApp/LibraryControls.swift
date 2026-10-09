@@ -279,6 +279,7 @@ struct LibraryCommands: Commands {
     @ObservedObject var model: LibraryModel
     @ObservedObject var infoPanel: InfoPanelModel
     @ObservedObject var filter: LibraryFilterModel
+    @ObservedObject var timelineSectionLoad: TimelineSectionLoadModel
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
 
@@ -377,9 +378,11 @@ struct LibraryCommands: Commands {
                           !model.timelineVerified)
             Divider()
             Button("Load All Timeline Sections") {
-                openWindow(id: "timeline-section-load")
+                if timelineSectionLoad.prepareCurrentTarget() {
+                    openWindow(id: "timeline-section-load")
+                }
             }
-            .disabled(model.snapshot == nil || model.repository == nil || !model.timelineVerified)
+            .disabled(!timelineSectionLoad.canPresent)
         }
     }
 }

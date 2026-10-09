@@ -168,46 +168,6 @@ final class LibraryFilterControllerTests: XCTestCase {
                        "tail loading must not implicitly retry the failed section")
     }
 
-    func testScannerUsesAtMostTwoPageReads() async throws {
-        let root = temporaryTestRoot("FilterConcurrency")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let sourceSections = sections(6)
-        var pages: [Int: [PhotoItem]] = [:]
-        for index in sourceSections.indices {
-            pages[index] = [try item(Int64(index + 1), day: 1_713_571_200 - Int64(index * 86_400), camera: "C\(index)")]
-        }
-        let snapshot = TimelineSnapshot(sections: sourceSections)
-        let transport = ScannerTransport(snapshot: snapshot, pages: pages, delay: .milliseconds(30))
-        let controller = LibraryFilterController(repository: try repository(transport: transport, root: root),
-                                                 snapshot: snapshot)
-        await controller.loadAll()
-        let completed = await waitUntil { await transport.totalCalls() == 6 }
-        XCTAssertTrue(completed)
-        let maximum = await transport.maximumConcurrentReads()
-        XCTAssertLessThanOrEqual(maximum, 2)
-    }
-
-    func testCancellationStopsAdmittingAdditionalPages() async throws {
-        let root = temporaryTestRoot("FilterCancel")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let sourceSections = sections(5)
-        var pages: [Int: [PhotoItem]] = [:]
-        for index in sourceSections.indices {
-            pages[index] = [try item(Int64(index + 1), day: 1_713_571_200 - Int64(index * 86_400), camera: "C")]
-        }
-        let snapshot = TimelineSnapshot(sections: sourceSections)
-        let transport = ScannerTransport(snapshot: snapshot, pages: pages, delay: .seconds(1))
-        let controller = LibraryFilterController(repository: try repository(transport: transport, root: root),
-                                                 snapshot: snapshot)
-        await controller.loadAll()
-        let admitted = await waitUntil { await transport.totalCalls() == 2 }
-        XCTAssertTrue(admitted)
-        await controller.cancelScan()
-        try await Task.sleep(for: .milliseconds(80))
-        let callsAfterCancel = await transport.totalCalls()
-        XCTAssertEqual(callsAfterCancel, 2)
-    }
-
     func testCachedProvisionalIsReplacedByVerifiedCatalog() async throws {
         let root = temporaryTestRoot("FilterReplacement")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -235,36 +195,6 @@ final class LibraryFilterControllerTests: XCTestCase {
         XCTAssertEqual(latest, ["Current Camera"])
     }
 
-    func testLoadAllBypassesCachedPageForVerificationByDefault() async throws {
-        let root = temporaryTestRoot("FilterUncachedLoadAll")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let section = sections(1)[0]
-        let cached = try item(1, day: 1_713_571_200, camera: "Cached Camera")
-        let current = try item(1, day: 1_713_571_200, camera: "Current Camera")
-        let snapshot = TimelineSnapshot(sections: [section])
-        let transport = ScannerTransport(snapshot: snapshot, pages: [0: [current]])
-        let repository = try repository(transport: transport, root: root)
-        let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(
-            server: SynologyClient.defaultBaseURL, account: "filter"), section: section))
-        try await repository.store.put(
-            key, kind: .page, data: JSONEncoder().encode([cached]), validatedRun: "old-run"
-        )
-        let controller = LibraryFilterController(repository: repository, snapshot: snapshot)
-        let box = FilterEventBox()
-        let observation = Task {
-            for await event in await controller.observe() { await box.record(event) }
-        }
-
-        await controller.loadAll()
-        let loaded = await waitUntil { await box.verified == 1 }
-        XCTAssertTrue(loaded)
-        observation.cancel()
-        let latest = await box.latestCatalog()
-        XCTAssertEqual(latest, ["Current Camera"])
-        let calls = await transport.totalCalls()
-        XCTAssertEqual(calls, 1)
-    }
-
     func testVideoOnlyFilterPublishesMatchingResultAndCameraCatalog() async throws {
         let root = temporaryTestRoot("FilterVideoOnly")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -286,9 +216,7 @@ final class LibraryFilterControllerTests: XCTestCase {
         let observation = Task {
             for await event in await controller.observe() { await box.record(event) }
         }
-        await controller.loadAll()
-        let loaded = await waitUntil { await box.verified == 1 }
-        XCTAssertTrue(loaded)
+        await controller.ingest(sectionIndex: 0, items: [photo, video], verified: true)
         let registration = await controller.apply(LibraryFilter(mediaKinds: [.video]))
         observation.cancel()
 

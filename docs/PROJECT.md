@@ -21,7 +21,7 @@ The native split-view sidebar contains Library, Favorites, Map, and Albums desti
 - Toolbar controls rotate the active viewer photo or the current browser selection left or right. Rotation is optimistic, supports photos and Live Photo stills, and adopts refreshed orientation, resolution, and thumbnail descriptors from the NAS; videos are skipped.
 - Albums shows read-only Personal Space album cards with cover, name, and item count. Opening an album reuses the shared browser with collection-scoped restoration; Escape returns from an opened album or map result just as its Back button does.
 - Album creation, rename, deletion, membership changes, and Shared Space browsing are not implemented.
-- Personal Library has a session-only metadata filter for media kind, camera, lens, literal file extension, megapixels, size, ISO, focal length, aperture, and shutter speed. Results and option catalogs immediately include every item page cached for the current validated timeline, including noncontiguous older pages, and expand cached-first in bounded batches when the user scrolls toward newer or older results. Empty results retain a **Load More Results** fallback because they have no scrollable source anchor. The Library menu can validate all Personal Library item pages through an explicit Start action; this bulk run bypasses stored page values by default and offers an opt-in **Use Cached Pages** toggle. Filter criteria and coverage are not restored after relaunch, and other collections are unchanged.
+- Personal Library has a session-only metadata filter for media kind, camera, lens, literal file extension, megapixels, size, ISO, focal length, aperture, and shutter speed. Results and option catalogs immediately include every item page cached for the current validated timeline, including noncontiguous older pages, and expand cached-first in bounded batches when the user scrolls toward newer or older results. Empty results retain a **Load More Results** fallback because they have no scrollable source anchor. Filter criteria and coverage are not restored after relaunch, and other collections are unchanged.
 
 ### Map
 
@@ -48,6 +48,7 @@ The Cmd+I Info utility panel follows the active viewer item or browser selection
 - Thumbnail rendition changes preserve other cached sizes. Compatible fallback renditions remain visible until the selected rendition is available.
 - An optional viewer setting loads cached or network-backed `xl` previews alongside originals when the library rendition is smaller.
 - The Library menu can warm the selected thumbnail rendition for an inclusive populated-day range using bounded, cancellable background work.
+- **Load All Timeline Sections** can validate every item-metadata page for the active Personal Library, Favorites, or opened album. It bypasses stored page payloads by default, can opt into current-run verified cached pages, and does not download thumbnail bytes.
 - Demanded video bytes are persisted in fixed-size segments under the same disk budget. They have lower retention priority than every photo rendition, use a separate two-transfer lane, and are never prefetched for adjacent videos. A partially cached video is not presented as fully available offline.
 - Settings controls thumbnail rendition, large viewer previews, default video quality, and a 200 MB–100 GB disk budget.
 

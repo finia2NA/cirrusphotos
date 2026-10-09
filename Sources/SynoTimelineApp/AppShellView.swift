@@ -6,6 +6,7 @@ struct AppShellView: View {
     @EnvironmentObject private var model: LibraryModel
     @EnvironmentObject private var infoPanel: InfoPanelModel
     @EnvironmentObject private var libraryFilter: LibraryFilterModel
+    @EnvironmentObject private var timelineSectionLoad: TimelineSectionLoadModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismissWindow) private var dismissWindow
     @ObservedObject var navigationRestoration: NavigationRestorationStore
@@ -89,10 +90,22 @@ struct AppShellView: View {
         .onExitCommand {
             model.navigateBack()
         }
-        .onAppear { updateBackHandler(); libraryFilter.configure(library: model) }
-        .onChange(of: selectedDestination) { _, _ in updateBackHandler() }
-        .onChange(of: openedAlbumID) { _, _ in updateBackHandler() }
-        .onChange(of: openedMapFilter) { _, _ in updateBackHandler() }
+        .onAppear {
+            updateBackHandler()
+            libraryFilter.configure(library: model)
+            timelineSectionLoad.configure(library: model, filter: libraryFilter)
+            updateTimelineSectionLoadSource()
+        }
+        .onChange(of: selectedDestination) { _, _ in
+            updateBackHandler(); updateTimelineSectionLoadSource()
+        }
+        .onChange(of: openedAlbumID) { _, _ in
+            updateBackHandler(); updateTimelineSectionLoadSource()
+        }
+        .onChange(of: openedMapFilter) { _, _ in
+            updateBackHandler(); updateTimelineSectionLoadSource()
+        }
+        .onChange(of: selectedCollection) { _, _ in updateTimelineSectionLoadSource() }
         .onDisappear {
             dismissWindow(id: InfoPanelScene.id)
         }
@@ -103,6 +116,7 @@ struct AppShellView: View {
         }
         .onChange(of: timelineVerified) { _, verified in
             viewer?.updateAllowNetwork(verified)
+            updateTimelineSectionLoadSource()
         }
         .onChange(of: model.timelineVerified) { _, verified in
             // A cached timeline can become verified without changing its section
@@ -136,6 +150,7 @@ struct AppShellView: View {
         }
         .onChange(of: snapshotRevision) { _, _ in
             updateInfoPanelContext()
+            updateTimelineSectionLoadSource()
         }
         .onChange(of: model.snapshotRevision) { _, _ in
             libraryFilter.configure(library: model)
@@ -188,6 +203,11 @@ struct AppShellView: View {
         )) {
             ThumbnailRotationProgressView(model: model)
         }
+    }
+
+    private func updateTimelineSectionLoadSource() {
+        timelineSectionLoad.configure(library: model, filter: libraryFilter)
+        timelineSectionLoad.updateSource(collection: selectedCollection)
     }
 
     private var detail: some View {

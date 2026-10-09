@@ -66,9 +66,10 @@ final class LibraryFilterModel: ObservableObject {
         Task { await controller.indexCachedPages() }
     }
 
-    func ingest(sectionIndex: Int, items: [PhotoItem], verified: Bool) {
-        guard let controller else { return }
-        Task { await controller.ingest(sectionIndex: sectionIndex, items: items, verified: verified) }
+    @discardableResult
+    func ingest(sectionIndex: Int, items: [PhotoItem], verified: Bool) -> Task<Void, Never>? {
+        guard let controller else { return nil }
+        return Task { await controller.ingest(sectionIndex: sectionIndex, items: items, verified: verified) }
     }
 
     func apply() {
@@ -128,12 +129,6 @@ final class LibraryFilterModel: ObservableObject {
                                                           userScrollGeneration: userScrollGeneration)
         }
     }
-    func loadAll(useCachedPages: Bool = false) {
-        Task { await controller?.loadAll(useCachedPages: useCachedPages) }
-    }
-    func cancel() { Task { await controller?.cancelScan() } }
-    func retry() { Task { await controller?.retryFailed() } }
-
     private func receive(_ event: LibraryFilterControllerEvent) async {
         catalog = event.catalog
         progress = event.progress
