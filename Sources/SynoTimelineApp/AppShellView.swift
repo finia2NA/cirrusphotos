@@ -500,6 +500,10 @@ struct AppShellView: View {
             ToolbarItem(placement: .navigation) {
                 LibrarySizeControl(value: $model.itemsPerRow)
             }
+            ToolbarItem(placement: .navigation) {
+                BrowserThumbnailShapeControl(model: model)
+                    .frame(height: ToolbarMetrics.controlHeight)
+            }
             if isAlbumBrowser {
                 ToolbarItem(placement: .principal) {
                     Text(model.albumName(for: collection) ?? "Album")

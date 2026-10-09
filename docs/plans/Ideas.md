@@ -21,5 +21,10 @@ Ideas for future features:
 - Download pictures
   - Step 2: optionally also connect to the synology drive API and download files with the same name but different ending along with it. Eg: there is also a raw and an .xml for this pic but they are not indexed by syno photos
 - Upload: define a folder to watch on the mac, upload with the syno api. Need to support destination definition for this. Optionally delete on mac once confirmed on nas
-- Live photo playback: on click-and-hold, live photo loads after the full photo has finished loading
+- Live photo playback: on click-and-hold, live photo loads after the full photo has finished loading. Goes back to frame 1 when cursor lets go, no media controls shown.
 - Better loading indicator: Either a small donut that fills in the current location or elsewhere in the top bar, or a line that spans a part/all of the top bar and fills
+- More stable maps view that does not have to parse all the locations all the time and uses diffs
+- Investigate diffs for more things in the cache
+- Edit in:
+  - Right click on photo and select "Edit in..." and then choose an app to open the photo in.
+  - If raw loading from the picture download step is available, offer to edit the normal or the raw file. In this case, there are 2 entries in the right click menu, one for each file.

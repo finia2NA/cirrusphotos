@@ -14,8 +14,8 @@ The native split-view sidebar contains Library, Favorites, Map, and Albums desti
 
 ### Library, Favorites, and albums
 
-- Personal Library and Favorites share a virtualized, day-grouped fixed grid with 3–10 square slots per row and aspect-fitted thumbnails.
-- The compact day navigator gives equal space to each populated day and appears near the pointer or with keyboard focus.
+- Personal Library and Favorites share a virtualized, day-grouped fixed grid with 3–10 square slots per row, a small leading content inset, and a persisted preference for aspect-fitted or square-cropped thumbnails. The preference applies to every shared browser and does not change slot, row, or document geometry. A toolbar button beside the thumbnail-size control in each shared browser and the Library menu's **Crop Thumbnails to Square** command toggle the same preference.
+- The compact day navigator gives equal space to each populated day and appears near the pointer or with keyboard focus. A persisted option can instead keep its rail and current selection visible while idle.
 - Click, Shift-click, Shift-Option-click range selection, marquee, Shift-marquee, Cmd+A, and menu-backed arrow commands select across day and page boundaries.
 - Favorites appear as heart badges. The toolbar and Library menu `.` command toggle the active viewer photo or browser selection, with confirmation when more than five items are affected or the entire collection is selected.
 - Toolbar controls rotate the active viewer photo or the current browser selection left or right. Rotation is optimistic, supports photos and Live Photo stills, and adopts refreshed orientation, resolution, and thumbnail descriptors from the NAS; videos are skipped.

@@ -79,6 +79,65 @@ final class LibraryViewportGeometryTests: XCTestCase {
                              try XCTUnwrap(geometry.y(forDay: "2024-04-03")))
     }
 
+    func testSquareCropFillsSlotsAndHitTestingUsesSquareFrame() throws {
+        let index = LibraryIndex(snapshot: TimelineSnapshot(sections: [section(day: 3, limit: 2, count: 2)]))
+        var geometry = LibraryViewportGeometry(index: index, width: 608, itemsPerRow: 3,
+                                               cropsThumbnailsToSquare: true)
+        geometry.reconcile(pages: [0: LibraryPage(sectionIndex: 0, items: [
+            try item(1, width: 400, height: 100), try item(2, width: 100, height: 400)
+        ], verified: true)])
+        let wide = try XCTUnwrap(geometry.frame(forItem: 1))
+        let tall = try XCTUnwrap(geometry.frame(forItem: 2))
+        let wideSlot = try XCTUnwrap(geometry.slotFrame(for: 0))
+        let tallSlot = try XCTUnwrap(geometry.slotFrame(for: 1))
+        XCTAssertEqual(wide, wideSlot)
+        XCTAssertEqual(tall, tallSlot)
+        XCTAssertEqual(wide.width, wideSlot.width, accuracy: 0.001)
+        XCTAssertEqual(wide.height, wideSlot.height, accuracy: 0.001)
+        // Corners letterboxed in fit mode resolve to the square's ordinal in crop mode.
+        XCTAssertEqual(geometry.ordinal(at: CGPoint(x: wideSlot.midX, y: wideSlot.minY + 2)), 0)
+        XCTAssertEqual(geometry.ordinal(at: CGPoint(x: tallSlot.minX + 2, y: tallSlot.midY)), 1)
+        XCTAssertEqual(geometry.ordinals(intersecting: CGRect(x: tallSlot.minX + 1,
+            y: tallSlot.minY + 1, width: 4, height: 4)), IndexSet(integer: 1))
+    }
+
+    func testSquareModeRelayoutReturnsTrueAndKeepsDocumentGeometry() throws {
+        let index = LibraryIndex(snapshot: TimelineSnapshot(sections: [section(day: 3, limit: 2, count: 2)]))
+        let page = LibraryPage(sectionIndex: 0, items: [
+            try item(1, width: 400, height: 100), try item(2, width: 100, height: 400)
+        ], verified: true)
+        var geometry = LibraryViewportGeometry(index: index, width: 608, itemsPerRow: 3)
+        geometry.reconcile(pages: [0: page])
+        let height = geometry.totalHeight
+        let side = geometry.slotSide
+        let dayOrigin = try XCTUnwrap(geometry.y(forDay: "2024-04-03"))
+        let fitFrame = try XCTUnwrap(geometry.frame(forItem: 1))
+        XCTAssertFalse(geometry.cropsThumbnailsToSquare)
+        XCTAssertTrue(geometry.setLayout(width: 608, itemsPerRow: 3,
+                                         cropsThumbnailsToSquare: true, pages: [0: page]))
+        XCTAssertTrue(geometry.cropsThumbnailsToSquare)
+        XCTAssertEqual(geometry.frame(forItem: 1), geometry.slotFrame(for: 0))
+        XCTAssertNotEqual(geometry.frame(forItem: 1), fitFrame)
+        XCTAssertEqual(geometry.totalHeight, height, accuracy: 0.001)
+        XCTAssertEqual(geometry.slotSide, side, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(geometry.y(forDay: "2024-04-03")), dayOrigin, accuracy: 0.001)
+        // Re-applying the same presentation is a no-op, not a relayout.
+        XCTAssertFalse(geometry.setLayout(width: 608, itemsPerRow: 3,
+                                          cropsThumbnailsToSquare: true, pages: [0: page]))
+    }
+
+    func testSquareModeRelayoutPreservesItemAnchor() throws {
+        let index = LibraryIndex(snapshot: TimelineSnapshot(sections: [section(day: 3, limit: 8, count: 8)]))
+        let page = LibraryPage(sectionIndex: 0, items: try (1...8).map { try item(Int64($0)) }, verified: true)
+        var geometry = LibraryViewportGeometry(index: index, width: 600, itemsPerRow: 6)
+        geometry.reconcile(pages: [0: page])
+        let anchor = try XCTUnwrap(geometry.anchor(at: try XCTUnwrap(geometry.frame(forItem: 7)).minY + 5))
+        XCTAssertTrue(geometry.setLayout(width: 600, itemsPerRow: 6,
+                                         cropsThumbnailsToSquare: true, pages: [0: page]))
+        XCTAssertEqual(try XCTUnwrap(geometry.y(for: anchor)),
+                       try XCTUnwrap(geometry.frame(forItem: 7)).minY + 5, accuracy: 0.001)
+    }
+
     func testRectangleHitsOnlyLoadedFittedImages() throws {
         let index = LibraryIndex(snapshot: TimelineSnapshot(sections: [section(day: 3, limit: 4, count: 4)]))
         var geometry = LibraryViewportGeometry(index: index, width: 600, itemsPerRow: 3)

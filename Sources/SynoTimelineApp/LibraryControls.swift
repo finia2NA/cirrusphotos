@@ -60,6 +60,25 @@ struct ViewerFavoriteControl: View {
     }
 }
 
+/// Toggles the shared browser between aspect-fitted and square-cropped thumbnails.
+/// The Library menu's "Crop Thumbnails to Square" command is the discoverable equivalent.
+struct BrowserThumbnailShapeControl: View {
+    @ObservedObject var model: LibraryModel
+
+    var body: some View {
+        Button {
+            model.cropsThumbnailsToSquare.toggle()
+        } label: {
+            Label(model.cropsThumbnailsToSquare ? "Use Aspect-Fit Thumbnails" : "Crop Thumbnails to Square",
+                  systemImage: model.cropsThumbnailsToSquare ? "square.fill" : "square")
+        }
+        .accessibilityLabel(model.cropsThumbnailsToSquare ? "Use Aspect-Fit Thumbnails" : "Crop Thumbnails to Square")
+        .help(model.cropsThumbnailsToSquare
+              ? "Crop Thumbnails to Square (on)"
+              : "Crop Thumbnails to Square (off)")
+    }
+}
+
 struct BrowserFavoriteControl: View {
     @ObservedObject var model: LibraryModel
     let collection: PhotoCollectionDescriptor
@@ -325,6 +344,9 @@ struct LibraryCommands: Commands {
             Button("Decrease Thumbnail Size") { model.adjustItemsPerRow(by: 1) }
                 .keyboardShortcut("-", modifiers: .command)
                 .disabled(model.itemsPerRow >= 10)
+            Divider()
+            Toggle("Crop Thumbnails to Square", isOn: $model.cropsThumbnailsToSquare)
+            Toggle("Always Show Timeline", isOn: $model.alwaysShowsTimeline)
             Divider()
             Button("Select Left") { model.performBrowserCommand(.move(.left, extending: false)) }
                 .keyboardShortcut(.leftArrow, modifiers: [])

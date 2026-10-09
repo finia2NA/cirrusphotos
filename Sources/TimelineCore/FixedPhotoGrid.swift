@@ -48,4 +48,11 @@ public enum FixedPhotoGrid {
         return CGRect(x: slot.midX - width / 2, y: slot.midY - height / 2,
                       width: width, height: height)
     }
+
+    /// The visible image/interaction rectangle for one item. Square cropping fills the
+    /// full slot; otherwise the aspect-fitted frame is centered inside it.
+    public static func visibleFrame(in slot: CGRect, aspectRatio: Double,
+                                    cropsToSquare: Bool) -> CGRect {
+        cropsToSquare ? slot : fittedFrame(in: slot, aspectRatio: aspectRatio)
+    }
 }

@@ -98,6 +98,12 @@ final class LibraryModel: ObservableObject {
             UserDefaults.standard.set(valid, forKey: "itemsPerRow")
         }
     }
+    @Published var cropsThumbnailsToSquare: Bool = UserDefaults.standard.bool(forKey: "cropsThumbnailsToSquare") {
+        didSet { UserDefaults.standard.set(cropsThumbnailsToSquare, forKey: "cropsThumbnailsToSquare") }
+    }
+    @Published var alwaysShowsTimeline: Bool = UserDefaults.standard.bool(forKey: "alwaysShowsTimeline") {
+        didSet { UserDefaults.standard.set(alwaysShowsTimeline, forKey: "alwaysShowsTimeline") }
+    }
     @Published var budgetFraction: Double = CacheBudget.fraction(for: Int64(UserDefaults.standard.object(forKey: "cacheBudget") as? Int ?? Int(CacheBudget.bytes(at: 0.5)))) {
         didSet {
             let bytes = CacheBudget.bytes(at: budgetFraction)

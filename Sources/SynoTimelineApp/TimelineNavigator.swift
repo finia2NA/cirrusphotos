@@ -8,6 +8,7 @@ private extension Collection {
 struct TimelineNavigator: View {
     let timeline: Timeline
     @Binding var selected: Int
+    var alwaysVisible = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered: Int?
     @State private var pointerIsNear = false
@@ -17,7 +18,7 @@ struct TimelineNavigator: View {
     @FocusState private var focused: Bool
     private let inset: CGFloat = 14
 
-    private var isRevealed: Bool { pointerIsNear || dragging || (focused && keyboardActive) }
+    private var isRevealed: Bool { alwaysVisible || pointerIsNear || dragging || (focused && keyboardActive) }
 
     var body: some View {
         GeometryReader { geometry in

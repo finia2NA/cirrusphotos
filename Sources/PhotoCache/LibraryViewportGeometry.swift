@@ -49,6 +49,9 @@ public struct LibraryViewportGeometry {
     public private(set) var totalHeight = 0.0
     public private(set) var width: Double
     public private(set) var itemsPerRow: Int
+    /// When true, each loaded item's materialized interaction/image frame is the full
+    /// square slot rather than an aspect-fitted rectangle inside it.
+    public private(set) var cropsThumbnailsToSquare: Bool
 
     private let index: LibraryIndex
     private var pages: [Int: LibraryPage] = [:]
@@ -69,10 +72,12 @@ public struct LibraryViewportGeometry {
     private let headingHeight = 38.0
     private let gap = FixedPhotoGrid.gap
 
-    public init(index: LibraryIndex, width: Double, itemsPerRow: Int = 6) {
+    public init(index: LibraryIndex, width: Double, itemsPerRow: Int = 6,
+                cropsThumbnailsToSquare: Bool = false) {
         self.index = index
         self.width = max(1, width)
         self.itemsPerRow = FixedPhotoGrid.columns(itemsPerRow)
+        self.cropsThumbnailsToSquare = cropsThumbnailsToSquare
         buildSlices()
         recalculate()
     }
@@ -83,11 +88,14 @@ public struct LibraryViewportGeometry {
 
     @discardableResult
     public mutating func setLayout(width newWidth: Double, itemsPerRow newCount: Int,
+                                   cropsThumbnailsToSquare newCrops: Bool? = nil,
                                    pages: [Int: LibraryPage]) -> Bool {
         guard newWidth.isFinite, newWidth > 0 else { return false }
         let count = FixedPhotoGrid.columns(newCount)
-        guard abs(width - newWidth) > 0.5 || itemsPerRow != count else { return false }
-        width = newWidth; itemsPerRow = count; self.pages = pages
+        let crops = newCrops ?? cropsThumbnailsToSquare
+        guard abs(width - newWidth) > 0.5 || itemsPerRow != count || crops != cropsThumbnailsToSquare
+        else { return false }
+        width = newWidth; itemsPerRow = count; cropsThumbnailsToSquare = crops; self.pages = pages
         recalculate()
         return true
     }
@@ -323,8 +331,9 @@ public struct LibraryViewportGeometry {
                 let slot = FixedPhotoGrid.slotFrame(column: position, rowY: absoluteY,
                     availableWidth: width, columns: itemsPerRow, gap: gap)
                 itemSlotFrames[item.photo.id] = slot
-                itemFrames[item.photo.id] = FixedPhotoGrid.fittedFrame(in: slot,
-                                                                        aspectRatio: item.photo.displayAspectRatio)
+                itemFrames[item.photo.id] = FixedPhotoGrid.visibleFrame(
+                    in: slot, aspectRatio: item.photo.displayAspectRatio,
+                    cropsToSquare: cropsThumbnailsToSquare)
             }
         }
     }

@@ -36,4 +36,14 @@ final class FixedPhotoGridTests: XCTestCase {
         XCTAssertEqual(FixedPhotoGrid.row(itemCount: 2, availableWidth: 500, columns: 6).cells.count, 2)
         XCTAssertEqual(FixedPhotoGrid.row(itemCount: 20, availableWidth: 500, columns: 6).cells.count, 6)
     }
+
+    func testCropPreferenceSelectsSlotOrFittedVisibleFrame() {
+        let slot = CGRect(x: 10, y: 20, width: 100, height: 100)
+        XCTAssertEqual(FixedPhotoGrid.visibleFrame(in: slot, aspectRatio: 4, cropsToSquare: true), slot)
+        XCTAssertEqual(FixedPhotoGrid.visibleFrame(in: slot, aspectRatio: 0.25, cropsToSquare: true), slot)
+        XCTAssertEqual(FixedPhotoGrid.visibleFrame(in: slot, aspectRatio: 4, cropsToSquare: false),
+                       FixedPhotoGrid.fittedFrame(in: slot, aspectRatio: 4))
+        XCTAssertEqual(FixedPhotoGrid.visibleFrame(in: slot, aspectRatio: .nan, cropsToSquare: false),
+                       FixedPhotoGrid.fittedFrame(in: slot, aspectRatio: .nan))
+    }
 }

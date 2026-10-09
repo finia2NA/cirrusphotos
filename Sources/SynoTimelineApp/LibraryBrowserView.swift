@@ -217,6 +217,7 @@ struct LibraryBrowserView: View {
                                              repository: repository, allowNetwork: library.timelineVerified(for: collection),
                                              thumbnailSize: library.thumbnailSize,
                                              itemsPerRow: library.itemsPerRow,
+                                             cropsThumbnailsToSquare: library.cropsThumbnailsToSquare,
                                              selectionState: library.selectionState(for: collection),
                                              restorationAnchor: restorationAnchor,
                                              bridge: bridge,
@@ -250,7 +251,8 @@ struct LibraryBrowserView: View {
                                              onRetry: { Task { await library.reload() } }) { day in
                         if snapshot.timeline.days.contains(where: { $0.id == day }) { selectedDay = day }
                     }
-                        TimelineNavigator(timeline: snapshot.timeline, selected: selection)
+                        TimelineNavigator(timeline: snapshot.timeline, selected: selection,
+                                          alwaysVisible: library.alwaysShowsTimeline)
                             .frame(width: 72)
                             .padding(.top, contentTopInset + 16)
                             .padding(.bottom, 16)
@@ -491,6 +493,7 @@ private struct HostedRow: View {
     let repository: CachedPhotosRepository
     let size: ThumbnailSize
     let pages: [Int: LibraryPage]
+    let cropsToSquare: Bool
     let onSelect: (Int) -> Void
     let onCommand: (BrowserSelectionCommand) -> Void
     let onOpenPhoto: (Int, PhotoViewerOpenRequest) -> Void
@@ -501,11 +504,12 @@ private struct HostedRow: View {
             ForEach(row.layout.cells.indices, id: \.self) { position in
                 let cell = row.layout.cells[position]
                 if let item = row.slots[position] {
-                    let ratio = max(0.0001, item.photo.displayAspectRatio)
-                    let fittedWidth = min(cell.width, row.layout.height * ratio)
-                    let fittedHeight = min(row.layout.height, cell.width / ratio)
+                    let slot = CGRect(x: cell.x, y: 0, width: cell.width, height: row.layout.height)
+                    let visible = FixedPhotoGrid.visibleFrame(in: slot,
+                        aspectRatio: item.photo.displayAspectRatio, cropsToSquare: cropsToSquare)
                     ThumbnailCell(item: item.photo, repository: repository,
                                   size: size, allowNetwork: item.verified,
+                                  cropsToSquare: cropsToSquare,
                                   isSelected: selection.indexes.contains(item.ordinal),
                                   onSelect: { onSelect(item.ordinal) },
                                   onCommand: onCommand) { source in
@@ -515,7 +519,8 @@ private struct HostedRow: View {
                             pageVerified: page?.verified ?? item.verified)
                         onOpenPhoto(item.ordinal, PhotoViewerOpenRequest(seed: seed, source: source))
                     }
-                        .frame(width: fittedWidth, height: fittedHeight)
+                        .frame(width: visible.width, height: visible.height)
+                        .clipped()
                         .frame(width: cell.width, height: row.layout.height)
                 } else {
                     Color.clear.frame(width: cell.width, height: row.layout.height)
@@ -544,6 +549,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let allowNetwork: Bool
     let thumbnailSize: ThumbnailSize
     let itemsPerRow: Int
+    let cropsThumbnailsToSquare: Bool
     let selectionState: BrowserSelectionState
     let restorationAnchor: PhotoTimelineRestorationAnchor?
     let bridge: LibraryBrowserBridge
@@ -686,10 +692,14 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             repository = input.repository
             let insetAnchor = geometry?.anchor(at: visibleTop(in: scroll))
             let oldInsets = scroll.contentInsets
-            let insets = NSEdgeInsets(top: input.contentTopInset, left: 0, bottom: 0, right: 0)
+            let horizontalInset = CGFloat(FixedPhotoGrid.gap)
+            let insets = NSEdgeInsets(top: input.contentTopInset, left: horizontalInset,
+                                      bottom: 0, right: horizontalInset)
             scroll.contentInsets = insets
             let insetsChanged = abs(oldInsets.top - insets.top) > 0.5 ||
-                abs(oldInsets.left - insets.left) > 0.5
+                abs(oldInsets.left - insets.left) > 0.5 ||
+                abs(oldInsets.right - insets.right) > 0.5 ||
+                abs(oldInsets.bottom - insets.bottom) > 0.5
             if thumbnailSize != input.thumbnailSize { viewRevision += 1 }
             thumbnailSize = input.thumbnailSize
             if colorScheme != input.colorScheme { viewRevision += 1 }
@@ -705,7 +715,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 let newIndex = LibraryIndex(snapshot: input.snapshot)
                 index = newIndex
                 geometry = LibraryViewportGeometry(index: newIndex, width: width,
-                                                   itemsPerRow: input.itemsPerRow)
+                                                   itemsPerRow: input.itemsPerRow,
+                                                   cropsThumbnailsToSquare: input.cropsThumbnailsToSquare)
                 selectionState = input.selectionState
                 selectionState.bind(to: newIndex.fingerprint)
                 publishSelection()
@@ -730,9 +741,11 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     demandedPrefetch = []
                 }
                 if let current = geometry,
-                   abs(current.width - width) > 0.5 || current.itemsPerRow != input.itemsPerRow {
+                   abs(current.width - width) > 0.5 || current.itemsPerRow != input.itemsPerRow ||
+                   current.cropsThumbnailsToSquare != input.cropsThumbnailsToSquare {
                     let anchor = current.anchor(at: visibleTop(in: scroll))
                     geometry?.setLayout(width: width, itemsPerRow: input.itemsPerRow,
+                                        cropsThumbnailsToSquare: input.cropsThumbnailsToSquare,
                                         pages: pages)
                     selection.endExtension()
                     cancelPointerInteraction()
@@ -875,6 +888,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 if abs(current.width - width) > 0.5 {
                     let anchor = current.anchor(at: visibleTop(in: scroll))
                     geometry?.setLayout(width: width, itemsPerRow: current.itemsPerRow,
+                                        cropsThumbnailsToSquare: current.cropsThumbnailsToSquare,
                                         pages: pages)
                     selection.endExtension()
                     cancelPointerInteraction()
@@ -935,6 +949,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                             frame: CGRect(x: 0, y: rowY, width: geometry.width, height: row.layout.height),
                             content: AnyView(HostedRow(row: row, repository: repository,
                                                        size: thumbnailSize, pages: pages,
+                                                       cropsToSquare: geometry.cropsThumbnailsToSquare,
                                                        onSelect: { [weak self] in self?.selectFromAccessibility($0) },
                                                        onCommand: { [weak self] in self?.perform($0) },
                                                        onOpenPhoto: { [weak self] ordinal, request in
