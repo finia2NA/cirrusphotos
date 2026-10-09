@@ -104,28 +104,17 @@ final class TimelineSectionLoadModel: ObservableObject {
         staleTimelineMessage = nil
         progress = .init(total: target.snapshot.sections.count,
                          remaining: target.snapshot.sections.count)
-        let pageEmission: TimelineSectionCacheLoader.PageEmission?
         if target.collection == .personalLibrary {
             filter?.configure(library: library)
-            pageEmission = { [weak filter] sectionIndex, items, verified in
-                let ingestion = await MainActor.run {
-                    filter?.ingest(sectionIndex: sectionIndex, items: items, verified: verified)
-                }
-                await ingestion?.value
-            }
-        } else {
-            pageEmission = nil
         }
         let loader = TimelineSectionCacheLoader(repository: repository,
                                                 collection: target.collection,
-                                                snapshot: target.snapshot,
-                                                collectionLabel: target.title,
-                                                pageEmission: pageEmission)
+                                                snapshot: target.snapshot)
         self.loader = loader
         loaderObserver = Task { [weak self] in
-            for await value in await loader.observe() {
+            for await event in await loader.observe() {
                 guard !Task.isCancelled else { return }
-                self?.receive(value)
+                await self?.receive(event)
             }
         }
         return true
@@ -160,8 +149,14 @@ final class TimelineSectionLoadModel: ObservableObject {
         }
     }
 
-    private func receive(_ value: TimelineSectionCacheLoadProgress) {
+    private func receive(_ event: TimelineSectionCacheLoaderEvent) async {
         guard staleTimelineMessage == nil else { return }
+        if capturedTarget?.collection == .personalLibrary, let emission = event.emission,
+           let ingestion = filter?.ingest(sectionIndex: emission.sectionIndex,
+                                          items: emission.items, verified: emission.verified) {
+            await ingestion.value
+        }
+        let value = event.progress
         if runRequestPending, value.state == .idle { return }
         runRequestPending = false
         runActive = value.state == .running
@@ -169,7 +164,7 @@ final class TimelineSectionLoadModel: ObservableObject {
                          verified: value.verified, provisional: value.provisional,
                          failed: value.failed, remaining: value.remaining,
                          currentSectionLabel: value.state == .running
-                             ? "Loading \(value.collectionLabel) sections" : nil,
+                             ? "Loading \(targetTitle ?? "collection") sections" : nil,
                          matchCount: nil, state: Self.presentation(value.state),
                          failures: value.failures)
     }
@@ -192,11 +187,11 @@ final class TimelineSectionLoadModel: ObservableObject {
         }
     }
 
-    private static func presentation(_ value: TimelineSectionCacheLoadProgress.State) -> TimelineSectionLoadPresentationProgress.State {
+    private static func presentation(_ value: TimelineSectionCacheProgress.State) -> TimelineSectionLoadPresentationProgress.State {
         switch value {
         case .idle: .idle
         case .running: .running
-        case .cancelled: .cancelled
+        case .canceling: .cancelled
         case .finished: .finished
         }
     }

@@ -41,7 +41,7 @@ The actor should accept:
 - one authoritative `PhotoCollectionDescriptor`
 - the verified `TimelineSnapshot` captured when the operation is prepared
 
-Expose a progress value and observation stream tailored to the load window. The progress must contain the collection, total section count, completed/verified count, provisional count where relevant, failed count, remaining count, current collection label supplied by the app, state (`idle`, `running`, `cancelled`, `finished`), and stable per-section failure messages. Keep transport and cache errors sanitized as they are today.
+Expose one event stream containing generic loader progress plus page emissions. `TimelineSectionCacheProgress` contains counts, state, and stable failures; `TimelineSectionCacheEmission` identifies the source section, items, and verification state; `TimelineSectionCacheLoaderEvent` carries the latest progress plus an optional emission. Collection labels remain in the app layer.
 
 Implement these operations:
 
@@ -68,7 +68,7 @@ Do not add direct `DiskCache` writes. The ordinary repository page pipeline must
 
 ### 2. Keep Personal Library filtering synchronized
 
-Use exactly one explicit bulk scheduler for Personal Library, Favorites, and normal albums. `TimelineSectionLoadModel` owns a `TimelineSectionCacheLoader` for every invocation. For Personal Library, every provisional and verified loader page emission is forwarded through `LibraryFilterModel.ingest(sectionIndex:items:verified:)`, which updates the existing `LibraryFilterController` records, facet catalogs, coverage, and active derived results.
+Use exactly one explicit bulk scheduler for Personal Library, Favorites, and normal albums. `TimelineSectionLoadModel` owns a `TimelineSectionCacheLoader` for every invocation and observes its event stream. For Personal Library, every provisional and verified emission is forwarded through `LibraryFilterModel.ingest(sectionIndex:items:verified:)`, which updates the existing `LibraryFilterController` records, facet catalogs, coverage, and active derived results.
 
 Do not retain a separate explicit `LibraryFilterController.loadAll` path or `LibraryFilterModel` bulk load/cancel/retry wrappers. The filter controller keeps its separate network-disabled cache discovery, empty-result initial batch, and bounded scroll edge-demand scheduler. Do not generalize session filters to Favorites or albums.
 
@@ -82,7 +82,8 @@ It should:
 - Normalize `.libraryFilter` to `.personalLibrary` and reject `.mapFilter`.
 - Accept `.personalLibrary`, `.favorites`, and `.album(id)` only when `LibraryModel` has a snapshot and `timelineVerified(for:)` is true.
 - Resolve a display title from `LibraryModel.albumName(for:)`, with a deterministic album fallback if the name is temporarily unavailable.
-- On command invocation, capture the collection, current snapshot, and `snapshotRevision(for:)`, then configure the collection-neutral loader, with a Personal Library emission callback when applicable.
+- On command invocation, capture the collection, current snapshot, and `snapshotRevision(for:)`, then create the same collection-neutral loader used for every target.
+- Observe loader events, publish generic progress with the app-owned target label, and forward Personal Library emissions through `LibraryFilterModel.ingest(sectionIndex:items:verified:)`.
 - Observe collection snapshot revisions while a run is active. If the captured revision changes, cancel the run and expose a clear stale-timeline message. This matters for Favorites because successful favorite mutations replace its authoritative geometry.
 - Expose `canPresent`, target title, progress, `start(useCachedPages:)`, `cancel()`, and `retryFailed()` to SwiftUI.
 - Shut down a prior non-running prepared loader before preparing another collection. Do not retarget a running loader merely because sidebar navigation changed.

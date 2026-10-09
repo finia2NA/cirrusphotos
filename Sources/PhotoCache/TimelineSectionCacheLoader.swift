@@ -1,16 +1,14 @@
 import Foundation
 import SynologyAPI
 
-public struct TimelineSectionCacheLoadProgress: Equatable, Sendable {
+public struct TimelineSectionCacheProgress: Equatable, Sendable {
     public enum State: Equatable, Sendable {
         case idle
         case running
-        case cancelled
+        case canceling
         case finished
     }
 
-    public let collection: PhotoCollectionDescriptor
-    public let collectionLabel: String
     public let total: Int
     public let verified: Int
     public let provisional: Int
@@ -22,12 +20,27 @@ public struct TimelineSectionCacheLoadProgress: Equatable, Sendable {
     public var processed: Int { verified + provisional + failed }
 }
 
+public struct TimelineSectionCacheEmission: Equatable, Sendable {
+    public let sectionIndex: Int
+    public let items: [PhotoItem]
+    public let verified: Bool
+
+    public init(sectionIndex: Int, items: [PhotoItem], verified: Bool) {
+        self.sectionIndex = sectionIndex
+        self.items = items
+        self.verified = verified
+    }
+}
+
+public struct TimelineSectionCacheLoaderEvent: Equatable, Sendable {
+    public let progress: TimelineSectionCacheProgress
+    public let emission: TimelineSectionCacheEmission?
+}
+
 /// Explicitly warms every item-metadata page described by one captured,
 /// authoritative collection timeline. The repository remains responsible for
 /// cache reads, validation, mutation epochs, shared jobs, and persistence.
 public actor TimelineSectionCacheLoader {
-    public typealias PageEmission = @Sendable (_ sectionIndex: Int, _ items: [PhotoItem], _ verified: Bool) async -> Void
-
     private enum SectionState: Equatable, Sendable { case unseen, provisional, verified, failed }
 
     private struct QueuedRead: Sendable {
@@ -43,10 +56,8 @@ public actor TimelineSectionCacheLoader {
     }
 
     private let repository: CachedPhotosRepository
-    public let collection: PhotoCollectionDescriptor
-    public let snapshot: TimelineSnapshot
-    public let collectionLabel: String
-    private let pageEmission: PageEmission?
+    private let collection: PhotoCollectionDescriptor
+    private let snapshot: TimelineSnapshot
     private var states: [SectionState]
     private var pending: [QueuedRead] = []
     private var activeIndices = Set<Int>()
@@ -54,35 +65,31 @@ public actor TimelineSectionCacheLoader {
     private var failureCachePolicies: [Int: Bool] = [:]
     private var scheduler: Task<Void, Never>?
     private var wasCancelled = false
-    private var observers: [UUID: AsyncStream<TimelineSectionCacheLoadProgress>.Continuation] = [:]
+    private var observers: [UUID: AsyncStream<TimelineSectionCacheLoaderEvent>.Continuation] = [:]
 
     public init(repository: CachedPhotosRepository,
                 collection: PhotoCollectionDescriptor,
-                snapshot: TimelineSnapshot,
-                collectionLabel: String,
-                pageEmission: PageEmission? = nil) {
+                snapshot: TimelineSnapshot) {
         self.repository = repository
         self.collection = collection
         self.snapshot = snapshot
-        self.collectionLabel = collectionLabel
-        self.pageEmission = pageEmission
         states = Array(repeating: .unseen, count: snapshot.sections.count)
     }
 
     deinit { scheduler?.cancel() }
 
-    public func observe() -> AsyncStream<TimelineSectionCacheLoadProgress> {
+    public func observe() -> AsyncStream<TimelineSectionCacheLoaderEvent> {
         let id = UUID()
         return AsyncStream(bufferingPolicy: .bufferingNewest(2)) { continuation in
             observers[id] = continuation
-            continuation.yield(makeProgress())
+            continuation.yield(.init(progress: makeProgress(), emission: nil))
             continuation.onTermination = { @Sendable _ in
                 Task { await self.removeObserver(id) }
             }
         }
     }
 
-    public func progress() -> TimelineSectionCacheLoadProgress { makeProgress() }
+    public func progress() -> TimelineSectionCacheProgress { makeProgress() }
 
     public func loadAll(useCachedPages: Bool = false) {
         guard scheduler == nil else { return }
@@ -185,9 +192,9 @@ public actor TimelineSectionCacheLoader {
                         guard !Task.isCancelled else { break }
                         switch event {
                         case .value(let items, let isVerified):
-                            await self.pageEmission?(read.index, items, isVerified)
+                            await self.recordEmission(index: read.index, items: items,
+                                                     verified: isVerified)
                             verified = verified || isVerified
-                            if !isVerified { await self.recordProvisional(read.index) }
                         case .failure(let message):
                             failure = message
                         }
@@ -202,28 +209,33 @@ public actor TimelineSectionCacheLoader {
         }
     }
 
-    private func recordProvisional(_ index: Int) {
-        guard states.indices.contains(index), states[index] != .verified else { return }
-        states[index] = .provisional
-        publish()
+    private func recordEmission(index: Int, items: [PhotoItem], verified: Bool) {
+        guard states.indices.contains(index) else { return }
+        if verified {
+            states[index] = .verified
+            failureMessages.removeValue(forKey: index)
+            failureCachePolicies.removeValue(forKey: index)
+        } else if states[index] != .verified {
+            states[index] = .provisional
+        }
+        publish(emission: .init(sectionIndex: index, items: items, verified: verified))
     }
 
-    private func makeProgress() -> TimelineSectionCacheLoadProgress {
+    private func makeProgress() -> TimelineSectionCacheProgress {
         let verified = states.filter { $0 == .verified }.count
         let provisional = states.filter { $0 == .provisional }.count
         let failed = states.filter { $0 == .failed }.count
-        let state: TimelineSectionCacheLoadProgress.State
+        let state: TimelineSectionCacheProgress.State
         if scheduler != nil {
             state = .running
         } else if wasCancelled {
-            state = .cancelled
+            state = .canceling
         } else if verified == states.count {
             state = .finished
         } else {
             state = .idle
         }
-        return .init(collection: collection, collectionLabel: collectionLabel,
-                     total: states.count, verified: verified, provisional: provisional,
+        return .init(total: states.count, verified: verified, provisional: provisional,
                      failed: failed, remaining: states.count - verified,
                      state: state,
                      failures: failureMessages.sorted(by: { $0.key < $1.key }).map {
@@ -231,9 +243,9 @@ public actor TimelineSectionCacheLoader {
                      })
     }
 
-    private func publish() {
-        let progress = makeProgress()
-        observers.values.forEach { $0.yield(progress) }
+    private func publish(emission: TimelineSectionCacheEmission? = nil) {
+        let event = TimelineSectionCacheLoaderEvent(progress: makeProgress(), emission: emission)
+        observers.values.forEach { $0.yield(event) }
     }
 
     private func removeObserver(_ id: UUID) { observers.removeValue(forKey: id) }

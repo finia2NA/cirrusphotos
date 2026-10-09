@@ -25,7 +25,7 @@ final class TimelineSectionCacheLoaderTests: XCTestCase {
         ))
     }
 
-    private func waitForFinish(_ loader: TimelineSectionCacheLoader) async -> TimelineSectionCacheLoadProgress? {
+    private func waitForFinish(_ loader: TimelineSectionCacheLoader) async -> TimelineSectionCacheProgress? {
         let finished = await waitUntil {
             let value = await loader.progress()
             return value.state == .finished
@@ -38,8 +38,7 @@ final class TimelineSectionCacheLoaderTests: XCTestCase {
         let snapshot = TimelineSnapshot(sections: sections(3))
         let transport = BulkPageTransport(item: try item(1))
         let loader = TimelineSectionCacheLoader(repository: try repository(root: root, transport: transport),
-                                                collection: .favorites, snapshot: snapshot,
-                                                collectionLabel: "Favorites")
+                                                collection: .favorites, snapshot: snapshot)
         await loader.loadAll()
         let finalProgress = await waitForFinish(loader)
         let progress = try XCTUnwrap(finalProgress)
@@ -55,8 +54,7 @@ final class TimelineSectionCacheLoaderTests: XCTestCase {
         XCTAssertEqual(snapshot.sections.count, 2)
         let transport = BulkPageTransport(item: try item(1))
         let loader = TimelineSectionCacheLoader(repository: try repository(root: root, transport: transport),
-                                                collection: .album(54), snapshot: snapshot,
-                                                collectionLabel: "Trip")
+                                                collection: .album(54), snapshot: snapshot)
         await loader.loadAll()
         let progress = await waitForFinish(loader)
         let collections = await transport.collections()
@@ -71,8 +69,7 @@ final class TimelineSectionCacheLoaderTests: XCTestCase {
         let snapshot = TimelineSnapshot(sections: sections(6))
         let transport = BulkPageTransport(item: try item(1), delay: .seconds(1))
         let loader = TimelineSectionCacheLoader(repository: try repository(root: root, transport: transport),
-                                                collection: .favorites, snapshot: snapshot,
-                                                collectionLabel: "Favorites")
+                                                collection: .favorites, snapshot: snapshot)
         await loader.loadAll()
         let admitted = await waitUntil { await transport.callCount() == 2 }
         let maximum = await transport.maximumConcurrent()
@@ -83,7 +80,7 @@ final class TimelineSectionCacheLoaderTests: XCTestCase {
         let calls = await transport.callCount()
         let state = await loader.progress().state
         XCTAssertEqual(calls, 2)
-        XCTAssertEqual(state, .cancelled)
+        XCTAssertEqual(state, .canceling)
     }
 
     func testDefaultBypassesStalePageAndUseCachedPagesReusesCurrentRunValue() async throws {
@@ -100,7 +97,7 @@ final class TimelineSectionCacheLoaderTests: XCTestCase {
                                        validatedRun: "old-run")
 
         let first = TimelineSectionCacheLoader(repository: repository, collection: .favorites,
-                                               snapshot: snapshot, collectionLabel: "Favorites")
+                                               snapshot: snapshot)
         await first.loadAll()
         let firstProgress = await waitForFinish(first)
         XCTAssertNotNil(firstProgress)
@@ -112,7 +109,7 @@ final class TimelineSectionCacheLoaderTests: XCTestCase {
         XCTAssertEqual(firstCalls, 1)
 
         let second = TimelineSectionCacheLoader(repository: repository, collection: .favorites,
-                                                snapshot: snapshot, collectionLabel: "Favorites")
+                                                snapshot: snapshot)
         await second.loadAll(useCachedPages: true)
         let secondProgress = await waitForFinish(second)
         let secondCalls = await transport.callCount()
@@ -126,10 +123,10 @@ final class TimelineSectionCacheLoaderTests: XCTestCase {
         let transport = BulkPageTransport(item: try item(1))
         let repository = try repository(root: root, transport: transport)
         for await _ in await repository.page(snapshot.sections[1], collection: .album(9)) {}
+        try await Task.sleep(for: .milliseconds(30))
         await transport.failNext(offset: 1)
         let loader = TimelineSectionCacheLoader(repository: repository,
-                                                collection: .album(9), snapshot: snapshot,
-                                                collectionLabel: "Album 9")
+                                                collection: .album(9), snapshot: snapshot)
         await loader.loadAll(useCachedPages: false)
         let failed = await waitUntil { await loader.progress().failed == 1 }
         let firstCounts = [await transport.count(offset: 0), await transport.count(offset: 1),
@@ -154,7 +151,7 @@ final class TimelineSectionCacheLoaderTests: XCTestCase {
         let collections: [PhotoCollectionDescriptor] = [.personalLibrary, .favorites, .album(54), .album(55)]
         for collection in collections {
             let loader = TimelineSectionCacheLoader(repository: repository, collection: collection,
-                                                    snapshot: snapshot, collectionLabel: collection.rawValue)
+                                                    snapshot: snapshot)
             await loader.loadAll()
             let progress = await waitForFinish(loader)
             XCTAssertNotNil(progress)
