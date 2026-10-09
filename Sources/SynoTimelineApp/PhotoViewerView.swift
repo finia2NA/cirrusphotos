@@ -5,6 +5,7 @@ struct PhotoViewerView: View {
     @ObservedObject var viewer: PhotoViewerPresentation
     let toolbarInset: CGFloat
     let reduceMotion: Bool
+    let pixelInterpolation: PixelInterpolationPreference
     let onSelectionChanged: (PhotoViewerState) -> Void
     let onClose: () -> Void
 
@@ -16,6 +17,9 @@ struct PhotoViewerView: View {
                               toolbarInset: toolbarInset,
                               openingSourceRect: viewer.source.rectInWindowContent(),
                               reduceMotion: reduceMotion,
+                              interpolation: pixelInterpolation.imageInterpolation(
+                                isFullResolution: viewer.isDisplayingFullResolution
+                              ),
                               controller: viewer.canvasController,
                               onPrevious: viewer.navigatePrevious,
                               onNext: viewer.navigateNext,

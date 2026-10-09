@@ -8,6 +8,11 @@ final class PhotoViewerCanvasView: NSView {
     var onClose: (() -> Void)?
     var toolbarInset: CGFloat = 0 { didSet { updateGeometry() } }
     var reduceMotion = false
+    var interpolation: NSImageInterpolation = .none {
+        didSet {
+            if interpolation != oldValue { needsDisplay = true }
+        }
+    }
 
     private var image: NSImage?
     private var selectionGeneration: UInt64 = 0
@@ -70,7 +75,7 @@ final class PhotoViewerCanvasView: NSView {
         }
         image.draw(in: frame, from: .zero, operation: .sourceOver,
                    fraction: min(1, max(0, backgroundAlpha)), respectFlipped: true, hints: [
-                    .interpolation: NSImageInterpolation.high
+                    .interpolation: interpolation
                    ])
     }
 

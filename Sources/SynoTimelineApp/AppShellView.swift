@@ -224,6 +224,7 @@ struct AppShellView: View {
                     PhotoViewerView(viewer: viewer,
                                     toolbarInset: topInset,
                                     reduceMotion: reduceMotion,
+                                    pixelInterpolation: model.pixelInterpolation,
                                     onSelectionChanged: followViewer,
                                     onClose: closeViewer)
                         .ignoresSafeArea(.container, edges: .top)

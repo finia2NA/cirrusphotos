@@ -14,6 +14,11 @@ struct CacheSettingsView: View {
             }
             Toggle("Load large previews in viewer", isOn: $library.loadsLargeViewerPreviews)
                 .disabled(library.thumbnailSize == .xl)
+            Picker("Pixel interpolation", selection: $library.pixelInterpolation) {
+                ForEach(PixelInterpolationPreference.allCases, id: \.self) { preference in
+                    Text(preference.displayName).tag(preference)
+                }
+            }
             Picker("Default video quality", selection: $library.videoQuality) {
                 ForEach(VideoQualityPreference.allCases, id: \.self) { quality in
                     Text(quality.displayName).tag(quality)

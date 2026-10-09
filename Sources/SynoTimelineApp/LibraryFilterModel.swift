@@ -27,7 +27,7 @@ final class LibraryFilterModel: ObservableObject {
     private var controller: LibraryFilterController?
     private var observer: Task<Void, Never>?
     private var fingerprint: String?
-    private var lastTailDemandProcessed = -1
+    private var lastEdgeDemand: EdgeDemandKey?
     private var installedRegistration: LibraryFilterRegistration?
     private var installingRegistration: LibraryFilterRegistration?
 
@@ -36,8 +36,9 @@ final class LibraryFilterModel: ObservableObject {
     var activeCount: Int { committed.activeCriterionCount }
     var canApply: Bool { validateFields().isEmpty }
     var coverageText: String {
+        if progress.isDiscoveringCachedPages { return "Searching cached pages…" }
         if progress.total > 0 && progress.verified == progress.total { return "All \(progress.total) sections loaded" }
-        return "Options from \(progress.processed) of \(progress.total) sections"
+        return "Options from \(progress.indexed) cached or loaded sections; \(progress.verified) verified"
     }
     var statusText: String {
         let matches = progress.matchCount ?? 0
@@ -49,7 +50,9 @@ final class LibraryFilterModel: ObservableObject {
         guard let snapshot = library.snapshot, library.timelineVerified, let repository = library.repository else { return }
         let next = LibraryIndex(snapshot: snapshot).fingerprint
         guard fingerprint != next else { return }
+        let previousController = controller
         observer?.cancel()
+        Task { await previousController?.shutdown() }
         clear()
         fingerprint = next
         let controller = LibraryFilterController(repository: repository, snapshot: snapshot)
@@ -60,6 +63,7 @@ final class LibraryFilterModel: ObservableObject {
                 await self?.receive(event)
             }
         }
+        Task { await controller.indexCachedPages() }
     }
 
     func ingest(sectionIndex: Int, items: [PhotoItem], verified: Bool) {
@@ -87,7 +91,7 @@ final class LibraryFilterModel: ObservableObject {
         Task {
             let registration = await controller.apply(filter)
             await install(registration)
-            await controller.loadNextBatch()
+            if registration.snapshot.sections.isEmpty { await controller.loadInitialBatch() }
         }
     }
 
@@ -106,15 +110,23 @@ final class LibraryFilterModel: ObservableObject {
         validationErrors = [:]
         installedRegistration = nil
         installingRegistration = nil
+        lastEdgeDemand = nil
         let currentController = controller
         Task { await currentController?.unregisterFilter() }
     }
 
-    func loadNext() { Task { await controller?.loadNextBatch() } }
-    func loadNextIfNeeded() {
-        guard progress.remaining > 0, progress.processed != lastTailDemandProcessed else { return }
-        lastTailDemandProcessed = progress.processed
-        loadNext()
+    func loadInitialBatch() { Task { await controller?.loadInitialBatch() } }
+    func edgeDemand(syntheticSectionIndices: [Int], direction: LibraryFilterScanDirection,
+                    userScrollGeneration: UInt64) {
+        let key = EdgeDemandKey(direction: direction, sections: syntheticSectionIndices.sorted(),
+                                generation: userScrollGeneration)
+        guard key != lastEdgeDemand else { return }
+        lastEdgeDemand = key
+        Task {
+            await controller?.demandVisibleResultSections(syntheticSectionIndices,
+                                                          direction: direction,
+                                                          userScrollGeneration: userScrollGeneration)
+        }
     }
     func loadAll(useCachedPages: Bool = false) {
         Task { await controller?.loadAll(useCachedPages: useCachedPages) }
@@ -212,6 +224,12 @@ final class LibraryFilterModel: ObservableObject {
         }
         return parsePositive(text)
     }
+}
+
+private struct EdgeDemandKey: Equatable {
+    let direction: LibraryFilterScanDirection
+    let sections: [Int]
+    let generation: UInt64
 }
 
 private extension LibraryFilterRegistration {

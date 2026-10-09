@@ -241,9 +241,11 @@ struct LibraryBrowserView: View {
                                                  guard collection == .personalLibrary else { return }
                                                  libraryFilter.ingest(sectionIndex: section, items: items, verified: verified)
                                              },
-                                             onNearTail: {
+                                             onFilterEdgeDemand: { sections, direction, generation in
                                                  guard collection.isLibraryFilter else { return }
-                                                 libraryFilter.loadNextIfNeeded()
+                                                 libraryFilter.edgeDemand(syntheticSectionIndices: sections,
+                                                                          direction: direction,
+                                                                          userScrollGeneration: generation)
                                              },
                                              onRetry: { Task { await library.reload() } }) { day in
                         if snapshot.timeline.days.contains(where: { $0.id == day }) { selectedDay = day }
@@ -254,11 +256,6 @@ struct LibraryBrowserView: View {
                             .padding(.bottom, 16)
                             .padding(.trailing, 6)
                     }
-                    if collection.isLibraryFilter && libraryFilter.progress.remaining > 0 {
-                        Button("Load More Results") { libraryFilter.loadNext() }
-                            .padding(.vertical, 8)
-                            .accessibilityHint("Scans the next Personal Library sections")
-                    }
                 }
             } else if library.snapshot(for: collection)?.timeline.days.isEmpty == true {
                 ContentUnavailableView {
@@ -266,8 +263,8 @@ struct LibraryBrowserView: View {
                           systemImage: emptySymbol)
                 } description: { Text(collection.isLibraryFilter ? libraryFilter.coverageText : emptyDescription) }
                 actions: {
-                    if collection.isLibraryFilter && libraryFilter.progress.remaining > 0 {
-                        Button("Load More Results") { libraryFilter.loadNext() }
+                    if collection.isLibraryFilter && libraryFilter.progress.hasInitialUnverifiedSection {
+                        Button("Load More Results") { libraryFilter.loadInitialBatch() }
                     }
                 }
             } else if let error = library.error(for: collection), library.snapshot(for: collection) == nil {
@@ -403,10 +400,25 @@ final class BrowserSelectionObservation: ObservableObject {
     @Published var indexes = IndexSet()
 }
 
+struct LibraryFilterEdgeDemandGeometry {
+    static func resolve(direction: LibraryFilterScanDirection, top: CGFloat,
+                        viewportHeight: CGFloat, documentHeight: CGFloat) -> LibraryFilterScanDirection? {
+        switch direction {
+        case .newer:
+            return top <= viewportHeight * 2 ? direction : nil
+        case .older:
+            return top + viewportHeight >= max(0, documentHeight - viewportHeight * 2) ? direction : nil
+        }
+    }
+}
+
 /// Owns timeline scrolling and tracks whether its document or an accessibility item has focus.
 final class TimelineScrollView: NSScrollView {
     var focusChanged: ((Bool) -> Void)?
+    var userScroll: ((LibraryFilterScanDirection, UInt64) -> Void)?
     weak var keyboardResponder: NSView?
+    private var scrollGeneration: UInt64 = 0
+    private var lastScrollDirection: LibraryFilterScanDirection?
 
     var browserCommandContextActive: Bool {
         guard let window, window.isKeyWindow else { return false }
@@ -456,8 +468,22 @@ final class TimelineScrollView: NSScrollView {
 
     override func scrollWheel(with event: NSEvent) {
         focusTimeline()
+        let oldY = contentView.bounds.minY
         super.scrollWheel(with: event)
+        let newY = contentView.bounds.minY
+        let direction: LibraryFilterScanDirection?
+        if newY < oldY || (newY == oldY && event.scrollingDeltaY > 0) { direction = .newer }
+        else if newY > oldY || (newY == oldY && event.scrollingDeltaY < 0) { direction = .older }
+        else { direction = nil }
+        guard let direction else { return }
+        let isDiscreteWheelEvent = event.phase.isEmpty && event.momentumPhase.isEmpty
+        if event.phase == .began || isDiscreteWheelEvent || lastScrollDirection != direction {
+            scrollGeneration &+= 1
+        }
+        lastScrollDirection = direction
+        userScroll?(direction, scrollGeneration)
     }
+
 }
 
 private struct HostedRow: View {
@@ -530,7 +556,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let onCommandStateChanged: (BrowserCommandSnapshot, ((BrowserSelectionCommand) -> Void)?) -> Void
     let onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void
     let onPageObserved: (Int, [PhotoItem], Bool) -> Void
-    let onNearTail: () -> Void
+    let onFilterEdgeDemand: ([Int], LibraryFilterScanDirection, UInt64) -> Void
     let onRetry: () -> Void
     let onVisibleDay: (String) -> Void
 
@@ -611,7 +637,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var onCommandStateChanged: ((BrowserCommandSnapshot, ((BrowserSelectionCommand) -> Void)?) -> Void)?
         private var onRestorationAnchorChanged: ((PhotoTimelineRestorationAnchor) -> Void)?
         private var onPageObserved: ((Int, [PhotoItem], Bool) -> Void)?
-        private var onNearTail: (() -> Void)?
+        private var onFilterEdgeDemand: (([Int], LibraryFilterScanDirection, UInt64) -> Void)?
         private var demandedVisible: [Int] = []
         private var demandedPrefetch: [Int] = []
         private var suppressFeedback = false
@@ -646,7 +672,10 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             onCommandStateChanged = input.onCommandStateChanged
             onRestorationAnchorChanged = input.onRestorationAnchorChanged
             onPageObserved = input.onPageObserved
-            onNearTail = input.onNearTail
+            onFilterEdgeDemand = input.onFilterEdgeDemand
+            (scroll as? TimelineScrollView)?.userScroll = { [weak self] direction, generation in
+                self?.userDidScroll(direction, generation: generation)
+            }
             scrollIntent.captureRestoration(input.restorationAnchor)
             input.bridge.revealHandler = { [weak self] request, completion in
                 self?.reveal(request, completion: completion)
@@ -860,9 +889,6 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             let visible = scroll.contentView.bounds
             let y = visibleTop(in: scroll)
             let height = visibleHeight(in: scroll)
-            if visibleTop(in: scroll) + height >= max(0, geometry.totalHeight - height * 2) {
-                onNearTail?()
-            }
             let clipY = Double(visible.minY)
             scrollIntent.viewportMoved(to: clipY)
             cancelSupersededReveal()
@@ -967,6 +993,17 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 scheduleRestorationFeedback()
             }
             updateSelectionDrawing()
+        }
+
+        private func userDidScroll(_ direction: LibraryFilterScanDirection, generation: UInt64) {
+            guard collection.isLibraryFilter, let scroll, let geometry else { return }
+            let top = visibleTop(in: scroll)
+            let height = visibleHeight(in: scroll)
+            guard LibraryFilterEdgeDemandGeometry.resolve(direction: direction, top: top,
+                    viewportHeight: height, documentHeight: geometry.totalHeight) != nil else { return }
+            let sections = geometry.sectionIndices(y: top, height: height)
+            guard !sections.isEmpty else { return }
+            onFilterEdgeDemand?(sections, direction, generation)
         }
 
         private func reveal(_ request: BrowserRevealRequest, completion: @escaping (CGRect?) -> Void) {

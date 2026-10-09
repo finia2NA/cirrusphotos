@@ -2,13 +2,13 @@ import MapKit
 import SwiftUI
 import TimelineCore
 
-/// A small non-interactive pin map for the info panel.
+/// A small interactive pin map for the info panel.
 struct InfoPanelMapView: View {
     let pins: [InfoPanelPin]
 
     var body: some View {
         if !pins.isEmpty {
-            Map(initialPosition: .region(region), interactionModes: []) {
+            Map(initialPosition: .region(region), interactionModes: .all) {
                 ForEach(pins, id: \.id) { pin in
                     Marker("", coordinate: CLLocationCoordinate2D(latitude: pin.coordinate.latitude,
                                                                   longitude: pin.coordinate.longitude))

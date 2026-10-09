@@ -60,6 +60,8 @@ final class LibraryFilterModelTests: XCTestCase {
         XCTAssertTrue(applied)
         let collection = try XCTUnwrap(filter.activeCollection)
         let revision = library.snapshotRevision(for: collection)
+        filter.edgeDemand(syntheticSectionIndices: [0], direction: .older,
+                          userScrollGeneration: 1)
 
         let loaded = await waitUntil { filter.progress.verified == 2 }
         XCTAssertTrue(loaded)

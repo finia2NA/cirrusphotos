@@ -14,6 +14,7 @@ final class PhotoViewerPresentation: ObservableObject {
     @Published private(set) var isClosing = false
     @Published private(set) var rotationFailure: String?
     @Published private(set) var rotationPending = false
+    @Published private(set) var isDisplayingFullResolution = false
     @Published var zoom: Double = 1
 
     let session: PhotoViewerSession
@@ -257,6 +258,7 @@ final class PhotoViewerPresentation: ObservableObject {
             decodeFailure = nil
             isDecodingFullImage = false
             if !sameItem {
+                isDisplayingFullResolution = false
                 image = next.selection.itemID == originalItemID ? source.image : nil
                 zoom = 1
             }
@@ -281,6 +283,7 @@ final class PhotoViewerPresentation: ObservableObject {
             guard let decoded = await DecodedImages.shared.image(from: data, maxPixel: 1600),
                   !Task.isCancelled, self?.state?.selection == selection,
                   self?.hasDisplayedFullImage == false else { return }
+            self?.isDisplayingFullResolution = false
             self?.image = decoded
         }
     }
@@ -301,6 +304,7 @@ final class PhotoViewerPresentation: ObservableObject {
                 SynologyDiagnostics.decoding.info(
                     "Full-size decode succeeded item_id=\(selection.itemID ?? -1, privacy: .public) width=\(bitmap.image.width, privacy: .public) height=\(bitmap.image.height, privacy: .public) generation=\(selection.generation, privacy: .public)"
                 )
+                self?.isDisplayingFullResolution = true
                 self?.image = NSImage(cgImage: displayBitmap.image,
                                       size: NSSize(width: displayBitmap.image.width,
                                                    height: displayBitmap.image.height))

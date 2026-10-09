@@ -69,6 +69,11 @@ final class LibraryModel: ObservableObject {
     @Published var loadsLargeViewerPreviews: Bool = UserDefaults.standard.bool(forKey: "loadsLargeViewerPreviews") {
         didSet { UserDefaults.standard.set(loadsLargeViewerPreviews, forKey: "loadsLargeViewerPreviews") }
     }
+    @Published var pixelInterpolation: PixelInterpolationPreference = PixelInterpolationPreference(
+        rawValue: UserDefaults.standard.string(forKey: "pixelInterpolation") ?? "off"
+    ) ?? .off {
+        didSet { UserDefaults.standard.set(pixelInterpolation.rawValue, forKey: "pixelInterpolation") }
+    }
     @Published var videoQuality: VideoQualityPreference = VideoQualityPreference(
         rawValue: UserDefaults.standard.string(forKey: "videoQuality") ?? "automatic"
     ) ?? .automatic {
