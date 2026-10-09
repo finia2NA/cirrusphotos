@@ -174,6 +174,185 @@ final class RotationTests: XCTestCase {
         XCTAssertEqual(cachedItem.additional?.thumbnail?.cacheKey, "set-committed")
     }
 
+    func testAutomaticMatcherSupportsImageIOOriginalFormats() throws {
+        let source = try patternedImage(width: 72, height: 108)
+        let wrongThumbnail = try encoded(
+            ThumbnailOrientationMatcher.rotate(source, clockwiseQuarterTurns: -1),
+            type: .jpeg
+        )
+        let thumbnails = Dictionary(uniqueKeysWithValues: ThumbnailSize.allCases.map {
+            ($0, wrongThumbnail)
+        })
+        let metadata = try item(20, width: 72, height: 108)
+
+        for type in [UTType.jpeg, .png, .tiff, .heic] {
+            let original = try encoded(source, type: type)
+            let match = try ThumbnailOrientationMatcher.match(
+                originalData: original, item: metadata, thumbnails: thumbnails
+            )
+            XCTAssertEqual(match.clockwiseQuarterTurns, 1, "Failed for \(type.identifier)")
+        }
+    }
+
+    func testAutomaticMatcherRequiresAllThreeRenditionsToAgree() throws {
+        let source = try patternedImage(width: 72, height: 108)
+        let needsRight = try encoded(
+            ThumbnailOrientationMatcher.rotate(source, clockwiseQuarterTurns: -1), type: .jpeg
+        )
+        let needsLeft = try encoded(
+            ThumbnailOrientationMatcher.rotate(source, clockwiseQuarterTurns: 1), type: .jpeg
+        )
+        let metadata = try item(21, width: 72, height: 108)
+
+        XCTAssertThrowsError(try ThumbnailOrientationMatcher.match(
+            originalData: encoded(source, type: .png), item: metadata,
+            thumbnails: [.sm: needsRight, .m: needsLeft, .xl: needsRight]
+        )) { error in
+            guard case ThumbnailOrientationMatchError.disagreement = error else {
+                return XCTFail("Expected disagreement, got \(error)")
+            }
+        }
+    }
+
+    func testAutomaticMatcherRejectsAmbiguousUniformImages() throws {
+        let uniform = try jpeg()
+        let metadata = try item(27, width: 4, height: 3)
+        XCTAssertThrowsError(try ThumbnailOrientationMatcher.match(
+            originalData: uniform, item: metadata,
+            thumbnails: [.sm: uniform, .m: uniform, .xl: uniform]
+        )) { error in
+            guard case ThumbnailOrientationMatchError.ambiguous = error else {
+                return XCTFail("Expected ambiguity, got \(error)")
+            }
+        }
+    }
+
+    func testAutomaticMatcherLeavesAlreadyCorrectRenditionsAtZero() throws {
+        let source = try patternedImage(width: 72, height: 108)
+        let data = try encoded(source, type: .jpeg)
+        let metadata = try item(22, width: 72, height: 108)
+        let match = try ThumbnailOrientationMatcher.match(
+            originalData: try encoded(source, type: .tiff), item: metadata,
+            thumbnails: [.sm: data, .m: data, .xl: data]
+        )
+        XCTAssertEqual(match.clockwiseQuarterTurns, 0)
+    }
+
+    func testAutomaticMatcherRecognizesEveryQuarterTurn() throws {
+        let source = try patternedImage(width: 72, height: 108)
+        let original = try encoded(source, type: .png)
+        let metadata = try item(25, width: 72, height: 108)
+        for correction in 0..<4 {
+            let thumbnail = try encoded(
+                ThumbnailOrientationMatcher.rotate(
+                    source, clockwiseQuarterTurns: (4 - correction) % 4
+                ),
+                type: .jpeg
+            )
+            let match = try ThumbnailOrientationMatcher.match(
+                originalData: original, item: metadata,
+                thumbnails: Dictionary(uniqueKeysWithValues: ThumbnailSize.allCases.map {
+                    ($0, thumbnail)
+                })
+            )
+            XCTAssertEqual(match.clockwiseQuarterTurns, correction)
+        }
+    }
+
+    func testAutomaticWorkflowDoesNotMutateWhenRenditionsDisagree() async throws {
+        let root = temporaryTestRoot("RotationAutomaticDisagreement")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try patternedImage(width: 72, height: 108)
+        let originalData = try encoded(source, type: .heic)
+        let needsRight = try encoded(
+            ThumbnailOrientationMatcher.rotate(source, clockwiseQuarterTurns: -1), type: .jpeg
+        )
+        let needsLeft = try encoded(
+            ThumbnailOrientationMatcher.rotate(source, clockwiseQuarterTurns: 1), type: .jpeg
+        )
+        let original = try item(23, width: 72, height: 108)
+        let transport = RotationTransport(
+            thumbnails: [.sm: needsRight, .m: needsLeft, .xl: needsRight],
+            original: originalData, refreshed: original
+        )
+        let repository = try repository(transport, root: root)
+        let action = SelectionRotationAction(itemIDs: [23], sectionsByID: [:],
+                                             collection: .personalLibrary,
+                                             itemsByID: [23: original])
+        var final: ThumbnailRotationProgress?
+        for await progress in await repository.fixThumbnailRotations(action) { final = progress }
+
+        XCTAssertEqual(final?.stage, .finished)
+        XCTAssertEqual(final?.failures.count, 1)
+        let regenerationCalls = await transport.regenerationCalls
+        let uploadedFiles = await transport.uploadedFiles
+        XCTAssertTrue(regenerationCalls.isEmpty)
+        XCTAssertTrue(uploadedFiles.isEmpty)
+    }
+
+    func testAutomaticWorkflowDoesNotMutateAlreadyCorrectRenditions() async throws {
+        let root = temporaryTestRoot("RotationAutomaticAlreadyCorrect")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try patternedImage(width: 72, height: 108)
+        let originalData = try encoded(source, type: .tiff)
+        let thumbnail = try encoded(source, type: .jpeg)
+        let item = try item(26, width: 72, height: 108)
+        let transport = RotationTransport(
+            thumbnails: Dictionary(uniqueKeysWithValues: ThumbnailSize.allCases.map {
+                ($0, thumbnail)
+            }),
+            original: originalData, refreshed: item
+        )
+        let repository = try repository(transport, root: root)
+        let action = SelectionRotationAction(itemIDs: [26], sectionsByID: [:],
+                                             collection: .personalLibrary,
+                                             itemsByID: [26: item])
+        var final: ThumbnailRotationProgress?
+        for await progress in await repository.fixThumbnailRotations(action) { final = progress }
+
+        let regenerationCalls = await transport.regenerationCalls
+        let uploadedFiles = await transport.uploadedFiles
+        XCTAssertTrue(final?.failures.isEmpty == true)
+        XCTAssertTrue(regenerationCalls.isEmpty)
+        XCTAssertTrue(uploadedFiles.isEmpty)
+    }
+
+    func testAutomaticWorkflowUploadsOnlyAfterUnanimousMatch() async throws {
+        let root = temporaryTestRoot("RotationAutomaticSuccess")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try patternedImage(width: 72, height: 108)
+        let originalData = try encoded(source, type: .png)
+        let wrong = try encoded(
+            ThumbnailOrientationMatcher.rotate(source, clockwiseQuarterTurns: -1), type: .jpeg
+        )
+        let original = try item(24, width: 72, height: 108)
+        let refreshed = try item(24, key: "fixed", width: 72, height: 108)
+        let transport = RotationTransport(
+            thumbnails: Dictionary(uniqueKeysWithValues: ThumbnailSize.allCases.map { ($0, wrong) }),
+            original: originalData, refreshed: refreshed
+        )
+        let repository = try repository(transport, root: root)
+        let action = SelectionRotationAction(itemIDs: [24], sectionsByID: [:],
+                                             collection: .personalLibrary,
+                                             itemsByID: [24: original])
+        var final: ThumbnailRotationProgress?
+        for await progress in await repository.fixThumbnailRotations(action) { final = progress }
+
+        XCTAssertTrue(final?.failures.isEmpty == true)
+        let regenerationCalls = await transport.regenerationCalls
+        let uploadedFiles = await transport.uploadedFiles
+        XCTAssertEqual(regenerationCalls, [[24]])
+        let uploaded = try XCTUnwrap(uploadedFiles.first)
+        for data in [uploaded.sm, uploaded.m, uploaded.xl] {
+            let source = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
+            let properties = try XCTUnwrap(
+                CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+            )
+            XCTAssertEqual(properties[kCGImagePropertyPixelWidth] as? Int, 72)
+            XCTAssertEqual(properties[kCGImagePropertyPixelHeight] as? Int, 108)
+        }
+    }
+
     private func jpeg() throws -> Data {
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let context = try XCTUnwrap(CGContext(data: nil, width: 4, height: 3, bitsPerComponent: 8,
@@ -189,10 +368,44 @@ final class RotationTests: XCTestCase {
         XCTAssertTrue(CGImageDestinationFinalize(destination))
         return data as Data
     }
+
+    private func patternedImage(width: Int, height: Int) throws -> CGImage {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: 0, space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ))
+        context.setFillColor(CGColor(red: 0.08, green: 0.12, blue: 0.2, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.setFillColor(CGColor(red: 0.95, green: 0.15, blue: 0.08, alpha: 1))
+        context.fill(CGRect(x: 3, y: 5, width: width / 3, height: height / 4))
+        context.setFillColor(CGColor(red: 0.1, green: 0.8, blue: 0.25, alpha: 1))
+        context.fill(CGRect(x: width / 2, y: height / 3,
+                            width: width / 2 - 7, height: height / 5))
+        context.setFillColor(CGColor(red: 0.2, green: 0.35, blue: 1, alpha: 1))
+        context.fillEllipse(in: CGRect(x: width / 5, y: height * 2 / 3,
+                                       width: width / 2, height: height / 4))
+        return try XCTUnwrap(context.makeImage())
+    }
+
+    private func encoded(_ image: CGImage, type: UTType) throws -> Data {
+        let data = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+            data, type.identifier as CFString, 1, nil
+        ), "ImageIO cannot encode \(type.identifier) on this system")
+        CGImageDestinationAddImage(destination, image, [
+            kCGImageDestinationLossyCompressionQuality: 0.92,
+        ] as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        return data as Data
+    }
 }
 
 private actor RotationTransport: PhotosTransport {
     let thumbnailData: Data
+    let thumbnails: [ThumbnailSize: Data]
+    let originalData: Data
     let refreshed: PhotoItem
     let failUpload: Bool
     let failRotate: Bool
@@ -200,6 +413,7 @@ private actor RotationTransport: PhotosTransport {
     let setCommitsThenThrows: Bool
     var currentItem: PhotoItem
     var rotateCalls: [([Int64], PhotoRotationDirection)] = []
+    var regenerationCalls: [[Int64]] = []
     var restoredUnits: [[Int64]] = []
     var uploadedUnits: [Int64] = []
     var uploadedFiles: [ConvertedThumbnailFiles] = []
@@ -208,12 +422,26 @@ private actor RotationTransport: PhotosTransport {
          initialItem: PhotoItem? = nil, uploadCommitsThenCancels: Bool = false,
          setCommitsThenThrows: Bool = false) {
         thumbnailData = thumbnail
+        thumbnails = Dictionary(uniqueKeysWithValues: ThumbnailSize.allCases.map { ($0, thumbnail) })
+        originalData = thumbnail
         self.refreshed = refreshed
         self.failUpload = failUpload
         self.failRotate = failRotate
         self.currentItem = initialItem ?? refreshed
         self.uploadCommitsThenCancels = uploadCommitsThenCancels
         self.setCommitsThenThrows = setCommitsThenThrows
+    }
+
+    init(thumbnails: [ThumbnailSize: Data], original: Data, refreshed: PhotoItem) {
+        self.thumbnails = thumbnails
+        thumbnailData = thumbnails[.m] ?? Data()
+        originalData = original
+        self.refreshed = refreshed
+        failUpload = false
+        failRotate = false
+        currentItem = refreshed
+        uploadCommitsThenCancels = false
+        setCommitsThenThrows = false
     }
 
     func rotate(itemIDs: [Int64], direction: PhotoRotationDirection) async throws {
@@ -223,9 +451,10 @@ private actor RotationTransport: PhotosTransport {
     func items(ids: [Int64]) async throws -> [PhotoItem] { [currentItem] }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, etag: String?,
                    lastModified: String?) async throws -> ThumbnailResponse {
-        ThumbnailResponse(data: thumbnailData, etag: nil, lastModified: nil)
+        ThumbnailResponse(data: thumbnails[size], etag: nil, lastModified: nil)
     }
     func setRegenerating(itemIDs: [Int64]) async throws -> [RegeneratingThumbnailUnit] {
+        regenerationCalls.append(itemIDs)
         if setCommitsThenThrows {
             currentItem = refreshed
             throw TestFailure("set response lost")
@@ -241,5 +470,9 @@ private actor RotationTransport: PhotosTransport {
             throw CancellationError()
         }
         if failUpload { throw TestFailure("upload failed") }
+    }
+    func fullImage(_ resource: FullImageResource, etag: String?,
+                   lastModified: String?) async throws -> FullImageResponse {
+        FullImageResponse(data: originalData, etag: nil, lastModified: nil)
     }
 }

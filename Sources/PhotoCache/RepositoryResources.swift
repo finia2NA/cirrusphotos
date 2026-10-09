@@ -54,7 +54,9 @@ public struct SelectionRotationAction: Sendable {
 }
 
 public struct ThumbnailRotationProgress: Sendable, Equatable {
-    public enum Stage: String, Sendable { case preparing, downloading, rotating, uploading, refreshing, finished }
+    public enum Stage: String, Sendable {
+        case preparing, downloading, analyzing, rotating, uploading, refreshing, finished
+    }
     public let completedItems: Int
     public let totalItems: Int
     public let itemID: Int64?

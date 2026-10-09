@@ -31,6 +31,7 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var rotationFailure: String?
     @Published private(set) var rotationBusy = false
     @Published private(set) var thumbnailRotationProgress: ThumbnailRotationProgress?
+    @Published private(set) var isFixingThumbnailRotations = false
     @Published private(set) var metadataInvalidationRevision: UInt64 = 0
     @Published private(set) var cacheResetInProgress = false
     @Published private(set) var cacheResetError: String?
@@ -340,6 +341,7 @@ final class LibraryModel: ObservableObject {
 
     func rotateThumbnailPreviews(_ direction: PhotoRotationDirection) {
         guard thumbnailRotationTask == nil, let repository else { return }
+        isFixingThumbnailRotations = false
         let snapshot = browserCommandSnapshot
         thumbnailRotationProgress = .init(completedItems: 0, totalItems: 0, itemID: nil, stage: .preparing)
         thumbnailRotationTask = Task { [weak self] in
@@ -361,6 +363,33 @@ final class LibraryModel: ObservableObject {
         }
     }
 
+    func fixThumbnailRotations() {
+        guard thumbnailRotationTask == nil, let repository else { return }
+        isFixingThumbnailRotations = true
+        let snapshot = browserCommandSnapshot
+        thumbnailRotationProgress = .init(completedItems: 0, totalItems: 0,
+                                          itemID: nil, stage: .preparing)
+        thumbnailRotationTask = Task { [weak self] in
+            guard let self else { return }
+            let action: SelectionRotationAction?
+            if let viewer = activeViewer { action = viewer.rotationAction() }
+            else { action = await resolveRotation(snapshot, repository: repository) }
+            guard let action, !action.itemIDs.isEmpty else {
+                thumbnailRotationProgress = .init(
+                    completedItems: 0, totalItems: 0, itemID: nil, stage: .finished,
+                    failures: ["No selected photos support thumbnail rotation repair."]
+                )
+                thumbnailRotationTask = nil
+                return
+            }
+            for await progress in await repository.fixThumbnailRotations(action) {
+                thumbnailRotationProgress = progress
+            }
+            DecodedImages.shared.clear()
+            thumbnailRotationTask = nil
+        }
+    }
+
     func cancelThumbnailRotation() {
         thumbnailRotationTask?.cancel()
         thumbnailRotationTask = nil
@@ -369,6 +398,7 @@ final class LibraryModel: ObservableObject {
     func dismissThumbnailRotation() {
         if thumbnailRotationProgress?.stage != .finished { cancelThumbnailRotation() }
         thumbnailRotationProgress = nil
+        isFixingThumbnailRotations = false
     }
 
     func dismissRotationFailure() { rotationFailure = nil }

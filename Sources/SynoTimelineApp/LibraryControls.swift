@@ -127,7 +127,10 @@ struct ThumbnailRotationProgressView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Rotating Thumbnail Previews").font(.headline)
+            Text(model.isFixingThumbnailRotations
+                 ? "Fixing Thumbnail Rotations"
+                 : "Rotating Thumbnail Previews")
+                .font(.headline)
             if let progress {
                 ProgressView(value: Double(progress.completedItems),
                              total: Double(max(1, progress.totalItems)))
@@ -274,6 +277,12 @@ struct LibraryCommands: Commands {
             .disabled(!model.canRotate || model.thumbnailRotationProgress != nil)
             Button { model.rotateThumbnailPreviews(.clockwise) } label: {
                 Label("Rotate Thumbnail Previews Right…", systemImage: "rotate.right")
+                    .labelStyle(.titleAndIcon)
+            }
+            .disabled(!model.canRotate || model.thumbnailRotationProgress != nil)
+            Divider()
+            Button { model.fixThumbnailRotations() } label: {
+                Label("Fix Thumbnail Rotations…", systemImage: "wand.and.stars")
                     .labelStyle(.titleAndIcon)
             }
             .disabled(!model.canRotate || model.thumbnailRotationProgress != nil)

@@ -4,6 +4,18 @@ import ImageIO
 import SynologyAPI
 import UniformTypeIdentifiers
 
+private enum ThumbnailRotationOperation: Sendable {
+    case manual(PhotoRotationDirection)
+    case automatic
+
+    var logDescription: String {
+        switch self {
+        case .manual(let direction): direction.rawValue
+        case .automatic: "automatic"
+        }
+    }
+}
+
 extension CachedPhotosRepository {
     public func photoItemChanges() -> AsyncStream<PhotoItemChange> {
         let id = UUID()
@@ -75,7 +87,26 @@ extension CachedPhotosRepository {
         let producer = StreamProducer()
         return AsyncStream(bufferingPolicy: .bufferingNewest(16)) { continuation in
             producer.task = Task {
-                await self.runThumbnailRotation(action, direction: direction, continuation: continuation)
+                await self.runThumbnailRotation(action, operation: .manual(direction),
+                                                continuation: continuation)
+            }
+            continuation.onTermination = { @Sendable _ in producer.task?.cancel() }
+        }
+    }
+
+    /// Detects the relative thumbnail orientation from the displayed original. All
+    /// three renditions must independently agree before the server is mutated.
+    public func fixThumbnailRotations(
+        _ action: SelectionRotationAction
+    ) -> AsyncStream<ThumbnailRotationProgress> {
+        SynologyDiagnostics.rotations.info(
+            "Automatic thumbnail rotation requested items=\(action.itemIDs.count, privacy: .public)"
+        )
+        let producer = StreamProducer()
+        return AsyncStream(bufferingPolicy: .bufferingNewest(16)) { continuation in
+            producer.task = Task {
+                await self.runThumbnailRotation(action, operation: .automatic,
+                                                continuation: continuation)
             }
             continuation.onTermination = { @Sendable _ in producer.task?.cancel() }
         }
@@ -83,7 +114,7 @@ extension CachedPhotosRepository {
 
     private func runThumbnailRotation(
         _ action: SelectionRotationAction,
-        direction: PhotoRotationDirection,
+        operation: ThumbnailRotationOperation,
         continuation: AsyncStream<ThumbnailRotationProgress>.Continuation
     ) async {
         let total = action.itemIDs.count
@@ -152,11 +183,43 @@ extension CachedPhotosRepository {
                     )
                 }
                 try Task.checkCancellation()
+                let clockwiseQuarterTurns: Int
+                switch operation {
+                case .manual(let direction):
+                    clockwiseQuarterTurns = direction == .clockwise ? 1 : -1
+                case .automatic:
+                    guard let resource = item.fullImageResource else {
+                        throw SynologyAPIError.unsupported("A full-size image is unavailable.")
+                    }
+                    let original = try await comparisonOriginal(resource)
+                    try Task.checkCancellation()
+                    continuation.yield(.init(completedItems: completed, totalItems: total,
+                                             itemID: id, stage: .analyzing, failures: failures))
+                    let match = try await ThumbnailOrientationAnalyzer.shared.match(
+                        originalData: original, item: item, thumbnails: downloaded
+                    )
+                    try Task.checkCancellation()
+                    clockwiseQuarterTurns = match.clockwiseQuarterTurns
+                    SynologyDiagnostics.rotations.info(
+                        "Matched thumbnail orientation item_id=\(id, privacy: .public) unit_id=\(descriptor.unitID, privacy: .public) clockwise_quarter_turns=\(clockwiseQuarterTurns, privacy: .public)"
+                    )
+                }
+                if clockwiseQuarterTurns == 0 {
+                    SynologyDiagnostics.rotations.info(
+                        "Thumbnail orientation already correct item_id=\(id, privacy: .public) unit_id=\(descriptor.unitID, privacy: .public)"
+                    )
+                    completed += 1
+                    itemMutations.pendingIDs.remove(id)
+                    claimedIDs.remove(id)
+                    continue
+                }
                 continuation.yield(.init(completedItems: completed, totalItems: total,
                                          itemID: id, stage: .rotating, failures: failures))
-                let files = try Self.rotatedFiles(downloaded, direction: direction)
+                let files = try Self.rotatedFiles(
+                    downloaded, clockwiseQuarterTurns: clockwiseQuarterTurns
+                )
                 SynologyDiagnostics.rotations.info(
-                    "Rotated thumbnails locally item_id=\(id, privacy: .public) unit_id=\(descriptor.unitID, privacy: .public) sm_bytes=\(files.sm.count, privacy: .public) m_bytes=\(files.m.count, privacy: .public) xl_bytes=\(files.xl.count, privacy: .public)"
+                    "Rotated thumbnails locally item_id=\(id, privacy: .public) unit_id=\(descriptor.unitID, privacy: .public) clockwise_quarter_turns=\(clockwiseQuarterTurns, privacy: .public) sm_bytes=\(files.sm.count, privacy: .public) m_bytes=\(files.m.count, privacy: .public) xl_bytes=\(files.xl.count, privacy: .public)"
                 )
                 let units: [RegeneratingThumbnailUnit]
                 do {
@@ -228,9 +291,26 @@ extension CachedPhotosRepository {
         continuation.yield(.init(completedItems: completed, totalItems: total, itemID: nil,
                                  stage: .finished, failures: failures))
         SynologyDiagnostics.rotations.info(
-            "Thumbnail rotation run finished completed=\(completed, privacy: .public) total=\(total, privacy: .public) failures=\(failures.count, privacy: .public)"
+            "Thumbnail rotation run finished operation=\(operation.logDescription, privacy: .public) completed=\(completed, privacy: .public) total=\(total, privacy: .public) failures=\(failures.count, privacy: .public)"
         )
         continuation.finish()
+    }
+
+    private func comparisonOriginal(_ resource: FullImageResource) async throws -> Data {
+        var cached: Data?
+        var failure: String?
+        for await event in fullImage(resource, allowNetwork: true, priority: .visible) {
+            try Task.checkCancellation()
+            switch event {
+            case .value(let data, let verified):
+                if verified { return data }
+                cached = data
+            case .failure(let message):
+                failure = message
+            }
+        }
+        if let cached { return cached }
+        throw SynologyAPIError.transport(failure ?? "The full-size image is unavailable.")
     }
 
     private func lookupAllRotationItems(_ ids: [Int64]) async throws -> [PhotoItem] {
@@ -353,32 +433,34 @@ extension CachedPhotosRepository {
     }
 
     nonisolated private static func rotatedFiles(
-        _ downloaded: [ThumbnailSize: Data], direction: PhotoRotationDirection
+        _ downloaded: [ThumbnailSize: Data], clockwiseQuarterTurns: Int
     ) throws -> ConvertedThumbnailFiles {
         ConvertedThumbnailFiles(
-            sm: try rotateJPEG(downloaded[.sm], direction: direction),
-            m: try rotateJPEG(downloaded[.m], direction: direction),
-            xl: try rotateJPEG(downloaded[.xl], direction: direction)
+            sm: try rotateJPEG(downloaded[.sm], clockwiseQuarterTurns: clockwiseQuarterTurns),
+            m: try rotateJPEG(downloaded[.m], clockwiseQuarterTurns: clockwiseQuarterTurns),
+            xl: try rotateJPEG(downloaded[.xl], clockwiseQuarterTurns: clockwiseQuarterTurns)
         )
     }
 
-    nonisolated private static func rotateJPEG(_ data: Data?, direction: PhotoRotationDirection) throws -> Data {
+    nonisolated private static func rotateJPEG(
+        _ data: Data?, clockwiseQuarterTurns: Int
+    ) throws -> Data {
         guard let data, let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                as? [CFString: Any],
+              let pixelWidth = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let pixelHeight = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+              pixelWidth > 0, pixelHeight > 0,
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: max(pixelWidth, pixelHeight),
+              ] as CFDictionary) else {
             throw SynologyAPIError.invalidResponse
         }
-        let width = image.width, height = image.height
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
-              let context = CGContext(data: nil, width: height, height: width,
-                                      bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace,
-                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
-            throw SynologyAPIError.invalidResponse
-        }
-        context.translateBy(x: CGFloat(height) / 2, y: CGFloat(width) / 2)
-        context.rotate(by: direction == .clockwise ? -.pi / 2 : .pi / 2)
-        context.translateBy(x: -CGFloat(width) / 2, y: -CGFloat(height) / 2)
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        guard let rotated = context.makeImage() else { throw SynologyAPIError.invalidResponse }
+        let rotated = try ThumbnailOrientationMatcher.rotate(
+            image, clockwiseQuarterTurns: clockwiseQuarterTurns
+        )
         let output = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(output, UTType.jpeg.identifier as CFString, 1, nil) else {
             throw SynologyAPIError.invalidResponse
