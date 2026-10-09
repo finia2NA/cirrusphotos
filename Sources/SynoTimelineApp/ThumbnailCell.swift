@@ -41,30 +41,6 @@ struct ThumbnailCell: View {
             } else {
                 Image(systemName: "photo").foregroundStyle(.tertiary)
             }
-            if let duration = item.additional?.videoMeta?.duration,
-               item.type == "video", duration.isFinite, duration > 0 {
-                Text(Self.formattedDuration(duration))
-                    .font(.caption2.monospacedDigit().weight(.medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 3))
-                    .padding(5)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity,
-                           alignment: .bottomTrailing)
-                    .accessibilityLabel("Video duration \(Self.formattedDuration(duration))")
-            }
-            if item.isFavorite {
-                Image(systemName: "heart.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(5)
-                    .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 4))
-                    .padding(5)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity,
-                           alignment: .bottomLeading)
-                    .accessibilityLabel("Favorite")
-            }
             if let onActivate {
                 ThumbnailActivationSurface(itemID: item.id, image: image,
                                            isSelected: isSelected,
@@ -100,6 +76,42 @@ struct ThumbnailCell: View {
                 if image == nil { failed = true }
             }
         }
+    }
+
+}
+
+/// Badges belong to the stable grid slot rather than the thumbnail's animated, clipped frame.
+struct ThumbnailBadgeOverlay: View {
+    let item: PhotoItem
+
+    var body: some View {
+        ZStack {
+            if let duration = item.additional?.videoMeta?.duration,
+               item.type == "video", duration.isFinite, duration > 0 {
+                Text(Self.formattedDuration(duration))
+                    .font(.caption2.monospacedDigit().weight(.medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 3))
+                    .padding(5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity,
+                           alignment: .bottomTrailing)
+                    .accessibilityLabel("Video duration \(Self.formattedDuration(duration))")
+            }
+            if item.isFavorite {
+                Image(systemName: "heart.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(5)
+                    .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 4))
+                    .padding(5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity,
+                           alignment: .bottomLeading)
+                    .accessibilityLabel("Favorite")
+            }
+        }
+        .allowsHitTesting(false)
     }
 
     private static func formattedDuration(_ duration: TimeInterval) -> String {

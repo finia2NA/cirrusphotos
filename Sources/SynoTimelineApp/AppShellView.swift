@@ -251,10 +251,12 @@ struct AppShellView: View {
                         .ignoresSafeArea(.container, edges: .top)
                 }
 
-                Rectangle()
-                    .fill(.regularMaterial)
+                // The Liquid Glass surface behind the native toolbar that keeps the
+                // chrome legible while detail content passes beneath it.
+                Color.clear
                     .frame(maxWidth: .infinity)
                     .frame(height: topInset)
+                    .glassEffect(.regular, in: Rectangle())
                     .ignoresSafeArea(.container, edges: .top)
                     .allowsHitTesting(false)
 

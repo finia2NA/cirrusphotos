@@ -568,7 +568,8 @@ private struct HostedRow: View {
                         onOpenPhoto(item.ordinal, PhotoViewerOpenRequest(seed: seed, source: source))
                     }
                         .frame(width: visible.width, height: visible.height)
-                        .clipped()
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .overlay { ThumbnailBadgeOverlay(item: item.photo) }
                         .frame(width: cell.width, height: row.layout.height)
                 } else {
                     Color.clear.frame(width: cell.width, height: row.layout.height)

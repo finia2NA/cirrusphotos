@@ -4,7 +4,7 @@ import TimelineCore
 
 /// Full-window still-photo canvas.
 ///
-/// Rendering is compositor-backed: a black backdrop layer and a separate image layer
+/// Rendering is compositor-backed: an appearance-matched backdrop layer and a separate image layer
 /// hold the displayed bitmap, and all transitions animate only layer geometry and
 /// opacity. The `NSImage` is uploaded to the image layer's `contents` once per identity
 /// change, so no animation frame resamples it.
@@ -95,10 +95,10 @@ final class PhotoViewerCanvasView: NSView {
         root.backgroundColor = nil
         root.isOpaque = false
         if backdropLayer.superlayer == nil {
-            backdropLayer.backgroundColor = NSColor.black.cgColor
             backdropLayer.frame = bounds
             root.addSublayer(backdropLayer)
         }
+        updateBackdropColor()
         if imageLayer.superlayer == nil {
             imageLayer.contentsGravity = .resize
             imageLayer.magnificationFilter = .linear
@@ -135,6 +135,19 @@ final class PhotoViewerCanvasView: NSView {
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         updateBackingScale()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBackdropColor()
+    }
+
+    private func updateBackdropColor() {
+        let match = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        backdropLayer.backgroundColor = (match == .darkAqua ? NSColor.black : NSColor.white).cgColor
+        CATransaction.commit()
     }
 
     /// SwiftUI installs the representable while the thumbnail's mouse/key event is
