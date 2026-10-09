@@ -3,6 +3,22 @@ import SynologyAPI
 
 // Actor-isolated metadata coordination; task identities remain owned by the session.
 extension PhotoViewerSession {
+    func applyItemChanges(_ change: PhotoItemChange) {
+        for (section, page) in metadata.pages {
+            let updated = page.items.map { change.items[$0.id] ?? $0 }
+            metadata.pages[section] = ViewerMetadataWindow.PageEntry(items: updated, verified: page.verified)
+        }
+        guard let id = currentItem?.id, let replacement = change.items[id] else { return }
+        currentItem = applyingFavorite(replacement)
+        currentIdentity = Self.identity(of: replacement)
+        if change.quarterTurns[id] == nil {
+            generation &+= 1
+            images.resetSelection(keeping: replacement.fullImageResource)
+            startAssetsForCurrentMetadata()
+        }
+        publish()
+    }
+
     func ensurePage(_ sectionIndex: Int, visible: Bool) {
         guard !closed, index.sections.indices.contains(sectionIndex) else { return }
         if let page = metadata.pages[sectionIndex], page.verified || !allowNetwork {

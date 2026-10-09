@@ -37,6 +37,7 @@ public actor LibraryPageWindow {
     private var retryRevision = 0
     private var observers: [UUID: AsyncStream<LibraryPageEvent>.Continuation] = [:]
     private var favoriteTask: Task<Void, Never>?
+    private var itemMutationTask: Task<Void, Never>?
     private var favoriteValues: [Int64: Bool] = [:]
 
     public init(repository: CachedPhotosRepository,
@@ -49,6 +50,7 @@ public actor LibraryPageWindow {
 
     public func events() -> AsyncStream<LibraryPageEvent> {
         observeFavoritesIfNeeded()
+        observeItemMutationsIfNeeded()
         let id = UUID()
         return AsyncStream(bufferingPolicy: .bufferingNewest(maximumPages * 2 + 4)) { continuation in
             observers[id] = continuation
@@ -192,6 +194,34 @@ public actor LibraryPageWindow {
             for await change in await repository.favoriteChanges() {
                 guard !Task.isCancelled else { return }
                 await self?.receiveFavorite(change)
+            }
+        }
+    }
+
+    private func observeItemMutationsIfNeeded() {
+        guard itemMutationTask == nil else { return }
+        let repository = repository
+        itemMutationTask = Task { [weak self] in
+            for await change in await repository.photoItemChanges() {
+                guard !Task.isCancelled else { return }
+                await self?.receiveItems(change)
+            }
+        }
+    }
+
+    private func receiveItems(_ change: PhotoItemChange) {
+        guard let fingerprint else { return }
+        for (section, page) in pages {
+            var modified = false
+            let items = page.items.map { item -> PhotoItem in
+                guard let replacement = change.items[item.id] else { return item }
+                modified = true
+                return replacement
+            }
+            if modified {
+                let updated = LibraryPage(sectionIndex: section, items: items, verified: page.verified)
+                pages[section] = updated
+                publish(.page(updated, fingerprint: fingerprint))
             }
         }
     }

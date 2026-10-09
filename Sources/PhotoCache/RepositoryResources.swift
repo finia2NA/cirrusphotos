@@ -25,6 +25,52 @@ public struct FavoriteChange: Sendable {
     }
 }
 
+public struct PhotoItemChange: Sendable {
+    public let items: [Int64: PhotoItem]
+    public let quarterTurns: [Int64: Int]
+
+    public init(items: [Int64: PhotoItem], quarterTurns: [Int64: Int] = [:]) {
+        self.items = items
+        self.quarterTurns = quarterTurns
+    }
+}
+
+public struct SelectionRotationAction: Sendable {
+    public let itemIDs: [Int64]
+    public let sectionsByID: [Int64: TimelineSection]
+    public let collection: PhotoCollectionDescriptor
+    public let itemsByID: [Int64: PhotoItem]
+    public let expectedTimelineFingerprint: String?
+
+    public init(itemIDs: [Int64], sectionsByID: [Int64: TimelineSection],
+                collection: PhotoCollectionDescriptor, itemsByID: [Int64: PhotoItem],
+                expectedTimelineFingerprint: String? = nil) {
+        self.itemIDs = itemIDs
+        self.sectionsByID = sectionsByID
+        self.collection = collection
+        self.itemsByID = itemsByID
+        self.expectedTimelineFingerprint = expectedTimelineFingerprint
+    }
+}
+
+public struct ThumbnailRotationProgress: Sendable, Equatable {
+    public enum Stage: String, Sendable { case preparing, downloading, rotating, uploading, refreshing, finished }
+    public let completedItems: Int
+    public let totalItems: Int
+    public let itemID: Int64?
+    public let stage: Stage
+    public let failures: [String]
+
+    public init(completedItems: Int, totalItems: Int, itemID: Int64?, stage: Stage,
+                failures: [String] = []) {
+        self.completedItems = completedItems
+        self.totalItems = totalItems
+        self.itemID = itemID
+        self.stage = stage
+        self.failures = failures
+    }
+}
+
 public struct SelectionFavoriteAction: Sendable {
     public let affectedIDs: [Int64]
     public let targetFavorite: Bool

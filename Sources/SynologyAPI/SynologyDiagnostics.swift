@@ -9,4 +9,6 @@ public enum SynologyDiagnostics {
     public static let originals = Logger(subsystem: subsystem, category: "repository.originals")
     public static let transport = Logger(subsystem: subsystem, category: "transport.originals")
     public static let decoding = Logger(subsystem: subsystem, category: "viewer.decoding")
+    public static let rotations = Logger(subsystem: subsystem, category: "repository.rotations")
+    public static let rotationTransport = Logger(subsystem: subsystem, category: "transport.rotations")
 }

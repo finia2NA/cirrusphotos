@@ -28,6 +28,9 @@ final class LibraryModel: ObservableObject {
     /// Pending confirmation for a large selection-favorite action; nil when no confirmation is needed.
     @Published private(set) var pendingFavoriteConfirmation: SelectionFavoriteConfirmation?
     @Published private(set) var browserFavoriteFailure: String?
+    @Published private(set) var rotationFailure: String?
+    @Published private(set) var rotationBusy = false
+    @Published private(set) var thumbnailRotationProgress: ThumbnailRotationProgress?
     @Published private(set) var metadataInvalidationRevision: UInt64 = 0
     @Published private(set) var cacheResetInProgress = false
     @Published private(set) var cacheResetError: String?
@@ -41,6 +44,7 @@ final class LibraryModel: ObservableObject {
     private var viewerCloseHandler: (() -> Void)?
     private var backHandler: (() -> Void)?
     private var thumbnailPolicyRevision: UInt64 = 0
+    private var thumbnailRotationTask: Task<Void, Never>?
     /// True while a selection-favorite write (or resolution) is in progress.
     private(set) var browserFavoriteBusy = false
     var authenticationFailed: Bool {
@@ -304,6 +308,80 @@ final class LibraryModel: ObservableObject {
         guard canToggleViewerFavorite else { return }
         activeViewer?.toggleFavorite()
         updateViewerCommands()
+    }
+
+    var canRotate: Bool {
+        if let activeViewer { return activeViewer.canRotate }
+        return browserCommandsActive && !browserCommandSnapshot.selectedOrdinals.isEmpty &&
+            timelineVerified(for: browserCommandSnapshot.collection) && !rotationBusy
+    }
+
+    func rotateSelection(_ direction: PhotoRotationDirection) {
+        if let activeViewer {
+            activeViewer.rotate(direction)
+            updateViewerCommands()
+            return
+        }
+        guard canRotate, let repository else { return }
+        rotationBusy = true
+        rotationFailure = nil
+        let snapshot = browserCommandSnapshot
+        Task { [weak self] in
+            guard let self else { return }
+            defer { rotationBusy = false }
+            guard let action = await resolveRotation(snapshot, repository: repository) else {
+                rotationFailure = "The selected photos could not be verified or do not support rotation."
+                return
+            }
+            do { try await repository.rotate(action, direction: direction) }
+            catch { rotationFailure = error.localizedDescription }
+        }
+    }
+
+    func rotateThumbnailPreviews(_ direction: PhotoRotationDirection) {
+        guard thumbnailRotationTask == nil, let repository else { return }
+        let snapshot = browserCommandSnapshot
+        thumbnailRotationProgress = .init(completedItems: 0, totalItems: 0, itemID: nil, stage: .preparing)
+        thumbnailRotationTask = Task { [weak self] in
+            guard let self else { return }
+            let action: SelectionRotationAction?
+            if let viewer = activeViewer { action = viewer.rotationAction() }
+            else { action = await resolveRotation(snapshot, repository: repository) }
+            guard let action, !action.itemIDs.isEmpty else {
+                thumbnailRotationProgress = .init(completedItems: 0, totalItems: 0, itemID: nil,
+                    stage: .finished, failures: ["No selected photos support thumbnail rotation."])
+                thumbnailRotationTask = nil
+                return
+            }
+            for await progress in await repository.rotateThumbnails(action, direction: direction) {
+                thumbnailRotationProgress = progress
+            }
+            DecodedImages.shared.clear()
+            thumbnailRotationTask = nil
+        }
+    }
+
+    func cancelThumbnailRotation() {
+        thumbnailRotationTask?.cancel()
+        thumbnailRotationTask = nil
+    }
+
+    func dismissThumbnailRotation() {
+        if thumbnailRotationProgress?.stage != .finished { cancelThumbnailRotation() }
+        thumbnailRotationProgress = nil
+    }
+
+    func dismissRotationFailure() { rotationFailure = nil }
+
+    private func resolveRotation(_ snapshot: BrowserCommandSnapshot,
+                                 repository: CachedPhotosRepository) async -> SelectionRotationAction? {
+        guard snapshot.active, let timeline = snapshots[snapshot.collection] else { return nil }
+        return await SelectionRotationResolver(repository: repository).resolve(
+            collection: snapshot.collection, snapshot: timeline,
+            selectedOrdinals: snapshot.selectedOrdinals,
+            knownItemIDsByOrdinal: snapshot.knownItemIDsByOrdinal,
+            expectedTimelineFingerprint: snapshot.indexFingerprint
+        )
     }
 
     // MARK: - Selection Favorites

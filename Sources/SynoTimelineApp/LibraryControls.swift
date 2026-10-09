@@ -1,5 +1,10 @@
 import SwiftUI
 import SynologyAPI
+import PhotoCache
+
+enum ToolbarMetrics {
+    static let controlHeight: CGFloat = 36
+}
 
 struct LibrarySizeControl: View {
     @Binding var value: Int
@@ -15,6 +20,8 @@ struct LibrarySizeControl: View {
                 .accessibilityValue("\(value) items per row")
             Image(systemName: "plus").accessibilityHidden(true)
         }
+        .frame(height: ToolbarMetrics.controlHeight)
+        .padding(.horizontal, 4)
         .imageScale(.small)
         .help("Thumbnail size")
     }
@@ -31,6 +38,8 @@ struct ViewerZoomControl: View {
                 .accessibilityValue("\(Int((viewer.zoom * 100).rounded())) percent of fit")
             Image(systemName: "plus.magnifyingglass").accessibilityHidden(true)
         }
+        .frame(height: ToolbarMetrics.controlHeight)
+        .padding(.horizontal, 4)
         .imageScale(.small)
     }
 }
@@ -77,6 +86,80 @@ struct BrowserFavoriteControl: View {
         } else {
             return "Toggle Favorite for \(count) Selected Items"
         }
+    }
+}
+
+struct ViewerRotationControls: View {
+    @ObservedObject var viewer: PhotoViewerPresentation
+    var body: some View {
+        HStack(spacing: 2) {
+            Button { viewer.rotate(.counterClockwise) } label: {
+                Label("Rotate Photo Left", systemImage: "rotate.left")
+            }
+            Button { viewer.rotate(.clockwise) } label: {
+                Label("Rotate Photo Right", systemImage: "rotate.right")
+            }
+        }
+        .disabled(!viewer.canRotate)
+        .help(viewer.rotationFailure ?? "Rotate photo")
+    }
+}
+
+struct BrowserRotationControls: View {
+    @ObservedObject var model: LibraryModel
+    var body: some View {
+        HStack(spacing: 2) {
+            Button { model.rotateSelection(.counterClockwise) } label: {
+                Label("Rotate Selected Photos Left", systemImage: "rotate.left")
+            }
+            Button { model.rotateSelection(.clockwise) } label: {
+                Label("Rotate Selected Photos Right", systemImage: "rotate.right")
+            }
+        }
+        .disabled(!model.canRotate)
+        .help("Rotate selected photos")
+    }
+}
+
+struct ThumbnailRotationProgressView: View {
+    @ObservedObject var model: LibraryModel
+    private var progress: ThumbnailRotationProgress? { model.thumbnailRotationProgress }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Rotating Thumbnail Previews").font(.headline)
+            if let progress {
+                ProgressView(value: Double(progress.completedItems),
+                             total: Double(max(1, progress.totalItems)))
+                Text(status(progress)).foregroundStyle(.secondary)
+                if !progress.failures.isEmpty {
+                    ScrollView {
+                        Text(progress.failures.joined(separator: "\n"))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }.frame(maxHeight: 120)
+                }
+            }
+            HStack {
+                Spacer()
+                Button(progress?.stage == .finished ? "Done" : "Cancel") {
+                    model.dismissThumbnailRotation()
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 440)
+        .interactiveDismissDisabled(progress?.stage != .finished)
+    }
+
+    private func status(_ progress: ThumbnailRotationProgress) -> String {
+        if progress.stage == .finished {
+            return progress.failures.isEmpty
+                ? "Finished \(progress.completedItems) of \(progress.totalItems)."
+                : "Finished with \(progress.failures.count) failure(s)."
+        }
+        let item = progress.itemID.map { " photo \($0)" } ?? ""
+        return "\(progress.stage.rawValue.capitalized)\(item) · \(progress.completedItems) of \(progress.totalItems) complete"
     }
 }
 
@@ -158,6 +241,8 @@ struct ConnectionToolbarItem: View {
                     .disabled(library.isLoading)
             }
         }
+        .frame(height: ToolbarMetrics.controlHeight)
+        .padding(.horizontal, 4)
         .font(.caption)
     }
 }
@@ -169,6 +254,26 @@ struct LibraryCommands: Commands {
     @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some Commands {
+        CommandGroup(after: .pasteboard) {
+            Divider()
+            Button { model.rotateSelection(.counterClockwise) } label: {
+                Label("Rotate Photo Left", systemImage: "rotate.left")
+            }
+            .disabled(!model.canRotate)
+            Button { model.rotateSelection(.clockwise) } label: {
+                Label("Rotate Photo Right", systemImage: "rotate.right")
+            }
+            .disabled(!model.canRotate)
+            Divider()
+            Button { model.rotateThumbnailPreviews(.counterClockwise) } label: {
+                Label("Rotate Thumbnail Previews Left…", systemImage: "rotate.left")
+            }
+            .disabled(!model.canRotate || model.thumbnailRotationProgress != nil)
+            Button { model.rotateThumbnailPreviews(.clockwise) } label: {
+                Label("Rotate Thumbnail Previews Right…", systemImage: "rotate.right")
+            }
+            .disabled(!model.canRotate || model.thumbnailRotationProgress != nil)
+        }
         CommandMenu("Library") {
             Button("Back") { model.navigateBack() }
                 .keyboardShortcut(.cancelAction)

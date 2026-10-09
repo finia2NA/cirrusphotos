@@ -29,6 +29,7 @@ public actor PhotoViewerSession {
     var favoriteFailures: [Int64: String] = [:]
     var favoriteValues: [Int64: Bool] = [:]
     var favoriteTask: Task<Void, Never>?
+    var itemMutationTask: Task<Void, Never>?
     var metadataResetTask: Task<Void, Never>?
     var appliedMetadataResetRevision: UInt64 = 0
     var playlist = ViewerPlaylist()
@@ -129,6 +130,7 @@ public actor PhotoViewerSession {
         images.cancelAll()
         metadata.cancelJobs()
         favoriteTask?.cancel()
+        itemMutationTask?.cancel()
         metadataResetTask?.cancel()
         publish()
         for observer in observers.values { observer.finish() }
@@ -149,6 +151,12 @@ public actor PhotoViewerSession {
             for await change in await repository.favoriteChanges() {
                 guard !Task.isCancelled else { return }
                 await self?.applyFavorites(change.values)
+            }
+        }
+        itemMutationTask = Task { [weak self] in
+            for await change in await repository.photoItemChanges() {
+                guard !Task.isCancelled else { return }
+                await self?.applyItemChanges(change)
             }
         }
         metadataResetTask = Task { [weak self] in

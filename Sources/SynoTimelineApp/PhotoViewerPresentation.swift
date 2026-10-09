@@ -12,6 +12,8 @@ final class PhotoViewerPresentation: ObservableObject {
     @Published private(set) var isDecodingFullImage = false
     @Published private(set) var invalidationMessage: String?
     @Published private(set) var isClosing = false
+    @Published private(set) var rotationFailure: String?
+    @Published private(set) var rotationPending = false
     @Published var zoom: Double = 1
 
     let session: PhotoViewerSession
@@ -22,6 +24,8 @@ final class PhotoViewerPresentation: ObservableObject {
     var onInfoItemChanged: ((PhotoItem?) -> Void)?
     private let initialItem: PhotoItem
     private let index: LibraryIndex
+    private let repository: CachedPhotosRepository
+    private let collection: PhotoCollectionDescriptor
 
     private var stateTask: Task<Void, Never>?
     private var decodeTask: Task<Void, Never>?
@@ -39,6 +43,8 @@ final class PhotoViewerPresentation: ObservableObject {
         originalItemID = request.seed.item.id
         initialItem = request.seed.item
         self.index = index
+        self.repository = repository
+        self.collection = collection
         self.snapshotRevision = snapshotRevision
         image = request.source.image
         session = PhotoViewerSession(repository: repository, collection: collection,
@@ -126,6 +132,40 @@ final class PhotoViewerPresentation: ObservableObject {
         Task { await session.toggleFavorite() }
     }
 
+    var canRotate: Bool {
+        invalidationMessage == nil && !isClosing && !rotationPending &&
+            state?.metadataVerified == true && state?.allowNetwork == true &&
+            state?.item?.hasDisplayableStillImage == true
+    }
+
+    func rotationAction() -> SelectionRotationAction? {
+        guard canRotate, let state, let item = state.item,
+              index.sections.indices.contains(state.desiredLocation.sectionIndex) else { return nil }
+        let section = index.sections[state.desiredLocation.sectionIndex]
+        return SelectionRotationAction(itemIDs: [item.id], sectionsByID: [item.id: section],
+                                       collection: collection, itemsByID: [item.id: item],
+                                       expectedTimelineFingerprint: index.fingerprint)
+    }
+
+    func rotate(_ direction: PhotoRotationDirection) {
+        guard let action = rotationAction() else { return }
+        rotationPending = true
+        rotationFailure = nil
+        let priorImage = image
+        let repository = repository
+        if let image { self.image = Self.rotatedImage(image, direction: direction) }
+        Task { [weak self] in
+            do { try await repository.rotate(action, direction: direction) }
+            catch {
+                self?.image = priorImage
+                self?.rotationFailure = error.localizedDescription
+            }
+            self?.rotationPending = false
+        }
+    }
+
+    func dismissRotationFailure() { rotationFailure = nil }
+
     func sectionOffsetHint(for location: PhotoViewerLocation) -> Int? {
         guard index.sections.indices.contains(location.sectionIndex) else { return nil }
         return index.sections[location.sectionIndex].offset
@@ -190,6 +230,7 @@ final class PhotoViewerPresentation: ObservableObject {
     private func receive(_ next: PhotoViewerState) {
         guard !next.isClosed else { return }
         if currentGeneration != next.selection.generation {
+            let sameItem = state?.selection.itemID != nil && state?.selection.itemID == next.selection.itemID
             currentGeneration = next.selection.generation
             lastThumbnailData = nil
             lastFullData = nil
@@ -198,8 +239,10 @@ final class PhotoViewerPresentation: ObservableObject {
             thumbnailDecodeTask?.cancel()
             decodeFailure = nil
             isDecodingFullImage = false
-            image = next.selection.itemID == originalItemID ? source.image : nil
-            zoom = 1
+            if !sameItem {
+                image = next.selection.itemID == originalItemID ? source.image : nil
+                zoom = 1
+            }
             canvasController.resetForSelection(next.selection.generation)
         }
         state = next
@@ -235,11 +278,15 @@ final class PhotoViewerPresentation: ObservableObject {
             do {
                 let bitmap = try await FullImageDecoder.shared.decode(data)
                 guard !Task.isCancelled, self?.state?.selection == selection else { return }
+                let displayBitmap = try bitmap.rotatedForDisplay(
+                    quarterTurns: self?.state?.item?.originalDisplayQuarterTurns ?? 0
+                )
                 SynologyDiagnostics.decoding.info(
                     "Full-size decode succeeded item_id=\(selection.itemID ?? -1, privacy: .public) width=\(bitmap.image.width, privacy: .public) height=\(bitmap.image.height, privacy: .public) generation=\(selection.generation, privacy: .public)"
                 )
-                self?.image = NSImage(cgImage: bitmap.image,
-                                      size: NSSize(width: bitmap.image.width, height: bitmap.image.height))
+                self?.image = NSImage(cgImage: displayBitmap.image,
+                                      size: NSSize(width: displayBitmap.image.width,
+                                                   height: displayBitmap.image.height))
                 self?.hasDisplayedFullImage = true
                 self?.thumbnailDecodeTask?.cancel()
                 self?.decodeFailure = nil
@@ -261,4 +308,17 @@ final class PhotoViewerPresentation: ObservableObject {
     }
 
     private static let dateFormatter = CaptureWallTimeFormatter.make()
+
+    private static func rotatedImage(_ source: NSImage, direction: PhotoRotationDirection) -> NSImage {
+        let output = NSImage(size: NSSize(width: source.size.height, height: source.size.width))
+        output.lockFocus()
+        let transform = NSAffineTransform()
+        transform.translateX(by: output.size.width / 2, yBy: output.size.height / 2)
+        transform.rotate(byDegrees: direction == .clockwise ? -90 : 90)
+        transform.translateX(by: -source.size.width / 2, yBy: -source.size.height / 2)
+        transform.concat()
+        source.draw(in: NSRect(origin: .zero, size: source.size))
+        output.unlockFocus()
+        return output
+    }
 }

@@ -67,6 +67,12 @@ extension PhotosTransport {
         throw TestFailure("Unexpected favorite write")
     }
 
+    func items(ids: [Int64]) async throws -> [PhotoItem] { throw TestFailure("Unexpected item lookup") }
+    func rotate(itemIDs: [Int64], direction: PhotoRotationDirection) async throws { throw TestFailure("Unexpected rotation") }
+    func setRegenerating(itemIDs: [Int64]) async throws -> [RegeneratingThumbnailUnit] { throw TestFailure("Unexpected regeneration") }
+    func restoreFromRegenerating(unitIDs: [Int64]) async throws { throw TestFailure("Unexpected regeneration restore") }
+    func uploadConvertedThumbnails(unitID: Int64, files: ConvertedThumbnailFiles) async throws { throw TestFailure("Unexpected converted upload") }
+
     func thumbnail(
         _ descriptor: ThumbnailInfo,
         size: ThumbnailSize,

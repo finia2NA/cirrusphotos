@@ -18,6 +18,7 @@ The native split-view sidebar contains Library, Favorites, Map, and Albums desti
 - The compact day navigator gives equal space to each populated day and appears near the pointer or with keyboard focus.
 - Click, Shift-click, Shift-Option-click range selection, marquee, Shift-marquee, Cmd+A, and menu-backed arrow commands select across day and page boundaries.
 - Favorites appear as heart badges. The toolbar and Library menu `.` command toggle the active viewer photo or browser selection, with confirmation when more than five items are affected or the entire collection is selected.
+- Toolbar controls rotate the active viewer photo or the current browser selection left or right. Rotation is optimistic, supports photos and Live Photo stills, and adopts refreshed orientation, resolution, and thumbnail descriptors from the NAS; videos are skipped.
 - Albums shows read-only Personal Space album cards with cover, name, and item count. Opening an album reuses the shared browser with collection-scoped restoration; Escape returns from an opened album or map result just as its Back button does.
 - Album creation, rename, deletion, membership changes, and Shared Space browsing are not implemented.
 
@@ -46,7 +47,9 @@ The Cmd+I Info utility panel follows the active viewer item or browser selection
 
 ## Mutations and freshness
 
-Favorite writes are optimistic and serialized. The repository patches affected cached pages, rolls failed or unsubmitted items back, and refreshes authoritative Favorites ordering after successful writes. A Favorites viewer preserves its opening playlist while membership changes. No other Synology Photos write operation is implemented.
+Favorite writes are optimistic and serialized. The repository patches affected cached pages, rolls failed or unsubmitted items back, and refreshes authoritative Favorites ordering after successful writes. A Favorites viewer preserves its opening playlist while membership changes.
+
+Normal photo rotation is available in the toolbar for the active viewer item or browser selection. The native Edit menu contains icon-labeled left/right commands for both normal and thumbnail-only rotation. Normal rotation changes Synology's display orientation and generated renditions without modifying original bytes. Thumbnail-only rotation runs in a modal, cancellable progress workflow: it downloads `sm`, `m`, and `xl`, rotates JPEG bytes locally, replaces only those server renditions through the confirmed regeneration workflow, refreshes descriptors, and leaves original bytes plus orientation/resolution metadata unchanged. Post-regeneration failure or cancellation restores each affected thumbnail unit out of regenerating state.
 
 Photo capture times are treated as capture-local wall-clock values. Grouping and display preserve the encoded local time without inferring a timezone from the Mac or GPS data.
 

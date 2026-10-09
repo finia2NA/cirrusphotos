@@ -33,6 +33,7 @@ struct ThumbnailCell: View {
             RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.08))
             if let image, displayedRendition?.hasPrefix(familyIdentity) == true {
                 Image(nsImage: image).resizable().scaledToFit()
+                    .rotationEffect(.degrees(Double(item.pendingRotationQuarterTurns * 90)))
             } else if failed, displayedRendition == renditionIdentity {
                 Image(systemName: "photo.badge.exclamationmark").foregroundStyle(.secondary)
             } else {

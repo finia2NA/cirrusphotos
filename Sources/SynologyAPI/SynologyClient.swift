@@ -242,6 +242,200 @@ public actor SynologyClient: PhotosTransport {
         guard response.success else { throw SynologyAPIError.api(response.error?.code ?? -1) }
     }
 
+    public func items(ids: [Int64]) async throws -> [PhotoItem] {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        guard !ids.isEmpty, ids.count <= 1_000 else {
+            throw SynologyAPIError.unsupported("Item lookup requires 1–1000 item IDs.")
+        }
+        let response: APIEnvelope<ItemData> = try await post(
+            path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item",
+            parameters: [
+                "api": "SYNO.Foto.Browse.Item", "version": "7", "method": "get",
+                "id": Self.idArray(ids), "additional": Self.additionalParameter(), "_sid": sid,
+            ], authenticated: true
+        )
+        guard response.success, let data = response.data else {
+            throw SynologyAPIError.api(response.error?.code ?? -1)
+        }
+        return data.list
+    }
+
+    public func rotate(itemIDs: [Int64], direction: PhotoRotationDirection) async throws {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        guard !itemIDs.isEmpty else { return }
+        let response: APIEnvelope<ItemSetData> = try await post(
+            path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item",
+            parameters: [
+                "api": "SYNO.Foto.Browse.Item", "version": "7", "method": "set",
+                "id": Self.idArray(itemIDs), "rotate_action": direction.rawValue, "_sid": sid,
+            ], authenticated: true
+        )
+        guard response.success else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+        guard response.data?.errorList.isEmpty != false else { throw SynologyAPIError.invalidResponse }
+    }
+
+    public func setRegenerating(itemIDs: [Int64]) async throws -> [RegeneratingThumbnailUnit] {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        guard !itemIDs.isEmpty else { return [] }
+        SynologyDiagnostics.rotationTransport.info(
+            "Sending set_regenerating item_count=\(itemIDs.count, privacy: .public) first_item_id=\(itemIDs.first ?? -1, privacy: .public) api_version=1"
+        )
+        let response: APIEnvelope<RegeneratingData>
+        do {
+            response = try await post(
+                path: "/webapi/entry.cgi",
+                parameters: [
+                    "api": "SYNO.Foto.RegeneratePreview", "version": "1",
+                    "method": "set_regenerating", "item_id": Self.idArray(itemIDs), "_sid": sid,
+                ], authenticated: true
+            )
+        } catch {
+            SynologyDiagnostics.rotationTransport.error(
+                "set_regenerating transport failed item_count=\(itemIDs.count, privacy: .public) first_item_id=\(itemIDs.first ?? -1, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+            throw error
+        }
+        guard response.success, let data = response.data else {
+            SynologyDiagnostics.rotationTransport.error(
+                "set_regenerating API rejected request item_count=\(itemIDs.count, privacy: .public) first_item_id=\(itemIDs.first ?? -1, privacy: .public) api_code=\(response.error?.code ?? -1, privacy: .public)"
+            )
+            throw SynologyAPIError.api(response.error?.code ?? -1)
+        }
+        SynologyDiagnostics.rotationTransport.info(
+            "set_regenerating accepted item_count=\(itemIDs.count, privacy: .public) first_item_id=\(itemIDs.first ?? -1, privacy: .public) returned_units=\(data.list.count, privacy: .public) first_unit_id=\(data.list.first?.unitID ?? -1, privacy: .public)"
+        )
+        return data.list.map { RegeneratingThumbnailUnit(itemID: $0.itemID, unitID: $0.unitID) }
+    }
+
+    public func restoreFromRegenerating(unitIDs: [Int64]) async throws {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        guard !unitIDs.isEmpty else { return }
+        SynologyDiagnostics.rotationTransport.info(
+            "Sending restore_from_regenerating unit_count=\(unitIDs.count, privacy: .public) first_unit_id=\(unitIDs.first ?? -1, privacy: .public) api_version=1"
+        )
+        let response: APIEnvelope<EmptyData>
+        do {
+            response = try await post(
+                path: "/webapi/entry.cgi",
+                parameters: [
+                    "api": "SYNO.Foto.RegeneratePreview", "version": "1",
+                    "method": "restore_from_regenerating", "unit_id": Self.idArray(unitIDs), "_sid": sid,
+                ], authenticated: true
+            )
+        } catch {
+            SynologyDiagnostics.rotationTransport.error(
+                "restore_from_regenerating transport failed unit_count=\(unitIDs.count, privacy: .public) first_unit_id=\(unitIDs.first ?? -1, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+            throw error
+        }
+        guard response.success else {
+            SynologyDiagnostics.rotationTransport.error(
+                "restore_from_regenerating API rejected request unit_count=\(unitIDs.count, privacy: .public) first_unit_id=\(unitIDs.first ?? -1, privacy: .public) api_code=\(response.error?.code ?? -1, privacy: .public)"
+            )
+            throw SynologyAPIError.api(response.error?.code ?? -1)
+        }
+        SynologyDiagnostics.rotationTransport.info(
+            "restore_from_regenerating accepted unit_count=\(unitIDs.count, privacy: .public) first_unit_id=\(unitIDs.first ?? -1, privacy: .public)"
+        )
+    }
+
+    public func uploadConvertedThumbnails(unitID: Int64, files: ConvertedThumbnailFiles) async throws {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        SynologyDiagnostics.rotationTransport.info(
+            "Preparing converted thumbnail upload unit_id=\(unitID, privacy: .public) sm_bytes=\(files.sm.count, privacy: .public) m_bytes=\(files.m.count, privacy: .public) xl_bytes=\(files.xl.count, privacy: .public) api_version=3"
+        )
+        let boundary = "SynoTimeline-\(UUID().uuidString)"
+        let body = Self.convertedThumbnailMultipartBody(
+            boundary: boundary, unitID: unitID, files: files
+        )
+
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+        components.path = "/webapi/entry.cgi"
+        guard let url = components.url else { throw SynologyAPIError.invalidResponse }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 300
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
+        if let synoToken { request.setValue(synoToken, forHTTPHeaderField: "X-SYNO-TOKEN") }
+        request.httpBody = body
+        let data: Data
+        let response: URLResponse
+        do { (data, response) = try await session.data(for: request) }
+        catch is CancellationError {
+            SynologyDiagnostics.rotationTransport.info(
+                "Converted thumbnail upload cancelled unit_id=\(unitID, privacy: .public)"
+            )
+            throw CancellationError()
+        }
+        catch {
+            SynologyDiagnostics.rotationTransport.error(
+                "Converted thumbnail upload transport failed unit_id=\(unitID, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+            throw SynologyAPIError.transport(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            SynologyDiagnostics.rotationTransport.error(
+                "Converted thumbnail upload missing HTTP response unit_id=\(unitID, privacy: .public) bytes=\(data.count, privacy: .public)"
+            )
+            throw SynologyAPIError.invalidResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            SynologyDiagnostics.rotationTransport.error(
+                "Converted thumbnail upload HTTP failure unit_id=\(unitID, privacy: .public) status=\(http.statusCode, privacy: .public) bytes=\(data.count, privacy: .public)"
+            )
+            throw SynologyAPIError.http(http.statusCode)
+        }
+        guard let envelope = try? JSONDecoder().decode(APIEnvelope<EmptyData>.self, from: data),
+              envelope.success else {
+            if let envelope = try? JSONDecoder().decode(APIEnvelope<EmptyData>.self, from: data) {
+                SynologyDiagnostics.rotationTransport.error(
+                    "Converted thumbnail upload API rejected request unit_id=\(unitID, privacy: .public) status=\(http.statusCode, privacy: .public) api_code=\(envelope.error?.code ?? -1, privacy: .public) response_bytes=\(data.count, privacy: .public)"
+                )
+                throw SynologyAPIError.api(envelope.error?.code ?? -1)
+            }
+            SynologyDiagnostics.rotationTransport.error(
+                "Converted thumbnail upload returned invalid JSON unit_id=\(unitID, privacy: .public) status=\(http.statusCode, privacy: .public) response_bytes=\(data.count, privacy: .public)"
+            )
+            throw SynologyAPIError.invalidResponse
+        }
+        SynologyDiagnostics.rotationTransport.info(
+            "Converted thumbnail upload accepted unit_id=\(unitID, privacy: .public) status=\(http.statusCode, privacy: .public) response_bytes=\(data.count, privacy: .public)"
+        )
+    }
+
+    static func convertedThumbnailMultipartBody(
+        boundary: String, unitID: Int64, files: ConvertedThumbnailFiles
+    ) -> Data {
+        var body = Data()
+        func append(_ string: String) { body.append(Data(string.utf8)) }
+        // Match Synology's desktop converter and the confirmed live probe exactly.
+        // Authentication is carried by the cookie and X-SYNO-TOKEN header. The prior
+        // variant added `_sid` and sorted these fields; that request received API error
+        // 101, so keep this body byte-shape aligned with the confirmed working request.
+        let fields = [
+            ("api", "SYNO.Foto.Upload.ConvertedFile"),
+            ("version", "3"),
+            ("method", "upload"),
+            ("unit_id", String(unitID)),
+        ]
+        for (name, value) in fields {
+            append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n")
+        }
+        for (name, data) in [("thumb_sm", files.sm), ("thumb_m", files.m), ("thumb_xl", files.xl)] {
+            append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"; filename=\"\(name).jpg\"\r\nContent-Type: image/jpeg\r\n\r\n")
+            body.append(data)
+            append("\r\n")
+        }
+        append("--\(boundary)--\r\n")
+        return body
+    }
+
+    private static func idArray(_ ids: [Int64]) -> String {
+        "[" + ids.map(String.init).joined(separator: ",") + "]"
+    }
+
     public func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                           etag: String? = nil, lastModified: String? = nil) async throws -> ThumbnailResponse {
         guard let sid else { throw SynologyAPIError.api(119) }

@@ -24,6 +24,17 @@ final class FullImageDecoderTests: XCTestCase {
         XCTAssertEqual(bitmap.image.height, 12)
     }
 
+    func testDisplayQuarterTurnAppliesAfterOriginalEXIFTransform() async throws {
+        let bitmap = try await FullImageDecoder().decode(encodedImage())
+        let clockwise = try bitmap.rotatedForDisplay(quarterTurns: 1)
+        XCTAssertEqual(clockwise.image.width, 12)
+        XCTAssertEqual(clockwise.image.height, 8)
+        let counterClockwise = try bitmap.rotatedForDisplay(quarterTurns: -1)
+        XCTAssertEqual(counterClockwise.image.width, 12)
+        XCTAssertEqual(counterClockwise.image.height, 8)
+        XCTAssertTrue(try bitmap.rotatedForDisplay(quarterTurns: 4) === bitmap)
+    }
+
     func testOversizedImageFailsInsteadOfSilentlyDownsampling() async throws {
         do {
             _ = try await FullImageDecoder(maximumBytes: 16).decode(encodedImage())

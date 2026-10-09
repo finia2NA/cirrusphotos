@@ -6,6 +6,127 @@ The viewer and Favorites album captures in `docs/captures/favorites.har` and `fa
 
 The web client changes favorite status with a form-encoded `POST /webapi/entry.cgi/SYNO.Foto.Browse.Item`: `api=SYNO.Foto.Browse.Item`, `version=7`, `method=set_favorite`, `id=[<item IDs>]`, and `favorite=true` or `false`. `favorites.har` captured the one-item form. `favoriteunfavorite2photos.har` confirmed that the endpoint accepts several IDs in one request: the web client sent the same two-item array once with `favorite=true` and once with `favorite=false`, and both returned `{"success":true}`. This endpoint is implemented for Personal Space favorites; the accompanying `SYNO.Foto.Udc.send_event` request is telemetry.
 
+## Thumbnail replacement
+
+Authorized write probes against `cirrus` on 2026-10-09 established that
+`SYNO.Foto.Upload.ConvertedFile` version 3, method `upload`, accepts a multipart request for
+thumbnail renditions that are already marked `ready`, but does **not** replace those ready
+renditions. The request used the photo's `additional.thumbnail.unit_id` (not its Browse item ID)
+and file fields `thumb_sm`, `thumb_m`, and `thumb_xl` and returned `{"success":true}` with both
+unchanged and modified JPEGs. Uploading unchanged JPEGs was therefore indistinguishable from a
+successful replacement. A decisive follow-up uploaded three 90-degree-rotated JPEGs with swapped
+pixel dimensions, repeatedly bypassed HTTP caches, and re-read item metadata. For more than 15
+seconds, the thumbnail cache key stayed unchanged and all three endpoints continued serving the
+original hashes and dimensions. The original download also remained byte-identical. Restoring the
+saved thumbnail bytes returned success and the original renditions remained present.
+
+Consequently, this endpoint cannot implement thumbnail-only rotation for already-generated
+Photos thumbnails by itself. It must be preceded by the regeneration transition below; a success
+response from `ConvertedFile.upload` without that transition is not proof that ready renditions
+changed.
+
+```http
+POST /webapi/entry.cgi
+Content-Type: multipart/form-data
+
+api=SYNO.Foto.Upload.ConvertedFile
+version=3
+method=upload
+unit_id=<additional.thumbnail.unit_id>
+thumb_sm=<JPEG>
+thumb_m=<JPEG>
+thumb_xl=<JPEG>
+```
+
+### Confirmed replacement workflow
+
+A second authorized probe against Personal Space item `239345` confirmed the complete workflow
+used by the Synology Photos web client:
+
+1. Preserve or produce all three replacement JPEGs (`sm`, `m`, and `xl`).
+2. Mark the Browse item for regeneration:
+
+   ```http
+   POST /webapi/entry.cgi
+   Content-Type: application/x-www-form-urlencoded
+
+   api=SYNO.Foto.RegeneratePreview
+   version=1
+   method=set_regenerating
+   item_id=[<Browse item ID>]
+   ```
+
+   The response contains `data.list` entries with `filename`, `type`, and the thumbnail
+   `unit_id`. This work is handed directly to Synology's desktop/browser converter and does not
+   appear in `SYNO.Foto.Upload.ConvertedFile.list_convert_needed`.
+3. Upload the three JPEGs to `SYNO.Foto.Upload.ConvertedFile` as shown above, using the returned
+   unit ID.
+4. Re-read the item and use its new thumbnail cache key. The upload completed in about one second,
+   left the Browse item's orientation and resolution metadata unchanged, and advanced the cache
+   key while retaining the same unit ID.
+
+The probe first uploaded unchanged saved renditions, then repeated the sequence with 90-degree
+rotated renditions. The NAS served the rotated uploads byte-for-byte at the new cache key, including
+the swapped pixel dimensions (`240x320` to `320x240`, `320x427` to `427x320`, and `1280x1707` to
+`1707x1280`). Repeating the sequence with the saved baseline JPEGs restored all three exact SHA-256
+hashes. The original download remained byte-identical and the item remained at orientation `6` and
+resolution `3024x4032`. This establishes that thumbnail-only rotation is viable without changing
+the photo or its display-orientation metadata.
+
+If conversion or upload fails after `set_regenerating`, roll the unit out of that state with:
+
+```http
+POST /webapi/entry.cgi
+Content-Type: application/x-www-form-urlencoded
+
+api=SYNO.Foto.RegeneratePreview
+version=1
+method=restore_from_regenerating
+unit_id=[<thumbnail unit ID>]
+```
+
+That recovery request was also probed: it returned success, preserved the current cache key and
+renditions, and left the item metadata unchanged. Deleting only this app's cached thumbnails or
+metadata cannot replace a NAS rendition; it merely causes another download of whatever bytes the
+NAS currently serves. After a successful replacement, the app must adopt the server's new cache key
+and invalidate any in-memory image for the old descriptor.
+
+Synology's DSM Login Web API guide defines common error `101` as a request with no `api`, `method`,
+or `version` parameter. Photos does not publish endpoint-specific error documentation for
+`RegeneratePreview` or `Upload.ConvertedFile`, and observed Photos behavior is broader: the GPS
+write probe below returned `101` even though all three routing fields were present, when the
+unsupported method parameter was the distinguishing input. Treat `101` from these unofficial
+Photos writes as a request-validation failure until the failing endpoint and stage are known, not
+as proof that a routing field was literally absent. Rotation diagnostics use the unified Console
+subsystem and the `repository.rotations` / `transport.rotations` categories to identify that stage
+without logging credentials, session material, cache keys, filenames, URLs, or response bodies.
+
+## Personal Space rotation
+
+An authorized clockwise/inverse probe against `cirrus` on 2026-10-09 confirmed the Photos web
+client request shape for a normal photo rotation:
+
+```http
+POST /webapi/entry.cgi/SYNO.Foto.Browse.Item
+Content-Type: application/x-www-form-urlencoded
+
+api=SYNO.Foto.Browse.Item
+version=7
+method=set
+id=[<Browse item ID>]
+rotate_action=clockwise
+```
+
+`rotate_action=counter_clockwise` performs the inverse. Each call completed in under two seconds
+and returned `{"data":{"error_list":[]},"success":true}`. A `Browse.Item.get` lookup reflected
+the change in under one second: the EXIF orientation changed, resolution width and height swapped,
+the thumbnail unit ID stayed stable, and `additional.thumbnail.cache_key` advanced. All `sm`, `m`,
+and `xl` thumbnail bytes changed under the new key. The `SYNO.Foto.Download` original remained
+byte-identical, so this operation changes Synology's display orientation and generated renditions,
+not the stored original bytes. Applying the inverse restored the original orientation and
+resolution and advanced the cache key again. Regenerated thumbnail bytes did not return to their
+prior hashes, which is expected because the server regenerated them; the original bytes did.
+
 ## Personal Space albums
 
 `almbumsoverviewandopening.har` captured the album overview and one album open (Synology Photos 1.9.1-10928, 2026-10-06). The overview is a single list request:

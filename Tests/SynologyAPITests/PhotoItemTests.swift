@@ -4,6 +4,32 @@ import XCTest
 @testable import SynologyAPI
 
 final class PhotoItemTests: XCTestCase {
+    func testOptimisticQuarterTurnSwapsResolutionAndMapsOrientation() throws {
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":1,"time":1700000000,"type":"photo","additional":{"resolution":{"width":400,"height":300},"orientation":1,"orientation_original":1}}
+        """.utf8))
+        let clockwise = item.rotated(.clockwise)
+        XCTAssertEqual(clockwise.additional?.resolution?.width, 300)
+        XCTAssertEqual(clockwise.additional?.resolution?.height, 400)
+        XCTAssertEqual(clockwise.additional?.orientation, 6)
+        XCTAssertEqual(clockwise.rotated(.counterClockwise), item)
+    }
+
+    func testOriginalDisplayQuarterTurnDeltaCoversNormalAndMirroredCycles() throws {
+        func item(original: Int, current: Int) throws -> PhotoItem {
+            try JSONDecoder().decode(PhotoItem.self, from: Data("""
+            {"id":1,"time":1700000000,"type":"photo","additional":{"orientation":\(current),"orientation_original":\(original)}}
+            """.utf8))
+        }
+        XCTAssertEqual(try item(original: 1, current: 1).originalDisplayQuarterTurns, 0)
+        XCTAssertEqual(try item(original: 1, current: 6).originalDisplayQuarterTurns, 1)
+        XCTAssertEqual(try item(original: 1, current: 3).originalDisplayQuarterTurns, 2)
+        XCTAssertEqual(try item(original: 1, current: 8).originalDisplayQuarterTurns, -1)
+        XCTAssertEqual(try item(original: 2, current: 7).originalDisplayQuarterTurns, 1)
+        XCTAssertEqual(try item(original: 7, current: 5).originalDisplayQuarterTurns, 2)
+        XCTAssertEqual(try item(original: 5, current: 4).originalDisplayQuarterTurns, -1)
+        XCTAssertEqual(try item(original: 1, current: 2).originalDisplayQuarterTurns, 0)
+    }
     func testOrientationIsDecodedButDoesNotRotateServerResolutionAgain() throws {
         for orientation in [1, 3, 6, 8] {
             let item = try decode(resolution: "{\"width\":4000,\"height\":2000}",

@@ -119,3 +119,13 @@ struct RepositoryFavoriteState {
         for observer in observers.values { observer.yield(change) }
     }
 }
+
+
+struct RepositoryItemMutationState {
+    var observers: [UUID: AsyncStream<PhotoItemChange>.Continuation] = [:]
+    var pendingIDs: Set<Int64> = []
+
+    func publish(_ change: PhotoItemChange) {
+        for observer in observers.values { observer.yield(change) }
+    }
+}

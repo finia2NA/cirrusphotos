@@ -163,6 +163,20 @@ struct AppShellView: View {
         } message: {
             Text(model.browserFavoriteFailure ?? "The favorite update failed.")
         }
+        .alert("Rotation Failed", isPresented: Binding(
+            get: { model.rotationFailure != nil || viewer?.rotationFailure != nil },
+            set: { if !$0 { model.dismissRotationFailure(); viewer?.dismissRotationFailure() } }
+        )) {
+            Button("OK") { model.dismissRotationFailure(); viewer?.dismissRotationFailure() }
+        } message: {
+            Text(model.rotationFailure ?? viewer?.rotationFailure ?? "The photo could not be rotated.")
+        }
+        .sheet(isPresented: Binding(
+            get: { model.thumbnailRotationProgress != nil },
+            set: { if !$0 { model.dismissThumbnailRotation() } }
+        )) {
+            ThumbnailRotationProgressView(model: model)
+        }
     }
 
     private var detail: some View {
@@ -388,48 +402,66 @@ struct AppShellView: View {
         if let viewer {
             ToolbarItem(placement: .navigation) {
                 Button(action: closeViewer) {
-                    Label("Back to Library", systemImage: "chevron.left")
+                    Image(systemName: "chevron.left")
+                        .frame(width: ToolbarMetrics.controlHeight,
+                               height: ToolbarMetrics.controlHeight)
+                        .contentShape(.circle)
                 }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: Circle())
+                .accessibilityLabel("Back to Library")
                 .help("Back to Library")
             }
-            ToolbarSpacer(.fixed, placement: .navigation)
+            .sharedBackgroundVisibility(.hidden)
             ToolbarItem(placement: .navigation) {
                 ViewerZoomControl(viewer: viewer)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                ViewerFavoriteControl(viewer: viewer)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                InfoPanelToolbarControl()
             }
             ToolbarItem(placement: .principal) {
                 ViewerToolbarTitle(viewer: viewer)
             }
             .sharedBackgroundVisibility(.hidden)
+            ToolbarSpacer(.flexible, placement: .primaryAction)
+            ToolbarItemGroup(placement: .primaryAction) {
+                ViewerRotationControls(viewer: viewer)
+                    .frame(height: ToolbarMetrics.controlHeight)
+                ViewerFavoriteControl(viewer: viewer)
+                    .frame(height: ToolbarMetrics.controlHeight)
+                InfoPanelToolbarControl()
+                    .frame(height: ToolbarMetrics.controlHeight)
+            }
+            ToolbarSpacer(.fixed, placement: .primaryAction)
         } else if let collection = selectedCollection {
             if isAlbumBrowser {
                 ToolbarItem(placement: .navigation) {
                     Button(action: closeAlbum) {
-                        Label("Albums", systemImage: "chevron.left")
+                        Image(systemName: "chevron.left")
+                            .frame(width: ToolbarMetrics.controlHeight,
+                                   height: ToolbarMetrics.controlHeight)
+                            .contentShape(.circle)
                     }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: Circle())
+                    .accessibilityLabel("Back to Albums")
                     .help("Back to Albums")
                 }
+                .sharedBackgroundVisibility(.hidden)
             } else if isMapFilterBrowser {
                 ToolbarItem(placement: .navigation) {
                     Button(action: closeMapFilter) {
-                        Label("Map", systemImage: "chevron.left")
+                        Image(systemName: "chevron.left")
+                            .frame(width: ToolbarMetrics.controlHeight,
+                                   height: ToolbarMetrics.controlHeight)
+                            .contentShape(.circle)
                     }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: Circle())
+                    .accessibilityLabel("Back to Map")
                     .help("Back to Map")
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             ToolbarItem(placement: .navigation) {
                 LibrarySizeControl(value: $model.itemsPerRow)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                BrowserFavoriteControl(model: model, collection: collection)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                InfoPanelToolbarControl()
             }
             if isAlbumBrowser {
                 ToolbarItem(placement: .principal) {
@@ -447,10 +479,34 @@ struct AppShellView: View {
                         .lineLimit(1)
                 }
                 .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .principal) {
+                    Color.clear
+                        .frame(width: 1, height: 1)
+                        .accessibilityHidden(true)
+                }
+                .sharedBackgroundVisibility(.hidden)
             }
+            ToolbarSpacer(.flexible, placement: .primaryAction)
+            ToolbarItemGroup(placement: .primaryAction) {
+                BrowserRotationControls(model: model)
+                    .frame(height: ToolbarMetrics.controlHeight)
+                BrowserFavoriteControl(model: model, collection: collection)
+                    .frame(height: ToolbarMetrics.controlHeight)
+                InfoPanelToolbarControl()
+                    .frame(height: ToolbarMetrics.controlHeight)
+            }
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+        } else {
+            ToolbarItem(placement: .principal) {
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityHidden(true)
+            }
+            .sharedBackgroundVisibility(.hidden)
+            ToolbarSpacer(.flexible, placement: .primaryAction)
         }
 
-        ToolbarSpacer(.flexible, placement: .primaryAction)
         ToolbarItem(placement: .primaryAction) {
             ConnectionToolbarItem()
         }

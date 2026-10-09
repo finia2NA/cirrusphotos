@@ -6,6 +6,29 @@ public final class FullImageBitmap: @unchecked Sendable {
     public let image: CGImage
     public var byteCount: Int { image.bytesPerRow * image.height }
     init(_ image: CGImage) { self.image = image }
+
+    /// Applies only Synology's display-orientation delta. The decoder has already
+    /// applied the original file's EXIF transform, so this must never be used for
+    /// server-generated thumbnails.
+    public func rotatedForDisplay(quarterTurns: Int) throws -> FullImageBitmap {
+        let turns = ((quarterTurns % 4) + 4) % 4
+        guard turns != 0 else { return self }
+        let swapsAxes = turns % 2 == 1
+        let outputWidth = swapsAxes ? image.height : image.width
+        let outputHeight = swapsAxes ? image.width : image.height
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: outputWidth, height: outputHeight,
+                                      bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            throw FullImageDecodeError.unsupported
+        }
+        context.translateBy(x: CGFloat(outputWidth) / 2, y: CGFloat(outputHeight) / 2)
+        context.rotate(by: -CGFloat(turns) * .pi / 2)
+        context.translateBy(x: -CGFloat(image.width) / 2, y: -CGFloat(image.height) / 2)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        guard let result = context.makeImage() else { throw FullImageDecodeError.unsupported }
+        return FullImageBitmap(result)
+    }
 }
 
 public enum FullImageDecodeError: LocalizedError {

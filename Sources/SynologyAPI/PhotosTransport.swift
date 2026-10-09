@@ -26,6 +26,33 @@ public struct FullImageResponse: Sendable {
     }
 }
 
+public enum PhotoRotationDirection: String, Codable, Sendable, CaseIterable {
+    case clockwise
+    case counterClockwise = "counter_clockwise"
+}
+
+public struct RegeneratingThumbnailUnit: Sendable, Equatable {
+    public let itemID: Int64?
+    public let unitID: Int64
+
+    public init(itemID: Int64? = nil, unitID: Int64) {
+        self.itemID = itemID
+        self.unitID = unitID
+    }
+}
+
+public struct ConvertedThumbnailFiles: Sendable, Equatable {
+    public let sm: Data
+    public let m: Data
+    public let xl: Data
+
+    public init(sm: Data, m: Data, xl: Data) {
+        self.sm = sm
+        self.m = m
+        self.xl = xl
+    }
+}
+
 public protocol PhotosTransport: Sendable {
     func login(credentials: SynologyCredentials) async throws
     func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot
@@ -42,6 +69,11 @@ public protocol PhotosTransport: Sendable {
     func locationItems(ids: [Int64]) async throws -> LocationItemLookup
 
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws
+    func items(ids: [Int64]) async throws -> [PhotoItem]
+    func rotate(itemIDs: [Int64], direction: PhotoRotationDirection) async throws
+    func setRegenerating(itemIDs: [Int64]) async throws -> [RegeneratingThumbnailUnit]
+    func restoreFromRegenerating(unitIDs: [Int64]) async throws
+    func uploadConvertedThumbnails(unitID: Int64, files: ConvertedThumbnailFiles) async throws
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse
     func fullImage(_ resource: FullImageResource,

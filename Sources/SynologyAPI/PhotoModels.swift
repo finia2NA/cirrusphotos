@@ -12,6 +12,10 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
     public let liveType: String?
     public let filesize: Int64?
     public var additional: Additional?
+    /// Ephemeral UI projection while a normal server rotation is pending. It is
+    /// deliberately excluded from cached/wire coding and returns to zero when the
+    /// authoritative item is decoded.
+    public var pendingRotationQuarterTurns: Int = 0
 
     enum CodingKeys: String, CodingKey {
         case id, filename, time, type, filesize, additional
@@ -22,6 +26,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
         public let thumbnail: ThumbnailInfo?
         public let resolution: Resolution?
         public let orientation: Int?
+        public let orientationOriginal: Int?
         public let videoMeta: VideoMetadata?
         public let exif: ExifInfo?
         public let gps: PhotoCoordinate?
@@ -30,6 +35,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
 
         enum CodingKeys: String, CodingKey {
             case thumbnail, resolution, orientation, exif, gps, favorite
+            case orientationOriginal = "orientation_original"
             case videoMeta = "video_meta"
             case folderPath = "folder"
         }
@@ -49,6 +55,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
                 thumbnail: nil,
                 resolution: nil,
                 orientation: nil,
+                orientationOriginal: nil,
                 videoMeta: nil,
                 exif: nil,
                 gps: nil,
@@ -59,6 +66,44 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
             copy.additional?.favorite = favorite
         }
         return copy
+    }
+
+    /// Optimistic metadata projection used while Synology regenerates the normal
+    /// display orientation. The authoritative item replaces this value after the write.
+    public func rotated(_ direction: PhotoRotationDirection) -> PhotoItem {
+        var copy = self
+        copy.pendingRotationQuarterTurns += direction == .clockwise ? 1 : -1
+        guard var additional = copy.additional else { return copy }
+        if let resolution = additional.resolution {
+            additional = Additional(
+                thumbnail: additional.thumbnail,
+                resolution: Resolution(width: resolution.height, height: resolution.width),
+                orientation: Self.rotatedOrientation(additional.orientation, direction),
+                orientationOriginal: additional.orientationOriginal,
+                videoMeta: additional.videoMeta,
+                exif: additional.exif,
+                gps: additional.gps,
+                folderPath: additional.folderPath,
+                favorite: additional.favorite
+            )
+        } else {
+            additional = Additional(
+                thumbnail: additional.thumbnail, resolution: nil,
+                orientation: Self.rotatedOrientation(additional.orientation, direction),
+                orientationOriginal: additional.orientationOriginal,
+                videoMeta: additional.videoMeta, exif: additional.exif, gps: additional.gps,
+                folderPath: additional.folderPath, favorite: additional.favorite
+            )
+        }
+        copy.additional = additional
+        return copy
+    }
+
+    private static func rotatedOrientation(_ orientation: Int?, _ direction: PhotoRotationDirection) -> Int? {
+        guard let orientation else { return nil }
+        let clockwise = [1: 6, 6: 3, 3: 8, 8: 1, 2: 7, 7: 4, 4: 5, 5: 2]
+        let counterClockwise = [1: 8, 8: 3, 3: 6, 6: 1, 2: 5, 5: 4, 4: 7, 7: 2]
+        return (direction == .clockwise ? clockwise : counterClockwise)[orientation] ?? orientation
     }
 
     public struct Resolution: Codable, Sendable, Equatable {
@@ -123,6 +168,23 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
     }
 
     public var isVideo: Bool { type == "video" }
+
+    /// Additional clockwise quarter turns required after ImageIO has applied the
+    /// stored original's EXIF orientation. Synology normal rotation changes
+    /// `orientation` while leaving `orientation_original` and original bytes intact.
+    /// Mirrored EXIF orientations form their own four-state rotation cycle.
+    public var originalDisplayQuarterTurns: Int {
+        guard let current = additional?.orientation,
+              let original = additional?.orientationOriginal else { return 0 }
+        let cycles = [[1, 6, 3, 8], [2, 7, 4, 5]]
+        for cycle in cycles {
+            guard let originalIndex = cycle.firstIndex(of: original),
+                  let currentIndex = cycle.firstIndex(of: current) else { continue }
+            let clockwise = (currentIndex - originalIndex + 4) % 4
+            return clockwise == 3 ? -1 : clockwise
+        }
+        return 0
+    }
 }
 
 /// The stable server identity and revision used to request and cache an original image.
