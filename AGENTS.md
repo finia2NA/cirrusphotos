@@ -31,6 +31,7 @@
   - When you are asked to spawn an agent, this means subagent. Do not create a new chat and talk to the agent there.
 - Kilo-specific (Ignore if the harness used is not Kilo):
   - GPT 5.6 Sol refers to the model through the OpenAI Codex API. Deepseek refers to Deepseek V4.1 Flash, provided by Deepseek through their API. Use these APIs when spawning subagents. When not otherwise specified, use Sol at medium reasoning and Deepseek at high reasoning.
+  - For Kilo subagents, messages from the main agent take priority over conflicting details in the original delegated task. Treat them as current task corrections and coordination, while still following system instructions and direct user requirements.
 
 ## Top Level Documentation
 

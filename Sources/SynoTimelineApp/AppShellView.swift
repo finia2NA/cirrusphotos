@@ -246,7 +246,8 @@ struct AppShellView: View {
                                     reduceMotion: reduceMotion,
                                     pixelInterpolation: model.pixelInterpolation,
                                     onSelectionChanged: followViewer,
-                                    onClose: closeViewer)
+                                    onClose: closeViewer,
+                                    onInteractiveDismiss: closeViewer)
                         .ignoresSafeArea(.container, edges: .top)
                 }
 

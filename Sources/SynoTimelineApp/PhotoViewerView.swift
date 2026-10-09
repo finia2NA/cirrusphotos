@@ -8,6 +8,7 @@ struct PhotoViewerView: View {
     let pixelInterpolation: PixelInterpolationPreference
     let onSelectionChanged: (PhotoViewerState) -> Void
     let onClose: () -> Void
+    let onInteractiveDismiss: () -> Void
 
     var body: some View {
         ZStack {
@@ -17,13 +18,16 @@ struct PhotoViewerView: View {
                               toolbarInset: toolbarInset,
                               openingSourceRect: viewer.source.rectInWindowContent(),
                               reduceMotion: reduceMotion,
+                              interactiveDismissalEnabled: !reduceMotion
+                                && viewer.state?.item?.isVideo != true,
                               interpolation: pixelInterpolation.imageInterpolation(
                                 isFullResolution: viewer.isDisplayingFullResolution
                               ),
                               controller: viewer.canvasController,
                               onPrevious: viewer.navigatePrevious,
                               onNext: viewer.navigateNext,
-                              onClose: onClose) { viewer.zoom = Double($0) }
+                              onClose: onClose,
+                              onInteractiveDismiss: onInteractiveDismiss) { viewer.zoom = Double($0) }
                 .accessibilityLabel(viewer.filename)
 
             if let state = viewer.state, let resource = state.videoResource {

@@ -42,11 +42,13 @@ struct PhotoViewerCanvas: NSViewRepresentable {
     let toolbarInset: CGFloat
     let openingSourceRect: CGRect?
     let reduceMotion: Bool
+    let interactiveDismissalEnabled: Bool
     let interpolation: NSImageInterpolation
     let controller: PhotoViewerCanvasController
     let onPrevious: () -> Void
     let onNext: () -> Void
     let onClose: () -> Void
+    let onInteractiveDismiss: () -> Void
     let onZoomChanged: (CGFloat) -> Void
 
     func makeNSView(context: Context) -> PhotoViewerCanvasView {
@@ -55,6 +57,7 @@ struct PhotoViewerCanvas: NSViewRepresentable {
         view.onPrevious = onPrevious
         view.onNext = onNext
         view.onClose = onClose
+        view.onInteractiveDismiss = onInteractiveDismiss
         controller.attach(view)
         return view
     }
@@ -64,8 +67,10 @@ struct PhotoViewerCanvas: NSViewRepresentable {
         view.onPrevious = onPrevious
         view.onNext = onNext
         view.onClose = onClose
+        view.onInteractiveDismiss = onInteractiveDismiss
         view.toolbarInset = toolbarInset
         view.reduceMotion = reduceMotion
+        view.interactiveDismissalEnabled = interactiveDismissalEnabled
         view.interpolation = interpolation
         view.configureOpeningSource(openingSourceRect)
         view.setImage(image, selectionGeneration: selectionGeneration,
