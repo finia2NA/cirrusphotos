@@ -56,6 +56,9 @@ struct RepositoryMetadataWork {
     var mapFilters: [UUID: MapFilterState] = [:]
     var mapFilterPages: [String: [PhotoItem]] = [:]
     var mapFilterPageOrder: [String] = []
+    var libraryFilters: [UUID: LibraryFilterCollectionState] = [:]
+    var libraryFilterPages: [String: [PhotoItem]] = [:]
+    var libraryFilterPageOrder: [String] = []
 
     var hasDemand: Bool {
         !initialSubscribers.isEmpty || !timelineJobs.isEmpty || !pageJobs.isEmpty ||
@@ -85,6 +88,13 @@ struct MapFilterState {
     let snapshot: TimelineSnapshot
     let itemIDsBySection: [[Int64]]
     let idsBySection: [TimelineSection: [Int64]]
+}
+
+struct LibraryFilterCollectionState {
+    let registrationID: UUID
+    let metadataEpoch: UInt64
+    let registration: LibraryFilterRegistration
+    let referencesBySection: [TimelineSection: [LibraryFilterReference]]
 }
 
 struct RepositoryImageWork {

@@ -73,8 +73,14 @@ struct InfoPanelView: View {
         let content = infoPanel.content
         return VStack(alignment: .leading, spacing: 8) {
             if let filename = content.filename {
-                copyButton(label: filename, value: filename, help: "Copy filename")
-                    .font(.headline)
+                HStack(spacing: 6) {
+                    Image(systemName: content.mediaKind?.systemImage ?? "doc")
+                        .accessibilityHidden(true)
+                    copyButton(label: filename, value: filename, help: "Copy filename")
+                }
+                .font(.headline)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(content.mediaKind?.accessibilityLabel ?? "File"), \(filename)")
             }
             if content.itemIDText != nil || content.folderPath != nil {
                 HStack(spacing: 4) {

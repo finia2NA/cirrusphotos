@@ -90,6 +90,7 @@ final class InfoPanelTests: XCTestCase {
         let resolved = await waitUntil { model.content.kind == .single && !model.content.isLoading }
         XCTAssertTrue(resolved)
         XCTAssertEqual(model.content.filename, "IMG_3905.HEIC")
+        XCTAssertEqual(model.content.mediaKind, .photo)
         XCTAssertEqual(model.content.itemIDText, "5")
         XCTAssertEqual(model.content.folderPath, "/MobileBackup/iPhone/2024/11")
         XCTAssertEqual(model.content.camera, "iPhone 13 Pro")

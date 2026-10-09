@@ -69,11 +69,16 @@ extension CachedPhotosRepository {
     }
 
     public func page(_ section: TimelineSection, collection: PhotoCollectionDescriptor = .personalLibrary,
+                     useCachedPages: Bool = true,
                      allowNetwork: Bool = true,
                      priority: RequestPriority = .visible) -> AsyncStream<ResourceEvent<[PhotoItem]>> {
         if collection.isMapFilter {
             return mapFilterPage(section, collection: collection,
                                  allowNetwork: allowNetwork, priority: priority)
+        }
+        if collection.isLibraryFilter {
+            return libraryFilterPage(section, collection: collection,
+                                     allowNetwork: allowNetwork, priority: priority)
         }
         let subscriber = UUID()
         let producer = StreamProducer()
@@ -82,7 +87,9 @@ extension CachedPhotosRepository {
                 guard let key = CacheKey.page(namespace: namespace, section: section, collection: collection) else {
                     continuation.yield(.failure("The section has no date bounds.")); continuation.finish(); return
                 }
-                let cached = try? await readCachedMetadata([PhotoItem].self, key: key)
+                let cached = useCachedPages
+                    ? (try? await readCachedMetadata([PhotoItem].self, key: key))
+                    : nil
                 guard !Task.isCancelled else { continuation.finish(); return }
                 let items = cached.map { favorites.applyingOverrides($0.value) }
                 let validation = validationRun(for: collection)
@@ -146,7 +153,11 @@ extension CachedPhotosRepository {
     public func promotePage(_ section: TimelineSection,
                             collection: PhotoCollectionDescriptor = .personalLibrary) async {
         guard let key = CacheKey.page(namespace: namespace, section: section, collection: collection) else { return }
-        if collection.isMapFilter {
+        if collection.usesPersonalLibrarySource {
+            if collection.isLibraryFilter {
+                promoteLibraryFilterSources(section, collection: collection)
+                return
+            }
             for candidate in personalSections(covering: section) {
                 guard let candidateKey = CacheKey.page(namespace: namespace, section: candidate,
                                                        collection: .personalLibrary) else { continue }

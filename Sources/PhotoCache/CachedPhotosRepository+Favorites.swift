@@ -184,9 +184,10 @@ extension CachedPhotosRepository {
 
     private func cachedItem(itemID: Int64, section: TimelineSection,
                             collection: PhotoCollectionDescriptor) async -> PhotoItem? {
-        if collection.isMapFilter {
+        if collection.usesPersonalLibrarySource {
             guard let key = CacheKey.page(namespace: namespace, section: section, collection: collection),
-                  let items = metadata.mapFilterPages[key] else { return nil }
+                  let items = collection.isMapFilter ? metadata.mapFilterPages[key] : metadata.libraryFilterPages[key]
+            else { return nil }
             return items.first(where: { $0.id == itemID })
         }
         guard let key = CacheKey.page(namespace: namespace, section: section, collection: collection),

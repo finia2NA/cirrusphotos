@@ -278,6 +278,7 @@ struct ConnectionToolbarItem: View {
 struct LibraryCommands: Commands {
     @ObservedObject var model: LibraryModel
     @ObservedObject var infoPanel: InfoPanelModel
+    @ObservedObject var filter: LibraryFilterModel
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
 
@@ -374,6 +375,11 @@ struct LibraryCommands: Commands {
             Button("Download Thumbnails…") { openWindow(id: "thumbnail-download") }
                 .disabled(model.snapshot?.timeline.days.isEmpty != false || model.repository == nil ||
                           !model.timelineVerified)
+            Divider()
+            Button("Load All Timeline Sections") {
+                openWindow(id: "timeline-section-load")
+            }
+            .disabled(model.snapshot == nil || model.repository == nil || !model.timelineVerified)
         }
     }
 }

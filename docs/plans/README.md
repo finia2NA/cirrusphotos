@@ -10,6 +10,7 @@ This directory contains implementation plans, completed design records, and curr
 - `DONE_MAP_PLAN.md` — completed location map destination (client-side clustered Apple Maps over the Personal Library), filtered-location timeline browsing, and info-panel maps.
 - `DONE_ALBUMS_PLAN.md` — completed read-only Albums destination, overview grid, day-grouped album browsing, and album caching integration.
 - `DONE_INFO_PANEL_PLAN.md` — completed floating Cmd+I info panel for the browser selection and viewer, with a manual verification checklist.
+- `DONE_LIBRARY_FILTERING_PLAN.md` — completed Personal Library metadata filtering over incrementally loaded item pages, a bounded load-all operation, and media-type labeling in Info. Scope is Personal Library only; filters and coverage are session-only; literal file extensions remain distinct.
 - `DONE_PHOTO_VIEWER_PLAN.md` — completed viewer plan with a still-useful manual verification checklist.
 - `DONE_CORRECTNESS_CLEANUP_PLAN.md` — completed browser, sidebar, Favorites, and timestamp correctness work.
 - `TODO_REMAINING_CLEANUP.md` — remaining repository-structure cleanup.

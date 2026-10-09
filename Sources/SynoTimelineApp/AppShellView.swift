@@ -5,6 +5,7 @@ import SynologyAPI
 struct AppShellView: View {
     @EnvironmentObject private var model: LibraryModel
     @EnvironmentObject private var infoPanel: InfoPanelModel
+    @EnvironmentObject private var libraryFilter: LibraryFilterModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismissWindow) private var dismissWindow
     @ObservedObject var navigationRestoration: NavigationRestorationStore
@@ -29,7 +30,7 @@ struct AppShellView: View {
     /// overview and the unfiltered map.
     private var selectedCollection: PhotoCollectionDescriptor? {
         switch selectedDestination {
-        case .personalLibrary: .personalLibrary
+        case .personalLibrary: libraryFilter.activeCollection ?? .personalLibrary
         case .favorites: .favorites
         case .albums: openedAlbumID.map { .album($0) }
         case .map: openedMapFilter
@@ -88,7 +89,7 @@ struct AppShellView: View {
         .onExitCommand {
             model.navigateBack()
         }
-        .onAppear { updateBackHandler() }
+        .onAppear { updateBackHandler(); libraryFilter.configure(library: model) }
         .onChange(of: selectedDestination) { _, _ in updateBackHandler() }
         .onChange(of: openedAlbumID) { _, _ in updateBackHandler() }
         .onChange(of: openedMapFilter) { _, _ in updateBackHandler() }
@@ -103,11 +104,18 @@ struct AppShellView: View {
         .onChange(of: timelineVerified) { _, verified in
             viewer?.updateAllowNetwork(verified)
         }
+        .onChange(of: model.timelineVerified) { _, verified in
+            // A cached timeline can become verified without changing its section
+            // descriptors or snapshot revision. Filtering depends on that verified
+            // transition to create its controller and begin observing item pages.
+            if verified { libraryFilter.configure(library: model) }
+        }
         .onChange(of: model.retryRevision) { _, _ in
             viewer?.retry()
         }
         .onChange(of: model.metadataInvalidationRevision) { _, revision in
             guard revision > 0 else { return }
+            libraryFilter.clear()
             mapFilterOpenGeneration &+= 1
             openedMapFilter = nil
             viewer?.invalidateForNewIndex()
@@ -128,6 +136,9 @@ struct AppShellView: View {
         }
         .onChange(of: snapshotRevision) { _, _ in
             updateInfoPanelContext()
+        }
+        .onChange(of: model.snapshotRevision) { _, _ in
+            libraryFilter.configure(library: model)
         }
         .onChange(of: model.albums) { _, albums in
             validateOpenedAlbum(in: albums)
@@ -185,13 +196,13 @@ struct AppShellView: View {
             ZStack(alignment: .topLeading) {
                 if let collection = selectedCollection {
                     LibraryBrowserView(collection: collection,
-                                       restorationAnchor: collection.isMapFilter
+                                       restorationAnchor: collection.usesPersonalLibrarySource
                                            ? nil : navigationRestoration.timelineAnchor(for: collection),
                                        bridge: browserBridge,
                                        contentTopInset: topInset,
                                        onOpenPhoto: openPhoto,
                                        onRestorationAnchorChanged: { anchor in
-                                           guard !collection.isMapFilter else { return }
+                                           guard !collection.usesPersonalLibrarySource else { return }
                                            navigationRestoration.setTimelineAnchor(anchor, for: collection)
                                        })
                         .id(collection)
@@ -484,6 +495,11 @@ struct AppShellView: View {
                         .lineLimit(1)
                 }
                 .sharedBackgroundVisibility(.hidden)
+            } else if libraryFilter.isActive && selectedDestination == .personalLibrary {
+                ToolbarItem(placement: .principal) {
+                    Text(libraryFilter.statusText).font(.headline).lineLimit(1)
+                }
+                .sharedBackgroundVisibility(.hidden)
             } else {
                 ToolbarItem(placement: .principal) {
                     Color.clear
@@ -494,6 +510,10 @@ struct AppShellView: View {
             }
             ToolbarSpacer(.flexible, placement: .primaryAction)
             ToolbarItemGroup(placement: .primaryAction) {
+                if selectedDestination == .personalLibrary {
+                    LibraryFilterToolbarControl()
+                        .frame(height: ToolbarMetrics.controlHeight)
+                }
                 BrowserRotationControls(model: model)
                     .frame(height: ToolbarMetrics.controlHeight)
                 BrowserFavoriteControl(model: model, collection: collection)

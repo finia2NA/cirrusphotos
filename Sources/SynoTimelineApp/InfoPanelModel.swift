@@ -24,6 +24,7 @@ struct InfoPanelContent: Equatable {
     var sizeText: String?
     var isResolvingSize = false
     var filename: String?
+    var mediaKind: PhotoMediaKind?
     var itemIDText: String?
     var folderPath: String?
     var dateTimeText: String?
@@ -254,6 +255,7 @@ final class InfoPanelModel: ObservableObject {
         var content = InfoPanelContent()
         content.kind = .single
         content.filename = item.filename
+        content.mediaKind = item.mediaKind
         content.itemIDText = String(item.id)
         content.folderPath = item.additional?.folderPath
         content.dateTimeText = InfoPanelFormatting.singleDateTime(item.time)

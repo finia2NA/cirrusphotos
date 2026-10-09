@@ -167,6 +167,7 @@ struct LibraryBrowserView: View {
     var onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void = { _ in }
     @EnvironmentObject private var library: LibraryModel
     @EnvironmentObject private var infoPanel: InfoPanelModel
+    @EnvironmentObject private var libraryFilter: LibraryFilterModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedDay: String?
     @State private var jumpRequest: DayJumpRequest?
@@ -207,8 +208,9 @@ struct LibraryBrowserView: View {
         Group {
             if let snapshot = library.snapshot(for: collection), !snapshot.timeline.days.isEmpty,
                let repository = library.repository {
-                HStack(spacing: 0) {
-                    LibraryBrowserScrollView(snapshot: snapshot,
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        LibraryBrowserScrollView(snapshot: snapshot,
                                              collection: collection,
                                              revision: library.snapshotRevision(for: collection),
                                              retryRevision: library.retryRevision,
@@ -235,18 +237,39 @@ struct LibraryBrowserView: View {
                                                  library.installBrowserCommands(snapshot: snapshot, handler: handler)
                                              },
                                              onRestorationAnchorChanged: onRestorationAnchorChanged,
+                                             onPageObserved: { section, items, verified in
+                                                 guard collection == .personalLibrary else { return }
+                                                 libraryFilter.ingest(sectionIndex: section, items: items, verified: verified)
+                                             },
+                                             onNearTail: {
+                                                 guard collection.isLibraryFilter else { return }
+                                                 libraryFilter.loadNextIfNeeded()
+                                             },
                                              onRetry: { Task { await library.reload() } }) { day in
                         if snapshot.timeline.days.contains(where: { $0.id == day }) { selectedDay = day }
                     }
-                    TimelineNavigator(timeline: snapshot.timeline, selected: selection)
-                        .frame(width: 72)
-                        .padding(.top, contentTopInset + 16)
-                        .padding(.bottom, 16)
-                        .padding(.trailing, 6)
+                        TimelineNavigator(timeline: snapshot.timeline, selected: selection)
+                            .frame(width: 72)
+                            .padding(.top, contentTopInset + 16)
+                            .padding(.bottom, 16)
+                            .padding(.trailing, 6)
+                    }
+                    if collection.isLibraryFilter && libraryFilter.progress.remaining > 0 {
+                        Button("Load More Results") { libraryFilter.loadNext() }
+                            .padding(.vertical, 8)
+                            .accessibilityHint("Scans the next Personal Library sections")
+                    }
                 }
             } else if library.snapshot(for: collection)?.timeline.days.isEmpty == true {
-                ContentUnavailableView(emptyTitle, systemImage: emptySymbol,
-                    description: Text(emptyDescription))
+                ContentUnavailableView {
+                    Label(collection.isLibraryFilter ? (libraryFilter.progress.remaining == 0 ? "No matches in library" : "No matches in loaded sections") : emptyTitle,
+                          systemImage: emptySymbol)
+                } description: { Text(collection.isLibraryFilter ? libraryFilter.coverageText : emptyDescription) }
+                actions: {
+                    if collection.isLibraryFilter && libraryFilter.progress.remaining > 0 {
+                        Button("Load More Results") { libraryFilter.loadNext() }
+                    }
+                }
             } else if let error = library.error(for: collection), library.snapshot(for: collection) == nil {
                 ContentUnavailableView {
                     Label(isAlbum ? "Album unavailable" : "Library unavailable",
@@ -506,6 +529,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let onSelectionStateChanged: (BrowserSelectionState) -> Void
     let onCommandStateChanged: (BrowserCommandSnapshot, ((BrowserSelectionCommand) -> Void)?) -> Void
     let onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void
+    let onPageObserved: (Int, [PhotoItem], Bool) -> Void
+    let onNearTail: () -> Void
     let onRetry: () -> Void
     let onVisibleDay: (String) -> Void
 
@@ -585,6 +610,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var onSelectionStateChanged: ((BrowserSelectionState) -> Void)?
         private var onCommandStateChanged: ((BrowserCommandSnapshot, ((BrowserSelectionCommand) -> Void)?) -> Void)?
         private var onRestorationAnchorChanged: ((PhotoTimelineRestorationAnchor) -> Void)?
+        private var onPageObserved: ((Int, [PhotoItem], Bool) -> Void)?
+        private var onNearTail: (() -> Void)?
         private var demandedVisible: [Int] = []
         private var demandedPrefetch: [Int] = []
         private var suppressFeedback = false
@@ -618,6 +645,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             onSelectionStateChanged = input.onSelectionStateChanged
             onCommandStateChanged = input.onCommandStateChanged
             onRestorationAnchorChanged = input.onRestorationAnchorChanged
+            onPageObserved = input.onPageObserved
+            onNearTail = input.onNearTail
             scrollIntent.captureRestoration(input.restorationAnchor)
             input.bridge.revealHandler = { [weak self] request, completion in
                 self?.reveal(request, completion: completion)
@@ -755,7 +784,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     case .failure(let section, let message):
                         self.errors[section] = message
                         self.rowRevisions[section, default: 0] += 1
-                    case .page: break
+                    case .page(let page, _):
+                        self.onPageObserved?(page.sectionIndex, page.items, page.verified)
                     case .removed: break
                     }
                     // Events use a bounded newest buffer, so reconcile against the authoritative window.
@@ -830,6 +860,9 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             let visible = scroll.contentView.bounds
             let y = visibleTop(in: scroll)
             let height = visibleHeight(in: scroll)
+            if visibleTop(in: scroll) + height >= max(0, geometry.totalHeight - height * 2) {
+                onNearTail?()
+            }
             let clipY = Double(visible.minY)
             scrollIntent.viewportMoved(to: clipY)
             cancelSupersededReveal()

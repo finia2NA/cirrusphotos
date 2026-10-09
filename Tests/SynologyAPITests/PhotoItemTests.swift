@@ -4,6 +4,18 @@ import XCTest
 @testable import SynologyAPI
 
 final class PhotoItemTests: XCTestCase {
+    func testMediaKindPreservesUnknownAndRecognizesObservedLiveShapes() throws {
+        func item(_ type: String, live: String? = nil) throws -> PhotoItem {
+            let liveField = live.map { ",\"live_type\":\"\($0)\"" } ?? ""
+            return try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"time\":1,\"type\":\"\(type)\"\(liveField)}".utf8))
+        }
+        XCTAssertEqual(try item("photo").mediaKind, .photo)
+        XCTAssertEqual(try item("video").mediaKind, .video)
+        XCTAssertEqual(try item("live", live: "photo").mediaKind, .livePhoto)
+        XCTAssertEqual(try item("photo", live: "live").mediaKind, .livePhoto)
+        XCTAssertEqual(try item("future").mediaKind, .unknown("future"))
+    }
+
     func testObservedVideoConversionAndClosestQualitySelection() throws {
         let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
         {"id":41,"filename":"clip.mov","time":1700000000,"type":"video","additional":{"thumbnail":{"unit_id":51,"cache_key":"revision"},"video_convert":[{"quality":"low","metadata":{"duration":5000,"container_type":"mp4","video_codec":"h264"}},{"quality":"high","metadata":{"duration":"5000","resolution_x":1920,"resolution_y":1080}}],"video_meta":{"duration":5000,"video_codec":"hevc"}}}

@@ -114,6 +114,9 @@ extension CachedPhotosRepository {
         metadata.mapFilters.removeAll()
         metadata.mapFilterPages.removeAll()
         metadata.mapFilterPageOrder.removeAll()
+        metadata.libraryFilters.removeAll()
+        metadata.libraryFilterPages.removeAll()
+        metadata.libraryFilterPageOrder.removeAll()
         // Mutation epochs and favorite overrides remain monotonic/live. Already
         // submitted NAS writes are not duplicated or canceled by a local reset.
     }

@@ -21,6 +21,7 @@ The native split-view sidebar contains Library, Favorites, Map, and Albums desti
 - Toolbar controls rotate the active viewer photo or the current browser selection left or right. Rotation is optimistic, supports photos and Live Photo stills, and adopts refreshed orientation, resolution, and thumbnail descriptors from the NAS; videos are skipped.
 - Albums shows read-only Personal Space album cards with cover, name, and item count. Opening an album reuses the shared browser with collection-scoped restoration; Escape returns from an opened album or map result just as its Back button does.
 - Album creation, rename, deletion, membership changes, and Shared Space browsing are not implemented.
+- Personal Library has a session-only metadata filter for media kind, camera, lens, literal file extension, megapixels, size, ISO, focal length, aperture, and shutter speed. Results and option catalogs are cached-first and expand in bounded section batches. The Library menu can validate all Personal Library item pages through an explicit Start action; this bulk run bypasses stored page values by default and offers an opt-in **Use Cached Pages** toggle. Filter criteria and coverage are not restored after relaunch, and other collections are unchanged.
 
 ### Map
 
@@ -34,7 +35,7 @@ Space or double-click opens a photo or ordinary video in the same window. Photos
 
 Settings provides Automatic, Original, High, Medium, Low, and Mobile default video quality choices. Automatic targets High. For a converted choice, the app uses only renditions advertised by the current item; if the requested quality is absent, it chooses the closest advertised quality and prefers the lower one when equally distant. If no converted rendition is advertised, it streams the stored original. The toolbar reports the effective rendition and identifies an unavailable requested quality when fallback occurs.
 
-The Cmd+I Info utility panel follows the active viewer item or browser selection. It shows selection totals and date range, resolves aggregate size and media counts, and shows single-item filename, copyable item ID and available Synology folder path, capture date, camera/exposure details, dimensions, size, format, and available location context. It is transient and excluded from Mission Control and the normal window cycle.
+The Cmd+I Info utility panel follows the active viewer item or browser selection. It shows selection totals and date range, resolves aggregate size and media counts, and shows a single item's media-kind icon, filename, copyable item ID and available Synology folder path, capture date, camera/exposure details, dimensions, size, format, and available location context. It is transient and excluded from Mission Control and the normal window cycle.
 
 ## Cache and network behavior
 
@@ -58,4 +59,4 @@ Photo capture times are treated as capture-local wall-clock values. Grouping and
 
 ## Deferred scope
 
-Generated people/subject albums, general client-side filtering, Shared Space browsing, Live Photo motion playback, place names, upload, sharing, album writes, and coordinated session renewal after expiry remain future work. New collection types should reuse the repository and shared browser rather than introduce destination-specific cache systems.
+Generated people/subject albums, filtering outside Personal Library, Shared Space browsing, Live Photo motion playback, place names, upload, sharing, album writes, and coordinated session renewal after expiry remain future work. New collection types should reuse the repository and shared browser rather than introduce destination-specific cache systems.

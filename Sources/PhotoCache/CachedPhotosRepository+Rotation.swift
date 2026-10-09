@@ -535,12 +535,27 @@ extension CachedPhotosRepository {
     private func patchRotationPages(action: SelectionRotationAction,
                                     replacements: [Int64: PhotoItem]) async {
         var sections: Set<TimelineSection> = []
-        for id in replacements.keys {
-            if let section = action.sectionsByID[id] { sections.insert(section) }
+        var patchCollection = action.collection
+        if let filterID = action.collection.libraryFilterID,
+           let filter = metadata.libraryFilters[filterID],
+           let sourceSections = metadata.latestTimelines[.personalLibrary]?.sections {
+            patchCollection = .personalLibrary
+            let wanted = Set(replacements.keys)
+            let sourceIndices = Set(filter.referencesBySection.values
+                .flatMap { $0 }
+                .filter { wanted.contains($0.itemID) }
+                .map(\.sourceSectionIndex))
+            for index in sourceIndices where sourceSections.indices.contains(index) {
+                sections.insert(sourceSections[index])
+            }
+        } else {
+            for id in replacements.keys {
+                if let section = action.sectionsByID[id] { sections.insert(section) }
+            }
         }
         for section in sections {
             guard let key = CacheKey.page(namespace: namespace, section: section,
-                                          collection: action.collection) else { continue }
+                                          collection: patchCollection) else { continue }
             for _ in 0..<3 {
                 guard let cached = try? await store.get(key),
                       let items = try? JSONDecoder().decode([PhotoItem].self, from: cached.data),
@@ -560,6 +575,11 @@ extension CachedPhotosRepository {
         if action.collection.isMapFilter {
             for (key, items) in metadata.mapFilterPages {
                 metadata.mapFilterPages[key] = items.map { replacements[$0.id] ?? $0 }
+            }
+        }
+        if action.collection.isLibraryFilter {
+            for (key, items) in metadata.libraryFilterPages {
+                metadata.libraryFilterPages[key] = items.map { replacements[$0.id] ?? $0 }
             }
         }
     }

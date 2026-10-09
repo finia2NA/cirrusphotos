@@ -72,6 +72,49 @@ final class RotationTests: XCTestCase {
         XCTAssertEqual(item.additional?.orientation, 1)
     }
 
+    func testLibraryFilterRotationPatchesAuthoritativeSourceForRederivation() async throws {
+        let root = temporaryTestRoot("LibraryFilterRotation")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = try item(31)
+        let refreshed = try item(31, key: "rotated", orientation: 6, width: 300, height: 400)
+        let sourceSection = TimelineSection(offset: 0, limit: 1,
+            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
+        let sourceSnapshot = TimelineSnapshot(sections: [sourceSection])
+        let transport = RotationTransport(thumbnail: try jpeg(), refreshed: refreshed,
+                                          timelineSnapshot: sourceSnapshot, pageItems: [original])
+        let repository = try repository(transport, root: root)
+        for await _ in await repository.timeline(collection: .personalLibrary) {}
+
+        let store = await repository.store
+        let sourceKey = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(
+            server: SynologyClient.defaultBaseURL, account: "rotation"), section: sourceSection))
+        try await store.put(sourceKey, kind: .page, data: JSONEncoder().encode([original]), validatedRun: "prior")
+
+        let built = DayGroupedTimelineBuilder.build(entries: [.init(id: original.id, time: original.time)])
+        let descriptor = PhotoCollectionDescriptor.libraryFilter(UUID())
+        let registration = LibraryFilterRegistration(
+            descriptor: descriptor, snapshot: built.snapshot,
+            referencesBySection: [[.init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: original.id)]],
+            filter: LibraryFilter(mediaKinds: [.photo]), revision: 1)
+        try await repository.registerLibraryFilter(registration)
+        let filteredSection = try XCTUnwrap(built.snapshot.sections.first)
+        let action = SelectionRotationAction(itemIDs: [original.id],
+            sectionsByID: [original.id: filteredSection], collection: descriptor,
+            itemsByID: [original.id: original])
+
+        try await repository.rotate(action, direction: .clockwise)
+        // Re-registering evicts the in-memory derived page. The next derivation must
+        // therefore observe the patched authoritative Personal Library cache.
+        try await repository.replaceLibraryFilterSnapshot(registration)
+        var rederived: [PhotoItem] = []
+        for await event in await repository.page(filteredSection, collection: descriptor,
+                                                  allowNetwork: false) {
+            if case .value(let items, _) = event { rederived = items }
+        }
+        XCTAssertEqual(rederived.first?.additional?.thumbnail?.cacheKey, "rotated")
+        XCTAssertEqual(rederived.first?.additional?.orientation, 6)
+    }
+
     func testThumbnailUploadFailureRestoresRegeneratingUnit() async throws {
         let root = temporaryTestRoot("RotationRestore")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -453,10 +496,13 @@ private actor RotationTransport: PhotosTransport {
     var restoredUnits: [[Int64]] = []
     var uploadedUnits: [Int64] = []
     var uploadedFiles: [ConvertedThumbnailFiles] = []
+    let timelineSnapshot: TimelineSnapshot?
+    let pageItems: [PhotoItem]
 
     init(thumbnail: Data, refreshed: PhotoItem, failUpload: Bool = false, failRotate: Bool = false,
          initialItem: PhotoItem? = nil, uploadCommitsThenCancels: Bool = false,
-         setCommitsThenThrows: Bool = false) {
+         setCommitsThenThrows: Bool = false, timelineSnapshot: TimelineSnapshot? = nil,
+         pageItems: [PhotoItem] = []) {
         thumbnailData = thumbnail
         thumbnails = Dictionary(uniqueKeysWithValues: ThumbnailSize.allCases.map { ($0, thumbnail) })
         originalData = thumbnail
@@ -466,6 +512,8 @@ private actor RotationTransport: PhotosTransport {
         self.currentItem = initialItem ?? refreshed
         self.uploadCommitsThenCancels = uploadCommitsThenCancels
         self.setCommitsThenThrows = setCommitsThenThrows
+        self.timelineSnapshot = timelineSnapshot
+        self.pageItems = pageItems
     }
 
     init(thumbnails: [ThumbnailSize: Data], original: Data, refreshed: PhotoItem) {
@@ -478,6 +526,16 @@ private actor RotationTransport: PhotosTransport {
         currentItem = refreshed
         uploadCommitsThenCancels = false
         setCommitsThenThrows = false
+        timelineSnapshot = nil
+        pageItems = []
+    }
+
+    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
+        guard let timelineSnapshot else { throw TestFailure("Unexpected timeline request") }
+        return timelineSnapshot
+    }
+    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
+        pageItems
     }
 
     func rotate(itemIDs: [Int64], direction: PhotoRotationDirection) async throws {

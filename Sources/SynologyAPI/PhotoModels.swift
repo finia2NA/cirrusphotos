@@ -1,6 +1,31 @@
 import Foundation
 import TimelineCore
 
+public enum PhotoMediaKind: Hashable, Sendable {
+    case photo
+    case video
+    case livePhoto
+    case unknown(String)
+
+    public var accessibilityLabel: String {
+        switch self {
+        case .photo: "Photo"
+        case .video: "Video"
+        case .livePhoto: "Live Photo"
+        case .unknown: "File"
+        }
+    }
+
+    public var systemImage: String {
+        switch self {
+        case .photo: "photo"
+        case .video: "video"
+        case .livePhoto: "livephoto"
+        case .unknown: "doc"
+        }
+    }
+}
+
 public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
     public let id: Int64
     public let filename: String?
@@ -44,6 +69,15 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
     }
 
     public var isFavorite: Bool { additional?.favorite == true }
+
+    public var mediaKind: PhotoMediaKind {
+        let normalizedType = type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedLiveType = liveType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedType == "live" || normalizedLiveType == "live" { return .livePhoto }
+        if normalizedType == "video" { return .video }
+        if normalizedType == "photo" { return .photo }
+        return .unknown(type)
+    }
 
     /// The validated capture location, when the server reported one.
     public var coordinate: PhotoCoordinate? {
@@ -527,6 +561,8 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
     /// A session-only timeline filtered to an explicit item set (a map pin or
     /// cluster). Never persisted; pages are filtered from Personal Library pages.
     case mapFilter(UUID)
+    /// A session-only client-side filtered Personal Library collection.
+    case libraryFilter(UUID)
 
     /// Stable cache/restoration identity. Personal Library and Favorites keep their
     /// historical raw values so existing cache keys do not move.
@@ -536,6 +572,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
         case .favorites: "favorites"
         case .album(let id): "album:\(id)"
         case .mapFilter(let id): "map:\(id.uuidString)"
+        case .libraryFilter(let id): "filter:\(id.uuidString)"
         }
     }
 
@@ -550,6 +587,14 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
     }
 
     public var isMapFilter: Bool { mapFilterID != nil }
+
+    public var libraryFilterID: UUID? {
+        if case .libraryFilter(let id) = self { return id }
+        return nil
+    }
+
+    public var isLibraryFilter: Bool { libraryFilterID != nil }
+    public var usesPersonalLibrarySource: Bool { isMapFilter || isLibraryFilter }
 
     public var favoriteOnly: Bool { self == .favorites }
     public var supportsInitialTimeline: Bool { self == .personalLibrary }
@@ -570,9 +615,15 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
                 return
             }
             let mapPrefix = "map:"
-            guard rawValue.hasPrefix(mapPrefix),
-                  let id = UUID(uuidString: String(rawValue.dropFirst(mapPrefix.count))) else { return nil }
-            self = .mapFilter(id)
+            if rawValue.hasPrefix(mapPrefix),
+               let id = UUID(uuidString: String(rawValue.dropFirst(mapPrefix.count))) {
+                self = .mapFilter(id)
+                return
+            }
+            let filterPrefix = "filter:"
+            guard rawValue.hasPrefix(filterPrefix),
+                  let id = UUID(uuidString: String(rawValue.dropFirst(filterPrefix.count))) else { return nil }
+            self = .libraryFilter(id)
         }
     }
 
