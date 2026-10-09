@@ -31,3 +31,5 @@ Ideas for future features:
 - Search for filenames
 - Browse by folders
 - Filter within GPS box/polygon
+- Photo tools: filmstrip, histogram, peak detection, maybe focus edge detection
+- Bug hunt: check if the cached pages are always used, eg I found that even after alledgedly caching everything, the filtered view or views in the past are having problems (cache not full)
