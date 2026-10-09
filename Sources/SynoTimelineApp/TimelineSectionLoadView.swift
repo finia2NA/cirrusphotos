@@ -12,7 +12,7 @@ struct TimelineSectionLoadView: View {
             Text("\(model.progress.processed) of \(model.progress.total) sections")
             if let matches = model.progress.matchCount { Text("\(matches) matching items") }
             if let current = model.progress.currentSectionLabel { Text(current).foregroundStyle(.secondary) }
-            if model.progress.provisional > 0 { Text("\(model.progress.provisional) cached, awaiting verification") }
+            if model.progress.cached > 0 { Text("\(model.progress.cached) cached pages skipped") }
             if let stale = model.staleTimelineMessage {
                 Text(stale).foregroundStyle(.orange)
             }

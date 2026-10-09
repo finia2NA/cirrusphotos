@@ -117,6 +117,30 @@ final class TimelineSectionCacheLoaderTests: XCTestCase {
         XCTAssertEqual(secondCalls, 1, "a current-run verified page must not be requested again")
     }
 
+    func testUseCachedPagesSkipsStalePageWithoutValidationRequest() async throws {
+        let root = temporaryTestRoot("BulkSkipStale"); defer { try? FileManager.default.removeItem(at: root) }
+        let section = sections(1)[0]
+        let snapshot = TimelineSnapshot(sections: [section])
+        let transport = BulkPageTransport(item: try item(2))
+        let repository = try repository(root: root, transport: transport)
+        let namespace = CacheKey.namespace(server: server, account: credentials.username)
+        let key = try XCTUnwrap(CacheKey.page(namespace: namespace, section: section,
+                                              collection: .favorites))
+        try await repository.store.put(key, kind: .page,
+                                       data: JSONEncoder().encode([try item(1)]),
+                                       validatedRun: "old-run")
+        let loader = TimelineSectionCacheLoader(repository: repository, collection: .favorites,
+                                                snapshot: snapshot)
+
+        await loader.loadAll(useCachedPages: true)
+        let finalProgress = await waitForFinish(loader)
+        let progress = try XCTUnwrap(finalProgress)
+        let calls = await transport.callCount()
+        XCTAssertEqual(progress.cached, 1)
+        XCTAssertEqual(progress.verified, 0)
+        XCTAssertEqual(calls, 0)
+    }
+
     func testRetryReadsOnlyFailuresWithOriginalCachePolicy() async throws {
         let root = temporaryTestRoot("BulkRetry"); defer { try? FileManager.default.removeItem(at: root) }
         let snapshot = TimelineSnapshot(sections: sections(3))

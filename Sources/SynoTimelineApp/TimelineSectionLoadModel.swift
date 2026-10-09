@@ -9,6 +9,7 @@ struct TimelineSectionLoadPresentationProgress: Equatable {
     var total = 0
     var processed = 0
     var verified = 0
+    var cached = 0
     var provisional = 0
     var failed = 0
     var remaining = 0
@@ -161,7 +162,8 @@ final class TimelineSectionLoadModel: ObservableObject {
         runRequestPending = false
         runActive = value.state == .running
         progress = .init(total: value.total, processed: value.processed,
-                         verified: value.verified, provisional: value.provisional,
+                         verified: value.verified, cached: value.cached,
+                         provisional: value.provisional,
                          failed: value.failed, remaining: value.remaining,
                          currentSectionLabel: value.state == .running
                              ? "Loading \(targetTitle ?? "collection") sections" : nil,

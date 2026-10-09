@@ -48,7 +48,7 @@ The Cmd+I Info utility panel follows the active viewer item or browser selection
 - Thumbnail rendition changes preserve other cached sizes. Compatible fallback renditions remain visible until the selected rendition is available.
 - An optional viewer setting loads cached or network-backed `xl` previews alongside originals when the library rendition is smaller.
 - The Library menu can warm the selected thumbnail rendition for an inclusive populated-day range using bounded, cancellable background work.
-- **Load All Timeline Sections** can validate every item-metadata page for the active Personal Library, Favorites, or opened album. It bypasses stored page payloads by default, can opt into current-run verified cached pages, and does not download thumbnail bytes.
+- **Load All Timeline Sections** can fetch every missing item-metadata page for the active Personal Library, Favorites, or opened album. By default it bypasses stored pages and validates every section; **Use Cached Pages** skips any section that already has cached page data without validating it. It does not download thumbnail bytes.
 - Demanded video bytes are persisted in fixed-size segments under the same disk budget. They have lower retention priority than every photo rendition, use a separate two-transfer lane, and are never prefetched for adjacent videos. A partially cached video is not presented as fully available offline.
 - Settings controls thumbnail rendition, large viewer previews, default video quality, and a 200 MB–100 GB disk budget.
 

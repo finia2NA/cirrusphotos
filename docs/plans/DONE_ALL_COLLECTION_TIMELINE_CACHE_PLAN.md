@@ -22,7 +22,7 @@ The existing **Library > Load All Timeline Sections** menu item remains a single
 - In an opened normal album, it loads every section from that album's currently verified synthesized timeline into that album's page cache entries.
 - In the Albums overview or an unfiltered/filtered Map view, the command is disabled because there is no eligible persistent collection browser to warm.
 - The sheet/window identifies the target collection so the user can distinguish **Personal Library**, **Favorites**, and the current album name.
-- **Use Cached Pages** keeps its current meaning and default: off bypasses stored page payloads and fetches/validates every target section; on permits once-per-run verified pages to complete without another request and delivers stale cached values before validation when needed.
+- **Use Cached Pages** defaults off. Off bypasses stored page payloads and fetches/validates every target section. On skips every section with cached page data without validating it and fetches only cache misses.
 - Work remains bounded to two concurrent metadata page requests, is cancellable, reports per-section failures, and supports retrying failed sections.
 - Changing destinations after opening the load window does not silently retarget an active or prepared operation. Opening the command again captures the then-current eligible collection and snapshot.
 - A Favorites timeline revision during a run invalidates the captured geometry. The coordinator cancels that run and requires reopening/restarting against the latest verified snapshot rather than continuing with stale offsets.
@@ -62,7 +62,7 @@ repository.page(
 )
 ```
 
-Treat a section as complete only after a `verified: true` value. Record cached unverified emissions as provisional progress, but do not count them as complete. Preserve section identity by index in the captured snapshot so split-day sections remain distinct.
+Without the cached-page policy, treat a section as complete only after a `verified: true` value. With it, first probe the ordinary repository page pipeline with networking disabled; count any cached emission as skipped and move on, otherwise fetch the section with stored data bypassed. Preserve section identity by index in the captured snapshot so split-day sections remain distinct.
 
 Do not add direct `DiskCache` writes. The ordinary repository page pipeline must continue to own authentication, shared jobs, collection mutation epochs, cache admission, validation runs, optimistic favorite overlays, and SQLite commits.
 
@@ -122,7 +122,7 @@ In `Tests/PhotoCacheTests/TimelineSectionCacheLoaderTests.swift`:
 - Album load-all passes the exact `.album(id)` descriptor for every generated section, including two sections for a day above 1,000 items.
 - The loader admits no more than two concurrent page reads.
 - Default load-all bypasses an existing stale cached page and stores the current response.
-- **Use Cached Pages** accepts a page already verified in the current run without a duplicate transport request.
+- **Use Cached Pages** skips both stale and current-run cached pages without a transport request.
 - Cancellation stops admitting later sections.
 - Failure and retry affect only failed sections and retain the original cache policy.
 - Personal Library, Favorites, and two album IDs produce and retain distinct page cache entries for identical section descriptors.
@@ -158,7 +158,7 @@ Manual checks:
 3. Open a normal album and repeat. Include an album with enough same-day items to exercise split sections if one is available.
 4. Return to Personal Library with an active metadata filter, run the same command, and confirm filter options/results expand as pages arrive.
 5. Start a run, cancel it, and confirm no later sections are admitted; retry failures if present.
-6. With **Use Cached Pages** enabled, rerun within the same app session and confirm current-run verified pages do not generate duplicate page requests.
+6. With **Use Cached Pages** enabled, confirm cached sections are reported as skipped and do not generate page requests, while uncached sections are fetched.
 
 ## Constraints and non-goals
 

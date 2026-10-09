@@ -11,13 +11,14 @@ public struct TimelineSectionCacheProgress: Equatable, Sendable {
 
     public let total: Int
     public let verified: Int
+    public let cached: Int
     public let provisional: Int
     public let failed: Int
     public let remaining: Int
     public let state: State
     public let failures: [String]
 
-    public var processed: Int { verified + provisional + failed }
+    public var processed: Int { verified + cached + provisional + failed }
 }
 
 public struct TimelineSectionCacheEmission: Equatable, Sendable {
@@ -41,7 +42,7 @@ public struct TimelineSectionCacheLoaderEvent: Equatable, Sendable {
 /// authoritative collection timeline. The repository remains responsible for
 /// cache reads, validation, mutation epochs, shared jobs, and persistence.
 public actor TimelineSectionCacheLoader {
-    private enum SectionState: Equatable, Sendable { case unseen, provisional, verified, failed }
+    private enum SectionState: Equatable, Sendable { case unseen, cached, provisional, verified, failed }
 
     private struct QueuedRead: Sendable {
         let index: Int
@@ -51,6 +52,7 @@ public actor TimelineSectionCacheLoader {
     private struct ReadResult: Sendable {
         let index: Int
         let useCachedPages: Bool
+        let usedCachedPage: Bool
         let verified: Bool
         let failure: String?
     }
@@ -94,7 +96,7 @@ public actor TimelineSectionCacheLoader {
     public func loadAll(useCachedPages: Bool = false) {
         guard scheduler == nil else { return }
         wasCancelled = false
-        enqueue(states.indices.filter { states[$0] != .verified },
+        enqueue(states.indices.filter { states[$0] != .verified && states[$0] != .cached },
                 useCachedPages: useCachedPages)
     }
 
@@ -132,7 +134,8 @@ public actor TimelineSectionCacheLoader {
     }
 
     private func enqueue<S: Sequence>(_ indices: S, useCachedPages: Bool) where S.Element == Int {
-        for index in indices where states.indices.contains(index) && states[index] != .verified {
+        for index in indices where states.indices.contains(index) &&
+            states[index] != .verified && states[index] != .cached {
             guard !activeIndices.contains(index), !pending.contains(where: { $0.index == index }) else { continue }
             pending.append(.init(index: index, useCachedPages: useCachedPages))
         }
@@ -157,7 +160,11 @@ public actor TimelineSectionCacheLoader {
             guard !Task.isCancelled else { break }
             for result in results.sorted(by: { $0.index < $1.index }) {
                 activeIndices.remove(result.index)
-                if result.verified {
+                if result.usedCachedPage {
+                    states[result.index] = .cached
+                    failureMessages.removeValue(forKey: result.index)
+                    failureCachePolicies.removeValue(forKey: result.index)
+                } else if result.verified {
                     states[result.index] = .verified
                     failureMessages.removeValue(forKey: result.index)
                     failureCachePolicies.removeValue(forKey: result.index)
@@ -180,12 +187,26 @@ public actor TimelineSectionCacheLoader {
                 let section = snapshot.sections[read.index]
                 let collection = collection
                 tasks.addTask { [repository] in
+                    if read.useCachedPages {
+                        for await event in await repository.page(
+                            section, collection: collection, useCachedPages: true,
+                            allowNetwork: false, priority: .prefetch
+                        ) {
+                            guard !Task.isCancelled else { break }
+                            if case .value(let items, let verified) = event {
+                                await self.recordCachedEmission(index: read.index, items: items,
+                                                                verified: verified)
+                                return .init(index: read.index, useCachedPages: true,
+                                             usedCachedPage: true, verified: false, failure: nil)
+                            }
+                        }
+                    }
                     var verified = false
                     var failure: String?
                     for await event in await repository.page(
                         section,
                         collection: collection,
-                        useCachedPages: read.useCachedPages,
+                        useCachedPages: false,
                         allowNetwork: true,
                         priority: .prefetch
                     ) {
@@ -200,13 +221,19 @@ public actor TimelineSectionCacheLoader {
                         }
                     }
                     return .init(index: read.index, useCachedPages: read.useCachedPages,
-                                 verified: verified, failure: failure)
+                                 usedCachedPage: false, verified: verified, failure: failure)
                 }
             }
             var results: [ReadResult] = []
             for await result in tasks { results.append(result) }
             return results
         }
+    }
+
+    private func recordCachedEmission(index: Int, items: [PhotoItem], verified: Bool) {
+        guard states.indices.contains(index) else { return }
+        states[index] = .cached
+        publish(emission: .init(sectionIndex: index, items: items, verified: verified))
     }
 
     private func recordEmission(index: Int, items: [PhotoItem], verified: Bool) {
@@ -223,6 +250,7 @@ public actor TimelineSectionCacheLoader {
 
     private func makeProgress() -> TimelineSectionCacheProgress {
         let verified = states.filter { $0 == .verified }.count
+        let cached = states.filter { $0 == .cached }.count
         let provisional = states.filter { $0 == .provisional }.count
         let failed = states.filter { $0 == .failed }.count
         let state: TimelineSectionCacheProgress.State
@@ -230,13 +258,14 @@ public actor TimelineSectionCacheLoader {
             state = .running
         } else if wasCancelled {
             state = .canceling
-        } else if verified == states.count {
+        } else if verified + cached == states.count {
             state = .finished
         } else {
             state = .idle
         }
-        return .init(total: states.count, verified: verified, provisional: provisional,
-                     failed: failed, remaining: states.count - verified,
+        return .init(total: states.count, verified: verified, cached: cached,
+                     provisional: provisional, failed: failed,
+                     remaining: states.count - verified - cached,
                      state: state,
                      failures: failureMessages.sorted(by: { $0.key < $1.key }).map {
                          "Section \($0.key + 1): \($0.value)"
