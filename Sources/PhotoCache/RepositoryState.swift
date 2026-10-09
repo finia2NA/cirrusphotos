@@ -92,6 +92,8 @@ struct RepositoryImageWork {
     var fullImageJobs: [String: SharedJob<FullImageResolution>] = [:]
     var thumbnailFinishWithoutSubscribers: Set<String> = []
     var fullImageFinishWithoutSubscribers: Set<String> = []
+    var fullImageProgressObservers: [String: [UUID: @Sendable (TransferProgress) -> Void]] = [:]
+    var fullImageProgress: [String: TransferProgress] = [:]
 
     var hasDemand: Bool { !thumbnailJobs.isEmpty || !fullImageJobs.isEmpty }
 }

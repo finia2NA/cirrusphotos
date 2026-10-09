@@ -132,16 +132,10 @@ struct ThumbnailRotationProgressView: View {
                  : "Rotating Thumbnail Previews")
                 .font(.headline)
             if let progress {
-                ProgressView(value: Double(progress.completedItems),
-                             total: Double(max(1, progress.totalItems)))
+                ProgressView(value: progress.itemProgress, total: 1)
+                    .animation(.linear(duration: 0.18), value: progress.itemProgress)
                 Text(status(progress)).foregroundStyle(.secondary)
-                if !progress.failures.isEmpty {
-                    ScrollView {
-                        Text(progress.failures.joined(separator: "\n"))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                    }.frame(maxHeight: 120)
-                }
+                activityLog(progress.activity)
             }
             HStack {
                 Spacer()
@@ -151,8 +145,36 @@ struct ThumbnailRotationProgressView: View {
             }
         }
         .padding(20)
-        .frame(width: 440)
+        .frame(width: 520)
         .interactiveDismissDisabled(progress?.stage != .finished)
+    }
+
+    private func activityLog(_ entries: [String]) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 5) {
+                    ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in
+                        Text(entry)
+                            .font(.system(.caption, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .id(index)
+                    }
+                }
+                .padding(10)
+                .textSelection(.enabled)
+            }
+            .frame(height: 190)
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(.separator.opacity(0.5)))
+            .onAppear { scrollToLatest(entries, proxy: proxy) }
+            .onChange(of: entries.count) { _, _ in scrollToLatest(entries, proxy: proxy) }
+        }
+        .accessibilityLabel("Thumbnail rotation activity log")
+    }
+
+    private func scrollToLatest(_ entries: [String], proxy: ScrollViewProxy) {
+        guard !entries.isEmpty else { return }
+        withAnimation { proxy.scrollTo(entries.count - 1, anchor: .bottom) }
     }
 
     private func status(_ progress: ThumbnailRotationProgress) -> String {
@@ -162,6 +184,9 @@ struct ThumbnailRotationProgressView: View {
                 : "Finished with \(progress.failures.count) failure(s)."
         }
         let item = progress.itemID.map { " photo \($0)" } ?? ""
+        if let detail = progress.detail, let itemID = progress.itemID {
+            return "\(detail) for photo \(itemID) · \(progress.completedItems) of \(progress.totalItems) complete"
+        }
         return "\(progress.stage.rawValue.capitalized)\(item) · \(progress.completedItems) of \(progress.totalItems) complete"
     }
 }

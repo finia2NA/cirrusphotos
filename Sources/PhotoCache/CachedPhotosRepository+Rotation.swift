@@ -14,6 +14,11 @@ private enum ThumbnailRotationOperation: Sendable {
         case .automatic: "automatic"
         }
     }
+
+    var isAutomatic: Bool {
+        if case .automatic = self { return true }
+        return false
+    }
 }
 
 extension CachedPhotosRepository {
@@ -120,18 +125,22 @@ extension CachedPhotosRepository {
         let total = action.itemIDs.count
         var completed = 0
         var failures: [String] = []
+        var activity: [String] = []
         var claimedIDs: Set<Int64> = []
         defer {
             for id in claimedIDs { itemMutations.pendingIDs.remove(id) }
         }
-        continuation.yield(.init(completedItems: 0, totalItems: total, itemID: nil, stage: .preparing))
+        continuation.yield(.init(completedItems: 0, totalItems: total, itemID: nil,
+                                 stage: .preparing, activity: activity))
         do { try await connect() }
         catch {
             SynologyDiagnostics.rotations.error(
                 "Thumbnail rotation could not connect items=\(total, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
             )
+            activity.append("Could not start: \(error.localizedDescription)")
             continuation.yield(.init(completedItems: 0, totalItems: total, itemID: nil,
-                                     stage: .finished, failures: [error.localizedDescription]))
+                                     stage: .finished, failures: [error.localizedDescription],
+                                     activity: activity))
             continuation.finish(); return
         }
         for id in action.itemIDs {
@@ -140,6 +149,7 @@ extension CachedPhotosRepository {
                     "Thumbnail rotation cancelled before item item_id=\(id, privacy: .public) completed=\(completed, privacy: .public) total=\(total, privacy: .public)"
                 )
                 failures.append("Cancelled before photo \(id).")
+                activity.append("Photo \(id): cancelled before processing.")
                 break
             }
             guard !itemMutations.pendingIDs.contains(id) else {
@@ -147,6 +157,7 @@ extension CachedPhotosRepository {
                     "Thumbnail rotation rejected pending item item_id=\(id, privacy: .public)"
                 )
                 failures.append("Photo \(id) already has a rotation in progress.")
+                activity.append("Photo \(id): failed — another rotation is already in progress.")
                 completed += 1
                 continue
             }
@@ -158,16 +169,33 @@ extension CachedPhotosRepository {
                     "Thumbnail rotation missing eligible descriptor item_id=\(id, privacy: .public)"
                 )
                 failures.append("Photo \(id) does not have three replaceable thumbnails.")
+                activity.append("Photo \(id): failed — replaceable thumbnails are unavailable.")
                 completed += 1
                 itemMutations.pendingIDs.remove(id)
                 claimedIDs.remove(id)
                 continue
             }
             do {
-                continuation.yield(.init(completedItems: completed, totalItems: total,
-                                         itemID: id, stage: .downloading, failures: failures))
                 var downloaded: [ThumbnailSize: Data] = [:]
+                let thumbnailDownloadBytes = ThumbnailSize.allCases.reduce(Int64(0)) {
+                    $0 + Self.estimatedDownloadBytes(for: $1)
+                }
+                let estimatedOriginalBytes = item.filesize.flatMap { $0 > 0 ? $0 : nil }
+                    ?? Self.fallbackOriginalDownloadBytes
+                let estimatedTotalDownloadBytes = thumbnailDownloadBytes
+                    + (operation.isAutomatic ? estimatedOriginalBytes : 0)
+                var completedThumbnailDownloadBytes: Int64 = 0
                 for size in ThumbnailSize.allCases {
+                    continuation.yield(.init(
+                        completedItems: completed, totalItems: total, itemID: id,
+                        stage: .downloading, failures: failures,
+                        itemProgress: Self.downloadHalfProgress(
+                            completedBytes: completedThumbnailDownloadBytes,
+                            totalBytes: estimatedTotalDownloadBytes
+                        ),
+                        activity: activity,
+                        detail: "Downloading \(Self.downloadName(for: size)) thumbnail"
+                    ))
                     SynologyDiagnostics.rotations.info(
                         "Downloading thumbnail for rotation item_id=\(id, privacy: .public) unit_id=\(descriptor.unitID, privacy: .public) size=\(size.rawValue, privacy: .public) ready=\(descriptor.isReady(size), privacy: .public)"
                     )
@@ -178,6 +206,17 @@ extension CachedPhotosRepository {
                                                               etag: nil, lastModified: nil)
                     guard let data = response.data else { throw SynologyAPIError.invalidResponse }
                     downloaded[size] = data
+                    completedThumbnailDownloadBytes += Self.estimatedDownloadBytes(for: size)
+                    continuation.yield(.init(
+                        completedItems: completed, totalItems: total, itemID: id,
+                        stage: .downloading, failures: failures,
+                        itemProgress: Self.downloadHalfProgress(
+                            completedBytes: completedThumbnailDownloadBytes,
+                            totalBytes: estimatedTotalDownloadBytes
+                        ),
+                        activity: activity,
+                        detail: "Downloading \(Self.downloadName(for: size)) thumbnail"
+                    ))
                     SynologyDiagnostics.rotations.info(
                         "Downloaded thumbnail for rotation item_id=\(id, privacy: .public) unit_id=\(descriptor.unitID, privacy: .public) size=\(size.rawValue, privacy: .public) bytes=\(data.count, privacy: .public)"
                     )
@@ -191,15 +230,45 @@ extension CachedPhotosRepository {
                     guard let resource = item.fullImageResource else {
                         throw SynologyAPIError.unsupported("A full-size image is unavailable.")
                     }
-                    let original = try await comparisonOriginal(resource)
+                    let downloadActivity = activity
+                    let downloadFailures = failures
+                    let downloadCompleted = completed
+                    let completedEstimatedThumbnailBytes = completedThumbnailDownloadBytes
+                    continuation.yield(.init(
+                        completedItems: completed, totalItems: total, itemID: id,
+                        stage: .downloading, failures: failures,
+                        itemProgress: Self.downloadHalfProgress(
+                            completedBytes: completedThumbnailDownloadBytes,
+                            totalBytes: estimatedTotalDownloadBytes
+                        ),
+                        activity: activity, detail: "Downloading full photo"
+                    ))
+                    let original = try await comparisonOriginal(resource) { transfer in
+                        let fullBytes = transfer.totalBytes ?? estimatedOriginalBytes
+                        let aggregateDownloaded = completedEstimatedThumbnailBytes
+                            + min(transfer.completedBytes, fullBytes)
+                        let aggregateTotal = thumbnailDownloadBytes + fullBytes
+                        continuation.yield(.init(
+                            completedItems: downloadCompleted, totalItems: total, itemID: id,
+                            stage: .downloading, failures: downloadFailures,
+                            itemProgress: Self.downloadHalfProgress(
+                                completedBytes: aggregateDownloaded, totalBytes: aggregateTotal
+                            ),
+                            activity: downloadActivity, detail: "Downloading full photo"
+                        ))
+                    }
                     try Task.checkCancellation()
                     continuation.yield(.init(completedItems: completed, totalItems: total,
-                                             itemID: id, stage: .analyzing, failures: failures))
+                                             itemID: id, stage: .analyzing, failures: failures,
+                                             itemProgress: 0.5, activity: activity))
                     let match = try await ThumbnailOrientationAnalyzer.shared.match(
                         originalData: original, item: item, thumbnails: downloaded
                     )
                     try Task.checkCancellation()
                     clockwiseQuarterTurns = match.clockwiseQuarterTurns
+                    continuation.yield(.init(completedItems: completed, totalItems: total,
+                                             itemID: id, stage: .analyzing, failures: failures,
+                                             itemProgress: 0.6, activity: activity))
                     SynologyDiagnostics.rotations.info(
                         "Matched thumbnail orientation item_id=\(id, privacy: .public) unit_id=\(descriptor.unitID, privacy: .public) clockwise_quarter_turns=\(clockwiseQuarterTurns, privacy: .public)"
                     )
@@ -208,16 +277,22 @@ extension CachedPhotosRepository {
                     SynologyDiagnostics.rotations.info(
                         "Thumbnail orientation already correct item_id=\(id, privacy: .public) unit_id=\(descriptor.unitID, privacy: .public)"
                     )
+                    activity.append("Photo \(id): already correct.")
                     completed += 1
                     itemMutations.pendingIDs.remove(id)
                     claimedIDs.remove(id)
                     continue
                 }
                 continuation.yield(.init(completedItems: completed, totalItems: total,
-                                         itemID: id, stage: .rotating, failures: failures))
+                                         itemID: id, stage: .rotating, failures: failures,
+                                         itemProgress: operation.isAutomatic ? 0.6 : 0.5,
+                                         activity: activity))
                 let files = try Self.rotatedFiles(
                     downloaded, clockwiseQuarterTurns: clockwiseQuarterTurns
                 )
+                continuation.yield(.init(completedItems: completed, totalItems: total,
+                                         itemID: id, stage: .rotating, failures: failures,
+                                         itemProgress: 2.0 / 3.0, activity: activity))
                 SynologyDiagnostics.rotations.info(
                     "Rotated thumbnails locally item_id=\(id, privacy: .public) unit_id=\(descriptor.unitID, privacy: .public) clockwise_quarter_turns=\(clockwiseQuarterTurns, privacy: .public) sm_bytes=\(files.sm.count, privacy: .public) m_bytes=\(files.m.count, privacy: .public) xl_bytes=\(files.xl.count, privacy: .public)"
                 )
@@ -250,15 +325,31 @@ extension CachedPhotosRepository {
                         "Uploading rotated thumbnails item_id=\(id, privacy: .public) unit_id=\(unit.unitID, privacy: .public)"
                     )
                     continuation.yield(.init(completedItems: completed, totalItems: total,
-                                             itemID: id, stage: .uploading, failures: failures))
-                    try await client.uploadConvertedThumbnails(unitID: unit.unitID, files: files)
+                                             itemID: id, stage: .uploading, failures: failures,
+                                             itemProgress: 2.0 / 3.0, activity: activity))
+                    let uploadActivity = activity
+                    let uploadFailures = failures
+                    let uploadCompleted = completed
+                    try await client.uploadConvertedThumbnails(
+                        unitID: unit.unitID, files: files,
+                        progress: { transfer in
+                            continuation.yield(.init(
+                                completedItems: uploadCompleted, totalItems: total, itemID: id,
+                                stage: .uploading, failures: uploadFailures,
+                                itemProgress: 2.0 / 3.0 + (transfer.fractionCompleted ?? 0) / 3.0,
+                                activity: uploadActivity
+                            ))
+                        }
+                    )
                     try Task.checkCancellation()
                     continuation.yield(.init(completedItems: completed, totalItems: total,
-                                             itemID: id, stage: .refreshing, failures: failures))
+                                             itemID: id, stage: .refreshing, failures: failures,
+                                             itemProgress: 1, activity: activity))
                     let refreshedItem = try await waitForThumbnailRevision(itemID: id,
                                                                            oldCacheKey: descriptor.cacheKey)
                     await patchRotationPages(action: action, replacements: [id: refreshedItem])
                     itemMutations.publish(PhotoItemChange(items: [id: refreshedItem]))
+                    activity.append("Photo \(id): applied \(Self.rotationDescription(clockwiseQuarterTurns)).")
                     SynologyDiagnostics.rotations.info(
                         "Thumbnail rotation completed item_id=\(id, privacy: .public) unit_id=\(unit.unitID, privacy: .public)"
                     )
@@ -277,29 +368,36 @@ extension CachedPhotosRepository {
                     "Thumbnail rotation cancellation handled item_id=\(id, privacy: .public)"
                 )
                 failures.append("Thumbnail rotation was cancelled.")
+                activity.append("Photo \(id): cancelled.")
                 break
             } catch {
                 Self.logRotationFailure(
                     "item", itemID: id, unitID: descriptor.unitID, error: error
                 )
                 failures.append("Photo \(id): \(error.localizedDescription)")
+                activity.append("Photo \(id): failed — \(error.localizedDescription)")
             }
             completed += 1
             itemMutations.pendingIDs.remove(id)
             claimedIDs.remove(id)
         }
         continuation.yield(.init(completedItems: completed, totalItems: total, itemID: nil,
-                                 stage: .finished, failures: failures))
+                                 stage: .finished, failures: failures, itemProgress: 1,
+                                 activity: activity))
         SynologyDiagnostics.rotations.info(
             "Thumbnail rotation run finished operation=\(operation.logDescription, privacy: .public) completed=\(completed, privacy: .public) total=\(total, privacy: .public) failures=\(failures.count, privacy: .public)"
         )
         continuation.finish()
     }
 
-    private func comparisonOriginal(_ resource: FullImageResource) async throws -> Data {
+    private func comparisonOriginal(
+        _ resource: FullImageResource,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws -> Data {
         var cached: Data?
         var failure: String?
-        for await event in fullImage(resource, allowNetwork: true, priority: .visible) {
+        for await event in fullImage(resource, allowNetwork: true, priority: .visible,
+                                     progress: progress) {
             try Task.checkCancellation()
             switch event {
             case .value(let data, let verified):
@@ -311,6 +409,40 @@ extension CachedPhotosRepository {
         }
         if let cached { return cached }
         throw SynologyAPIError.transport(failure ?? "The full-size image is unavailable.")
+    }
+
+    nonisolated private static func rotationDescription(_ turns: Int) -> String {
+        switch (turns % 4 + 4) % 4 {
+        case 0: "no rotation"
+        case 1: "90° right"
+        case 2: "180°"
+        default: "90° left"
+        }
+    }
+
+    nonisolated private static let fallbackOriginalDownloadBytes: Int64 = 5_000_000
+
+    nonisolated private static func estimatedDownloadBytes(for size: ThumbnailSize) -> Int64 {
+        switch size {
+        case .sm: 60_000
+        case .m: 150_000
+        case .xl: 1_000_000
+        }
+    }
+
+    nonisolated private static func downloadName(for size: ThumbnailSize) -> String {
+        switch size {
+        case .sm: "small"
+        case .m: "medium"
+        case .xl: "large"
+        }
+    }
+
+    nonisolated private static func downloadHalfProgress(
+        completedBytes: Int64, totalBytes: Int64
+    ) -> Double {
+        guard totalBytes > 0 else { return 0 }
+        return 0.5 * min(1, max(0, Double(completedBytes) / Double(totalBytes)))
     }
 
     private func lookupAllRotationItems(_ ids: [Int64]) async throws -> [PhotoItem] {

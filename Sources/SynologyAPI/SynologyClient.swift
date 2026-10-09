@@ -1,6 +1,24 @@
 import Foundation
 import ImageIO
 
+private final class UploadTransferDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let progress: @Sendable (TransferProgress) -> Void
+
+    init(progress: @escaping @Sendable (TransferProgress) -> Void) {
+        self.progress = progress
+    }
+
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64, totalBytesExpectedToSend: Int64
+    ) {
+        progress(TransferProgress(
+            completedBytes: totalBytesSent,
+            totalBytes: totalBytesExpectedToSend > 0 ? totalBytesExpectedToSend : nil
+        ))
+    }
+}
+
 public actor SynologyClient: PhotosTransport {
     public static let defaultBaseURL = URL(string: "https://nas.example.com:5001")!
 
@@ -15,7 +33,9 @@ public actor SynologyClient: PhotosTransport {
         configuration.httpCookieStorage = HTTPCookieStorage()
         configuration.httpShouldSetCookies = true
         configuration.timeoutIntervalForRequest = 30
-        configuration.timeoutIntervalForResource = 300
+        // Request timeouts are inactivity timeouts and reset as data moves. Keep a
+        // generous absolute cap so large originals are not killed while progressing.
+        configuration.timeoutIntervalForResource = 24 * 60 * 60
         let delegate = CirrusTrustDelegate(allowedHost: baseURL.host ?? "")
         self.session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
     }
@@ -340,6 +360,13 @@ public actor SynologyClient: PhotosTransport {
     }
 
     public func uploadConvertedThumbnails(unitID: Int64, files: ConvertedThumbnailFiles) async throws {
+        try await uploadConvertedThumbnails(unitID: unitID, files: files, progress: { _ in })
+    }
+
+    public func uploadConvertedThumbnails(
+        unitID: Int64, files: ConvertedThumbnailFiles,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws {
         guard let sid else { throw SynologyAPIError.api(119) }
         SynologyDiagnostics.rotationTransport.info(
             "Preparing converted thumbnail upload unit_id=\(unitID, privacy: .public) sm_bytes=\(files.sm.count, privacy: .public) m_bytes=\(files.m.count, privacy: .public) xl_bytes=\(files.xl.count, privacy: .public) api_version=3"
@@ -354,15 +381,15 @@ public actor SynologyClient: PhotosTransport {
         guard let url = components.url else { throw SynologyAPIError.invalidResponse }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 300
+        request.timeoutInterval = 120
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
         if let synoToken { request.setValue(synoToken, forHTTPHeaderField: "X-SYNO-TOKEN") }
-        request.httpBody = body
         let data: Data
         let response: URLResponse
-        do { (data, response) = try await session.data(for: request) }
+        let delegate = UploadTransferDelegate(progress: progress)
+        do { (data, response) = try await session.upload(for: request, from: body, delegate: delegate) }
         catch is CancellationError {
             SynologyDiagnostics.rotationTransport.info(
                 "Converted thumbnail upload cancelled unit_id=\(unitID, privacy: .public)"
@@ -480,6 +507,13 @@ public actor SynologyClient: PhotosTransport {
 
     public func fullImage(_ resource: FullImageResource,
                           etag: String? = nil, lastModified: String? = nil) async throws -> FullImageResponse {
+        try await fullImage(resource, etag: etag, lastModified: lastModified, progress: { _ in })
+    }
+
+    public func fullImage(
+        _ resource: FullImageResource, etag: String? = nil, lastModified: String? = nil,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws -> FullImageResponse {
         guard let sid else { throw SynologyAPIError.api(119) }
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
         components.path = "/webapi/entry.cgi"
@@ -496,7 +530,7 @@ public actor SynologyClient: PhotosTransport {
         guard let url = components.url else { throw SynologyAPIError.invalidResponse }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.timeoutInterval = 300
+        request.timeoutInterval = 120
         request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
         request.setValue("image/*", forHTTPHeaderField: "Accept")
         if let etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
@@ -506,7 +540,15 @@ public actor SynologyClient: PhotosTransport {
         SynologyDiagnostics.transport.debug(
             "Sending original request unit_id=\(resource.unitID, privacy: .public) conditional=\(etag != nil || lastModified != nil, privacy: .public)"
         )
-        do { (data, response) = try await session.data(for: request) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 120
+        configuration.timeoutIntervalForResource = 24 * 60 * 60
+        let transfer = ProgressiveDataTransfer(
+            allowedHost: baseURL.host ?? "", configuration: configuration, progress: progress
+        )
+        do {
+            (data, response) = try await transfer.data(for: request)
+        }
         catch is CancellationError {
             SynologyDiagnostics.transport.debug(
                 "Original transport cancelled unit_id=\(resource.unitID, privacy: .public)"

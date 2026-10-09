@@ -62,14 +62,22 @@ public struct ThumbnailRotationProgress: Sendable, Equatable {
     public let itemID: Int64?
     public let stage: Stage
     public let failures: [String]
+    /// Progress within the current photo, independent of the batch position.
+    public let itemProgress: Double
+    public let activity: [String]
+    public let detail: String?
 
     public init(completedItems: Int, totalItems: Int, itemID: Int64?, stage: Stage,
-                failures: [String] = []) {
+                failures: [String] = [], itemProgress: Double = 0,
+                activity: [String] = [], detail: String? = nil) {
         self.completedItems = completedItems
         self.totalItems = totalItems
         self.itemID = itemID
         self.stage = stage
         self.failures = failures
+        self.itemProgress = min(1, max(0, itemProgress))
+        self.activity = activity
+        self.detail = detail
     }
 }
 

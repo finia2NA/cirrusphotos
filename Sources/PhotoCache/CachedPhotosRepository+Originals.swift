@@ -5,12 +5,15 @@ extension CachedPhotosRepository {
     /// Returns compressed original-image bytes. Cached bytes arrive first and are then
     /// validated at most once per app run when network access is allowed.
     public func fullImage(_ resource: FullImageResource, allowNetwork: Bool = true,
-                          priority: RequestPriority = .visible) -> AsyncStream<ResourceEvent<Data>> {
+                          priority: RequestPriority = .visible,
+                          progress: (@Sendable (TransferProgress) -> Void)? = nil)
+        -> AsyncStream<ResourceEvent<Data>> {
         let subscriber = UUID()
         let producer = StreamProducer()
         return AsyncStream(bufferingPolicy: .bufferingNewest(3)) { continuation in
             producer.task = Task {
                 let key = CacheKey.fullImage(namespace: namespace, resource: resource)
+                if let progress { registerFullImageProgress(progress, key: key, subscriber: subscriber) }
                 let cached: CacheEntry?
                 do {
                     cached = try await store.get(key)
@@ -32,6 +35,10 @@ extension CachedPhotosRepository {
                     )
                 }
                 guard allowNetwork && cached?.validatedRun != runID else {
+                    if let cached {
+                        progress?(TransferProgress(completedBytes: Int64(cached.data.count),
+                                                   totalBytes: Int64(cached.data.count)))
+                    }
                     SynologyDiagnostics.originals.debug(
                         "Original network request skipped unit_id=\(resource.unitID, privacy: .public) network_allowed=\(allowNetwork, privacy: .public) already_validated=\(cached?.validatedRun == self.runID, privacy: .public)"
                     )
@@ -96,10 +103,19 @@ extension CachedPhotosRepository {
                 SynologyDiagnostics.originals.info(
                     "Downloading or validating original unit_id=\(resource.unitID, privacy: .public) priority=\(String(describing: priority), privacy: .public) has_etag=\(prior?.etag != nil, privacy: .public) has_last_modified=\(prior?.lastModified != nil, privacy: .public)"
                 )
-                var response = try await client.fullImage(resource, etag: prior?.etag,
-                                                          lastModified: prior?.lastModified)
+                var response = try await client.fullImage(
+                    resource, etag: prior?.etag, lastModified: prior?.lastModified,
+                    progress: { value in
+                        Task { await self.publishFullImageProgress(value, key: key) }
+                    }
+                )
                 if response.notModified && prior == nil {
-                    response = try await client.fullImage(resource, etag: nil, lastModified: nil)
+                    response = try await client.fullImage(
+                        resource, etag: nil, lastModified: nil,
+                        progress: { value in
+                            Task { await self.publishFullImageProgress(value, key: key) }
+                        }
+                    )
                 }
                 try Task.checkCancellation()
                 let result: FullImageResolution
@@ -143,6 +159,10 @@ extension CachedPhotosRepository {
     }
 
     private func releaseFullImage(key: String, subscriber: UUID) {
+        imageWork.fullImageProgressObservers[key]?[subscriber] = nil
+        if imageWork.fullImageProgressObservers[key]?.isEmpty == true {
+            imageWork.fullImageProgressObservers[key] = nil
+        }
         guard var job = imageWork.fullImageJobs[key] else { return }
         job.subscribers.remove(subscriber)
         if job.subscribers.isEmpty && !imageWork.fullImageFinishWithoutSubscribers.contains(key) {
@@ -156,10 +176,26 @@ extension CachedPhotosRepository {
     }
 
     private func finishFullImageJob(key: String, id: UUID) {
+        imageWork.fullImageProgress[key] = nil
         imageWork.fullImageFinishWithoutSubscribers.remove(key)
         guard let job = imageWork.fullImageJobs[key], job.id == id,
               job.subscribers.isEmpty else { return }
         imageWork.fullImageJobs.removeValue(forKey: key)
         cancelIdleLogin()
+    }
+
+    private func registerFullImageProgress(
+        _ observer: @escaping @Sendable (TransferProgress) -> Void,
+        key: String, subscriber: UUID
+    ) {
+        imageWork.fullImageProgressObservers[key, default: [:]][subscriber] = observer
+        if let current = imageWork.fullImageProgress[key] { observer(current) }
+    }
+
+    private func publishFullImageProgress(_ progress: TransferProgress, key: String) {
+        imageWork.fullImageProgress[key] = progress
+        for observer in imageWork.fullImageProgressObservers[key]?.values ?? [:].values {
+            observer(progress)
+        }
     }
 }

@@ -313,6 +313,7 @@ final class RotationTests: XCTestCase {
         let regenerationCalls = await transport.regenerationCalls
         let uploadedFiles = await transport.uploadedFiles
         XCTAssertTrue(final?.failures.isEmpty == true)
+        XCTAssertEqual(final?.activity, ["Photo 26: already correct."])
         XCTAssertTrue(regenerationCalls.isEmpty)
         XCTAssertTrue(uploadedFiles.isEmpty)
     }
@@ -351,6 +352,41 @@ final class RotationTests: XCTestCase {
             XCTAssertEqual(properties[kCGImagePropertyPixelWidth] as? Int, 72)
             XCTAssertEqual(properties[kCGImagePropertyPixelHeight] as? Int, 108)
         }
+    }
+
+    func testAutomaticWorkflowReportsWeightedTransferProgressAndSuccessfulActivity() async throws {
+        let root = temporaryTestRoot("RotationAutomaticProgress")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try patternedImage(width: 72, height: 108)
+        let wrong = try encoded(
+            ThumbnailOrientationMatcher.rotate(source, clockwiseQuarterTurns: -1), type: .jpeg
+        )
+        let original = try item(28, width: 72, height: 108)
+        let transport = RotationTransport(
+            thumbnails: Dictionary(uniqueKeysWithValues: ThumbnailSize.allCases.map { ($0, wrong) }),
+            original: try encoded(source, type: .heic),
+            refreshed: try item(28, key: "fixed", width: 72, height: 108)
+        )
+        let repository = try repository(transport, root: root)
+        let action = SelectionRotationAction(itemIDs: [28], sectionsByID: [:],
+                                             collection: .personalLibrary,
+                                             itemsByID: [28: original])
+        var updates: [ThumbnailRotationProgress] = []
+        for await progress in await repository.fixThumbnailRotations(action) {
+            updates.append(progress)
+        }
+
+        let expectedHalfwayThroughOriginal = 0.5 * Double(1_210_000 + 2_500_000) / 6_210_000
+        XCTAssertTrue(updates.contains {
+            abs($0.itemProgress - expectedHalfwayThroughOriginal) < 0.001
+                && $0.detail == "Downloading full photo"
+        })
+        XCTAssertTrue(updates.contains { $0.detail == "Downloading small thumbnail" })
+        XCTAssertTrue(updates.contains { $0.detail == "Downloading medium thumbnail" })
+        XCTAssertTrue(updates.contains { $0.detail == "Downloading large thumbnail" })
+        XCTAssertTrue(updates.contains { abs($0.itemProgress - (5.0 / 6.0)) < 0.001 })
+        let activity = try XCTUnwrap(updates.last?.activity).joined(separator: "\n")
+        XCTAssertEqual(activity, "Photo 28: applied 90° right.")
     }
 
     private func jpeg() throws -> Data {
@@ -471,8 +507,25 @@ private actor RotationTransport: PhotosTransport {
         }
         if failUpload { throw TestFailure("upload failed") }
     }
+    func uploadConvertedThumbnails(
+        unitID: Int64, files: ConvertedThumbnailFiles,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws {
+        progress(TransferProgress(completedBytes: 50, totalBytes: 100))
+        try await uploadConvertedThumbnails(unitID: unitID, files: files)
+        progress(TransferProgress(completedBytes: 100, totalBytes: 100))
+    }
     func fullImage(_ resource: FullImageResource, etag: String?,
                    lastModified: String?) async throws -> FullImageResponse {
         FullImageResponse(data: originalData, etag: nil, lastModified: nil)
+    }
+    func fullImage(
+        _ resource: FullImageResource, etag: String?, lastModified: String?,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws -> FullImageResponse {
+        progress(TransferProgress(completedBytes: 2_500_000, totalBytes: 5_000_000))
+        let response = try await fullImage(resource, etag: etag, lastModified: lastModified)
+        progress(TransferProgress(completedBytes: 5_000_000, totalBytes: 5_000_000))
+        return response
     }
 }
