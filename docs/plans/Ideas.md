@@ -1,0 +1,23 @@
+Ideas for future features:
+- Filtering everywhere, not just in the timeline.
+  - Favorites and albums should be easy, map-based idk
+- Onboarding:
+  - proper url, username and password, add setting for the tls hack. This is screen 1
+  - Then add option to sign out/switch accounts (might want to have caches/dbs in subfolders of .cache for this and define LRU priorities for eviction between them).
+  - After sign-in, suggest to warm the caches with the sections at least, optionally also thumbnails. If possible, open those views in the main window for this, need to extract them from their windows into a reusable thing for that.
+  - The entire sign in should probably be one window detached from the main app window, this opens, and then when it is done closes and the main app window opens
+- Cache Correctness Check:
+  - Check if current cache follows not only the priorities and performs eviction when it is full, but also if eviction within a category is LRU, what would be needed to implement that
+- Square thumbnails:
+  - Optionally display thumbnails in a square container.
+  - Have a button for this in the menu bar.
+  - The image just zooms so that the square is filled.
+  - While doing this, also fix left inset (right now, images touch the sidebar) and make option to keep the timeline visible.
+- Shared library access: Self explanetory, all the features we have right now, so timeline, maps, albums, etc, but using the shared data
+- Add to album/remove from album
+  - Be able to pin albums to the sidebar, then can quick-add to album with cmd + 1-9
+- Other Synology-native albums: People, subjects, tags
+- Delete pictures (make sure this is properly warned against, pop-up required)
+- Download pictures
+  - Step 2: optionally also connect to the synology drive API and download files with the same name but different ending along with it. Eg: there is also a raw and an .xml for this pic but they are not indexed by syno photos
+- Upload: define a folder to watch on the mac, upload with the syno api. Need to support destination definition for this. Optionally delete on mac once confirmed on nas

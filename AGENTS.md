@@ -27,6 +27,7 @@
 - Every keyboard shortcut added to the app must also be exposed as an appropriately named macOS menu-bar command. Treat the menu command as the discoverable command definition and attach its shortcut there rather than implementing a hidden view-only shortcut.
 - When being asked to write a plan, include specifics about files, functions, interfaces, etc that need to be created or modified. Include a clear description of the intended behavior and any relevant constraints. Avoid vague or high-level descriptions that do not provide actionable guidance.
   - Assume the plan will be executed by a less capable agent. Include all relevant details, and do not assume the executing agent will have the intuition necessary for an elegant implementation without guidance if it is not trivial.
+- When you are asked to spawn an agent, this means subagent. Do not create a new chat and talk to the agent there.
 
 ## Top Level Documentation
 
