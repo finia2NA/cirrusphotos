@@ -60,7 +60,7 @@ public struct LibraryFilterControllerEvent: Sendable {
     public let registration: LibraryFilterRegistration?
 }
 
-private struct LibraryFilterRecord: Sendable {
+private struct LibraryFilterRecord: Equatable, Sendable {
     let reference: LibraryFilterReference
     let time: Int64
     let values: LibraryFilterValues
@@ -89,6 +89,9 @@ public actor LibraryFilterController {
     private var observers: [UUID: AsyncStream<LibraryFilterControllerEvent>.Continuation] = [:]
     private var cacheDiscoveryTask: Task<Void, Never>?
     private var cacheDiscoveryComplete = false
+    private var pageObservation: PersonalPageObservation?
+    private var pageObservationTask: Task<Void, Never>?
+    private var stopped = false
     private var scheduler: Task<Void, Never>?
     private var pending: [QueuedRead] = []
     private var activeIndices = Set<Int>()
@@ -102,7 +105,7 @@ public actor LibraryFilterController {
         states = Array(repeating: .unseen, count: snapshot.sections.count)
     }
 
-    deinit { cacheDiscoveryTask?.cancel(); scheduler?.cancel() }
+    deinit { cacheDiscoveryTask?.cancel(); scheduler?.cancel(); pageObservationTask?.cancel() }
 
     public func observe() -> AsyncStream<LibraryFilterControllerEvent> {
         let id = UUID()
@@ -113,22 +116,27 @@ public actor LibraryFilterController {
         }
     }
 
-    public func indexCachedPages() async {
-        if cacheDiscoveryComplete { return }
+    public func indexCachedPages(reconcile: Bool = false) async {
+        guard !stopped else { return }
+        if cacheDiscoveryComplete && !reconcile { return }
         if cacheDiscoveryTask == nil {
-            cacheDiscoveryTask = Task { await self.discoverCachedPages() }
+            cacheDiscoveryComplete = false
+            cacheDiscoveryTask = Task {
+                await self.observePagesIfNeeded()
+                await self.discoverCachedPages()
+            }
             publish()
         }
         await cacheDiscoveryTask?.value
     }
 
-    public func ingest(sectionIndex: Int, items: [PhotoItem], verified: Bool) {
-        guard states.indices.contains(sectionIndex) else { return }
+    func ingest(sectionIndex: Int, items: [PhotoItem], verified: Bool) {
+        guard !stopped, states.indices.contains(sectionIndex) else { return }
         if replace(sectionIndex: sectionIndex, items: items, verified: verified) { publish() }
     }
 
     public func apply(_ filter: LibraryFilter) async -> LibraryFilterRegistration {
-        await indexCachedPages()
+        await indexCachedPages(reconcile: true)
         activeFilter = filter
         descriptor = .libraryFilter(UUID())
         revision &+= 1
@@ -183,8 +191,12 @@ public actor LibraryFilterController {
         publish(nil)
     }
 
-    public func shutdown() {
+    public func shutdown() async {
+        stopped = true
         cacheDiscoveryTask?.cancel()
+        pageObservationTask?.cancel()
+        if let pageObservation { await repository.removePersonalPageObserver(pageObservation.id) }
+        pageObservation = nil
         scheduler?.cancel()
         pending.removeAll()
         activeIndices.removeAll()
@@ -194,24 +206,62 @@ public actor LibraryFilterController {
 
     private func discoverCachedPages() async {
         for start in stride(from: 0, to: states.count, by: 2) {
-            guard !Task.isCancelled else { break }
-            let indices = Array(start..<min(start + 2, states.count)).filter { states[$0] != .verified }
+            guard !stopped, !Task.isCancelled else { break }
+            let indices = Array(start..<min(start + 2, states.count))
             let results = await read(indices: indices, useCachedPages: true, allowNetwork: false)
-            guard !Task.isCancelled else { break }
+            guard !stopped, !Task.isCancelled else { break }
+            var changed = false
             for result in results {
                 for emission in result.emissions {
-                    _ = replace(sectionIndex: result.index, items: emission.items, verified: emission.verified)
+                    changed = replace(sectionIndex: result.index, items: emission.items,
+                                      verified: emission.verified) || changed
                 }
             }
-            publish()
+            if changed { publish() }
         }
-        guard !Task.isCancelled else { return }
+        guard !stopped, !Task.isCancelled else { return }
         cacheDiscoveryComplete = true
         cacheDiscoveryTask = nil
         publish()
     }
 
+    private func observePagesIfNeeded() async {
+        guard pageObservation == nil, !stopped else { return }
+        let observation = await repository.observePersonalPages(sections: Set(sourceSnapshot.sections))
+        guard !stopped, !Task.isCancelled else {
+            await repository.removePersonalPageObserver(observation.id)
+            return
+        }
+        pageObservation = observation
+        pageObservationTask = Task { [weak self, repository] in
+            for await _ in observation.changes {
+                guard !Task.isCancelled else { break }
+                let sections = await repository.takePersonalPageChanges(observation.id)
+                await self?.receiveCachedPages(sections)
+            }
+        }
+    }
+
+    private func receiveCachedPages(_ sections: Set<TimelineSection>) async {
+        let indices = sourceSnapshot.sections.indices.filter { sections.contains(sourceSnapshot.sections[$0]) }
+        for start in stride(from: 0, to: indices.count, by: 2) {
+            guard !stopped, !Task.isCancelled else { return }
+            let batch = Array(indices[start..<min(start + 2, indices.count)])
+            let results = await read(indices: batch, useCachedPages: true, allowNetwork: false)
+            guard !stopped, !Task.isCancelled else { return }
+            var changed = false
+            for result in results {
+                for emission in result.emissions {
+                    changed = replace(sectionIndex: result.index, items: emission.items,
+                                      verified: emission.verified) || changed
+                }
+            }
+            if changed { publish() }
+        }
+    }
+
     private func enqueue(_ indices: [Int], useCachedPages: Bool, limit: Int?) {
+        guard !stopped else { return }
         var admitted = 0
         for index in indices where states.indices.contains(index) && states[index] != .verified {
             if activeIndices.contains(index) { continue }
@@ -292,13 +342,16 @@ public actor LibraryFilterController {
     @discardableResult
     private func replace(sectionIndex: Int, items: [PhotoItem], verified: Bool) -> Bool {
         if !verified && states[sectionIndex] == .verified { return false }
-        recordsBySection[sectionIndex] = items.enumerated().map {
+        let records = items.enumerated().map {
             LibraryFilterRecord(reference: .init(sourceSectionIndex: sectionIndex,
                                                   sourcePageOffset: $0.offset,
                                                   itemID: $0.element.id),
                                 time: $0.element.time, values: LibraryFilterValues($0.element))
         }
-        states[sectionIndex] = verified ? .verified : .provisional
+        let nextState: LibraryFilterSectionState = verified ? .verified : .provisional
+        guard recordsBySection[sectionIndex] != records || states[sectionIndex] != nextState else { return false }
+        recordsBySection[sectionIndex] = records
+        states[sectionIndex] = nextState
         if verified {
             failureMessages.removeValue(forKey: sectionIndex)
             failureCachePolicies.removeValue(forKey: sectionIndex)

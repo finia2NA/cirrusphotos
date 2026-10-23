@@ -33,29 +33,6 @@ public struct TimelineSectionCacheProgress: Equatable, Sendable {
     }
 }
 
-public struct TimelineSectionCacheEmission: Equatable, Sendable {
-    public let sectionIndex: Int
-    public let items: [PhotoItem]
-    public let verified: Bool
-
-    public init(sectionIndex: Int, items: [PhotoItem], verified: Bool) {
-        self.sectionIndex = sectionIndex
-        self.items = items
-        self.verified = verified
-    }
-}
-
-public struct TimelineSectionCacheLoaderEvent: Equatable, Sendable {
-    public let progress: TimelineSectionCacheProgress
-    public let emission: TimelineSectionCacheEmission?
-
-    public init(progress: TimelineSectionCacheProgress,
-                emission: TimelineSectionCacheEmission?) {
-        self.progress = progress
-        self.emission = emission
-    }
-}
-
 /// Explicitly warms every item-metadata page described by one captured,
 /// authoritative collection timeline. The repository remains responsible for
 /// cache reads, validation, mutation epochs, shared jobs, and persistence.
@@ -85,7 +62,7 @@ public actor TimelineSectionCacheLoader {
     private var failureCachePolicies: [Int: Bool] = [:]
     private var scheduler: Task<Void, Never>?
     private var wasCancelled = false
-    private var observers: [UUID: AsyncStream<TimelineSectionCacheLoaderEvent>.Continuation] = [:]
+    private var observers: [UUID: AsyncStream<TimelineSectionCacheProgress>.Continuation] = [:]
 
     public init(repository: CachedPhotosRepository,
                 collection: PhotoCollectionDescriptor,
@@ -98,13 +75,11 @@ public actor TimelineSectionCacheLoader {
 
     deinit { scheduler?.cancel() }
 
-    public func observe() -> AsyncStream<TimelineSectionCacheLoaderEvent> {
+    public func observe() -> AsyncStream<TimelineSectionCacheProgress> {
         let id = UUID()
-        // Page emissions are semantic input for Personal Library filtering, not
-        // merely presentation snapshots, so observers must receive every one.
-        return AsyncStream(bufferingPolicy: .unbounded) { continuation in
+        return AsyncStream(bufferingPolicy: .bufferingNewest(2)) { continuation in
             observers[id] = continuation
-            continuation.yield(.init(progress: makeProgress(), emission: nil))
+            continuation.yield(makeProgress())
             continuation.onTermination = { @Sendable _ in
                 Task { await self.removeObserver(id) }
             }
@@ -213,9 +188,7 @@ public actor TimelineSectionCacheLoader {
                             allowNetwork: false, priority: .prefetch
                         ) {
                             guard !Task.isCancelled else { break }
-                            if case .value(let items, let verified) = event {
-                                await self.recordCachedEmission(index: read.index, items: items,
-                                                                verified: verified)
+                            if case .value = event {
                                 return .init(index: read.index, useCachedPages: true,
                                              usedCachedPage: true, verified: false, failure: nil)
                             }
@@ -232,9 +205,7 @@ public actor TimelineSectionCacheLoader {
                     ) {
                         guard !Task.isCancelled else { break }
                         switch event {
-                        case .value(let items, let isVerified):
-                            await self.recordEmission(index: read.index, items: items,
-                                                     verified: isVerified)
+                        case .value(_, let isVerified):
                             verified = verified || isVerified
                         case .failure(let message):
                             failure = message
@@ -248,24 +219,6 @@ public actor TimelineSectionCacheLoader {
             for await result in tasks { results.append(result) }
             return results
         }
-    }
-
-    private func recordCachedEmission(index: Int, items: [PhotoItem], verified: Bool) {
-        guard states.indices.contains(index) else { return }
-        states[index] = .cached
-        publish(emission: .init(sectionIndex: index, items: items, verified: verified))
-    }
-
-    private func recordEmission(index: Int, items: [PhotoItem], verified: Bool) {
-        guard states.indices.contains(index) else { return }
-        if verified {
-            states[index] = .verified
-            failureMessages.removeValue(forKey: index)
-            failureCachePolicies.removeValue(forKey: index)
-        } else if states[index] != .verified {
-            states[index] = .provisional
-        }
-        publish(emission: .init(sectionIndex: index, items: items, verified: verified))
     }
 
     private func makeProgress() -> TimelineSectionCacheProgress {
@@ -292,9 +245,9 @@ public actor TimelineSectionCacheLoader {
                      })
     }
 
-    private func publish(emission: TimelineSectionCacheEmission? = nil) {
-        let event = TimelineSectionCacheLoaderEvent(progress: makeProgress(), emission: emission)
-        observers.values.forEach { $0.yield(event) }
+    private func publish() {
+        let progress = makeProgress()
+        observers.values.forEach { $0.yield(progress) }
     }
 
     private func removeObserver(_ id: UUID) { observers.removeValue(forKey: id) }

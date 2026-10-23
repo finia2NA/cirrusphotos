@@ -88,7 +88,7 @@ public struct LibraryFilter: Equatable, Sendable {
     }
 }
 
-struct LibraryFilterValues: Sendable {
+struct LibraryFilterValues: Equatable, Sendable {
     let mediaKind: PhotoMediaKind
     let camera: String?
     let lens: String?

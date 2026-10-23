@@ -91,6 +91,8 @@ extension CachedPhotosRepository {
     }
 
     private func cancelMetadataJobsForReset() {
+        for observer in metadata.personalPageObservers.values { observer.continuation.finish() }
+        metadata.personalPageObservers.removeAll()
         for job in metadata.timelineJobs.values { job.task.cancel() }
         for job in metadata.pageJobs.values { job.task.cancel() }
         metadata.albumListJob?.task.cancel()

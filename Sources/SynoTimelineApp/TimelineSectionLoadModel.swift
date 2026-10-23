@@ -154,25 +154,19 @@ final class TimelineSectionLoadModel: ObservableObject {
         if retry { await loader.retryFailed() }
         else { await loader.loadAll(useCachedPages: useCachedPages) }
         var sawRunning = false
-        for await event in stream {
+        for await progress in stream {
             guard !Task.isCancelled, staleTimelineMessage == nil else { return }
-            if event.progress.state == .running { sawRunning = true }
-            await receive(event, index: index)
-            if sawRunning && event.progress.state != .running { break }
-            if !sawRunning && event.progress.state == .finished { break }
+            if progress.state == .running { sawRunning = true }
+            receive(progress, index: index)
+            if sawRunning && progress.state != .running { break }
+            if !sawRunning && progress.state == .finished { break }
         }
     }
 
-    private func receive(_ event: TimelineSectionCacheLoaderEvent, index: Int) async {
+    private func receive(_ progress: TimelineSectionCacheProgress, index: Int) {
         guard staleTimelineMessage == nil, targetRuns.indices.contains(index) else { return }
-        let target = targetRuns[index].target
-        if target.collection == .personalLibrary, let emission = event.emission,
-           let ingestion = filter?.ingest(sectionIndex: emission.sectionIndex,
-                                          items: emission.items, verified: emission.verified) {
-            await ingestion.value
-        }
-        targetRuns[index].progress = event.progress
-        publishAggregate(state: .running, currentTitle: target.title)
+        targetRuns[index].progress = progress
+        publishAggregate(state: .running, currentTitle: targetRuns[index].target.title)
     }
 
     private func publishAggregate(state: TimelineSectionLoadPresentationProgress.State,

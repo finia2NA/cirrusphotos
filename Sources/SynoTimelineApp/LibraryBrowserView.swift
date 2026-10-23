@@ -240,10 +240,6 @@ struct LibraryBrowserView: View {
                                                  library.installBrowserCommands(snapshot: snapshot, handler: handler)
                                              },
                                              onRestorationAnchorChanged: onRestorationAnchorChanged,
-                                             onPageObserved: { section, items, verified in
-                                                 guard collection == .personalLibrary else { return }
-                                                 libraryFilter.ingest(sectionIndex: section, items: items, verified: verified)
-                                             },
                                              onFilterEdgeDemand: { sections, direction, generation in
                                                  guard collection.isLibraryFilter else { return }
                                                  libraryFilter.edgeDemand(syntheticSectionIndices: sections,
@@ -611,7 +607,6 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let onSelectionStateChanged: (BrowserSelectionState) -> Void
     let onCommandStateChanged: (BrowserCommandSnapshot, ((BrowserSelectionCommand) -> Void)?) -> Void
     let onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void
-    let onPageObserved: (Int, [PhotoItem], Bool) -> Void
     let onFilterEdgeDemand: ([Int], LibraryFilterScanDirection, UInt64) -> Void
     let onRetry: () -> Void
     let onVisibleDay: (String) -> Void
@@ -692,7 +687,6 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var onSelectionStateChanged: ((BrowserSelectionState) -> Void)?
         private var onCommandStateChanged: ((BrowserCommandSnapshot, ((BrowserSelectionCommand) -> Void)?) -> Void)?
         private var onRestorationAnchorChanged: ((PhotoTimelineRestorationAnchor) -> Void)?
-        private var onPageObserved: ((Int, [PhotoItem], Bool) -> Void)?
         private var onFilterEdgeDemand: (([Int], LibraryFilterScanDirection, UInt64) -> Void)?
         private var demandedVisible: [Int] = []
         private var demandedPrefetch: [Int] = []
@@ -730,7 +724,6 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             onSelectionStateChanged = input.onSelectionStateChanged
             onCommandStateChanged = input.onCommandStateChanged
             onRestorationAnchorChanged = input.onRestorationAnchorChanged
-            onPageObserved = input.onPageObserved
             onFilterEdgeDemand = input.onFilterEdgeDemand
             (scroll as? TimelineScrollView)?.userScroll = { [weak self] direction, generation in
                 self?.userDidScroll(direction, generation: generation)
@@ -919,9 +912,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     case .failure(let section, let message):
                         self.errors[section] = message
                         self.rowRevisions[section, default: 0] += 1
-                    case .page(let page, _):
-                        self.onPageObserved?(page.sectionIndex, page.items, page.verified)
-                    case .removed: break
+                    case .page, .removed: break
                     }
                     // Events use a bounded newest buffer, so reconcile against the authoritative window.
                     let retained = await window.retainedPages()

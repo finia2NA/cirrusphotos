@@ -39,7 +39,7 @@ final class TimelineSectionLoadModelTests: XCTestCase {
         return (library, filter, coordinator, transport, root)
     }
 
-    func testAppWideRunLoadsLibraryFavoritesAndEveryAlbumAndForwardsLibraryEmissions() async throws {
+    func testAppWideRunLoadsLibraryFavoritesAndEveryAlbumAndUpdatesFilterThroughRepository() async throws {
         let (library, filter, model, transport, root) = try await makeModels()
         defer { try? FileManager.default.removeItem(at: root) }
         model.refreshAvailability()

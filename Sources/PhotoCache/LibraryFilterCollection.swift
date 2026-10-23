@@ -61,45 +61,92 @@ extension CachedPhotosRepository {
                     continuation.finish(); return
                 }
                 let registrationID = state.registrationID
+                let sourceSnapshot = metadata.latestTimelines[.personalLibrary]
                 let grouped = Dictionary(grouping: references, by: \.sourceSectionIndex)
-                var resolved: [Int64: PhotoItem] = [:]
-                var allVerified = true
+                var contributions: [Int: (items: [PhotoItem], verified: Bool)] = [:]
                 var failure: String?
+
+                func isCurrent() -> Bool {
+                    guard !Task.isCancelled else { return false }
+                    guard metadata.admissionEpoch == state.metadataEpoch else { return false }
+                    guard metadata.libraryFilters[id]?.registrationID == registrationID else { return false }
+                    return metadata.latestTimelines[.personalLibrary]?.sections == sourceSnapshot?.sections
+                }
+
+                func assembled() -> (items: [PhotoItem], verified: Bool) {
+                    let items = references.compactMap { reference -> PhotoItem? in
+                        guard let source = contributions[reference.sourceSectionIndex],
+                              source.items.indices.contains(reference.sourcePageOffset) else { return nil }
+                        let item = source.items[reference.sourcePageOffset]
+                        guard item.id == reference.itemID, state.registration.filter.matches(item) else { return nil }
+                        return item
+                    }
+                    let verified = contributions.count == grouped.count &&
+                        contributions.values.allSatisfy(\.verified) && items.count == references.count
+                    return (favorites.applyingOverrides(items), verified)
+                }
+
+                func emit() -> Bool {
+                    let value = assembled()
+                    if value.verified, let key {
+                        metadata.libraryFilterPages[key] = value.items
+                        metadata.libraryFilterPageOrder.removeAll { $0 == key }
+                        metadata.libraryFilterPageOrder.append(key)
+                        while metadata.libraryFilterPageOrder.count > 8 {
+                            metadata.libraryFilterPages.removeValue(forKey: metadata.libraryFilterPageOrder.removeFirst())
+                        }
+                    }
+                    if !value.items.isEmpty || references.isEmpty {
+                        continuation.yield(.value(value.items, verified: value.verified))
+                    }
+                    return value.verified
+                }
+
+                // Read all cached contributions before any network-backed stream
+                // can suspend, including cached sources after an uncached source.
                 for sourceIndex in grouped.keys.sorted() {
-                    guard sourceSnapshotSection(sourceIndex) != nil else { allVerified = false; continue }
-                    guard let sourceSection = sourceSnapshotSection(sourceIndex) else { continue }
-                    var latest: [PhotoItem]?
-                    var verified = false
-                    for await event in page(sourceSection, collection: .personalLibrary,
-                                            allowNetwork: allowNetwork, priority: priority) {
+                    guard isCurrent() else { continuation.finish(); return }
+                    guard let sections = sourceSnapshot?.sections, sections.indices.contains(sourceIndex) else {
+                        failure = "A source section is no longer available."
+                        continue
+                    }
+                    for await event in page(sections[sourceIndex], collection: .personalLibrary,
+                                            allowNetwork: false, priority: priority) {
+                        guard isCurrent() else { continuation.finish(); return }
                         switch event {
-                        case .value(let items, let current): latest = items; verified = current
+                        case .value(let items, let verified): contributions[sourceIndex] = (items, verified)
                         case .failure(let message): failure = message
                         }
                     }
-                    guard metadata.libraryFilters[id]?.registrationID == registrationID else {
-                        continuation.finish(); return
-                    }
-                    allVerified = allVerified && verified
-                    guard let latest else { continue }
-                    for reference in grouped[sourceIndex, default: []]
-                    where latest.indices.contains(reference.sourcePageOffset) {
-                        let item = latest[reference.sourcePageOffset]
-                        if item.id == reference.itemID && state.registration.filter.matches(item) {
-                            resolved[item.id] = item
+                    guard isCurrent() else { continuation.finish(); return }
+                }
+                let complete = emit()
+                if complete || !allowNetwork {
+                    if let failure { continuation.yield(.failure(failure)) }
+                    continuation.finish(); return
+                }
+
+                do {
+                    _ = try await verifiedTimelineSnapshot(collection: .personalLibrary)
+                } catch {
+                    if isCurrent() { continuation.yield(.failure(error.localizedDescription)) }
+                    continuation.finish(); return
+                }
+                guard isCurrent() else { continuation.finish(); return }
+                for sourceIndex in grouped.keys.sorted() {
+                    guard let sections = sourceSnapshot?.sections, sections.indices.contains(sourceIndex) else { continue }
+                    for await event in page(sections[sourceIndex], collection: .personalLibrary,
+                                            allowNetwork: true, priority: priority) {
+                        guard isCurrent() else { continuation.finish(); return }
+                        switch event {
+                        case .value(let items, let verified):
+                            contributions[sourceIndex] = (items, verified)
+                        case .failure(let message): failure = message
                         }
                     }
+                    guard isCurrent() else { continuation.finish(); return }
                 }
-                let items = references.compactMap { resolved[$0.itemID] }
-                let complete = allVerified && items.count == references.count
-                if complete, let key {
-                    metadata.libraryFilterPages[key] = items
-                    metadata.libraryFilterPageOrder.append(key)
-                    while metadata.libraryFilterPageOrder.count > 8 {
-                        metadata.libraryFilterPages.removeValue(forKey: metadata.libraryFilterPageOrder.removeFirst())
-                    }
-                }
-                if !items.isEmpty || references.isEmpty { continuation.yield(.value(favorites.applyingOverrides(items), verified: complete)) }
+                _ = emit()
                 if let failure { continuation.yield(.failure(failure)) }
                 continuation.finish()
             }

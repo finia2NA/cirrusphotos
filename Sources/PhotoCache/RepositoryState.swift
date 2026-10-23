@@ -45,6 +45,7 @@ struct RepositoryMetadataWork {
     var refreshObservers: [PhotoCollectionDescriptor: [UUID: AsyncStream<ResourceEvent<TimelineSnapshot>>.Continuation]] = [:]
     var pageJobs: [String: SharedJob<[PhotoItem]>] = [:]
     var pageJobEpochs: [String: UInt64] = [:]
+    var personalPageObservers: [UUID: PersonalPageObserver] = [:]
     var pendingPagePromotions: [String] = []
     var albumListJob: SharedJob<[AlbumSummary]>?
     var albumListLatest: [AlbumSummary]?

@@ -39,7 +39,7 @@ final class LibraryFilterModelTests: XCTestCase {
         let video = try filterItem(id: 1, filename: "clip.MOV", type: "video", time: 1_713_571_200)
         let photo = try filterItem(id: 2, filename: "photo.JPG", type: "photo", time: 1_713_484_800)
         let transport = FilterModelTransport(
-            snapshot: TimelineSnapshot(sections: sections), pages: [1: [photo]], delay: .milliseconds(100)
+            snapshot: TimelineSnapshot(sections: sections), pages: [0: [video], 1: [photo]], delay: .milliseconds(100)
         )
         let repository = try CachedPhotosRepository(
             credentials: .init(username: "filter-model", password: "unused", otpSecret: "unused"),
@@ -51,7 +51,7 @@ final class LibraryFilterModelTests: XCTestCase {
 
         let filter = LibraryFilterModel()
         filter.configure(library: library)
-        filter.ingest(sectionIndex: 0, items: [video], verified: true)
+        for await _ in await repository.page(sections[0]) {}
         let ingested = await waitUntil { filter.progress.verified == 1 }
         XCTAssertTrue(ingested)
         filter.draft.mediaKinds = [.video]
@@ -73,6 +73,36 @@ final class LibraryFilterModelTests: XCTestCase {
         {"id":\(id),"filename":"\(filename)","time":\(time),"type":"\(type)",
          "additional":{"resolution":{"width":1920,"height":1080}}}
         """.utf8))
+    }
+
+    func testSameTimelineAfterMetadataResetCreatesNewFilterObserver() async throws {
+        let root = temporaryTestRoot("LibraryFilterReset")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let section = TimelineSection(offset: 0, limit: 1,
+            list: [TimelineDay(year: 2024, month: 4, day: 20, itemCount: 1)])
+        let video = try filterItem(id: 1, filename: "clip.MOV", type: "video", time: 1_713_571_200)
+        let transport = FilterModelTransport(snapshot: .init(sections: [section]),
+                                             pages: [0: [video]], delay: .zero)
+        let repository = try CachedPhotosRepository(
+            credentials: .init(username: "filter-reset", password: "unused", otpSecret: "unused"),
+            cacheRoot: root, transport: transport)
+        let library = LibraryModel(repository: repository)
+        await library.load()
+        let filter = LibraryFilterModel()
+        filter.configure(library: library)
+        for await _ in await repository.page(section) {}
+        let first = await waitUntil { filter.progress.verified == 1 }
+        XCTAssertTrue(first)
+
+        await library.clearMetadataCache()
+        let reset = await waitUntil { library.metadataInvalidationRevision > 0 && library.timelineVerified }
+        XCTAssertTrue(reset)
+        filter.configure(library: library)
+        let empty = await waitUntil { filter.progress.indexed == 0 }
+        XCTAssertTrue(empty)
+        for await _ in await repository.page(section) {}
+        let refreshed = await waitUntil { filter.progress.verified == 1 }
+        XCTAssertTrue(refreshed)
     }
 }
 

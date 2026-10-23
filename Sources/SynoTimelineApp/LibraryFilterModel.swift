@@ -27,6 +27,7 @@ final class LibraryFilterModel: ObservableObject {
     private var controller: LibraryFilterController?
     private var observer: Task<Void, Never>?
     private var fingerprint: String?
+    private var metadataRevision: UInt64?
     private var lastEdgeDemand: EdgeDemandKey?
     private var installedRegistration: LibraryFilterRegistration?
     private var installingRegistration: LibraryFilterRegistration?
@@ -49,12 +50,13 @@ final class LibraryFilterModel: ObservableObject {
         self.library = library
         guard let snapshot = library.snapshot, library.timelineVerified, let repository = library.repository else { return }
         let next = LibraryIndex(snapshot: snapshot).fingerprint
-        guard fingerprint != next else { return }
+        guard fingerprint != next || metadataRevision != library.metadataInvalidationRevision else { return }
         let previousController = controller
         observer?.cancel()
         Task { await previousController?.shutdown() }
         clear()
         fingerprint = next
+        metadataRevision = library.metadataInvalidationRevision
         let controller = LibraryFilterController(repository: repository, snapshot: snapshot)
         self.controller = controller
         observer = Task { [weak self] in
@@ -64,12 +66,6 @@ final class LibraryFilterModel: ObservableObject {
             }
         }
         Task { await controller.indexCachedPages() }
-    }
-
-    @discardableResult
-    func ingest(sectionIndex: Int, items: [PhotoItem], verified: Bool) -> Task<Void, Never>? {
-        guard let controller else { return nil }
-        return Task { await controller.ingest(sectionIndex: sectionIndex, items: items, verified: verified) }
     }
 
     func apply() {

@@ -132,6 +132,7 @@ extension CachedPhotosRepository {
             replacing: expectation
         )
         guard await metadataTokenIsCurrent(token) else { return .generationChanged }
+        if kind == .page, case .stored = result { publishPersonalPage(key: key) }
         return result
     }
 

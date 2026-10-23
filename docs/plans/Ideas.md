@@ -1,4 +1,6 @@
 Ideas for future features:
+
+Suspected incorrect behavior is tracked in [possiblebugs.md](possiblebugs.md).
 - Filtering everywhere, not just in the timeline.
   - Favorites and albums should be easy, map-based idk
 - Onboarding:
@@ -6,13 +8,11 @@ Ideas for future features:
   - Then add option to sign out/switch accounts (might want to have caches/dbs in subfolders of .cache for this and define LRU priorities for eviction between them).
   - After sign-in, suggest to warm the caches with the sections at least, optionally also thumbnails. If possible, open those views in the main window for this, need to extract them from their windows into a reusable thing for that.
   - The entire sign in should probably be one window detached from the main app window, this opens, and then when it is done closes and the main app window opens
-- Cache Correctness Check:
-  - Check if current cache follows not only the priorities and performs eviction when it is full, but also if eviction within a category is LRU, what would be needed to implement that
 - Square thumbnails:
   - Optionally display thumbnails in a square container.
   - Have a button for this in the menu bar.
   - The image just zooms so that the square is filled.
-  - While doing this, also fix left inset (right now, images touch the sidebar) and make option to keep the timeline visible.
+  - Add an option to keep the timeline visible.
 - Shared library access: Self explanetory, all the features we have right now, so timeline, maps, albums, etc, but using the shared data
 - Add to album/remove from album
   - Be able to pin albums to the sidebar, then can quick-add to album with cmd + 1-9
@@ -23,7 +23,6 @@ Ideas for future features:
 - Upload: define a folder to watch on the mac, upload with the syno api. Need to support destination definition for this. Optionally delete on mac once confirmed on nas
 - Live photo playback: on click-and-hold, live photo loads after the full photo has finished loading. Goes back to frame 1 when cursor lets go, no media controls shown.
 - Better loading indicator: Either a small donut that fills in the current location or elsewhere in the top bar, or a line that spans a part/all of the top bar and fills
-- More stable maps view that does not have to parse all the locations all the time and uses diffs
 - Investigate diffs for more things in the cache
 - Edit in:
   - Right click on photo and select "Edit in..." and then choose an app to open the photo in.
@@ -32,4 +31,3 @@ Ideas for future features:
 - Browse by folders
 - Filter within GPS box/polygon
 - Photo tools: filmstrip, histogram, peak detection, maybe focus edge detection
-- Bug hunt: check if the cached pages are always used, eg I found that even after alledgedly caching everything, the filtered view or views in the past are having problems (cache not full)
