@@ -7,6 +7,7 @@
 - **Core domain concepts:** Synology Photos spaces, photo/video items, timelines, collections, albums, thumbnails, originals, locations, selections, and authenticated DSM sessions.
 - **Data contract:** The NAS is authoritative. Metadata and media are delivered cached-first and demanded metadata is normally validated once per run; stale cached content remains useful when validation fails. External changes are not polled during a session.
 - **Architecture:** A process-shared repository actor owns authentication, cached-first metadata coordination, repository-driven filter indexing, persistence, mutations, and media work behind typed domain APIs. SwiftUI provides the shell, an AppKit viewport virtualizes the shared browser, AVFoundation plays repository-backed video ranges, SQLite indexes metadata/LRU state, and compressed media is stored as files in the ignored repository `.cache/` directory.
+- **Authentication:** `.env` requires `USER` and `PW`; `OTP` is optional for accounts without two-factor authentication. NAS-required OTP is reported at login. Authentication uses the observed `webui` session for normal-account access.
 - **Compatibility policy:** Incompatible preferences or cache schemas are discarded and recreated rather than migrated.
 - **Sources of truth:** The Synology Photos service on `cirrus`; Synology's DSM Login Web API documentation; and observed/reverse-engineered Synology Photos endpoints.
 

@@ -50,7 +50,7 @@ def load_env(path: Path) -> dict[str, str]:
             value = value[1:-1]
         values[key] = value
 
-    missing = [key for key in ("USER", "PW", "OTP") if not values.get(key)]
+    missing = [key for key in ("USER", "PW") if not values.get(key)]
     if missing:
         raise ProbeError(f"Missing required dotenv key(s): {', '.join(missing)}")
     return values
@@ -156,25 +156,25 @@ class SynologyProbe:
             raise ProbeError("NAS did not advertise SYNO.API.Auth")
         return data
 
-    def login(self, username: str, password: str, otp_code: str) -> None:
-        payload = self.call(
-            "/webapi/entry.cgi",
-            {
-                "api": "SYNO.API.Auth",
-                "version": "6",
-                "method": "login",
-                "account": username,
-                "passwd": password,
-                "otp_code": otp_code,
-                "session": "SynologyPhotos",
-                "format": "sid",
-                "enable_syno_token": "yes",
-                "enable_device_token": "no",
-                "device_name": "syno-login-probe",
-            },
-            post=True,
-        )
+    def login(self, username: str, password: str, otp_code: str | None = None) -> None:
+        parameters = {
+            "api": "SYNO.API.Auth",
+            "version": "6",
+            "method": "login",
+            "account": username,
+            "passwd": password,
+            "session": "webui",
+            "format": "sid",
+            "enable_syno_token": "yes",
+            "enable_device_token": "no",
+            "device_name": "syno-login-probe",
+        }
+        if otp_code is not None:
+            parameters["otp_code"] = otp_code
+        payload = self.call("/webapi/entry.cgi", parameters, post=True)
         if not payload.get("success"):
+            if otp_code is None and payload.get("error", {}).get("code") in {403, 404, 406}:
+                raise ProbeError("The NAS requires two-factor authentication. Set OTP in the environment file.")
             raise ProbeError(f"Login failed: {api_error(payload)}")
         data = payload.get("data")
         if not isinstance(data, dict) or not isinstance(data.get("sid"), str):
@@ -217,7 +217,7 @@ class SynologyProbe:
                     "api": "SYNO.API.Auth",
                     "version": "6",
                     "method": "logout",
-                    "session": "SynologyPhotos",
+                    "session": "webui",
                     "_sid": self.sid,
                 },
                 post=True,
@@ -243,7 +243,8 @@ def main() -> int:
     args = parse_args()
     try:
         credentials = load_env(args.env_file)
-        otp_code = generate_totp(credentials["OTP"])
+        otp_secret = credentials.get("OTP", "").strip()
+        otp_code = generate_totp(otp_secret) if otp_secret else None
         probe = SynologyProbe(args.base_url, verify_tls=args.verify_tls)
         advertised = probe.discover()
         photo_apis = sorted(name for name in advertised if name.startswith("SYNO.Foto"))

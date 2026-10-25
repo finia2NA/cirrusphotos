@@ -40,18 +40,26 @@ public actor SynologyClient: PhotosTransport {
         self.session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
     }
 
+    init(baseURL: URL, session: URLSession) {
+        self.baseURL = baseURL
+        self.session = session
+    }
+
     public func login(credentials: SynologyCredentials) async throws {
         for attempt in 0...1 {
-            let otpCode = try TOTP.generate(secret: credentials.otpSecret)
+            var parameters = [
+                "api": "SYNO.API.Auth", "version": "6", "method": "login",
+                "account": credentials.username, "passwd": credentials.password,
+                "session": "webui", "format": "sid",
+                "enable_syno_token": "yes", "enable_device_token": "no",
+                "device_name": "SynoTimeline"
+            ]
+            if let secret = credentials.otpSecret {
+                parameters["otp_code"] = try TOTP.generate(secret: secret)
+            }
             let response: APIEnvelope<LoginData> = try await post(
                 path: "/webapi/entry.cgi",
-                parameters: [
-                    "api": "SYNO.API.Auth", "version": "6", "method": "login",
-                    "account": credentials.username, "passwd": credentials.password,
-                    "otp_code": otpCode, "session": "SynologyPhotos", "format": "sid",
-                    "enable_syno_token": "yes", "enable_device_token": "no",
-                    "device_name": "SynoTimeline"
-                ], authenticated: false
+                parameters: parameters, authenticated: false
             )
             if response.success, let data = response.data {
                 sid = data.sid
@@ -59,7 +67,14 @@ public actor SynologyClient: PhotosTransport {
                 return
             }
             let code = response.error?.code ?? -1
-            guard attempt == 0, code == 403 || code == 404 else { throw SynologyAPIError.api(code) }
+            if credentials.otpSecret == nil, [403, 404, 406].contains(code) {
+                throw SynologyAPIError.configuration(
+                    "The NAS requires two-factor authentication for this account. Set OTP in .env to its base32 secret or otpauth URL."
+                )
+            }
+            guard credentials.otpSecret != nil, attempt == 0, code == 403 || code == 404 else {
+                throw SynologyAPIError.api(code)
+            }
             // DSM rejects a TOTP already used by a previous session. Retry once with a fresh window.
             let remainder = Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 30)
             try await Task.sleep(for: .seconds(31 - remainder))

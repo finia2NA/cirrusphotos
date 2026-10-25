@@ -4,12 +4,13 @@ import Foundation
 public struct SynologyCredentials: Sendable {
     public let username: String
     public let password: String
-    public let otpSecret: String
+    public let otpSecret: String?
 
-    public init(username: String, password: String, otpSecret: String) {
+    public init(username: String, password: String, otpSecret: String? = nil) {
         self.username = username
         self.password = password
-        self.otpSecret = otpSecret
+        let trimmed = otpSecret?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.otpSecret = trimmed?.isEmpty == false ? trimmed : nil
     }
 }
 
@@ -27,12 +28,16 @@ public enum CredentialStore {
         guard let url = candidates.first(where: { fileManager.fileExists(atPath: $0.path) }) else {
             throw SynologyAPIError.configuration("No .env file was found beside the project or app build.")
         }
-        let values = try parseEnv(Data(contentsOf: url))
-        let missing = ["USER", "PW", "OTP"].filter { values[$0, default: ""].isEmpty }
+        return try credentials(from: Data(contentsOf: url))
+    }
+
+    static func credentials(from data: Data) throws -> SynologyCredentials {
+        let values = try parseEnv(data)
+        let missing = ["USER", "PW"].filter { values[$0, default: ""].isEmpty }
         guard missing.isEmpty else {
             throw SynologyAPIError.configuration("Missing .env key(s): \(missing.joined(separator: ", "))")
         }
-        return SynologyCredentials(username: values["USER"]!, password: values["PW"]!, otpSecret: values["OTP"]!)
+        return SynologyCredentials(username: values["USER"]!, password: values["PW"]!, otpSecret: values["OTP"])
     }
 
     static func parseEnv(_ data: Data) throws -> [String: String] {

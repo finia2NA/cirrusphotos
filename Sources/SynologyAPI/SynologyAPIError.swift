@@ -18,8 +18,9 @@ public enum SynologyAPIError: LocalizedError, Sendable {
         case .api(let code):
             switch code {
             case 400: "The username or password was rejected."
-            case 402: "The account is not permitted to use Synology Photos."
+            case 402: "The NAS denied this request (Synology API error 402)."
             case 403, 404: "Two-factor authentication was rejected. Check the NAS and Mac clocks."
+            case 406: "The NAS requires two-factor authentication. Complete its setup in DSM before signing in."
             case 407: "The NAS temporarily blocked login attempts."
             case 119: "The Synology session expired."
             default: "Synology API error \(code)."

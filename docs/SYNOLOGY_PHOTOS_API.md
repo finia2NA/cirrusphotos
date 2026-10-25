@@ -225,6 +225,8 @@ The official DSM flow is:
 3. Make authenticated API calls using the mechanism supported by the target DSM build.
 4. Call `SYNO.API.Auth.logout` when the session is no longer needed.
 
+A read-only authentication comparison on 2026-10-25 with the disposable non-admin test account found that `SYNO.API.Auth.login` v6 rejected `session=SynologyPhotos` with error 402 but accepted `session=webui` with otherwise identical parameters. With the latter session, Personal initial/full timelines and the Favorites timeline all succeeded. The captured web client also uses `session=webui` for Auth resume. The native client and login probe therefore use `webui`; the probe logs out the same named session. Error 402 alone must not be described as proof that Photos application permission is missing.
+
 For TOTP accounts, the current six-digit value is passed as `otp_code`. The login probe in `scripts/test_synology_login.py` implements this flow without persisting a trusted-device token.
 
 On 2026-10-02, `cirrus` advertised:

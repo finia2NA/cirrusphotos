@@ -2,6 +2,7 @@
 .env
 *.har
 .cache/
+.cache2/
 
 # macOS
 .DS_Store

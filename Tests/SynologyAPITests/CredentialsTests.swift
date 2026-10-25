@@ -17,6 +17,9 @@ final class CredentialsTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["RUN_LIVE_SYNOLOGY_TEST"] == "1" else {
             throw XCTSkip("Live credential comparison is opt-in.")
         }
+        guard let secret = try CredentialStore.load().otpSecret else {
+            throw XCTSkip("The configured account does not use OTP.")
+        }
         let script = "import importlib.util,pathlib; s=importlib.util.spec_from_file_location('probe','scripts/test_synology_login.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.generate_totp(m.load_env(pathlib.Path('.env'))['OTP']))"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
@@ -28,7 +31,7 @@ final class CredentialsTests: XCTestCase {
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0)
         let reference = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let swift = try TOTP.generate(secret: CredentialStore.load().otpSecret)
+        let swift = try TOTP.generate(secret: secret)
         XCTAssertTrue(swift == reference, "Swift and Python TOTP calculations differ.")
     }
 

@@ -8,6 +8,8 @@ SynoTimeline is a macOS 27+ SwiftUI client for browsing a very large Synology Ph
 
 The Synology Photos service is authoritative. The client does not poll for external changes during a session. Demanded resources are normally validated once per run, while cached content remains usable when the network is slow, unavailable, or validation fails.
 
+Authentication uses `USER` and `PW` from `.env`; `OTP` is optional for accounts without two-factor authentication. If the NAS requires it, login reports an error asking for `OTP`.
+
 ## Current product surface
 
 The native split-view sidebar contains Library, Favorites, Map, and Albums destinations. The app restores the last persistent destination and collection-specific photo/date scroll anchors. Session Map filters are not restored.
