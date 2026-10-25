@@ -212,7 +212,7 @@ final class InfoPanelTests: XCTestCase {
         ])
     }
 
-    func testMultipleSelectionCapsRenderedPins() async throws {
+    func testMultipleSelectionIncludesEveryLocatedItem() async throws {
         let items = (0..<501).map { index in
             makeItem(id: Int64(index + 1), filesize: 1000,
                      latitude: 10 + Double(index) * 0.001, longitude: 20)
@@ -227,8 +227,8 @@ final class InfoPanelTests: XCTestCase {
         }
         XCTAssertTrue(resolved)
         XCTAssertEqual(model.content.countText, "501 Photos")
-        XCTAssertEqual(model.content.pins.count, 500)
-        XCTAssertEqual(model.content.pins.last?.id, 499)
+        XCTAssertEqual(model.content.pins.count, 501)
+        XCTAssertEqual(model.content.pins.last?.id, 500)
     }
 
     func testMultipleSelectionWithoutCoordinatesHasNoPins() async throws {

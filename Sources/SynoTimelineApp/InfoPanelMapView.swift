@@ -6,12 +6,29 @@ import TimelineCore
 struct InfoPanelMapView: View {
     let pins: [InfoPanelPin]
 
+    @State private var position: MapCameraPosition = .automatic
+
     var body: some View {
         if !pins.isEmpty {
-            Map(initialPosition: .region(region), interactionModes: .all) {
+            Map(position: $position, interactionModes: .all) {
                 ForEach(pins, id: \.id) { pin in
                     Marker("", coordinate: CLLocationCoordinate2D(latitude: pin.coordinate.latitude,
                                                                   longitude: pin.coordinate.longitude))
+                }
+            }
+            .onChange(of: pins, initial: true) { _, pins in
+                // A user pan changes the binding. A new selection must frame its
+                // own annotations again, even when the pin count stays the same.
+                if let first = pins.first,
+                   pins.allSatisfy({ $0.coordinate == first.coordinate }) {
+                    position = .region(MKCoordinateRegion(
+                        center: CLLocationCoordinate2D(latitude: first.coordinate.latitude,
+                                                       longitude: first.coordinate.longitude),
+                        span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)))
+                } else {
+                    // MapKit fits annotation content to the actual viewport,
+                    // including marker height and widely separated locations.
+                    position = .automatic
                 }
             }
             .frame(height: 150)
@@ -19,30 +36,5 @@ struct InfoPanelMapView: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Map with \(pins.count) location\(pins.count == 1 ? "" : "s")")
         }
-    }
-
-    private var region: MKCoordinateRegion {
-        if pins.count == 1, let pin = pins.first {
-            return MKCoordinateRegion(
-                center: CLLocationCoordinate2D(latitude: pin.coordinate.latitude,
-                                               longitude: pin.coordinate.longitude),
-                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01))
-        }
-        var minimumLatitude = 90.0
-        var maximumLatitude = -90.0
-        var minimumLongitude = 180.0
-        var maximumLongitude = -180.0
-        for pin in pins {
-            minimumLatitude = min(minimumLatitude, pin.coordinate.latitude)
-            maximumLatitude = max(maximumLatitude, pin.coordinate.latitude)
-            minimumLongitude = min(minimumLongitude, pin.coordinate.longitude)
-            maximumLongitude = max(maximumLongitude, pin.coordinate.longitude)
-        }
-        let latitudeDelta = max((maximumLatitude - minimumLatitude) * 1.4, 0.01)
-        let longitudeDelta = max((maximumLongitude - minimumLongitude) * 1.4, 0.01)
-        return MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: (minimumLatitude + maximumLatitude) / 2,
-                                           longitude: (minimumLongitude + maximumLongitude) / 2),
-            span: MKCoordinateSpan(latitudeDelta: latitudeDelta, longitudeDelta: longitudeDelta))
     }
 }

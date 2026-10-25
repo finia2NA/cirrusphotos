@@ -31,3 +31,5 @@ Suspected incorrect behavior is tracked in [possiblebugs.md](possiblebugs.md).
 - Browse by folders
 - Filter within GPS box/polygon
 - Photo tools: filmstrip, histogram, peak detection, maybe focus edge detection
+- Airplay: Deferred after unsuccessful receiver testing; see [investigation results and original plan](archive/DEFERRED_AIRPLAY_PLAN.md). Original idea: photo in viewer is sent to TV, stays when exiting the viewer, and switches when another photo opens.
+- Improve UI everywhere

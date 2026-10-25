@@ -222,14 +222,11 @@ final class InfoPanelModel: ObservableObject {
             next.sizeText = nil
             next.isResolvingSize = true
         }
-        next.pins = info.coordinates.prefix(Self.maximumMultiplePins).enumerated().map {
+        next.pins = info.coordinates.enumerated().map {
             InfoPanelPin(id: Int64($0.offset), coordinate: $0.element)
         }
         content = next
     }
-
-    /// The rendered pin cap for a multiple selection; the count text stays exact.
-    private static let maximumMultiplePins = 500
 
     private static func countNoun(for info: SelectionInfo) -> String {
         guard info.isComplete, !info.hadFailure, info.resolvedCount == info.itemCount else { return "Items" }

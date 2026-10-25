@@ -39,7 +39,7 @@ Settings provides Automatic, Original, High, Medium, Low, and Mobile default vid
 
 Settings also controls pixel interpolation in the photo viewer. **Always** smooths every displayed image, **Thumbnails Only** smooths provisional thumbnails and large previews until the original is displayed, and **Off** disables smoothing. The preference updates an open viewer immediately.
 
-The Cmd+I Info utility panel follows the active viewer item or browser selection. It shows selection totals and date range, resolves aggregate size and media counts, and shows a single item's media-kind icon, filename, copyable item ID and available Synology folder path, capture date, camera/exposure details, dimensions, size, format, and available location context. It is transient and excluded from Mission Control and the normal window cycle.
+The Cmd+I Info utility panel follows the active viewer item or browser selection. It shows selection totals and date range, resolves aggregate size and media counts, and shows a single item's media-kind icon, filename, copyable item ID and available Synology folder path, capture date, camera/exposure details, dimensions, size, format, and available location context. Its location map includes every located item in the selection and refits to the pins when the selection changes. It is transient and excluded from Mission Control and the normal window cycle.
 
 ## Cache and network behavior
 

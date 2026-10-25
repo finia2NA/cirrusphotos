@@ -13,3 +13,5 @@ These files are historical design records. They may describe earlier states and 
 - `DONE_PHOTO_VIEWER_PLAN.md` — completed photo viewer; retains a manual verification checklist.
 - `DONE_CORRECTNESS_CLEANUP_PLAN.md` — completed browser, sidebar, Favorites, and timestamp corrections.
 - `TODO_REMAINING_CLEANUP.md` — superseded repository-structure note; its proposed state boundaries and pipeline split are now implemented.
+
+- `DEFERRED_AIRPLAY_PLAN.md` — investigation closed without implementation; records failed LG direct-media tests, working discovery/pairing, rejected extended-display workaround, and unresolved native-resolution delivery.
