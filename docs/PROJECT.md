@@ -48,7 +48,7 @@ The Cmd+I Info utility panel follows the active viewer item or browser selection
 - Timelines, exact pages, albums, location records, thumbnails, previews, originals, and previously fetched video ranges are delivered cached-first.
 - One repository-owned metadata lifecycle coordinates admission, shared jobs, stale-result rejection, storage generations, atomic same-row commits, and successful invalidation revisions.
 - A metadata-only Settings reset removes timelines, pages, album metadata, locations, and session filters while preserving compressed media, validators, decoded thumbnails, and already admitted media transfers. Full clear removes metadata and media.
-- The Map location index retains conservative fingerprint validation. Strict Diff transport and merge infrastructure exists, but cross-run Diff proof remains disabled until all recorded evidence gates pass.
+- The Map location index retains conservative fingerprint validation. Experimental Diff transport and merge infrastructure exists, but cross-run Diff validation is not yet integrated. A bounded v7 optimization is planned; current behavior remains fingerprint-based.
 - Thumbnail rendition changes preserve other cached sizes. Compatible fallback renditions remain visible until the selected rendition is available.
 - An optional viewer setting loads cached or network-backed `xl` previews alongside originals when the library rendition is smaller.
 - The Library menu can warm the selected thumbnail rendition for an inclusive populated-day range using bounded, cancellable background work.

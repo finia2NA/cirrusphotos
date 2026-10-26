@@ -1,0 +1,2 @@
+# Tested with the generated JPEG/EXIF fixtures and offline runner suite.
+Pillow==12.3.0

@@ -707,6 +707,93 @@ The same disposable PNG was then downloaded, given EXIF GPS externally, and over
 
 The cursor is opaque and must be stored verbatim; the response echoes the next cursor. `(0, 0)` returned error 700, but this does not distinguish a malformed pair from expiry/reset of a previously valid pair. Still unproven: isolated GPS-only changes/removals, repeated/conflicting changes, truncation or continuation for large intervals, retention beyond the observed two days, and whether `SYNO.FotoTeam` behaves identically for Shared Space. See `docs/plans/WIP_DIFF_CACHE_PLAN.md` for the intended use and remaining evidence gate.
 
+### Filesystem runner observations (2026-10-25)
+
+The first unattended `phototest` run stopped during GPS removal, before any bulk,
+pagination, deletion, or cursor-aging experiments. A generated JPEG appeared in
+`Item.list` after about 61 seconds; GPS gain and change were visible after about
+32 seconds each, preserving item ID and capture time while advancing thumbnail
+revision. Repeated Diff v1 reads from the exact pre-action pairs returned empty
+item/album arrays throughout those stages despite advancing returned cursors.
+This is negative evidence for the currently tested request/account/filesystem
+path; it does not establish a universal Diff contract or explain the difference
+from the earlier overwrite probes.
+
+For GPS removal, local EXIF inspection confirmed no GPS IFD remained, but the
+Photos API retained the previous nonzero coordinates. The runner timed out
+around 94 seconds; an authoritative ID lookup about five minutes after the
+stage began still returned those previous coordinates with the same item ID.
+Do not treat an EXIF-only removal as a confirmed server location removal.
+
+Read-only follow-up replay of every saved stage cursor remained empty, including
+the initial-add cursor about 12 minutes after its baseline. Version exploration
+using that same initial pair returned empty arrays in v2–v5 too. Versions 6 and
+7 also returned empty arrays, but add `item.merge` and `item.move` categories;
+the existing strict v1 decoder intentionally rejects those shapes. This probe
+does not establish v6/v7 cursor-pair compatibility or semantics. Fresh controlled
+baselines are needed before relying on those versions.
+
+Private evidence and follow-up summaries remain under
+`docs/captures/map-diff-run-20261025T215418Z-1e90a26b/` (ignored by Git), including
+`report.json`, `events.jsonl`, `investigation.json`, and
+`diff-version-shapes.json`. No NAS data was changed during the investigation.
+
+### Overnight filesystem run (2026-10-26)
+
+The completed replacement run established all 5,000 generated additions in a
+final authoritative inventory, while original/replayed Diff v1 intervals contained
+zero modifications (142-byte response). A 5,000-item deletion eventually returned
+all unique tombstones (35,141-byte response). An accepted 3,603-second-old cursor
+still omitted its known-present sentinel. This is negative coverage evidence for
+the tested `phototest` account/request/filesystem path; the cause and its difference
+from earlier account probes are unresolved. Fixtures used 2020 capture dates.
+
+Do not equate every runner failure with an API guarantee failure: page walks
+during mutation omitted files not yet unlinked, and duplicate-ID observations
+ended some stages before quiet baselines were available. Quiet equal-time order
+and 4 MiB completeness were not established. See the
+[sanitized results analysis](captures/MAP_DIFF_RESULTS_2026-10-26.md) for exact
+findings, artifact limitations, cleanup outcome and next experiments.
+
+### Focused historical/current-date run (2026-10-26)
+
+The second run used 12 isolated JPEGs, historical/current cohorts and direct-ID
+plus folder/list corroboration. In each cohort, Diff v1 omitted all six additions
+and all four completed metadata/pixel modifications. All six deletion checks per
+cohort passed. Both GPS-removal cases retained prior coordinates through a
+10-minute timeout. There were no scan retries or API/transport errors. Current
+dates therefore did not restore modification coverage under the tested contract;
+the earlier bulk observation artifacts do not explain this result. See the
+[focused results](captures/MAP_DIFF_RESULTS_2026-10-26.md#focused-second-run--completed-2026-10-26)
+for exact scope and evidence limitations. Account and request/path differences
+from the earlier successful probes remain unresolved.
+
+### Official Android request contract (2026-10-26)
+
+A decrypted capture from the official Synology Photos Android 2.4.0 (644) app on a disposable Android 14 Pixel emulator confirms a different protocol from the v1 probes above:
+
+- `SYNO.Foto.Browse.Diff.get_version`, **version 7**, returns the opaque `diff_version` / `version_time` pair.
+- `SYNO.Foto.Browse.Item.list_all`, **version 7**, initializes the mobile item cache with `id_before=-1`, `limit=1000`, `geocoding_accept_language=enu`, and `additional=["address","geocoding_id","thumbnail","video_meta","mobile_cache_mtime","gps","orientation","favorite"]`. The captured library initially contained one item; multi-page continuation is not established by this capture.
+- `SYNO.Foto.Browse.Diff.list`, **version 7**, sends both cursor values, `geocoding_accept_language=enu`, and `additional=["description","exif","resolution","orientation","address","gps","geocoding_id","thumbnail","tag","video_meta","mobile_cache_mtime","folder","rating","motion_photo","thumb_version","duplicate_hash","favorite"]`.
+- The observed quiet response has `item.modify`, `item.delete`, `item.merge`, `item.move`, top-level `similar`, and `has_next=false`, plus the cursor pair. It does **not** use the v1 response's `album` group. Do not apply the v1 decoder to this response or infer continuation behavior from an empty interval.
+- A later refresh also issued `Diff.get` **version 7** with `additional=["thumbnail","sharing_info","access_permission","provider_count"]`. From the same saved cursor, that response had no modified items, while `Diff.list` returned the newly indexed fixture with GPS. `get` is not interchangeable with `list` for the observed item-cache update.
+- The app also calls `Diff.list_user_event` **version 7** with the cursor pair; its observed quiet response has `list=[]`, `has_next=false`, and a cursor. The role and coverage of this separate feed are not yet established.
+
+A controlled one-photo addition used an owned geotagged JPEG in the disposable filesystem test area. After authoritative indexing and 90 seconds of unchanged metadata, v7 `list` returned the fixture once, replay returned it again, and the returned-cursor fence was empty. v1 `get` from that same pair remained empty. A separate comparison held `additional=["gps","thumbnail"]`, language, account, and cursor constant:
+
+| API version | Method | Result for the indexed addition |
+| --- | --- | --- |
+| 1 | `get` | Success, zero modifications |
+| 1 | `list` | Rejected, error 103 |
+| 7 | `get` | Success, zero modifications |
+| 7 | `list` | Success, one modification with GPS/thumbnail; `has_next=false` |
+
+The Android Places map visibly displayed that fixture. A subsequent warm startup after emulator restart used Diff v7 `list` without repeating Item `list_all` in its captured startup sequence; only the tiny disposable library was tested. This establishes an actionable method/version distinction and positive coverage for one addition, not bulk, edit, access-change, reset, or continuation completeness. The prior v1 negative results do not establish v7 `list` coverage. Production Diff validation remains disabled pending controlled coverage and completeness tests. The ignored private capture directory is `docs/captures/android-photos-session-2026-10-26/`; request/response JSON is sanitized before writing, with no raw credential-bearing HAR recorded. The initial record is a Mac proxy connectivity probe; subsequent Android requests establish actual app interception.
+
+The separate [third runner](captures/MAP_DIFF_MOBILE_RUNNER.md), `make test-map-diff-3`, now tests the captured v7 item feed with the focused edit matrix and a 5,000-photo batch. It records and rejects `has_next=true` instead of guessing continuation, checks candidate `list_all` pagination against owned/folder inventories, and keeps production validation unchanged. Its completed 2026-10-26 run passed 12 focused additions, eight same-ID edits and 12 deletions, with no observed direct visibility gaps. GPS removal remained inconclusive because the NAS retained coordinates. Bulk responses contained 2,000 modifications with `has_next=true`; continuation and complete bulk coverage remain unproven. All 5,012 known test IDs were absent after cleanup. See [third-runner analysis](captures/MAP_DIFF_RESULTS_2026-10-26.md#third-runner-mobile-v7-item-feed--completed-2026-10-26).
+
+A subsequent bounded Android refresh returned all 5,012 test tombstones in one terminal v7 `list` response (`has_next=false`). A read-only replay matched both the capture and exact known-ID set, then fenced empty; the final inventory had one original item. Deletion response length must not be assumed to share the observed 2,000-modification page behavior. Modification continuation remains unobserved. The initial product plan now deliberately handles only bounded terminal intervals and rebuilds for partial/large intervals, so another bulk capture is not a prerequisite. See [follow-up evidence](captures/ANDROID_MAP_DIFF_CAPTURE_2026-10-26.md#bounded-follow-up-after-the-third-run).
+
 ## Error and refresh behavior
 
 - A failed section request should leave the section descriptor intact and expose a retry state.

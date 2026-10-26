@@ -1,304 +1,666 @@
-# Diff-based cache validation
+# Unified metadata engine and stable day pages
 
-Status: shared lifecycle/storage kernel, scoped reset, repository-owned Map-filter dependencies, responsive cache-only filter pass, and strict bounded Diff transport/merge infrastructure implemented on 2026-10-09. Cross-run Map Diff proof remains deliberately disabled: the mandatory large-interval completeness, cursor reset/rejection, feed visibility delay, positional-scan completeness/stable equal-time ordering, and Personal Space access-change evidence gates are still open. Production Map therefore retains conservative fingerprint validation and persists no cursor/proof. Diff for all other metadata remains deferred until both evidence and measured user-visible benefit warrant an optional policy. The GPS-only coverage assumption remains accepted.
+Status: **implementation draft, 2026-10-27; no product code implemented.** This
+supersedes the earlier Map-first/independent-proof proposals. The user prioritizes
+one clean architecture over shipping Map first. Library, Favorites, normal
+Personal albums, Map and derived collections must use one repository-owned
+metadata engine; they must not acquire independent Diff coordinators.
 
-The design covers every current cache resource through a shared cached-first lifecycle/storage boundary. Map uses Diff for its independently baselined payload and bounded repair; other resources retain authoritative per-run validation. Missing Map proof keeps warm data provisional until explicit Retry. This is not a synchronization engine: there is no polling, persistent journal, Shared Space implementation, image-validation shortcut, or new NAS write.
+Current behavior remains documented in [PROJECT](../PROJECT.md) and
+[ARCHITECTURE](../ARCHITECTURE.md). Protocol evidence is in
+[Map/Diff results](../captures/MAP_DIFF_RESULTS_2026-10-26.md) and the
+[Android capture](../captures/ANDROID_MAP_DIFF_CAPTURE_2026-10-26.md). The
+[page topology investigation](../captures/TIMELINE_PAGING_ANALYSIS_2026-10-27.md)
+is part of this plan and distinguishes observed NAS behavior from proposed
+normalization.
 
-## Intended end state and maintainability judgment
+## 1. Decisions and boundaries
 
-The primary goal is smooth use of already cached photos on slow or unavailable networks. Reducing request count is secondary. Diff must remain a private repository validation strategy: it must not become a prerequisite for displaying cached data, a new responsibility of each view model, or a general synchronization framework.
+Build one normalized metadata model and one coordinator inside the existing
+`CachedPhotosRepository` actor:
 
-The whole-app design is maintainable with one narrow shared metadata lifecycle/storage kernel and a small fixed set of concepts: (1) the existing semantic resource key/cached value, (2) Map's optional resource-owned proof, and (3) scoped invalidation of existing shared jobs. Resource-specific fetch algorithms remain in their existing extensions; Map repair is localized there. Images keep their pipeline. Do not build a second Diff cache, retained interval LRU, cursor propagation, per-consumer reset epochs, or a generalized baseline framework for deferred resources.
+- **Item identity:** one account/space/item ID, shared compact index and canonical
+  full details. No whole `PhotoItem` copies stored in each collection page.
+- **Collection identity:** predicates and authoritative membership/order, shared
+  day counts and stable day-local page slots. Favorite/album membership is not
+  inferred solely from ordinary item changes.
+- **Change authority:** one engine owns source cursors, eligibility, invalidation,
+  lookup, fences, fallback and atomic persistence. Collection providers acquire
+  data; they do not call Diff or decide when to advance a cursor.
+- **Map:** a projection of the same Personal item inventory, with a complete-
+  inventory flag and its own presentation revision, not its own persisted cursor.
+- **Sources:** start with proven v7 item `list`. Enable user/album event sources
+  only if the small tests in section 10 establish semantics. Otherwise use
+  authoritative collection reads **through the same engine**. Shared page schema
+  does not mean all collections share the same freshness evidence.
+- **Bounds:** terminal intervals only, at most 2,000 changed IDs and 4 MiB received
+  Diff bytes; no modification pagination in this slice. Partial/large/ambiguous
+  intervals invalidate affected scopes and use bounded authoritative recovery.
+- **Product contract:** cached data is emitted before authentication/network
+  waits. No periodic external-change polling. Normal reconciliation happens once
+  per run; explicit refresh, known local writes and demanded-read consistency
+  checks may require further engine work. Failed validation preserves cached data.
+- Keep media byte caches, their HTTP validators, transfer lanes and rendition
+  identities independent. Keep finite browser/viewer/filter retention bounds.
+- No new metadata actor, generic plugin/strategy framework, arbitrary rule DSL,
+  retained Diff-interval LRU, or per-view/per-collection synchronization engine.
 
-There is an irreducible cost: undocumented coverage must be established per resource, and independently fetched data needs separate baselines. The intended architecture covers the whole app without enabling Diff everywhere. Personal/Favorites timelines, all exact pages, album lists and opened-album scans retain ordinary cached-first, once-per-run authoritative validation in this implementation. Only Map receives a proof/delta strategy. The later-resource sections below specify conditions for future optional policies, not work required before Map ships. A later policy must improve measured responsiveness using the same lifecycle/storage kernel; do not add a resource-specific coordinator merely to save small requests. Album transport cleanup is a separate follow-up, not a Map prerequisite.
-
-Consumer APIs remain the existing `timeline(collection:)`, `page(_:collection:allowNetwork:priority:)`, `albums()`, image methods and `locationIndex()` streams. Their values, verification status and recoverable failures do not reveal whether validation used Diff, an authoritative request or a fenced scan. Keep `ResourceEvent` in `RepositoryResources.swift`; do not add proof/cursor/strategy flags to it. Location progress may describe useful work (checking/updating/scanning), but callers never choose the strategy. Settings gains one `clearMetadataCache() async throws` command; reset consumers receive only a successful invalidation revision, not the internal transaction phases. Existing `LibraryPageWindow` and `PhotoViewerSession` absorb page/window lifecycle details so SwiftUI views do not acquire server/cache orchestration.
-
-### Cached-first and offline contract
-
-- Read and publish cached timeline, exact page, location records and image bytes before awaiting authentication, metadata verification, Diff, fences or network admission. Verification controls server-dependent writes and new downloads; it does not disable scrolling, selection, cached viewer navigation or cached image display. An unavailable original falls back to its cached preview/thumbnail.
-- Failure after a cached value adds a nonblocking stale/offline indication and keeps the last usable value, selection, viewport and camera. It must not clear content, replace it with a spinner, manufacture an empty collection, or start an automatic full-library rebuild. Cold failure shows an error/retry state. Explicit metadata clear is the intentional exception that discards cached metadata; its help text must explain that offline browsing metadata must then be fetched again.
-- A verified current timeline is required to admit **new network page work**, not to read an exact cached page from the last known timeline. Preserve this distinction in `LibraryPageWindow` and `PhotoViewerSession`; tests already exercise cached pages with `allowNetwork: false`. Metadata refresh must not hold image disk reads or decoded-image lookup behind the metadata gate.
-- Prefer a direct authoritative fetch when no usable proof exists; baseline proof creation is opportunistic and is not required for delivering an ordinary successful fetch. If a fence cannot be established, publish a successfully fetched single-response resource under the existing once-per-run semantics without proof. A multi-request scan with an observed concurrent change remains unverified and keeps the previous snapshot; never use the single-response exception to bless an unstable paginated result.
-- A Diff-specific unsupported/malformed/timeout failure may fall back once to the resource's ordinary fetch when that is a bounded single request and the session remains usable. Authentication/offline failure does not cascade into more network work, and expensive scans require an explicit retry after transient feed failure. If the authoritative fallback also fails, retain stale data and finish; no automatic retry loop. Use existing request timeout/cancellation policy, not a new adaptive timeout controller.
-
-Maintainability acceptance is behavioral: a consumer test with an ordinary fake transport and one with an eligible Diff transport must observe the same cached-first values and failure retention. UI tests should not need to know cursor pairs or baseline fences. If implementing a resource requires those concepts to cross the repository boundary, simplify or leave that resource conventional before shipping it.
-
-## Resource decisions and enablement boundaries
-
-Deferred policies below are future possibilities, not established protocol facts or initial implementation requirements. Map empty-interval reuse requires **all four** observed change arrays empty; bounded supported item changes may be repaired. Other warm intervals remain provisional with Retry until resolved. Unopened resources are untouched, and Map never validates their metadata.
-
-| Resource and current owner | Decision | Required proof and fallback |
-| --- | --- | --- |
-| Personal Library full timeline, `CachedPhotosRepository+Metadata.swift` / `registerTimeline` | DEFER Diff; conventional validation | A later policy needs fenced complete `Timeline.get`, upload/delete, date-move, access/completeness/reset gates and measured benefit. Initial timeline never supplies full proof. |
-| Exact Personal Library section pages, same file / `registerPage` | DEFER Diff; conventional validation | A later policy must cover exact bounds/offset/limit and all `pageAdditional` fields, including favorite/EXIF/orientation/GPS, and improve latency. A timeline proof does not prove pages. |
-| Favorites timeline and pages | DEFER Diff; conventional validation | Preserve `favorite_only=true`, authoritative local-write refresh and frozen playlists. Future eligibility requires favorite/unfavorite and membership coverage plus measured benefit. |
-| Personal Space normal-album list, `CachedPhotosRepository+Albums.swift` / `registerAlbumList` | DEFER Diff; conventional validation | Future proof must fence the complete paginated list and cover lifecycle, names/order/count/cover/access changes. Empty `album` alone is insufficient. |
-| Album cover bytes | NO image shortcut | The list proves only the current cover descriptor. Share the existing unit-ID/rendition cache and HTTP validation with other thumbnails. |
-| Opened normal-album synthesized timelines and exact pages | DEFER Diff; conventional validation | Future policy needs membership/order/item-field evidence and measured benefit; independently baseline scan and exact page. List proof/count equality never proves membership. |
-| Personal Library location index | Only initially proof-enabled resource | Its own complete baseline/cursor, feed and positional-scan completeness/access/reset gates, observed upload/delete/combined-edit evidence and accepted GPS-only assumption. Bounded repairs look up every modified ID. An unusable warm proof retains provisional pins with explicit Retry; it does not trigger a large rebuild automatically. |
-| Session map-filter timelines/pages, `MapFilter.swift` | NO independent persistent proof | Derived from the selected location-record revision and verified complete Personal Library pages; preserve required-ID completeness checks. Invalidate on either dependency reset/change, return to Map if selection membership is obsolete. |
-| Thumbnail, viewer preview-thumbnail and original bytes | NO Diff replacement | Preserve conditional GET, opaque cache key, content validation, decoded-image digest identity, priority promotion, and manual downloader reuse policy. Empty Diff does not establish rendition or original immutability. |
-| Shared Space and condition albums | DEFER | The app uses Personal Space and requests `category="normal"`. No inference from `SYNO.Foto` to `SYNO.FotoTeam`; condition membership can change for reasons outside observed normal-album events. Keep unsupported types out of proof eligibility. |
-
-There is no blanket “cache validated” state. Each resource can remain on its conventional path indefinitely if its gate fails; correctness is preferable to forcing Diff into every pipeline. A negative coverage result must disable the affected policy, not silently broaden the accepted GPS assumption.
-
-## Current behavior and corrections
-
-Read [architecture](../ARCHITECTURE.md#locations-and-map), [cache design](WIP_CACHING_PLAN.md), and [recorded API evidence](../SYNOLOGY_PHOTOS_API.md#library-change-feed) together. The cache design document includes longer-term proposals; the source and architecture describe the current SQLite3 implementation and completed album/map features.
-
-- `Sources/PhotoCache/LocationIndex.swift`: `locationIndex()` emits cached records, joins Personal Library timeline validation, and compares `LibraryIndex.fingerprint`. A mismatch runs `runLocationIndexScan`, using 1,000-item positional pages, up to two concurrent requests, and a 2,048-page cap. It persists located records, scanned count, schema version, and source fingerprint. No cursor is stored.
-- `Sources/PhotoCache/CachedPhotosRepository+Metadata.swift`: `timeline` and `page` use `validationRun(for:)`, including run ID, collection, and mutation epoch. Exact page keys contain collection, date bounds, offset, limit, and requested additional fields. There is no item-membership index or durable cursor dependency.
-- `Sources/PhotoCache/CachedPhotosRepository+Albums.swift` separately validates the album list. Opened album snapshots are synthesized by `SynologyClient.albumTimeline(albumID:)`. These resources retain their current validation paths in the first slice.
-- `Sources/PhotoCache/DiskCache.swift` stores metadata JSON in SQLite and images in files. SQLite schema version 2 adds monotonic row revisions. Metadata commits return an explicit stored/generation-changed/superseded/not-retained result under atomic generation and row-revision checks. Metadata-only reset advances a separate generation and transactionally deletes non-image rows; full reset advances both generations.
-
-Do not carry forward these unsafe assumptions:
-
-1. Intersecting changed IDs with IDs already in a cached page cannot validate membership. An insertion, a capture-date change into a range, or a deletion elsewhere in a split day can shift an offset without touching any cached ID. Favorites and album membership have the same problem.
-2. Equal day counts or equal fingerprints do not prove unchanged GPS, thumbnails, order, or identity. A same-day delete/add can preserve counts. Changed-day rescanning is not a correctness-preserving fallback for a rejected or incomplete feed.
-3. A cursor obtained after a scan cannot simply be attached to it. Changes during positional pagination can skip or duplicate items. The payload must demonstrably cover the cursor's interval.
-4. Advancing a global cursor after updating Map leaves unopened albums and undemanded pages behind. Map owns its cursor inside its payload and cannot validate another resource.
-5. Diff does not prove image-validator or rendition-key correctness. Keep conditional thumbnail/original validation and manual range-download behavior unchanged.
-
-## Protocol evidence and accepted assumption
-
-The 2026-10-06 and 2026-10-08 probes establish that `SYNO.Foto.Browse.Diff` is advertised at versions 1–7, `get_version` v1 returns the opaque pair `diff_version`/`version_time`, and `get` returns a deterministic complete-looking interval for an observed two-day-old cursor. That interval contained 67 unique `item.modify` base records and advanced to the current cursor; repeating it returned the same records, and querying the returned cursor was empty. Diff supplied no GPS or thumbnail fields. A v7 item lookup returned all 67 current rows in exact order, and a subsequent quiet-window Diff fence was empty. A mixed lookup silently omitted a nonexistent ID, so lookup omission is not authoritative deletion evidence.
-
-A later controlled sequence proved that an upload appears as one base record in `item.modify` and a deletion appears as one bare integer ID in `item.delete`. The deleted ID was omitted from lookup, while unrelated concurrent modifications remained in both intervals. Each returned cursor produced an empty fence. Full sanitized conclusions and shapes are recorded in `docs/SYNOLOGY_PHOTOS_API.md`.
-
-A controlled external overwrite then added EXIF GPS to an existing disposable PNG. Synology retained the same item ID, returned that ID once under `item.modify` with no deletion, and exposed the new coordinates through authoritative lookup. The overwrite also changed capture time and thumbnail cache key while retaining thumbnail unit ID, so it proves the combined GPS/time/thumbnail-revision reindex path but not an isolated GPS-only edit. An unrelated modification shared the interval, and the returned cursor fenced empty.
-
-Missing cursor fields returned 120; a deliberately mismatched pair and `(0, 0)` returned 700. Error 700 is not yet proven to mean expiry/reset of a once-valid cursor. Preserve both cursor fields exactly as issued; do not derive cursors from dates or order them numerically. The original 67-record interval does not identify its actions; the later controlled probes separately establish upload, deletion and combined-edit coverage.
-
-The vendored `docs/SynologyPhotosAPI/API/SYNO.Foto.lib` advertises Diff but supplies no change semantics. `docs/SynologyPhotosAPI/API/SYNO.Foto/SYNO.Foto.Browse.Item.list.md` describes pagination and optional GPS fields, but establishes no arbitrary-ID batch lookup contract. Do not invent `item_ids`, `getinfo`, continuation fields, or tombstone shapes.
-
-The implementation must encode the observed evidence and explicit policies below; later probes refine them without silently changing the safety behavior:
-
-| Evidence or accepted policy | Implementation consequence |
-| --- | --- |
-| Actual addition, modification, deletion entries; item ID versus thumbnail unit ID; overlapping modify/delete entries; repeated changes | Define strict decoding and unambiguous final-state normalization. Never assume delete wins without evidence. |
-| GPS added/changed/removed, capture time changed, and thumbnail regeneration/replacement | Assume these appear under `item.modify`; always perform authoritative lookup for modified IDs. Document the residual false-empty risk and provide metadata-only invalidation as recovery. |
-| Complete interval from an older pair to the returned pair; truncation, continuation, reset, overflow, and large-import behavior | Partial change lists cannot authorize commits. Implement actual bounded pagination only if observed; reject ambiguous/over-limit responses. |
-| Read-only lookup of specified item IDs, fields, batch limit, missing/deleted/inaccessible IDs, order, and GPS-absence semantics | Repair needs authoritative metadata or complete feed records. A missing response is not automatically a deletion. |
-| A second Diff call after metadata reads detects changes during those reads; indexing delay between item reads and feed visibility | Establish the consistency fence below. If visibility lags without a reliable fence, leave the optimization disabled. |
-| Rejection/reset of a previously valid cursor and account isolation | Classify known rejection separately from auth, malformed requests, unsupported API, and transient failure. Unknown errors never become empty deltas. |
-
-Current evidence: addition, deletion, combined GPS gain/capture-time/thumbnail revision, nonempty modify decoding, deterministic replay, an accepted two-day-old cursor, ordered repair lookup, missing-ID ambiguity, bare-integer tombstones, unrelated concurrent entries, and empty consistency fences are observed. An isolated GPS-only change or removal could not be exercised because Synology Photos exposes GPS only as read metadata; its current frontend has no GPS editor and `Browse.Item.set` rejects a `gps` value.
-
-Proceed with the explicit product assumption that a GPS-only edit or reindex appears under `item.modify`, like other item changes. This is an accepted residual freshness risk, not a proven protocol fact. The delta path must look up every modified ID with `gps` and `thumbnail`; it must never infer that the base Diff record itself contains current location data. If the assumption is false, an empty Diff interval can leave a pin stale. The metadata-only invalidation command specified below is the recovery path: it removes the location payload and cursor so the next Map demand performs a fenced full scan, while preserving expensive image bytes.
-
-Repeat/conflict handling can conservatively rebuild without understanding final-event precedence. Large-interval completeness and rejected/reset cursor behavior are mandatory enablement gates: a client size limit cannot detect a server silently truncating a small response, and a successful empty interval after reset cannot be repaired by error handling. Implement infrastructure before those probes, but retain authoritative validation until the relevant gates pass. A duplicate or modify/delete overlap, malformed/unknown shape, oversized interval, missing required cursor, lookup omission without a matching tombstone, or error 700 cannot authorize reuse. Do not classify error 700 as expiry in diagnostics until a previously valid pair is observed failing.
-
-Cursor retention duration is an operational measurement, not a guessed TTL. Safe rejection handling permits implementation without knowing the maximum age. Shared Space and condition-album semantics are not prerequisites for the map slice.
-
-### Mandatory controlled evidence matrix
-
-For every row below, save cursor A and authoritative before-state, perform exactly the specified disposable-data action, wait for the web app and authoritative reads to show the change, then call `Diff.get(A)` twice and `Diff.get(returnedCursor)`. Record indexing order and whether the feed becomes visible before, with, or after authoritative state. Quiet-window checks are sound only under the established visibility contract; a reproducible delayed/omitted event fails the affected gate. Repeated observations provide operational evidence, not a mathematical guarantee of undocumented server behavior. Record server version and re-evaluate after a server upgrade; unknown capability uses conventional validation.
-
-All actions that change NAS state are user-performed or separately explicitly approved. This plan authorizes read-only analysis, not writes or permission resets. A HAR should capture each named UI interaction from before action through authoritative refresh, with request/response bodies for Diff and the follow-ups. If the UI never calls Diff, pair read-only probes with the HAR. Sanitize fixtures as described below.
-
-| Controlled action / gate | Inspect in Diff; never invent an unobserved shape | Authoritative comparison and resources unlocked |
-| --- | --- | --- |
-| Upload then delete disposable photos, including same-day replacement with unchanged count | Observed `item.modify` base object and `item.delete` integer ID; check unrelated records and replay | Full Personal `Timeline.get` v6; exact affected `Item.list` v7 pages including split-day offsets; `Item.get` v7 `id=[...]`. Existing upload/delete evidence satisfies event shape only; compare membership/order to unlock timeline/pages/location. |
-| Move capture time across two populated days and into a previously empty day; equal timestamps | Check target under `item.modify`, no assumed old date or ordering position | Timeline before/after plus all old/new day slices and ID lookup with `pageAdditional`; album scan if item is a member. Establish ordinal shifts, tie order and visibility. Combined overwrite already showed a time change but does not replace this split-day test. |
-| Favorite then unfavorite one item, including outside all cached pages | Determine whether `item.modify`, `album.modify`, both, or neither changes; record actual shapes | `Timeline.get` and exact `Item.list` with `favorite_only=true`, plus personal/album lookup favorite fields. Unlock Favorites and any page payload containing favorite. If neither domain changes, those resources stay conventional. |
-| Add/remove an existing library item in a normal album, then reorder album items | Inspect all four arrays: especially whether album membership/order emits `album.modify` even when item metadata does not change | `Album.list` v4 normal category; `Album.get` if captured; complete `Item.list` v7 with scalar `album_id`, `takentime` descending and `additional=[]`, and exact album pages with `pageAdditional`. Compare ID order/count and synthesized days. Manual UI order may not affect app capture-time order; prove this rather than treating it as a cache bug. |
-| Create, rename, delete normal album; explicitly change cover; delete or edit current cover item; last-item removal | Nonempty `album.modify`/`album.delete` shapes are **unknown today**. Capture full sanitized objects/scalars and IDs before defining decoders | Entire paginated `Album.list` with `sharing_info,thumbnail`, names/order/type/count/cover unit ID and cache key; album contents. Unlock list and normal-album dependencies only if every observable change is covered by some inspected array. |
-| Metadata edits: description, rotation/orientation, EXIF, thumbnail regeneration/replacement, GPS gain/removal | Observed combined overwrite preserves ID and emits `item.modify`; inspect every field change independently where available | `Item.get` with `pageAdditional`, exact page, and old/new thumbnail descriptor plus conditional image response. Pure GPS-only remains explicitly assumed, not blocking; the other page-field gaps remain gates. No image shortcut is unlocked by this probe. |
-| Revoke/restore visibility of disposable item/album or folder permission with a controlled account | Inspect whether tombstone, modification, error, or silent omission occurs, including album-only visibility | Same account's full timeline, exact page, full normal-album list/scan and ID lookup. Omission alone is not deletion. If visibility changes produce false-empty Diff, affected resources cannot use cross-run proof without an independent authoritative access check; do not present cached data as access-verified. |
-| Large import/delete and old interval, beyond likely response limits; repeated edits to same IDs | Inspect all four arrays, returned pair, duplicate/conflict behavior, actual continuation/truncation fields if any | Compare complete authoritative before/after ID inventories under a quiet fence. Cover >2,000 changes and >4 MiB expected data; verify actual termination, not merely matching returned counts. Unknown truncation means no cross-run Diff enablement. No invented continuation parameters. |
-| Positional scan completeness, especially >1,000 equal-capture-time items straddling page boundaries | An empty Diff fence proves only no observed change, not stable positional ordering or absence of skipped items | Compare the scan's complete ID set against an independently obtained authoritative inventory of a controlled test library; compare several repeated scans, varied page sizes and offsets across equal timestamps. Verify no omissions/duplicates under the actual `locationScanPage` query. Equal total counts, duplicate detection and repeated agreement alone are insufficient. If a stable complete positional walk cannot be established, do not mint Map proof; keep warm pins provisional and require a separately proven enumeration method before enabling repair. |
-| Once-valid cursor rejection/reset: retained old pair, service restart/reindex/reset on disposable test environment only | Compare `get_version`, old-pair response, error code/shape and any silent pair reuse | Rebuild authoritative baseline; exercise fake fixtures for 120/700/auth/transient/malformed separately. A disruptive live reset needs separate approval. If a reset can silently accept an old pair as empty, require a reliable server epoch signal or leave reuse disabled. |
-| Condition album rules/membership, only if later supported | Determine item and album event dependencies, including permission/rule changes | Rule definition, album list and complete matching items before/after. Explicitly deferred and cannot block shipping conventional normal albums. |
-
-Store a resource eligibility table beside the policy code (planned `MetadataValidationPolicy.swift`) with links to sanitized evidence in `docs/SYNOLOGY_PHOTOS_API.md`. Tests simulate both passing and failing gates; a compile-time enabled resource policy must be backed by recorded evidence. Do not add a user-facing “trust Diff” switch that bypasses these gates.
-
-A HAR would still help for capture-time changes and a bulk import: capture the Synology Photos web app in Personal Space from initial load through each action and refresh, including `SYNO.API.Info`, `Browse.Diff.get_version/get`, subsequent item-detail/list requests, and response bodies. Synology Photos 1.9.1-10928 has no GPS editor and rejects `Browse.Item.set` with a `gps` value. To test the accepted GPS assumption later, externally edit EXIF on one disposable JPEG through its underlying file path, allow Synology to reindex it, and compare read-only Diff and item lookups before and after each edit; do not overwrite a non-disposable original. Preserve ordering and paired cursor values in private analysis; commit only sanitized fixtures without cookies, SID, SynoToken, credentials, filenames, or real coordinates. If the web app does not call Diff, the HAR cannot settle its semantics: compare read-only Diff calls around the same actions. Obtain explicit approval before performing any write endpoint probe; this plan authorizes none.
-
-## Payload and persistence contract
-
-Modify `LocationIndexPayload` in `Sources/PhotoCache/LocationIndex.swift` to retain `[PhotoLocationRecord]` inside the versioned `MetadataCacheEnvelope` specified below. Its optional proof owns the `DiffCursor`; do not duplicate that cursor inside the records payload. A cursor-bearing envelope means the complete located subset is valid through that cursor. A cursorless envelope remains usable provisionally across runs; it cannot be labeled current and does not cause a full scan on every warm launch.
-
-Remove `sourceTimelineFingerprint` as a freshness authority and remove `scannedItemCount` from durable delta bookkeeping: the located subset cannot distinguish addition of an unlocated item from modification of an existing unlocated item. Scan progress keeps a local count.
-
-Increment the Map payload/key version for its proof envelope. Other metadata codecs/keys stay unchanged unless directly modified by the shared kernel; version any changed format and discard incompatible payloads without conversion or legacy decode branches. No new SQLite columns or account-schema bump are required. Keep the existing SQLite shape so this metadata change preserves image files. A future incompatible SQLite change follows the existing whole-account discard policy separately from the metadata-only reset contract.
-
-Encode records and cursor together and replace the single metadata row in one SQLite statement. Never persist a cursor in UserDefaults or a separately updated row. Extend the disk write boundary with a commit result, for example `CacheWriteResult.stored`, `.generationChanged`, and `.notRetained`, distinguishing stale-generation rejection from a result not retained after trimming. Storage failure must leave a coherent old/new row or a miss, never a new cursor with old records. Existing callers may discard the result explicitly.
-
-Add a metadata generation beside the existing whole-cache generation in `Sources/PhotoCache/DiskCache.swift`. Metadata reads may use cached bytes immediately, but every network-backed write of `.timeline`, `.page`, `.albumList`, or `.locationIndex` captures and rechecks `currentMetadataGeneration()`. Full `clear()` advances both generations. The new `clearMetadata()` advances only the metadata generation and deletes those four kinds in one SQLite transaction. It must not delete or rewrite `.thumbnail`, `.previewThumbnail`, or `.fullImage` rows/files, clear image validators, reclassify thumbnail families, or reject image writes that captured the unchanged whole-cache generation. Do not reuse the whole-cache generation for this command merely because it is simpler; doing so would discard in-flight expensive downloads.
-
-A verified network result can remain usable in run-local memory after storage failure, with an aggregate diagnostic; restart retries from the last persisted payload. Keep the `.locationIndex` retention class in `CachePriorityPolicy.swift`. Cursor bytes count in the existing payload budget. No extra protected cache, change journal, per-photo database, or independent budget is needed.
-
-## Interfaces and ownership
-
-Add `Sources/SynologyAPI/DiffModels.swift` for `DiffCursor: Codable, Hashable, Sendable` and the proven response/change types. Decode cursor integers without floating-point conversion. Required arrays/fields must not default to empty; ignore unrelated unknown fields. Keep item IDs distinct from `ThumbnailInfo.unitID`. Validate malformed/duplicate/conflicting entries using the recorded protocol. The observed success envelope is `data: {diff_version: Int64, version_time: Int64, item: {modify: [baseRecord], delete: [Int64]}, album: {modify: [], delete: []}}`; `baseRecord` contains `id`, `filename`, `filesize`, `folder_id`, `indexed_time`, `owner_user_id`, `time`, `type`. No `additional` fields occur in Diff. Until controlled album probes define nonempty entry shapes, detect nonempty album arrays as unsupported-for-proof without inventing their element type; never discard them during decode. After evidence, add strict typed album shapes and malformed fixtures. Empty/missing/wrong-type arrays are distinct cases.
-
-Extend the complete contract in `Sources/SynologyAPI/PhotosTransport.swift` and implement in `SynologyClient.swift`:
-
-```swift
-func diffVersion() async throws -> DiffCursor
-func changes(since cursor: DiffCursor) async throws -> PhotoDiff
-func locationItems(ids: [Int64]) async throws -> LocationItemLookup
+```mermaid
+flowchart LR
+  NAS["NAS item feed + authoritative collection readers"] --> E["CachedPhotosRepository: one metadata engine"]
+  E <--> S["One SQLite metadata transaction boundary"]
+  S --> I["Canonical item data"]
+  S --> M["Day catalogs + ordered membership slots"]
+  E --> B["Library / Favorites / Albums browser"]
+  E --> P["Map / filters / Info / viewer"]
 ```
 
-`PhotoDiff` expresses a complete interval and returned cursor; `LocationItemLookup` distinguishes found items from explicitly confirmed absence if supported. Wire shapes and lookup parameters come only from the recorded evidence. The observed feed does not supply GPS or thumbnail fields, so the implementation must retain lookup. Use `PhotosRequestFields.locationScanAdditional` (`gps`, `thumbnail`) and retain `PhotoItem.id/time`. Update test-only defaults in `Tests/PhotoCacheTests/PhotoCacheTestSupport.swift` and `Tests/SynoTimelineAppTests/SynoTimelineAppTestSupport.swift` to throw for unexpected new operations; add no production protocol defaults.
+## 2. Page geometry: what is true now and what changes
 
-Add `Sources/PhotoCache/CachedPhotosRepository+Diff.swift` for gated transport helpers and `Sources/PhotoCache/LocationIndexDelta.swift` for a pure merge helper. Merge confirmed deletions and authoritative replacements by item ID. A found item without GPS removes its pin; a newly located item creates one. Replace time/thumbnail along with coordinates. Return unique records sorted by capture time descending, then ID ascending as a deterministic tie-breaker. Apply the same order to full scans because clustering depends on input order. Invalid coordinates follow `PhotoItem.coordinate` validation.
+### Observed current layout
 
-Extend actor-owned state in `RepositoryState.swift`, keeping `CachedPhotosRepository` the sole coordinator. Store one map validation job, run-local completed result, failure state, and job identity. Include Diff work in `hasDemand` so `cancelIdleLogin()` does not cancel needed authentication. No new actor, whole-cache observation, or global cursor is required.
+A `TimelineSection` has a day list, an offset **within its requested date range**,
+and a limit. It is not a global collection offset. Library/Favorites sections may
+pack several small days; a large day may repeat across sections with nonzero
+within-range offsets. Existing captured examples include a 228-item day split
+114/114, a 163-item section spanning nine days, and Favorites 344 items packed into
+three sections spanning 69 days. Initial and full timeline packet boundaries can
+differ. Albums currently synthesize one-day sections split at 1,000.
 
-## Validation algorithm
+Do not implement assumptions that all NAS sections contain one day, every server
+page has1,000 items, or a new day preserves server packet partitioning. No exact
+new-day NAS repacking algorithm has been established, and this design does not
+need one.
 
-`locationIndex()` emits cached records before authentication or network admission, then joins one shared validation job. Memoize successful results for the repository run, including unpersisted results. Later opens do no network validation unless the user retries a failure or clears the cache.
+### Normalize every collection to stable logical day pages
 
-### Cursor-bearing cached payload
+Add `Sources/SynologyAPI/CollectionDayCatalog.swift`:
 
-1. Capture metadata generation and job identity before the first suspended read. Do not start or await Personal Library timeline validation: Map proof and repair are independent. An already available timeline count may supply an explicitly approximate progress estimate; otherwise report scanned count without a total.
-2. Call `changes(since: envelope.proof.cursor)` through the metadata gate. A complete interval with all four arrays empty reuses records and atomically stores the returned cursor. An unsupported album change makes warm validation inconclusive and exposes Retry; do not decode unknown nonempty album shapes as empty or launch a rebuild automatically.
-3. For a bounded nonempty item delta, obtain authoritative metadata for every modified/added ID, including IDs absent from the old index. Resolve deletion/conflicts only according to proven semantics. Build a candidate copy; do not publish partial maps or mutate the last good payload.
-4. After all lookups, call `changes(since: returnedCursor)` as a consistency fence. Commit only if the fence is complete and all four arrays are empty, using its returned cursor. If there are more changes, discard the candidate, retain warm pins provisionally and offer Retry. Do not claim current metadata belongs to an earlier cursor or enter a catch-up/rebuild loop.
-5. Before publication and commit, recheck cancellation, metadata generation, and job identity. Publish one complete replacement, preserving the camera. Persist records and cursor together.
+- `CaptureDay`: validated year/month/day, lexical identity and UTC arithmetic on
+  **capture-local encoded wall time**, never Mac/GPS timezone inference.
+- `CollectionDayCount(day:count:)`, with nonnegative counts.
+- `CollectionDayCatalog(days:completeness:)`, sorted newest-first. For raw Personal/
+  Favorites full timelines, deduplicate repeated days and require equal counts
+  for repeats. Validate section coverage/count consistency before treating the
+  result as full. Use checked arithmetic and existing scan/count caps before
+  allocating sections/slots. Initial timeline is always provisional/partial.
+- `DayPageAddress(collection:day:offset:capacity:order:)`; `capacity=250` is a
+  single policy constant, offset is a multiple of250, and contains no section
+  index, global ordinal, whole-timeline fingerprint or current day count.
+- `CollectionDayPager.snapshot(catalog:capacity:) -> TimelineSnapshot`: every
+  generated `TimelineSection` describes exactly one day, offset 0,250,... and
+  limit`min(250,dayCount-offset)`. `TimelineDay.itemCount` remains the whole-day
+  count on every split section. Preserve `LibraryIndex`'s existing ordinal mapping.
 
-An omitted lookup ID without authoritative absence semantics, truncated/ambiguous response, over-limit delta, rejected cursor or unavailable proof cannot be partially applied. With warm pins, retain them provisionally and expose Retry/Rebuild; no automatic minutes-long scan follows. The repository's explicit retry starts at most one fresh full-baseline attempt when repair cannot proceed. Auth failure still requires the existing login retry.
+A storage slot represents a capacity 250 day slice. Its row records the catalog/
+page membership version and actual count used when read; it cannot be reused
+merely because its address stayed equal. The final short slot's size changing
+must invalidate its membership, not silently extend an old array.
 
-### Full baseline and fallback
+Keep catalog **presentation revision** separate from each day's membership
+generation. Adding a different day changes the catalog/ordinal revision, but must
+not make every existing slot stale merely because its catalog revision is older.
+Persistent slot eligibility compares collection predicate/order, that day's count/
+membership generation and applicable source-reset epoch. A whole-timeline
+fingerprint or section-array revision is never its cache-validity stamp.
 
-On cold Map demand (including demand after explicit metadata clear) or explicit warm Retry/Rebuild, obtain cursor A immediately before scanning if Diff is usable. The mandatory independent-inventory/equal-timestamp gate must establish the enumeration method before it can mint proof. Use the existing 1,000-item walk and metadata gate, retaining located records plus a bounded scanned-ID set for duplicate detection. Fetch a terminal short/empty page; reaching the cap on a full page fails. Call `changes(since: A)` after scanning. Attach its cursor only if the complete interval has all four arrays empty. A quiet fence does not repair omissions caused by unstable equal-time ordering. Any observed change or duplicate retains the old payload and reports Retry; do not rescan repeatedly.
+Use the same pager for Personal, Favorites, albums and session-derived
+collections. Refactor `DayGroupedTimelineBuilder` to call it rather than keep a
+second sectioning algorithm. Raw NAS section packing remains a transport input,
+not persistent browser cache identity.
 
-A cold demand or explicit retry permits at most one full scan, never one per implicit warm opening. A rejected cursor may establish a fresh A; unsupported/untrustworthy Diff cannot produce proof. A successful conventional scan can produce cursorless provisional records under the existing static-during-session assumption. If available stable-baseline verification detects instability, do not downgrade that failure to a successful cursorless candidate.
+### Required shift behavior
 
-Without a usable cursor, display warm records as provisional regardless of day-count/fingerprint equality and offer explicit Retry/Rebuild. Memoize the inconclusive status during the run so reopening Map does not rescan or retry implicitly. Remove the fingerprint-as-freshness shortcut; preserving provisional offline data is not a compatibility mode or a claim of freshness.
-
-Full scans do not populate ordinary page-cache keys: positional responses lack `pageAdditional` and are not exact timeline sections. Cached Personal Library descriptors can serve provisional map-filter page reads without validation; current verified descriptors are needed only for subsequent network-backed page work. External polling remains out of scope. A successful location replacement updates a repository-owned filter revision and invalidates affected active session filters through the flow below.
-
-## Bounds, lifecycle, mutations, and retry
-
-- Route Diff and lookup calls through the existing two-slot metadata `NetworkGate`, at prefetch priority for Map. Acquire/release each request separately; never hold a slot while awaiting child requests needing slots. Preserve cached-read immediacy and visible browsing priority. At most two lookups run concurrently; cancel siblings on every exit.
-- Define policy constants beside the Diff helpers: initially 2,000 unique changed IDs, 32 lookup requests, and batch size `min(100, provenServerLimit)`. These are client safety policies, not Synology limits. Reject oversized responses before constructing extra copies/sets. Bound received Diff bytes (initial policy: 4 MiB) in transport; `post` currently buffers responses, so checking only after decode is insufficient. Tune conservative constants from sanitized small/bulk import measurements before enablement.
-- Retain only cached located records, one candidate, bounded delta state, and two scan pages. The duplicate-ID set is bounded by the existing scan cap; measure its peak large-library cost. Do not retain all scanned `PhotoItem` values or image bytes. Merge/sort once per candidate.
-- Preserve the current location-job lifetime: leaving Map removes the subscriber but allows background completion; another window joins the same job. Clear-cache and repository teardown cancel work. Recheck identity/generation after awaits and before terminal events/writes so late work cannot repopulate disk or resurrect cleared pins.
-- Both full clear and metadata clear use the successful invalidation revision specified below. `LibraryModel` observes it once per window; `AppShellView`, which owns `MapBrowserModel`, forwards the invalidation to its map model because finished finite location streams cannot convey later resets. Successful reset clears records/pin descriptors/filter state while preserving camera where possible, without representing empty success. Only active Map demand starts fresh validation; no second transaction-state observer is installed in the map view.
-- Favorites writes can advance Diff. Never advance Map's cursor in `CachedPhotosRepository+Favorites.swift` or suppress IDs believed to be local writes: they may also have external GPS changes. Repair only coordinate/time/thumbnail fields. Preserve optimistic overrides, rollback, collection epochs, and authoritative Favorites refresh. A concurrent write may conservatively invalidate the fence.
-- Memoize failure for implicit repeated demand. Add explicit `locationIndex(retry: true)` from `MapBrowserModel.retry()` to create one fresh map attempt. Sticky authentication still requires `retryAuthentication()`; unsupported capability stays memoized for the run and uses full-scan fallback on explicit retry. No timers, automatic login loops, or periodic rebuilds.
-
-## UX and observability
-
-Update `LocationIndexEvent`, `Sources/SynoTimelineApp/MapBrowserModel.swift`, and `MapBrowserView.swift` to distinguish validation, changed-record repair, and full rebuild. Keep cached pins usable while validating and retain them on failure with Retry. Cold failure is an error, not a successful empty map. Only a successful complete result may clear all pins.
-
-In `Sources/SynoTimelineApp/CacheSettingsView.swift`, add a `Button("Clear Metadata Cache")` beside the existing whole-cache action. Its help text must say that it removes timelines, loaded sections/item pages, album metadata, and the map index while keeping thumbnails, viewer previews, and originals. Wire it through `LibraryModel.clearMetadataCache()` to the repository operation above; refresh usage afterward, but do not call `DecodedImages.shared.clear()`. Disable both cache buttons while either clear is running and show an inline failure state. Keep `Button("Clear Cache")` as the explicit all-data action. The metadata button needs no destructive NAS confirmation because it removes only reproducible local data, but its label and help must make the preserved image behavior discoverable.
-
-Progress uses changed IDs resolved / changed IDs for delta work and scanned items / estimated timeline total for a full scan. Do not substitute located count for library size or mix progress units. No new shortcut is needed. Avoid reapplying identical records in `receive` just to update freshness: `apply` currently reclusters on every completion.
-
-Record aggregate strategy, empty/nonempty delta, fallback reason (rejected/unsupported/oversized/unstable), request counts, scanned count, bytes, elapsed time, cancellation, and persistence failure. Do not log cursors, IDs, filenames, coordinates, tokens, or authenticated URLs. Distinguish network success from persistence success. Compare cached first paint and metadata-gate contention against the baseline; visible scrolling must remain responsive.
-
-## Shared metadata kernel and deferred optional proof policies
-
-Only the cached-first lifecycle, scoped generation admission and atomic same-key commit boundary are shared now. Map alone stores proof. Keep existing non-Map payload codecs unless changing them is directly required by that kernel; do not wrap every cached resource or implement a generalized baseline engine merely to prepare deferred features. The optional-policy algorithm below is a correctness contract for later work, not a requirement to enable or build timeline/page/album Diff now.
-
-Add planned `Sources/PhotoCache/MetadataCacheEnvelope.swift` with `MetadataCacheEnvelope<Value: Codable & Sendable>` containing current `schemaVersion`, payload, and optional `MetadataValidationProof`. The proof contains the opaque cursor, resource policy version, and (only for pages if enabled) owning full-timeline fingerprint. The existing semantic row key already binds namespace, Personal Space, collection/filter/sort, API version and requested fields: construct it once from a typed internal `MetadataResource` descriptor and do not duplicate those identities inside the proof. A fingerprint is a dependency identity, never evidence of freshness. Store the envelope in the existing single SQLite metadata payload row, including its run marker in the same write. No cursor table or schema migration is necessary. Version the metadata keys/envelopes and discard incompatible payloads without legacy decoding. Leave image keys/schema unchanged for this change. `LocationIndexPayload` remains a typed payload using this same proof representation, not a second competing cursor format.
-
-Proof means: **these exact authoritative payload bytes, excluding run-local optimistic overlays, were read within a quiet interval ending at this cursor, under this resource's proven event coverage**. An empty later interval extends only that payload's proof. An envelope without proof is still useful cached-first data and may be verified this run by ordinary fetch; it is not eligible for cross-run suppression. An evicted payload loses its proof. Never attach a new launch's cursor to old unbaselined bytes, including a newly created envelope around existing JSON.
-
-Add planned `Sources/PhotoCache/CachedPhotosRepository+Validation.swift` for shared actor-owned helpers for cached emission/failure retention, `captureMetadataWorkToken`, admission checks and `commitMetadata(_:expectedToken:)`. Keep the existing typed loaders and resource fetch algorithms; do not force them into a generic `loadMetadata(resource:fetch:)` framework. `CachedPhotosRepository+Diff.swift` owns Map's bounded transport/capability policy; a separate general `MetadataValidationPolicy.swift` is deferred. `MetadataWorkToken` carries whole-cache/metadata generations, existing resource job UUID and collection mutation epoch. Before awaiting reset, invalidate identities and close metadata admission; disk metadata generation rejects late writes without another reset epoch. Route all metadata commits, including Favorites patches/rollback, through this boundary; image pipelines use only whole-cache generation. `transientPage` stays a cache-bypassing read for the frozen Favorites viewer with reset/epoch rejection and no proof.
-
-### Deferred non-Map baseline and empty-interval policy contract
-
-This subsection applies only if a later resource earns eligibility and measured benefit. It does not override Map's explicit warm Retry policy above, and must not be implemented speculatively as a generalized baseline framework now.
-
-1. Serve a valid cached envelope provisionally without waiting for login, Diff or a gate. `allowNetwork: false` performs no Diff/fence work. If its run marker is current and its dependencies still match, finish as today.
-2. On demand, if policy is eligible and the envelope has matching proof, join `changes(since: exactPair)`. Require a complete decoded interval with **all four arrays empty**. Extend the proof to the returned cursor with an atomic envelope replacement; preserve payload identity so unchanged snapshots/pages do not churn the UI. Set run verification only after token checks. An unchanged result need not perform a second fence because it contains no intervening metadata reads.
-3. With no valid proof, nonempty interval or incompatible dependency, invoke the authoritative resource fetch. Conventional resources stop there; their cache envelopes have no proof. Where the policy enables baseline creation, get A immediately before the fetch and Diff(A) afterward. Only an empty complete interval across all four arrays authorizes a proof through B. For album list/scan the fence surrounds **all** pagination. Do not attach proof to partial pages, duplicate scan IDs or capped pagination. Cold visible page demand defaults to direct authoritative loading rather than adding two proof-establishment requests.
-4. If a baseline fence fails or observes concurrent changes, do not run an automatic second baseline loop. A complete single-response fetch may be delivered and stored without proof under the conventional once-per-run policy; its usefulness does not depend on earning a cursor. An observed unstable multi-request album/location scan retains the previous provisional payload and reports a retryable validation failure. This distinction belongs in the shared resource policy, not in consumers.
-5. If Diff is definitively unsupported or resource coverage is not enabled, use the ordinary per-run authoritative fetch with no proof. A Diff-specific failure follows the bounded fallback rules in the offline contract; auth/offline failure retains cached content without further requests. On known unusable cursor, abandon only that proof and attempt an ordinary authoritative fetch with optional fresh fenced baseline. Capability failures shared by the account prevent futile repeated Diff calls in that run; they do not disable ordinary loading.
-
-Network page admission requires a verified current full timeline; cached page reads remain available against provisional geometry. Fetch the exact descriptor selected from that timeline and compare the dependency fingerprint again before commit. Timeline replacement invalidates browser/page-window/viewer generations; old disk pages may remain provisional but cannot inherit proof for a new owning snapshot. Even if the timeline is byte-identical after a nonempty delta, each page still needs its own authoritative fetch (or its own empty interval if that optional policy is enabled). This deliberately avoids targeted day/page patching, which would require old/new membership, deletion dates, split-day offsets and ordering information absent from Diff.
-
-For local Favorites mutations, preserve `RepositoryFavoriteState`, NAS write order and **durable cached-page patching/rollback** in `patchAffectedPagesBatch` and `rollbackBatchFavoriteCaches`. Memory-only publication overrides lose confirmed favorite changes after restart/offline and are not an acceptable simplification. Move these same-key metadata writes onto scoped generation/row-revision commits; a patch or rollback must drop any optional proof attached to changed bytes. Rollback must merge only failed IDs into the latest row and cannot restore an old row over a newer fetch. `refreshFavoritesAfterMutation` remains authoritative and conventional; capture its metadata token before the request (currently generation is captured afterward). Reject pre-mutation completion and never subtract local IDs from Diff or advance Map's cursor. Deleting durable patching is deferred unless a separately specified, explicitly persisted confirmed-favorite overlay replaces it, including crash/restart, partial success and rollback semantics; that replacement is outside this implementation.
-
-### Bounded coordination and cost
-
-Keep Diff capability and the one Map job in `RepositoryMetadataWork`, using the existing `SharedJob` lifecycle and metadata gate. There is no completed-response LRU or run-wide proof budget subsystem. If later optional policies require sharing, coalesce only simultaneously requested identical `(namespace, space, pair, metadataGeneration)` pairs and remove the entry on completion. Do not build this cross-resource broker now. Returned pairs remain opaque; no ordering or synthetic interval union. Other pages/timelines/albums remain conventional and create no Diff queue.
-
-Later demand cannot reuse an earlier completed Diff response; it uses its resource's existing once-per-run marker or a fresh validation. Initially Map has one localized validation writer/job, so no cross-resource Diff broker is required. Keep that one-writer invariant in `RepositoryMetadataWork` even when using the shared commit kernel. Do not walk disk to refresh proofs. Release slots between Map scan/lookup/fence requests. Album pagination cleanup is deferred; it must not block Map. Add cross-resource in-flight sharing only if a later policy needs it and measurements justify it.
-
-Persistence writes use both generation checks and a resource revision compare-and-swap so a late extension of an old envelope cannot overwrite a newer authoritative payload under the same key. Add `DiskCache.putMetadata` (planned) to validate the expected metadata generation and expected current payload digest atomically, returning `.stored`, `.generationChanged`, `.superseded`, or `.notRetained`. Expose the existing `entries.digest` through `CacheEntry` as the read revision; distinguish an expected absent row from “no comparison.” Both fresh fetch and empty-proof updates use it. A current resource job may publish a valid result when persistence fails, but must not mark a different stored payload validated with `markValidated`; run-local retention stays bounded by existing windows/jobs. A crash leaves the whole old envelope or whole new envelope. A metadata clear transaction removes payload and proof together.
-
-Preserve `validationRun(for:)`, cached-first `ResourceEvent`, `LibraryPageWindow`'s eight-page bound, viewer's three-page bound, selection invalidation on ordered-ID change, metadata-before-image-download admission and Favorites frozen-playlist semantics. No metadata proof grants image validation, and session map filters never persist one.
-
-## Cached Map-filter delivery and ownership
-
-Implement this before Diff. `MapFilter.swift` currently waits for each normal page stream to finish before delivering its filtered result; a cached page can therefore remain hidden behind slow validation. Change `mapFilterPage` into two bounded passes: first read every exact covering cached Personal Library page with `allowNetwork: false` and immediately emit available filtered items as provisional, then (only if allowed) join ordinary authoritative page demand and emit a complete verified replacement after every required source page and requested ID is accounted for. Do not wait for any network call before the provisional emission, treat missing cache pages as unresolved rather than empty success, and do not retain a partial result as verified session cache. Preserve registered ID order and the 12-page session limit. This reuses normal pages, not the new arbitrary-ID lookup path.
-
-Add a repository-owned `locationRevision` and capture it plus metadata generation in `MapFilterState`. `registerMapFilter` validates that the selected IDs/time membership still belong to that source revision; the repository owns the selected record snapshot and dependency checks, not UI-supplied proof. Advance the revision only when location records' membership/time/coordinate values change or metadata is explicitly reset, not on identical validation completion. Before every `mapFilterPage` emission/cache insertion and after each await, verify the descriptor is still registered with the captured revision/generation. Reject stale work after unregister/replacement. Cached source geometry can be read provisionally; network source demand waits on the repository's ordinary timeline path, without making Map-index validation wait for it.
-
-Expose session-filter invalidation through an existing-style repository resource/collection event with unavailable membership, not raw cursor or proof APIs. `LibraryModel` removes the invalid session snapshot and publishes ordinary model invalidation; `AppShellView` owns the active map-filter selection and `mapFilterOpenGeneration`, so it cancels a pending open, closes the obsolete filter/viewer context and returns to Map. `MapBrowserModel` owns pin rendering and camera; it receives refreshed records and preserves camera when possible. Cached filter pages remain usable during an inconclusive Map validation because its source revision did not change. No global current-timeline check may suppress this cache-only pass.
-
-## Scoped reset transaction and all consumers
-
-Implement planned `Sources/PhotoCache/CachedPhotosRepository+CacheReset.swift` with one serialized `resetMetadata()` helper used by public `clearMetadataCache()` and the metadata part of `clearCache()`. Transaction/admission phases remain private to the repository. Expose one replaying `metadataCacheResets() -> AsyncStream<UInt64>` carrying the latest **successful** invalidation revision, derived from metadata generation; zero means no completed reset. Cache adapters remember one last-applied revision, with newest buffering and replay preventing subscription races. Settings gets progress from its awaited command and errors from `throws`, not a second public reset state machine. Location loads retain normal finite progress streams. No separate location-only reset API.
-
-On reset admission, set `metadataResetInProgress`, invalidate metadata job identities, cancel metadata jobs (including Diff jobs, Favorites *refresh* and initial timeline requests), detach obsolete stream publishers and block new metadata network/commit admission. Do not cancel `favorites.writeTail`, pending IDs, overrides, authentication or image jobs. Call transactional `DiskCache.clearMetadata()` to advance its metadata generation and delete all non-image kinds. The disk actor performs no suspension between generation advance and SQL delete/commit. A rollback retains data but the generation remains advanced to reject pre-reset writers; it must never be rolled backward. On disk failure, retain published snapshots provisionally, release admission and throw to the command caller; do not broadcast successful invalidation or reinstate old work. New demand uses fresh work tokens and normal retry semantics.
-
-After successful disk commit, clear latest timelines, album list, page promotions, map filters/pages/order, run-local proofs, location completion/error and all metadata verification markers; keep epoch counters monotonic. Broadcast the successful revision once and resume admission. A finishing favorite write may schedule one new-token authoritative refresh afterward; old patch/rollback/refresh work cannot repopulate metadata. No new scan starts solely because a hidden model received a reset.
-
-`LibraryModel.swift` owns one UI-facing reset adapter installed during repository setup in `load()`: cancel `collectionFetchTasks`/`albumsTask` and pending selection resolution/confirmation, reset snapshots/verification/errors/album load state, and publish ordinary snapshot revisions plus the successful metadata-invalidation revision. `AppShellView.swift` actually owns the viewer, active map-filter selection, `mapFilterOpenGeneration` and `MapBrowserModel`: its one revision handler cancels pending filter opens, returns invalid filters to Map, forwards map invalidation and presents the session's viewer invalidation. Do not pretend LibraryModel directly owns those objects. `LibraryBrowserView`'s coordinator already owns/recreates `LibraryPageWindow`; continue that lifecycle through snapshot revisions and its existing `cancelAll`, without a new repository transaction observer in the view. `InfoPanelModel` receives cleared selection/viewer context through existing wiring and cancels resolution. Preserve `NavigationRestoration.swift` preferences/anchors. Demand the active destination first; background startup demand cannot delay cached paint or reload every lazy collection.
-
-Viewer reset must not inadvertently cancel expensive downloads by closing the viewer's last image subscription. `PhotoViewerSession` owns the repository revision subscription and a private `resetMetadata(revision:)`: invalidate `ViewerMetadataWindow`, cancel metadata/navigation and speculative new scheduling, and expose the existing stale/loading/reopen states through `PhotoViewerState`. `PhotoViewerPresentation` only renders those states and retains the currently displayed decoded image; it never compares cache generations or chooses a repair path. Explicit clear disables actions needing discarded metadata until the session reacquires it; ordinary offline validation failure still permits navigation through cached metadata. If the current item disappears, use the existing reopen message. Inside `RepositoryImageWork`, mark each already active transfer `finishDespiteNoSubscribers` at reset admission, and remove that mark with its existing job on completion/failure. This is one lifecycle flag, not a new lease manager or public API. Full clear/teardown still cancels jobs. Cover `releaseImage`/`releaseFullImage` paths. `ThumbnailRangeDownloader` handles invalidated range resolution within PhotoCache and emits an interrupted result while admitted image jobs finish. Do not call `DecodedImages.shared.clear()` for metadata reset; payload-digest keyed decoded thumbnails remain safe, and only the displayed original stays decoded under its existing limit.
-
-Add `cacheResetInProgress` and `cacheResetError` to `LibraryModel`, handle errors rather than the current `try?` in `clearCache`, and disable both Settings buttons during either reset. Full clear uses the same metadata notification but also clears image bytes/decoded memory and cancels image work. The metadata-only button must not change any image validator, validation run, rendition category, decoded-image identity or whole-cache generation. Test actual last-subscriber removal, not just a raw `DiskCache.put`, to verify the in-flight preservation contract.
-
-Image completion after metadata reset may still persist to its original image key, but viewer/page adapters in PhotoCache admit it to a displayed selection only after the existing selection/descriptor identity checks succeed. Their selection generations reject obsolete callbacks independently of image disk writes; add no UI cache epoch. A changed descriptor selects a different key and old bytes remain normal eviction candidates. Map reset clears pin descriptors, not shared decoded images. The finish-despite-no-subscribers flag lasts until the existing transfer completes even if reset fails; this bounded wasted-work tradeoff avoids a second reattachment protocol.
-
-## Focused cleanup alongside implementation
-
-| Existing area | Concrete change and reason | Boundary/test |
+| Action | Catalog/browser effect | Cache effect |
 | --- | --- | --- |
-| `DiskCache.swift` combines keys, budget and SQLite work | Move `CacheKey`/`ThumbnailCacheIdentity` to planned `CacheKey.swift`; keep SQL/generation/commit checks in DiskCache. Build each semantic metadata key once from `MetadataResource`; proof payloads do not duplicate query identities. | Existing key-isolation/thumbnail-family tests plus exact query-key tests. No storage library replacement. |
-| `CachedPhotosRepository+Metadata.swift` and `CachedPhotosRepository+Albums.swift` duplicate lifecycle/storage rules | Extract shared work-token/admission, cached-first/failure-retention and conditional-commit helpers. Preserve typed loaders and resource fetch algorithms; remove only duplicated boundary code actually replaced. | One shared-kernel contract suite plus current resource regressions. No generic loader/provider framework or album rewrite required. |
-| `LocationIndex.swift` mixes payload, scan and lifecycle | Move payload/events to planned `LocationIndexModels.swift`, pure merge to `LocationIndexDelta.swift`; retain one coordinator/writer. Delete `verifiedPersonalTimelineFingerprint` and fingerprint freshness shortcut; read an already available count only as optional progress. | Replace fingerprint-skip tests with provisional warm/retry and proof tests; Map succeeds with the Personal timeline request blocked. |
-| `SynologyClient.albums()` pagination and aggregate scan | DEFER transport extraction until album-specific work is warranted. Later add bounded `albumListPage`/`albumScanPage` primitives with per-request gate ownership and remove superseded aggregate methods together. | Not a Map dependency. Future tests cover full pagination, cap/duplicate detection and cancellation. |
-| `CachedPhotosRepository+Favorites.swift` disk patch/rollback | Retain durable patches and backups; integrate metadata generation and row-revision conditional commits, dropping any affected proof. Do not replace with memory-only overrides. A persisted confirmed-favorite overlay would need a separate plan. | Confirmed changes survive restart offline; partial failure rolls back only failed IDs and cannot overwrite newer metadata. |
-| `MapFilter.swift` waits for validation before emitting filtered cached pages | Two-pass cached-only then authoritative delivery; repository-owned source/filter revision checks at every suspended boundary. | Cached pins open useful filtered pages while all network barriers remain blocked; unregister/reset rejects late emissions. |
-| Reset logic spread across repository/model/map | One private reset transaction and successful revision stream; `LibraryModel` is the UI adapter, while `LibraryPageWindow`/`PhotoViewerSession` absorb cache lifecycles. Image jobs gain one finish flag. Delete public phase enums, duplicate epoch comparisons and per-view reset subscriptions. | Two-window replay, failure rollback, transfer completion and active viewer tests. |
-| `WIP_CACHING_PLAN.md` historical GRDB/migration and pending-album/map text | Correct current-status contradictions now; on implementation completion replace outdated validation recommendations with shipped policy and link this plan. | No migration or legacy decoder; root overview changes only after behavior ships. |
+| Add a new newest day | Prepend that day's sections; old ordinals/section indices move | Existing older day addresses remain valid if their membership evidence is unchanged |
+| Add a missing middle/oldest day | Insert/append its sections | Same rule; invalidate only the new day plus genuinely affected collection dependencies |
+| Add/delete within an existing day | Its count/tail limit/page count changes | Conservatively invalidate **all that day's membership slots**, not only the slot containing a known ID |
+| Day grows 1,500→1,501 | Six capacity 250 slots become seven | Older day keys stay unchanged; all six old slots in the changed day require membership validation |
+| Delete the last item of a day | Remove that day from the catalog | Remove/retire its slots; restore navigation to surviving item/day anchors |
+| Capture-time edit across days | Update both counts/catalog positions | Invalidate both old and new day memberships; keep unrelated days reusable |
+| Item edit with unchanged time | Item content changes; ordering may still be uncertain | Update canonical details and conservatively invalidate its day membership unless a tested mutation contract establishes order preservation |
+| Unknown deletion/date origin | Cannot locate affected ranges safely | Invalidate the relevant collection scope; never infer that uncached IDs are irrelevant |
+| Same-day delete/add preserving count | Catalog count may stay equal | Still invalidate membership; equal counts/fingerprints are not freshness evidence |
 
-These are narrow slices around edited boundaries, not permission to rewrite unrelated viewer, cache retention or selection systems. Keep one repository actor and existing image/network/decode bounds throughout.
+Rebase in-memory page windows by `DayPageAddress` when normalized snapshot indices
+move. Never relabel an old numeric section index as a different day. Selection
+ordinals must be remapped by known IDs or cleared, not allowed to select different
+photos after an inserted day. Retain item/day-based scroll anchors and the
+existing viewer-close/frozen-playlist behavior where applicable.
 
-## Implementation sequence
+## 3. Logical pages and network batches are separate
 
-Each slice must build and preserve conventional loading. No timeline/page/Favorites/album Diff enablement or album transport rewrite is required by this sequence.
+Add `Sources/PhotoCache/MetadataReadPlanner.swift`, a pure bounded planner.
+Inputs are demanded day addresses, current catalog/day versions, membership
+coverage and required detail profile. Output is `CollectionReadBatch` with exact
+predicate/sort/date bounds, offset/limit and expected per-day slices.
 
-1. **Cached Map-filter responsiveness.** Implement the cache-only first pass and repository-owned location/filter revision checks in `MapFilter.swift`/`RepositoryState.swift`; update `LibraryModel`/`AppShellView` invalidation wiring. Extend `MapFilterTests.swift` with blocked-network cached delivery and late-result rejection. This delivers a user-visible improvement independently of Diff.
-2. **Shared lifecycle/storage and scoped reset.** Extract only the common cached-first emission, work-token admission, same-key conditional commit and failure-retention boundaries. Add metadata generation, transactional clear and the successful revision event/Settings command with actual UI ownership above. Preserve durable Favorites patch/rollback and protect it with row revisions. Add planned `Tests/PhotoCacheTests/MetadataCacheResetTests.swift`, `Tests/SynoTimelineAppTests/MetadataCacheResetAppTests.swift` and focused shared-kernel contract tests. Do not refactor all transport algorithms or introduce generic baseline providers.
-3. **Map evidence and bounded transport.** Before minting Map proof, complete feed completeness/visibility/access/reset gates and the independent-inventory/equal-timestamp enumeration gate; retain GPS-only coverage as the accepted assumption. Add Diff models/bounded receipt/lookup and pure location merge with planned `DiffModelsTests.swift` and `LocationIndexDeltaTests.swift`. The deferred favorite/album/timeline/page proof probes do not block this step.
-4. **Map proof, one writer and explicit fallback.** Integrate the Map envelope, one shared Map validation writer, shared generation/row-revision commit, quiet full baseline and bounded repair. Remove the Personal timeline wait and fingerprint freshness authority. Cold demand may scan once; unprovable warm data stays provisional until explicit Retry/Rebuild. Add location/model tests and verify no automatic warm full scan under rejected/unsupported/oversized/inconclusive Diff.
-5. **Verify and ship the bounded scope.** Run `swift test`, `swift build`, and `bash scripts/run.sh` UI checks. Exercise cached pin/filter browsing with blocked network, unchanged warm launch, a controlled small change, unsupported/rejected cursor, equal-time positional scans, offline restart after confirmed favorite changes, and resets during actual image downloads. Record cached interaction latency and contention first; request totals second. Update current-behavior docs only once shipped. No NAS writes are authorized here.
-6. **Deferred optional policies.** Revisit timeline/page/Favorites/album Diff only after each resource's evidence and measured user-visible benefit justify it. Use the same kernel and resource-owned baselines, without changing consumer APIs. Album pagination extraction and an optional persisted confirmed-favorite overlay remain separately scoped work; neither blocks the initial Map result. Implement no speculative production policy branches for them now.
+- Coalesce adjacent demanded small days when their bounds can be covered without
+  unaccounted populated days. Maximum1,000 items and 32 populated days per demand
+  batch. Do not pad a single visible demand to 1,000 merely to fill a batch.
+- Coalesce contiguous offsets within a large day up to 1,000 items. Do not combine
+  arbitrary nonzero offsets across different date ranges.
+- Nonadjacent demands with intervening unrequested populated days are separate,
+  unless all intervening work is explicitly admitted within the same bound.
+- A catalog enumeration (e.g. a full album scan) may stream up to 1,000 entries per
+  request across more days; it is a separate bounded enumeration operation and can
+  seed many logical slots. No per-day network loop is required there either.
+- At most two metadata requests are in flight across the engine, using the
+  existing `NetworkGate` priorities. Share compatible overlapping jobs and
+  promote visible demand; cancel/release subscribers using current bounds.
+- After a response, demultiplex by capture day while preserving server order.
+  Require expected day counts/offset coverage for each slot being marked current.
+  Unexpected days, duplicate IDs, missing rows or inconsistent counts trigger a
+  bounded catalog/membership retry; do not discard extra IDs to fit old geometry.
+- Cold reads request normal full page fields and seed membership **and** canonical
+  details in one request. If a dirty prior slot's known detail rows are current,
+  membership-only reads (`additional=[]`) may reuse them and fetch only newly
+  encountered/missing IDs. If details are already stale/missing, use the combined
+  read instead of imposing two round trips for the same cold page.
+- Full-detail ID lookups are coalesced across consumers,100 IDs/batch, at most two
+  requests in flight. The existing transport's larger supported maximum need
+  not become the scheduler default.
 
-## Required validation
+Why this is required: the captured Personal catalog would have 2,245 logical
+capacity 250 pages versus 494 NAS sections; Favorites 69 versus 3. One HTTP request
+per logical day page would regress performance. A purely offline greedy batch
+illustration groups these counts into 92 and 3 requests respectively, but this is
+not a benchmark/promise and excludes demand shape, details and fences.
 
-Use barrier-controlled fake transports rather than sleeps for races.
+## 4. One store: canonical rows, membership, validity
 
-Organize tests by ownership to contain the maintenance burden: one parameterized shared-loader contract suite covers conventional/eligible-proof policies across cached success, slow network, offline failure and reset; pure wire/merge tests cover protocol details; resource adapters cover query/dependency differences only. Existing app tests assert retained content, interaction and selection behavior, not exact Diff sequences. Do not repeat every protocol/reset race across every view or create the full Cartesian product of resources, policies and failures. Add a new specialized test only where a resource has a distinct invariant (album pagination, location repair, Favorites playlist).
+Add `Sources/PhotoCache/MetadataStore.swift` as typed SQL helpers using the
+**existing DiskCache SQLite connection/actor**, not a second database/actor.
+Keep transactions synchronous inside that actor; never suspend while a SQL
+transaction is open. Proposed current metadata tables:
 
-The slow-network contract test suspends login/Diff/Personal-timeline/page requests on barriers and asserts cached timeline/page/image delivery, filtered Map browsing and cached viewer navigation complete before releasing network barriers. Map validation itself must finish without an unrelated Personal timeline request. An offline launch with warmed pages/thumbnails/originals remains useful across destinations, including confirmed favorite changes persisted before restart. Warm Diff timeout/rejection/unsupported/oversize produces provisional Map content and zero scan requests; explicit Retry permits one bounded rebuild. Compare cached emission/current-image responsiveness, not only request totals.
+| Table | Key and purpose |
+| --- | --- |
+| `metadata_state` | Current metadata format version; account/space namespace; engine revision/reset epoch; source cursors and recovery/coverage state |
+| `item_index` | Item ID, capture time, optional current GPS/thumbnail projection and compact-profile validity; retains non-geotagged IDs too |
+| `item_details` | Item ID, canonical `PhotoItem` payload, fixed field-profile/version, content/annotation validity, revision/cost/LRU |
+| `collection_state` | Collection key/type, catalog completeness/revision, current-run verification and membership policy |
+| `collection_days` | Collection+day, authoritative count, membership generation and order policy |
+| `day_pages` | DayPageAddress, ordered IDs/actual slot count, catalog/day generation, terminal/coverage flags and LRU |
+| `page_items` | Indexed reverse references by item ID to stored membership slots; no duplicated detail JSON |
 
-- Empty delta reuses cached pins with one feed request and no lookup/scan; album-only changes require fallback until separately proven irrelevant. Same-run reopen performs no network.
-- Add uncached located/unlocated IDs, GPS gain/loss, time/thumbnail replacement, delete unknown IDs, repeated entries, conflicting modify/delete. Missing lookup responses never become implicit deletions.
-- Equal counts with GPS edits and same-day replacement cannot authorize reuse. Changed split-day membership never marks timeline pages verified.
-- Change during repair retains provisional pins without an automatic baseline; explicit Retry permits one attempt. Change during scan retains the old payload. Duplicate/capped scans cannot persist partial data, and equal-time omissions discovered against an independent inventory fail proof eligibility even when the Diff fence is empty.
-- Rejected/malformed/unsupported/oversized responses, missing cursor, and server reset follow explicit failure/fallback paths. Timeout/auth failure do not create scan storms. Retry and sticky login failure are independently asserted.
-- Clear at disk read, admission, lookup completion, fence completion, and commit rejects late writes/success. Two subscribers share a job; one leaving does not cancel the other or background completion.
-- Favorites success, partial failure, and rollback during validation cannot manually advance cursors or corrupt overrides. Existing selection/viewer/album/map-filter/image suites pass.
-- Disk write failure, immediate trimming, corruption, account separation, and interrupted commit leave a coherent payload or a miss. Displayed but unpersisted results are revalidated next run.
-- Cold empty library succeeds; cold failure is not empty success; cached offline pins remain; recovery preserves camera. No whole-library image downloads occur.
-- Metadata-only invalidation removes timeline, page, album-list, and location-index rows, rejects late metadata writes, resets active metadata models/map filters, and causes the next relevant demand to fetch a new baseline. Thumbnail, preview, and original rows/files remain byte-identical and immediately reusable; in-flight image writes still commit because their whole-cache generation is unchanged. Full clear continues to remove both metadata and images.
+Use typed `CollectionKey` / Personal Space identity in every metadata key. Numeric
+item IDs are not globally valid across accounts or spaces. Keep catalog counts,
+materialized page membership and full item-detail coverage separate: knowing a
+day has 5,000 items does not mean its IDs/details are cached.
 
-- Map proof tests cover missing proof/payload, namespace/key mismatch, arbitrary opaque cursor values, corruption and absent arrays. Deferred resource policies must later prove that extending resource A cannot validate independently baselined B; do not implement page proof merely to test that future contract now.
-- Initial-scope regression: Personal/Favorites/normal-album timelines and pages retain authoritative conventional validation and issue no Diff calls. Their future proof-specific tests belong to the deferred policy change, not this release. Existing page-dependency/mutation tests must still reject obsolete completions.
-- Map has one writer with multiple subscribers; reset/explicit retry cannot create competing writers. Shared row-revision commits still reject same-key races from ordinary fetches/Favorites patches elsewhere. Gate/window bounds limit work and give visible requests admission between Map scan pages.
-- Map-filter cached-only emission precedes blocked validation, missing source pages stay unresolved, and unregister/location replacement/metadata reset rejects every late emission or session-cache insertion using the repository-owned filter revision. No raw server cursor reaches the UI.
-- Atomic proof extension loses a compare-and-swap race against replacement/clear without overwriting newer bytes. Fault injection before SQL commit, after commit and during trimming yields old/new/miss only. Run-local unpersisted success cannot survive restart as proof.
-- Two windows, reset subscription during completion, failed delete transaction, pending favorite partial success/rollback, open Info selection, active range download and open Favorites viewer all receive consistent reset semantics. Ordinary image release during reset leaves active transfers alive; full clear still cancels them. No stale ordinal command operates on reset metadata.
+### Metadata format and media preservation
 
-Acceptance: cached content, including Map-filter pages, remains useful with blocked/failed network work. Consumers retain simple cached-first APIs and see only successful reset revisions. Map alone earns atomic proof through recorded feed and independent-enumeration evidence plus the GPS assumption; warm unprovable data remains provisional with explicit Retry and no automatic full scan. All other metadata stays conventionally validated, and confirmed favorite changes survive offline restart through durable patching. The shared storage boundary rejects same-key races while Map retains one writer. Images retain HTTP validation; metadata clear preserves image bytes, safe decoded memory and admitted transfers. Future Diff policies and album transport cleanup require separate justification and do not block this result.
+Retain the base media `entries` table/schema if unchanged. Give normalized
+metadata one current format version in `metadata_state`; initialize/reset these
+new tables transactionally on missing/incompatible metadata version, and discard
+superseded non-media metadata entries. Do **not** decode or translate old page
+payloads, retain a dual read path, or add migrations. Current media records and
+files can remain because their format is unchanged. Make remaining `CacheKind`
+media values explicit if removing obsolete metadata cases would renumber them.
+If implementation actually changes the base media schema, its existing full-
+cache discard rule still applies; do not quietly invent a migration to avoid it.
+
+Metadata-only reset clears all normalized tables/checkpoints/projections and
+invalidates engine work through the existing lifecycle, preserving media. Full
+clear removes both. Unknown format validation is required; historical-format
+compatibility fixtures are not.
+
+### Sparse item details and eviction
+
+Normalize without losing useful offline data. Evicting one canonical detail row
+must not shift all following page ordinals or hide 249 other cached items.
+
+Add `Sources/PhotoCache/PhotoPageSnapshot.swift`:
+
+```swift
+public struct PhotoItemSlot: Sendable {
+    public let itemID: Int64
+    public let item: PhotoItem?       // detail payload may be absent after eviction
+    public let verified: Bool        // includes required content/annotation authority
+}
+public struct PhotoPageSnapshot: Sendable {
+    public let address: DayPageAddress
+    public let membershipRevision: UInt64
+    public let membershipVerified: Bool
+    public let slots: [PhotoItemSlot] // exact ordered membership positions; never compacted
+}
+```
+
+The schema is illustrative; implement concrete public/internal access as needed.
+Define fixed profiles, not an arbitrary per-field graph: `identityAndTime`
+(base fields only), `locations` (`gps`,`thumbnail` plus base fields), and
+`fullPage` (the current `PhotosRequestFields.pageAdditional`). Track user
+annotations' source/current-run authority separately even when returned in a full
+page response. Only a profile which actually requested GPS may establish that
+GPS is absent. An identity-only album scan must not remove a known pin or replace
+full details with nil EXIF. A partial profile does not materialize a full-detail
+slot as verified.
+
+A known membership slot with missing details stays a placeholder at the same
+position. Unknown page membership emits no invented IDs and uses the catalog's
+placeholder geometry until fetched. The repository's page stream becomes
+`ResourceEvent<PhotoPageSnapshot>`; replace consumers in one staged branch and
+remove the superseded `[PhotoItem]` page API rather than retain a compatibility
+wrapper. Aggregate event verification requires a complete current page; consumers
+may use individual slot verification to authorize actions/downloads for present
+current items. Missing/unverified selected items require authoritative resolution
+or a clear unavailable result.
+
+Charge detail bytes once, membership IDs/reference storage separately; include
+both in metadata eviction/accounting. Detail eviction leaves compact inventory
+and ordered membership intact. Membership eviction removes its reverse references;
+it does not delete item rows used by other collections. Keep Map inventory high
+retention as today. No dangling reference may silently shorten a result.
+
+## 5. Engine state, source checkpoints and central change application
+
+Add `Sources/PhotoCache/MetadataEngineState.swift` and
+`CachedPhotosRepository+MetadataEngine.swift` (methods remain on the repository
+actor). Replace overlapping job state in `RepositoryState.swift` with one engine
+state containing:
+
+- one coalesced reconciliation job per account/space;
+- fixed supported source states (`items`, optionally proven `userEvents`/album
+  events), each with its own opaque source cursor **inside this engine**;
+- content/reset revision and affected item/day versions;
+- collection catalog/membership read jobs and shared item-detail lookup jobs;
+- bounded observers for canonical item replacements, catalog/membership changes
+  and Map projection changes.
+
+A fixed collection provider describes acquisition only:
+
+```swift
+enum MetadataSourceID { case items, userEvents, albumChanges }
+enum CollectionMembershipPolicy {
+    case itemInventory
+    case provenEventSource(MetadataSourceID)
+    case authoritativePerRun
+    case sessionDerived
+}
+```
+
+No provider owns a cursor, invokes `changes(since:)`, interprets partial feeds,
+or commits sync progress. Only the engine's source reader may call the Diff
+transport methods. One engine may need multiple source requests if the NAS has
+separate event feeds; that is not one independent engine per destination.
+
+### Checkpoint contract
+
+A source cursor means all relevant changes through that cursor have been
+**durably applied or represented by durable invalidation** for every enrolled
+dependent resource, including unopened collections and unloaded pages. It does
+not mean every resource has been eagerly fetched/current.
+
+- On first use with no source checkpoint, establish a source boundary **before**
+  enrolling authoritative reads. Atomically leave/reset all pre-existing
+  unrepresented source-dependent coverage as unverified; do not fetch the whole
+  library just to create that boundary. A supported source can obtain a fresh
+  `get_version` pair, while unsupported sources remain authoritative-per-run
+  without source proof. The Personal inventory stays incomplete until its own
+  complete baseline commits.
+- Commit cursor advancement, canonical updates/tombstones, day-generation
+  invalidations and coverage changes in **one SQLite transaction** with existing
+  metadata generation/row expectations. A crash cannot leave a later cursor next
+  to uninvalidated stale pages.
+- Old cached bytes are never enrolled by stamping a new cursor on them. A new
+  authoritative read starts after an engine source checkpoint, captures current
+  engine/day/item versions, and commits only if those versions remain compatible.
+  The next source interval still starts no later than that read, so changes after
+  its start cannot be silently skipped. This is an invalidation lower-bound
+  contract, not an assertion that every resource is an exact snapshot of one
+  server instant.
+- For multi-request catalog/inventory baselines, surround the complete scan with
+  the applicable observed consistency fence before granting complete persistent
+  coverage. A baseline for an unproven membership source remains conventional
+  current-run authority only, not cross-run Diff proof.
+- Empty terminal source checks may advance a cursor without changing content/day
+  versions or causing UI churn. A changed source increments the affected versions;
+  overlapping in-flight candidates are rejected/replanned, never overwritten.
+- Do not numerically order or combine opaque cursor pairs. Token equality and
+  engine revisions determine admission; a delayed response cannot overwrite a
+  newer committed source state.
+
+### Reconciliation algorithm
+
+1. Emit cached catalogs, day pages and Map projection immediately. `allowNetwork:
+   false` performs no login, Diff, fence or baseline work.
+2. On first online metadata demand, join one engine reconciliation. For every
+   proven enabled source, read its interval from the stored cursor. Unsupported
+   sources route to authoritative-on-demand policies; no repeated speculative
+   endpoint probes.
+3. For terminal bounded item changes, capture **old** `item_index` rows, lookup
+   modified IDs authoritatively, and classify known additions, edits, date moves
+   and deletions. Absence from a sparse/incomplete index does **not** establish
+   an addition: treat its prior state/date as unknown and invalidate broadly. Only
+   a complete prior inventory can distinguish a genuinely new ID by absence.
+   Require exact ID response coverage; missing lookup rows are not tombstones. Do not interpret merge/move/similar or duplicate/conflicting
+   events; fall back conservatively.
+4. Prepare canonical replacements/dirty detail fields, update the compact
+   inventory even for items without GPS, and mark old/new affected days dirty for
+   every enrolled applicable collection. If collection membership is unknown,
+   mark that collection pending authoritative reconciliation rather than guess.
+   Unknown old dates invalidate the relevant collection membership scope.
+5. Obtain terminal empty fences after lookups for the proven sources involved.
+   If a fence observes new changes, discard the speculative candidate and allow
+   one bounded source/authoritative recovery; no unbounded chase loop.
+6. Commit the entire invalidation/update candidate atomically. Publish one engine
+   revision and bounded resource notifications. Refresh active structural
+   catalogs through their authoritative providers; unopened dirty state remains
+   durable until demanded.
+7. For partial/over-limit/rejected/unknown item intervals, invalidate the item-
+   dependent scope and mark the full Personal inventory incomplete. Do not apply
+   the first 2,000 modifications as complete. A fresh source cursor may be installed
+   only in the **same transaction** that makes every dependent old row unverified;
+   still-dirty rows remain unverified after future empty intervals. Requested
+   Library/Favorites/album pages recover through ordinary reads. Map requires one
+   complete lightweight Personal inventory rebuild before claiming full coverage.
+   This avoids a full-library bootstrap merely to show an ordinary Library page.
+   A concrete recovery implementation increments a source-reset epoch, keeps old
+   rows' enrolled epochs unchanged, and installs the fresh cursor in the same
+   transaction. Only subsequently reconciled rows receive the new epoch. This
+   makes an empty next-run interval incapable of reviving old unverified rows.
+   If the source itself is unsupported/unusable, disable its optimization for the
+   run and keep conventional authority rather than mint an unsupported boundary.
+8. Offline/authentication errors retain cached data and finish with recoverable
+   failure; they do not trigger expensive rebuild loops. Reset/generation checks
+   reject late candidates on every path.
+
+This replaces a collection of independently advanced resource cursors. Do not add
+NAS cursors to Map payloads, page rows, Favorites controllers or album controllers.
+Different source cursors, when genuinely needed, live in one engine header and
+advance only with their affected durable state.
+
+## 6. Acquisition for every collection, same read/materialization pipeline
+
+Add pure/provider definitions in `Sources/PhotoCache/CollectionMetadataSource.swift`
+and transport types in `Sources/SynologyAPI/CollectionPageRequest.swift`.
+
+| Collection | Catalog/membership acquisition | Initial freshness policy |
+| --- | --- | --- |
+| Personal Library | Normalize full Timeline v6 day counts; fetch scoped item pages by day/range; full lightweight ID/time/GPS inventory on Map/full-index demand | Proven bounded item source for covered item changes; authoritative reads where coverage is incomplete |
+| Favorites | Same Timeline v6 schema with `favorite_only=true`; identical normalized day pager and page reader | `authoritativePerRun` for membership/user flags until test in section 10 proves which source covers them |
+| Normal Personal album | Stream `Browse.Item list(album_id, takentime desc, additional=[])` catalog scan; derive day counts and retain ordered IDs rather than discard them | `authoritativePerRun` membership until proven album source; canonical item content can still be shared |
+| Map | Query located rows of complete Personal inventory; resolve selected IDs through common detail store | Same engine item source and inventory coverage, no separate Diff path |
+| Session Map/filter result | Explicit derived ID membership and existing policy-defined order, normalized with same pager | `sessionDerived`, tied to source revisions; no persistent cursor |
+
+Transport refactoring:
+
+- Replace transport `timeline(collection:initial:)` with
+  `collectionDayCatalog(collection:initial:) -> CollectionDayCatalog` for raw
+  Personal/Favorites Timeline responses, normalized inside `SynologyAPI`. The
+  repository still exposes `timeline(...) -> ResourceEvent<TimelineSnapshot>`
+  using the shared pager. Album calls to this transport method remain rejected;
+  `get_init_timeline` remains a partial catalog, never a full baseline.
+- Replace `albumTimeline`'s returned snapshot-only API with bounded catalog scan
+  chunks (`readAlbumCatalogBatch(albumID:offset:limit:) -> [CatalogItem]`, where
+  `CatalogItem` contains ID/time and preserves returned array order). The engine owns the scan, staging, completion and invalidation.
+  `DayGroupedTimelineBuilder.itemIDsBySection` must no longer be discarded; stream
+  ordered IDs into common day membership slots instead of retaining a second
+  whole collection photo array.
+- Replace section-shaped wire coupling with
+  `readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile)
+  -> CollectionBatchResult`, carrying the ordered returned items and requested
+  profile for staged membership/detail extraction.
+  The request explicitly binds collection predicate, sort, inclusive day/range
+  bounds, offset and limit. Library/Favorites use their observed default server
+  order; albums use their observed explicit taken-time order. Do not invent an
+  ID tie-breaker or assume the two orders equivalent without a narrow check.
+- Retain `items(ids:)` for shared authoritative detail resolution. Move v7
+  `get_version`/`list`, required `has_next`/activity decoding and 4 MiB receiving
+  limit into the shared source reader/transport; remove production v1 `get`
+  compatibility logic.
+- Only the engine marks a catalog/page current. Count equality, unchanged album
+  summary, unchanged timeline fingerprint or presence of a detail row do not
+  grant membership freshness.
+
+Favorites' annotation coverage matters to **ordinary Personal pages too** because
+those pages contain heart state. Define fixed field profiles/validity for compact
+index, complete page details and user annotations. If no favorite event source
+is proven, empty item Diff must not authorize a page's favorite flag or a toggle
+based on it. The engine can use current authoritative Favorites membership where
+complete, or a demanded full-item read for affected visible/selected IDs. This
+fallback is central and explicit; no hidden Favorites sync engine or fabricated
+all-app verified state.
+
+## 7. Map, filters, viewer and local mutations become consumers
+
+### Map
+
+Refactor `LocationIndex.swift` into a thin engine projection adapter. Remove its
+independent fingerprint validation, persisted location proof/cursor, scan task
+and merge coordinator. Move the pure reusable ID/location update logic from
+`LocationIndexDelta.swift` into central change application, or remove the file if
+its behavior is now naturally a store projection update.
+
+A complete Personal inventory stores ID/time for every item, plus optional
+GPS/thumbnail data. Build it only when demanded for Map/full-index work, in
+bounded chunks with one fence and a 2,048-page cap; cold Library browsing must
+not wait for it. Sparse item reads before that remain useful. A complete inventory scan may also
+seed Personal day membership only when its source order is established equivalent
+to the scoped day-query policy; otherwise retain the compact index and acquire
+page membership on demand. Compact inventory coverage never grants full-detail
+coverage. An inventory
+baseline must reconcile with the current engine revision; do not stamp a new
+cursor over other cached data. If catching up to its final cursor cannot use a
+bounded proven interval, invalidate other dependent coverage atomically when
+installing the baseline, rather than pretending unrelated old rows were read.
+
+`PhotoLocationRecord`, location stream/progress and camera/clustering stay in the
+Map-facing API. Advance the presentation revision only when located records
+change, not on empty cursor advancement. `MapBrowserModel` must honor unverified
+completion and keep cached pins visible after failure.
+
+### Filters and derived collections
+
+Replace Personal-page-only discovery as the sole item-detail truth with engine
+item notifications plus explicit Personal membership/detail coverage. Update
+`LibraryFilterController`, `LibraryFilterCollection.swift`, `MapFilter.swift` and
+`PersonalPageObservation.swift` so a canonical row fetched through an album does
+not silently prove Personal membership or filter completeness. Sparse cached
+matches remain usable; unchanged scrolling/edge-demand limits remain bounded.
+Use day addresses/item IDs and current source revision rather than durable
+section-array indices in `LibraryFilterReference`.
+
+Map/filter result details resolve through the shared item store and bounded
+ID lookup. Do not fetch entire covering Personal pages just to retrieve a few
+known selected IDs. Omitted required IDs mean incomplete/unavailable results or
+a stale derived registration, never inferred deletion. Source revision checks
+still reject stale clicks and invalidate obsolete derived memberships.
+
+### Local writes
+
+`CachedPhotosRepository+Favorites.swift` and `+Rotation.swift` submit optimistic
+item overlays, acknowledged field replacements and membership-dirty effects
+through the engine. Replace page-by-page persisted JSON patching/whole-page
+rollback with item/field-scoped updates and current versions. The engine publishes
+one canonical replacement to all loaded collections.
+
+Retain write serialization, affected-ID claiming, confirmation thresholds,
+partial-batch rollback, cancellation recovery and server-authoritative refresh.
+Never advance/skip a source cursor because a local write is known; its later
+feed echo is applied idempotently through the normal engine path.
+
+The open Favorites viewer keeps its frozen playlist and translated transient
+reads. `transientPage` becomes an engine read mode which cannot overwrite live
+membership slots. Shared current item fields can update while its ordering stays
+frozen. Do not solve this by materializing an entire album/library in memory.
+
+### Page consumers and navigation
+
+Update `LibraryPageWindow` (eight logical pages), `ViewerMetadataWindow`/
+`PhotoViewerSession` (three), `LibraryViewportGeometry`, browser row assembly,
+`SelectionInfoResolver`, `SelectionFavoriteResolver` and `SelectionRotationResolver`
+to address exact slots and preserve holes. Add a common `item(atPageOffset:)`
+accessor returning optional slot/item; remove assumptions that compact
+`items[pageOffset]` is always present.
+
+On catalog shifts, retain windows by semantic address where possible, remap
+section indices, and restore by item/day anchors. Where a current viewer context
+is invalidated, keep its displayed image through the existing close/reopen path.
+Do not retain ordinal selections across an inserted day unless identities can
+be remapped without fetching the entire library.
+
+`TimelineSectionCacheLoader` continues to schedule all persistent collections
+through the same repository API. Default warming resolves missing/dirty details
+and membership; expose explicit force validation as a distinct policy. Report
+reused/current, provisional, fetched and failed work honestly. It must not become
+a second metadata/diff scheduler in the app layer.
+
+## 8. Concrete files and interfaces
+
+| File | Responsibility/change |
+| --- | --- |
+| `SynologyAPI/CollectionDayCatalog.swift` (new) | CaptureDay, normalized catalog, completeness, DayPageAddress and shared pager |
+| `SynologyAPI/CollectionPageRequest.swift` (new) | Exact collection predicate/order/range request and fixed field profiles |
+| `SynologyAPI/TimelineModels.swift`, `DayGroupedTimelineBuilder.swift` | Raw/full versus normalized catalog handling; single day-section generator |
+| `SynologyAPI/DiffModels.swift`, `SynologyClient.swift`, `PhotosTransport.swift`, `PhotosRequestFields.swift` | Observed v7 wire source, typed batch/catalog readers, detail lookup; no feature-specific Diff APIs |
+| `PhotoCache/MetadataEngineState.swift` (new) | One reconciliation/job/source/coverage state, replacing scattered overlapping job ownership |
+| `PhotoCache/CachedPhotosRepository+MetadataEngine.swift` (new) | Sole reconciliation, fences, acquisition/commit and fallback orchestration |
+| `PhotoCache/MetadataChangeApplication.swift` (new, pure) | Old/new state classification and item/day/collection invalidation plan; no network/store ownership |
+| `PhotoCache/MetadataReadPlanner.swift` (new, pure) | Logical-slot-to-network-batch planning and demultiplex coverage checks |
+| `PhotoCache/CollectionMetadataSource.swift` (new) | Fixed source/predicate definitions, no cursor/coordinator |
+| `PhotoCache/MetadataStore.swift` (new) + `DiskCache.swift` | Normalized SQL and one atomic transaction boundary on existing cache actor/connection |
+| `PhotoCache/PhotoPageSnapshot.swift` (new) | Sparse ordered item slots and verification/profile materialization |
+| `CachedPhotosRepository+Metadata.swift`, `+Albums.swift` | Public cached-first adapters into the engine; remove independent validation/orchestration duplication |
+| `RepositoryState.swift`, `RepositoryMetadataToken.swift`, `+CacheReset.swift`, `CacheKey.swift`, `CachePriorityPolicy.swift` | One engine admission/version/commit/reset/retention contract and stable logical keys |
+| `LocationIndex.swift`, `LocationIndexDelta.swift`, `MapFilter.swift`, filter files | Engine-backed projections/dependencies; remove separate Map Diff ownership |
+| `+Favorites.swift`, `+Rotation.swift`, `RepositoryResources.swift` | Canonical mutation receipts/overlays and shared notifications |
+| `LibraryPageWindow.swift`, viewer/window/resolver/browser files | Sparse slot materialization, semantic address remapping and selection safety |
+| `TimelineSectionCacheLoader.swift`, app warming model | Common demand/reuse/force-validation policies, no source logic |
+
+Keep public consumer resource streams finite and cached-first. Changing page
+value types is allowed in this alpha; update all call sites/fake transports and
+remove the replaced API. Do not keep two engines or raw-vs-normalized page modes
+as a permanent compatibility layer.
+
+## 9. Phased implementation with one final architecture
+
+1. **Paging and contracts:** add pure catalog normalization/pager/address types,
+   read planner and sparse snapshot type. Audit actual captures with anonymized
+   fixtures. Decide fixed field profiles and collection order policies. No Diff
+   freshness switch yet.
+2. **Normalized store:** add current metadata schema, transactional candidate
+   commits/invalidation, LRU/cost/ref handling and reset. Add central engine state
+   with ordinary authoritative acquisition for every collection. Route all page
+   APIs/consumers through it and remove old page JSON storage. Media stays separate.
+3. **Catalog/membership and consumers:** normalize Personal/Favorites catalogs,
+   preserve album scan membership, implement batch demultiplexing and sparse detail
+   resolution, adapt mutations/filters/warmer/navigation. Still authoritative by
+   default while deterministic correctness checks pass.
+4. **One change source integration:** enable bounded proven v7 item reconciliation,
+   all-ID/time inventory, persistent invalidation, atomic cursor advancement and
+   Map projection. No Map-only engine is shipped as an intermediate destination.
+5. **Favorites/album eligibility:** integrate proven additional sources only if
+   test in section 10 justifies them; otherwise retain authoritative providers inside the same
+   engine. Do not block clean centralization waiting for undocumented membership
+   behavior. Remove superseded standalone plans/code, not leave two strategies
+   for consumers to choose.
+6. **Short acceptance and docs:** run the matrix below, one warm two-launch check,
+   one controlled date/membership change check, update PROJECT/ARCHITECTURE/AGENTS
+   to describe only completed behavior. Stop broad protocol investigation.
+
+Implement in reviewable commits on one branch; incomplete phases may stay on the
+branch behind tests, but do not present two competing production cache engines.
+
+## 10. Bounded protocol follow-ups and verification
+
+Two targeted mutation experiments may broaden eligibility. They are not
+permission to execute NAS write endpoints: obtain the user's confirmation first
+under AGENTS.md.
+
+1. Favorite/unfavorite one owned disposable item. Compare full item favorite state,
+   favorite-only catalog/membership, v7 item `list`, `get` and `list_user_event`
+   from exact pre-action pairs; record replay/fence. Determine the source of
+   annotations, including when ordinary Personal pages may skip revalidation.
+2. Add/remove the same item from one disposable normal album and rename/change
+   its summary. Compare ordered membership and album list/cover/count with those
+   feeds. Confirm cleanup and do not touch existing album/photo data.
+
+If source semantics remain ambiguous, record that and retain authoritative
+membership/annotations through the common engine. No new bulk, service-reset or
+multi-day cursor-aging suite is required. A readonly single-day scoped query
+check can confirm the new request shape against existing captured data.
+
+### Deterministic test matrix
+
+Add `CollectionDayPagerTests`, `MetadataReadPlannerTests`, `MetadataStoreTests`,
+`MetadataEngineTests`, `MetadataChangeApplicationTests` and `PhotoPageSnapshotTests`
+under the existing appropriate test targets. Update old timeline/page/Map/fake
+transport tests; replace superseded v1/whole-page expectations rather than retain
+old-format compatibility tests.
+
+Required cases:
+
+- Packed small days, split large days, repeated consistent counts, conflicting
+  counts, full versus initial partial catalog, capture-local boundaries and
+  invalid dates/counts.
+- New newest/middle/oldest days retain older addresses;1,500→1,501 adds one slot;
+  deletion of a final day; same-count delete/add; date moves and unknown old dates.
+- New day shifts navigation indices/ordinals but does not relabel cached pages or
+  silently move selection. Server repacking changes only transient batches.
+- Library/Favorites/album/derived inputs use the same pager and materializer;
+  distinct predicates/order policies never share membership accidentally.
+- Demand coalescing across small days, large-day offsets, gaps, caps 1,000/32,
+  missing/extra/duplicate response rows, equal-time ordering and cancellation.
+  Assert cold batch fetch counts to prevent one-network-request-per-day regressions.
+- Sparse details preserve exact slot identity/offset; missing detail at ordinal 0
+  does not move ordinal 1; one missing item does not hide other usable cached
+  items; selected-item actions require that slot's authority.
+- One empty source check serves all eligible consumers; unproven Favorites/album
+  fields never inherit verification. Current cached display never waits for sync.
+- Small item edit updates one canonical row, invalidates affected day membership
+  and projects Map/filter changes. Unlocated deletion uses old inventory time.
+- Partial/large/unsupported intervals invalidate durably without advancing past
+  unrepresented changes; terminal 5,012 deletions still hit the deliberate 2,000-ID
+  client repair bound. No endpoint continuation is guessed.
+- Atomic cursor+invalidation commit, rollback on failure, delayed response versus
+  newer state, restart with dirty undemanded pages, newly fetched rows enrolled
+  after checkpoint, late baseline with older root state, local-write/read races,
+  metadata/full reset and superseded generations.
+- Canonical item detail shared across Library/Favorites/multiple albums; local
+  favorite/rotation overlays and rollback preserve newer unrelated fields;
+  Favorites frozen viewer order and translated reads remain correct.
+- Complete-inventory flag is not inferred from sparse pages; Map does not claim
+  complete pins from an incomplete index; filter EXIF coverage is not inferred
+  from compact GPS data or from unrelated album membership.
+- Eviction/accounting, detail-row removal without membership corruption, reverse
+  reference cleanup, media survival on metadata reset/format reset, unknown-format
+  discard and no legacy decoding.
+- Existing browser eight-page/viewer three-page limits, network gate priority,
+  failed login/offline cached use, selection and anchor restoration, mutation
+  confirmation thresholds, thumbnail/original/video behavior and force warming.
+
+Add a boundary check (source/test review) that raw Diff transport calls originate
+only in the central engine/source reader. Map, Favorites, album providers,
+view models, warmer and filters must have no direct Diff call or source cursor.
+
+### Live acceptance: short and conclusive
+
+- Cold read produces useful Library/Favorites/album content without waiting for a
+  full Personal inventory; network batches stay bounded. Initial Map baseline is
+  allowed one lightweight full scan.
+- Warm unchanged relaunch reuses eligible data; verify request counts and time to
+  cached interaction, not merely successful decoding. Conventional fallback
+  collection reads are expected and clearly counted.
+- Add an owned photo on a new day and within a large day, then date-move/delete it.
+  Check day-local invalidation, stable older cache keys, correct new ordinals,
+  safe selection/viewer behavior, Map agreement and journal-scoped cleanup.
+  Use deterministic large-day fixtures for boundary cases when a new bulk upload
+  would add little confidence; do not rerun 5,000 photos just to exercise a fallback.
+
+Diagnostics are aggregate counts/bytes/timings, source outcomes, cache reuse,
+revision/commit results and invalidation reasons. Never emit raw source cursors,
+item IDs, names, coordinates, credentials, cookies or authenticated URLs in
+normal app logs.
+
+## 11. Definition of done
+
+One metadata engine serves all current collection types and Map; canonical item
+content is shared, logical day pages are stable across new days, page membership
+is never inferred from item presence alone, and every source checkpoint is backed
+by atomic durable updates/invalidation. Unsupported membership sources use the
+same engine's authoritative path. There is no independent Map Diff coordinator,
+no per-destination proof framework and no speculative promise that one empty item
+interval validates every cached field.
