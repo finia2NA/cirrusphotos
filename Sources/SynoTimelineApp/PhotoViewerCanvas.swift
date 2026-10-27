@@ -5,13 +5,15 @@ import SwiftUI
 final class PhotoViewerCanvasController {
     weak var view: PhotoViewerCanvasView?
     private var pendingGeneration: UInt64?
+    private var pendingImage: NSImage?
     private var pendingFocus = false
 
     func attach(_ view: PhotoViewerCanvasView) {
         self.view = view
         if let pendingGeneration {
-            view.resetForSelection(pendingGeneration)
+            view.resetForSelection(pendingGeneration, image: pendingImage)
             self.pendingGeneration = nil
+            self.pendingImage = nil
         }
         if pendingFocus {
             pendingFocus = false
@@ -19,9 +21,12 @@ final class PhotoViewerCanvasController {
         }
     }
 
-    func resetForSelection(_ generation: UInt64) {
-        if let view { view.resetForSelection(generation) }
-        else { pendingGeneration = generation }
+    func resetForSelection(_ generation: UInt64, image: NSImage?) {
+        if let view { view.resetForSelection(generation, image: image) }
+        else {
+            pendingGeneration = generation
+            pendingImage = image
+        }
     }
 
     func requestKeyboardFocus() {

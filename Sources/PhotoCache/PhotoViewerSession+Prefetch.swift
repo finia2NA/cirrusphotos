@@ -21,10 +21,12 @@ extension PhotoViewerSession {
         }
 
         var wantedKeys: Set<String> = []
+        var wantedIdentities: Set<String> = []
         // Keep adjacent prefetch subscribers alive until the newly selected visible
         // subscribers have joined the shared repository jobs. Cancelling them here can
         // race task startup and needlessly restart the same transfers.
         if let descriptor = currentItem?.additional?.thumbnail {
+            wantedIdentities.insert(Self.viewerThumbnailIdentity(descriptor))
             for request in currentThumbnailRequests(for: descriptor) {
                 let currentKey = Self.thumbnailKey(descriptor, size: request.size)
                 if images.thumbnailPrefetchJobs[currentKey] != nil { wantedKeys.insert(currentKey) }
@@ -34,10 +36,12 @@ extension PhotoViewerSession {
             guard let page = metadata.pages[location.sectionIndex],
                   page.slots.indices.contains(location.pageOffset),
                   let descriptor = page.slot(at: location.pageOffset)?.item?.additional?.thumbnail else { continue }
+            wantedIdentities.insert(Self.viewerThumbnailIdentity(descriptor))
+            let network = allowNetwork && page.verified &&
+                (thumbnailSize != .xl || images.enhancementsReleasedGeneration == generation)
             for request in neighborThumbnailRequests(for: descriptor) {
                 let key = Self.thumbnailKey(descriptor, size: request.size)
                 wantedKeys.insert(key)
-                let network = allowNetwork && page.verified
                 if let job = images.thumbnailPrefetchJobs[key], network && !job.allowNetwork {
                     job.task.cancel()
                     images.thumbnailPrefetchJobs.removeValue(forKey: key)
@@ -51,6 +55,9 @@ extension PhotoViewerSession {
             job.task.cancel()
             images.thumbnailPrefetchJobs.removeValue(forKey: key)
         }
+        for identity in images.thumbnailDataByIdentity.keys where !wantedIdentities.contains(identity) {
+            images.thumbnailDataByIdentity.removeValue(forKey: identity)
+        }
     }
 
     func startThumbnailPrefetch(_ descriptor: ThumbnailInfo,
@@ -58,15 +65,46 @@ extension PhotoViewerSession {
                                         key: String, allowNetwork: Bool) {
         let id = UUID()
         let repository = repository
+        let identity = Self.viewerThumbnailIdentity(descriptor)
+        let tier = request.tier
         let task = Task { [weak self] in
-            for await _ in await repository.thumbnail(descriptor, size: request.size,
-                                                       allowNetwork: allowNetwork, priority: .prefetch,
-                                                       cachePurpose: request.purpose) {
-                guard !Task.isCancelled else { break }
+            if tier == .configured {
+                for await event in await repository.thumbnailWithFallback(
+                    descriptor, size: request.size, allowNetwork: allowNetwork, priority: .prefetch
+                ) {
+                    guard !Task.isCancelled else { break }
+                    if case .value(let value, _) = event {
+                        await self?.receiveThumbnailPrefetch(value.data, identity: identity,
+                                                             tier: tier, key: key, id: id)
+                    }
+                }
+            } else {
+                for await event in await repository.thumbnail(
+                    descriptor, size: request.size, allowNetwork: allowNetwork, priority: .prefetch,
+                    cachePurpose: request.purpose
+                ) {
+                    guard !Task.isCancelled else { break }
+                    if case .value(let data, _) = event {
+                        await self?.receiveThumbnailPrefetch(data, identity: identity,
+                                                             tier: tier, key: key, id: id)
+                    }
+                }
             }
             await self?.finishThumbnailPrefetch(key: key, id: id)
         }
-        images.thumbnailPrefetchJobs[key] = ViewerImageWork.ThumbnailJob(id: id, allowNetwork: allowNetwork, task: task)
+        images.thumbnailPrefetchJobs[key] = ViewerImageWork.ThumbnailJob(
+            id: id, identity: identity, allowNetwork: allowNetwork, task: task
+        )
+    }
+
+    func receiveThumbnailPrefetch(_ data: Data, identity: String,
+                                         tier: ViewerImageWork.ThumbnailTier,
+                                         key: String, id: UUID) {
+        guard tier == .configured,
+              images.thumbnailPrefetchJobs[key]?.id == id,
+              images.thumbnailDataByIdentity[identity] != data else { return }
+        images.thumbnailDataByIdentity[identity] = data
+        publish()
     }
 
     func finishThumbnailPrefetch(key: String, id: UUID) {
@@ -93,8 +131,8 @@ extension PhotoViewerSession {
     }
 
     func neighborThumbnailRequests(for descriptor: ThumbnailInfo) -> [ViewerImageWork.ThumbnailRequest] {
-        var requests: [ViewerImageWork.ThumbnailRequest] = thumbnailSize == .xl ? [] : [configuredThumbnailRequest()]
-        if images.enhancementsReleasedGeneration == generation,
+        var requests = [configuredThumbnailRequest()]
+        if thumbnailSize != .xl, images.enhancementsReleasedGeneration == generation,
            let expensive = expensiveThumbnailRequest(for: descriptor) {
             requests.append(expensive)
         }

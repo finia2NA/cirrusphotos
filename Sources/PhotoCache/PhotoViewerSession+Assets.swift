@@ -131,6 +131,7 @@ extension PhotoViewerSession {
         let expectedGeneration = generation
         let repository = repository
         let key = Self.thumbnailKey(descriptor, size: request.size)
+        let identity = Self.viewerThumbnailIdentity(descriptor)
         if images.thumbnailData == nil { images.thumbnailStatus = .loading }
         let task = Task { [weak self] in
             if request.purpose == .library {
@@ -161,18 +162,21 @@ extension PhotoViewerSession {
             await self?.finishThumbnail(attempt, tier: request.tier, key: key)
         }
         images.thumbnailJobs[request.tier] = ViewerImageWork.ThumbnailJob(
-            id: attempt, allowNetwork: allowNetwork, task: task
+            id: attempt, identity: identity, allowNetwork: allowNetwork, task: task
         )
     }
 
     func receiveThumbnail(_ event: ResourceEvent<Data>, attempt: UUID,
                                   tier: ViewerImageWork.ThumbnailTier,
                                   generation expectedGeneration: UInt64, itemID: Int64) {
-        guard !closed, images.thumbnailJobs[tier]?.id == attempt, generation == expectedGeneration,
-              currentItem?.id == itemID else { return }
+        guard !closed, let job = images.thumbnailJobs[tier], job.id == attempt,
+              generation == expectedGeneration, currentItem?.id == itemID else { return }
         switch event {
         case .value(let data, let verified):
             images.thumbnailFailures.removeValue(forKey: tier)
+            if tier == .configured {
+                images.thumbnailDataByIdentity[job.identity] = data
+            }
             if images.bestThumbnailTier == nil || tier.rawValue >= images.bestThumbnailTier!.rawValue {
                 images.bestThumbnailTier = tier
                 images.thumbnailData = data

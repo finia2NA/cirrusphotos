@@ -223,8 +223,22 @@ public actor PhotoViewerSession {
             allowNetwork: allowNetwork,
             favoriteUpdating: currentItemID.map(pendingFavoriteIDs.contains) ?? false,
             favoriteFailure: currentItemID.flatMap { favoriteFailures[$0] },
-            isClosed: closed
+            isClosed: closed,
+            thumbnailIdentity: currentItem?.additional?.thumbnail.map(Self.viewerThumbnailIdentity),
+            previousNeighbor: neighborState(at: desired.ordinal - 1),
+            nextNeighbor: neighborState(at: desired.ordinal + 1)
         )
+    }
+
+    private func neighborState(at ordinal: Int) -> PhotoViewerNeighbor? {
+        guard let location = metadata.location(for: ordinal),
+              let page = metadata.pages[location.sectionIndex],
+              let item = page.slot(at: location.pageOffset)?.item,
+              let thumbnail = item.additional?.thumbnail else { return nil }
+        let identity = Self.viewerThumbnailIdentity(thumbnail)
+        return PhotoViewerNeighbor(itemID: item.id,
+                                   thumbnailIdentity: identity,
+                                   thumbnailData: images.thumbnailDataByIdentity[identity])
     }
 
     func publish() {
@@ -260,5 +274,9 @@ public actor PhotoViewerSession {
 
     static func thumbnailKey(_ descriptor: ThumbnailInfo, size: ThumbnailSize) -> String {
         "\(descriptor.unitID):\(descriptor.cacheKey):\(size.rawValue)"
+    }
+
+    static func viewerThumbnailIdentity(_ descriptor: ThumbnailInfo) -> String {
+        "\(descriptor.unitID):\(descriptor.cacheKey)"
     }
 }

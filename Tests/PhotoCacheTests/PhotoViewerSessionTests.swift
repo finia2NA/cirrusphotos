@@ -531,6 +531,89 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         await session.close()
     }
 
+    func testAdjacentConfiguredThumbnailsAreRetainedForInstantNavigation() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let items = try [item(1), item(2), item(3)]
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: items])
+        let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 3,
+            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 3)])])
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+                                         index: LibraryIndex(snapshot: snapshot),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1,
+                                                               item: items[1], page: items,
+                                                               pageVerified: true),
+                                         thumbnailSize: .m, allowNetwork: true)
+        _ = await session.state()
+        let neighborsReady = await waitUntil {
+            let state = await session.state()
+            return state.previousNeighbor?.itemID == 1 &&
+                state.previousNeighbor?.thumbnailIdentity == "1:key-1" &&
+                state.previousNeighbor?.thumbnailData == Data([1, 0x54]) &&
+                state.nextNeighbor?.itemID == 3 &&
+                state.nextNeighbor?.thumbnailIdentity == "3:key-3" &&
+                state.nextNeighbor?.thumbnailData == Data([3, 0x54])
+        }
+        XCTAssertTrue(neighborsReady)
+        await session.close()
+    }
+
+    func testCachedXLNeighborsAreRetainedWithoutNetwork() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let items = try [item(1), item(2), item(3)]
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: items])
+        let repository = try repository(root: cacheRoot, transport: transport)
+        for neighbor in [items[1], items[2]] {
+            let descriptor = try XCTUnwrap(neighbor.additional?.thumbnail)
+            for await _ in await repository.thumbnail(descriptor, size: .xl, allowNetwork: true) {}
+        }
+        let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 3,
+            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 3)])])
+        let session = PhotoViewerSession(repository: repository,
+                                         index: LibraryIndex(snapshot: snapshot),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                                                               item: items[0], page: items,
+                                                               pageVerified: true),
+                                         thumbnailSize: .xl, allowNetwork: false)
+        _ = await session.state()
+        let neighborReady = await waitUntil {
+            let state = await session.state()
+            return state.nextNeighbor?.itemID == 2 &&
+                state.nextNeighbor?.thumbnailIdentity == "2:key-2" &&
+                state.nextNeighbor?.thumbnailData == Data([2, 0x54])
+        }
+        XCTAssertTrue(neighborReady)
+        await session.close()
+    }
+
+    func testCachedFallbackThumbnailIsRetainedForInstantNavigation() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let items = try [item(1), item(2)]
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: items])
+        let repository = try repository(root: cacheRoot, transport: transport)
+        let descriptor = try XCTUnwrap(items[1].additional?.thumbnail)
+        for await _ in await repository.thumbnail(descriptor, size: .xl, allowNetwork: true) {}
+        let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 2,
+            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 2)])])
+        let session = PhotoViewerSession(repository: repository,
+                                         index: LibraryIndex(snapshot: snapshot),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                                                               item: items[0], page: items,
+                                                               pageVerified: true),
+                                         thumbnailSize: .m, allowNetwork: false)
+        _ = await session.state()
+        let neighborReady = await waitUntil {
+            let state = await session.state()
+            return state.nextNeighbor?.itemID == 2 &&
+                state.nextNeighbor?.thumbnailIdentity == "2:key-2" &&
+                state.nextNeighbor?.thumbnailData == Data([2, 0x54])
+        }
+        XCTAssertTrue(neighborReady)
+        await session.close()
+    }
+
     func testCachedImagesRemainVisibleWhenValidationFails() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let selected = try item(7)

@@ -32,6 +32,8 @@ final class PhotoViewerPresentation: ObservableObject {
     private var stateTask: Task<Void, Never>?
     private var decodeTask: Task<Void, Never>?
     private var thumbnailDecodeTask: Task<Void, Never>?
+    private var neighborDecodeTasks: [String: Task<Void, Never>] = [:]
+    private var decodedThumbnails: [String: NSImage] = [:]
     private var currentGeneration: UInt64?
     private var lastThumbnailData: Data?
     private var lastFullData: Data?
@@ -71,6 +73,7 @@ final class PhotoViewerPresentation: ObservableObject {
         stateTask?.cancel()
         decodeTask?.cancel()
         thumbnailDecodeTask?.cancel()
+        for task in neighborDecodeTasks.values { task.cancel() }
         let session = session
         Task { await session.close() }
     }
@@ -129,6 +132,8 @@ final class PhotoViewerPresentation: ObservableObject {
         if case .loading = state.fullImageStatus { return true }
         return false
     }
+
+    var decodedThumbnailIdentities: Set<String> { Set(decodedThumbnails.keys) }
 
     var canRetry: Bool {
         guard invalidationMessage == nil, let state else { return false }
@@ -231,6 +236,7 @@ final class PhotoViewerPresentation: ObservableObject {
         stateTask?.cancel()
         decodeTask?.cancel()
         thumbnailDecodeTask?.cancel()
+        cancelNeighborDecodes()
         Task { await session.close() }
     }
 
@@ -241,8 +247,14 @@ final class PhotoViewerPresentation: ObservableObject {
         stateTask?.cancel()
         decodeTask?.cancel()
         thumbnailDecodeTask?.cancel()
+        cancelNeighborDecodes()
         Task { await session.close() }
         return true
+    }
+
+    private func cancelNeighborDecodes() {
+        for task in neighborDecodeTasks.values { task.cancel() }
+        neighborDecodeTasks.removeAll()
     }
 
     private func receive(_ next: PhotoViewerState) {
@@ -259,10 +271,16 @@ final class PhotoViewerPresentation: ObservableObject {
             isDecodingFullImage = false
             if !sameItem {
                 isDisplayingFullResolution = false
-                image = next.selection.itemID == originalItemID ? source.image : nil
+                if next.selection.itemID == originalItemID {
+                    image = source.image
+                } else if let identity = next.thumbnailIdentity {
+                    image = decodedThumbnails[identity]
+                } else {
+                    image = nil
+                }
                 zoom = 1
             }
-            canvasController.resetForSelection(next.selection.generation)
+            canvasController.resetForSelection(next.selection.generation, image: image)
         }
         state = next
         onInfoItemChanged?(next.item)
@@ -275,6 +293,41 @@ final class PhotoViewerPresentation: ObservableObject {
             lastThumbnailData = data
             decodeThumbnail(data, selection: next.selection)
         }
+        prepareNeighborThumbnails(next)
+    }
+
+    private func prepareNeighborThumbnails(_ state: PhotoViewerState) {
+        var wanted: Set<String> = []
+        if let identity = state.thumbnailIdentity { wanted.insert(identity) }
+        for neighbor in [state.previousNeighbor, state.nextNeighbor].compactMap({ $0 }) {
+            let identity = neighbor.thumbnailIdentity
+            wanted.insert(identity)
+            guard let data = neighbor.thumbnailData,
+                  decodedThumbnails[identity] == nil,
+                  neighborDecodeTasks[identity] == nil else { continue }
+            neighborDecodeTasks[identity] = Task { [weak self] in
+                let decoded = await DecodedImages.shared.image(from: data, maxPixel: 1600)
+                guard !Task.isCancelled, let self else { return }
+                self.neighborDecodeTasks[identity] = nil
+                guard let decoded else { return }
+                self.finishNeighborThumbnailDecode(decoded, identity: identity)
+            }
+        }
+        for (identity, task) in neighborDecodeTasks where !wanted.contains(identity) {
+            task.cancel()
+            neighborDecodeTasks[identity] = nil
+        }
+        for identity in decodedThumbnails.keys where !wanted.contains(identity) {
+            decodedThumbnails[identity] = nil
+        }
+    }
+
+    func finishNeighborThumbnailDecode(_ decoded: NSImage, identity: String) {
+        decodedThumbnails[identity] = decoded
+        guard state?.thumbnailIdentity == identity, !hasDisplayedFullImage,
+              image == nil else { return }
+        isDisplayingFullResolution = false
+        image = decoded
     }
 
     private func decodeThumbnail(_ data: Data, selection: PhotoViewerSelection) {
@@ -285,6 +338,9 @@ final class PhotoViewerPresentation: ObservableObject {
                   self?.hasDisplayedFullImage == false else { return }
             self?.isDisplayingFullResolution = false
             self?.image = decoded
+            if let identity = self?.state?.thumbnailIdentity {
+                self?.decodedThumbnails[identity] = decoded
+            }
         }
     }
 

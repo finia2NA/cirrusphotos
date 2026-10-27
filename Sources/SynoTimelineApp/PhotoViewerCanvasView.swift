@@ -226,22 +226,35 @@ final class PhotoViewerCanvasView: NSView {
         snapLayerToRest()
     }
 
-    func resetForSelection(_ generation: UInt64) {
+    func resetForSelection(_ generation: UInt64, image next: NSImage?) {
         guard generation != selectionGeneration else { return }
         selectionGeneration = generation
-        image = nil
-        transform.reset()
         cancelTransition()
         phase = .resting
         dismissTranslation = .zero
         resetScrollGesture()
         dragLocation = nil
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        imageLayer.contents = nil
-        imageLayer.frame = .zero
-        backdropLayer.opacity = 1
-        CATransaction.commit()
+        transform.configure(imageSize: next?.size ?? CGSize(width: 1, height: 1), viewport: viewportRect())
+        transform.reset()
+        if hasOpened, let next {
+            image = next
+            updateImageContents()
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            imageLayer.frame = transform.imageFrame
+            imageLayer.opacity = 1
+            backdropLayer.opacity = 1
+            CATransaction.commit()
+        } else {
+            image = nil
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            imageLayer.contents = nil
+            imageLayer.frame = .zero
+            imageLayer.opacity = 1
+            backdropLayer.opacity = 1
+            CATransaction.commit()
+        }
         onZoomChanged?(1)
     }
 
@@ -707,5 +720,7 @@ final class PhotoViewerCanvasView: NSView {
     var isAwaitingInteractiveDismissal: Bool { phase == .awaitingDismissal }
     var backdropOpacity: CGFloat { CGFloat(backdropLayer.opacity) }
     var presentedImageFrame: CGRect { imageLayer.frame }
+    var presentedImage: NSImage? { image }
+    var hasImageContents: Bool { imageLayer.contents != nil }
     var currentZoom: CGFloat { transform.zoom }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import ImageIO
 import PhotoCache
@@ -9,12 +10,14 @@ import XCTest
 
 private actor PresentationTransport: PhotosTransport {
     let preview: Data
+    private var previews: [Int64: Data] = [:]
     private var releasedThumbnails: Set<Int64> = [1]
     private(set) var timelineCalls: [(PhotoCollectionDescriptor, Bool)] = []
     private(set) var albumListCalls = 0
 
     init(preview: Data) { self.preview = preview }
     func releaseThumbnail(_ id: Int64) { releasedThumbnails.insert(id) }
+    func setPreview(_ data: Data, for id: Int64) { previews[id] = data }
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {}
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
         timelineCalls.append((collection, initial))
@@ -29,7 +32,7 @@ private actor PresentationTransport: PhotosTransport {
         while !releasedThumbnails.contains(descriptor.unitID) {
             try await Task.sleep(for: .milliseconds(2))
         }
-        return ThumbnailResponse(data: preview, etag: nil, lastModified: nil)
+        return ThumbnailResponse(data: previews[descriptor.unitID] ?? preview, etag: nil, lastModified: nil)
     }
     func fullImage(_ resource: FullImageResource,
                    etag: String?, lastModified: String?) async throws -> FullImageResponse {
@@ -137,6 +140,87 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         XCTAssertNotNil(viewer.decodeFailure)
         XCTAssertTrue(viewer.close())
         XCTAssertFalse(viewer.close(), "Close must be idempotent during the collapse transition")
+        await viewer.session.close()
+    }
+
+    func testArrowNavigationReusesPrefetchedNeighborImageWithoutBlanking() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoPresentation-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstPreview = try previewData(width: 6, height: 4)
+        let nextPreview = try previewData(width: 12, height: 8)
+        let transport = PresentationTransport(preview: firstPreview)
+        await transport.setPreview(nextPreview, for: 2)
+        await transport.releaseThumbnail(2)
+        let repository = try CachedPhotosRepository(
+            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            baseURL: URL(string: "https://instant-navigation.example.invalid")!, cacheRoot: root,
+            transport: transport)
+        let items = try [item(1), item(2)]
+        let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 2,
+            list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 2)])])
+        let source = PhotoViewerSourceAnchor()
+        source.update(itemID: 1, image: try XCTUnwrap(NSImage(data: firstPreview)))
+        let viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+            request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                item: items[0], page: items, pageVerified: true), source: source),
+            thumbnailSize: .m, allowNetwork: true, snapshotRevision: 1)
+
+        let neighborDataReady = await waitUntil {
+            viewer.state?.nextNeighbor?.itemID == 2 && viewer.state?.nextNeighbor?.thumbnailData != nil
+        }
+        XCTAssertTrue(neighborDataReady)
+        let identity = try XCTUnwrap(viewer.state?.nextNeighbor?.thumbnailIdentity)
+        let neighborDecoded = await waitUntil { viewer.decodedThumbnailIdentities.contains(identity) }
+        XCTAssertTrue(neighborDecoded)
+
+        var observedImages: [NSImage?] = []
+        let cancellable = viewer.$image.sink { observedImages.append($0) }
+        defer { cancellable.cancel() }
+
+        viewer.navigateNext()
+        let navigated = await waitUntil { viewer.state?.selection.itemID == 2 }
+        XCTAssertTrue(navigated)
+        XCTAssertFalse(observedImages.contains { $0 == nil },
+                       "Cached arrow navigation must not clear the displayed image")
+        XCTAssertEqual(viewer.image?.size.width, 12)
+        XCTAssertEqual(viewer.image?.size.height, 8)
+        XCTAssertTrue(viewer.close())
+        await viewer.session.close()
+    }
+
+    func testLateNeighborDecodeInstallsTheNowCurrentImage() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoPresentation-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstPreview = try previewData(width: 6, height: 4)
+        let nextPreview = try previewData(width: 12, height: 8)
+        let transport = PresentationTransport(preview: firstPreview)
+        await transport.setPreview(nextPreview, for: 2)
+        let repository = try CachedPhotosRepository(
+            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            baseURL: URL(string: "https://late-neighbor.example.invalid")!, cacheRoot: root,
+            transport: transport)
+        let items = try [item(1), item(2)]
+        let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 2,
+            list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 2)])])
+        let source = PhotoViewerSourceAnchor()
+        source.update(itemID: 1, image: try XCTUnwrap(NSImage(data: firstPreview)))
+        let viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+            request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                item: items[0], page: items, pageVerified: true), source: source),
+            thumbnailSize: .m, allowNetwork: true, snapshotRevision: 1)
+
+        viewer.navigateNext()
+        let navigated = await waitUntil { viewer.state?.selection.itemID == 2 }
+        XCTAssertTrue(navigated)
+        XCTAssertNil(viewer.image)
+        let identity = try XCTUnwrap(viewer.state?.thumbnailIdentity)
+        let decoded = try XCTUnwrap(NSImage(data: nextPreview))
+
+        viewer.finishNeighborThumbnailDecode(decoded, identity: identity)
+
+        XCTAssertTrue(viewer.image === decoded)
+        XCTAssertFalse(viewer.isDisplayingFullResolution)
+        XCTAssertTrue(viewer.close())
         await viewer.session.close()
     }
 

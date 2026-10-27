@@ -37,6 +37,23 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         XCTAssertEqual(canvas.viewportRect(), CGRect(x: 0, y: 0, width: 840, height: 488))
     }
 
+    func testSelectionResetInstallsProvidedImageWithoutClearing() throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 20, pixelsHigh: 10, bitsPerSample: 8,
+            samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let next = NSImage(size: NSSize(width: 20, height: 10))
+        next.addRepresentation(bitmap)
+
+        canvas.resetForSelection(2, image: next)
+
+        XCTAssertTrue(canvas.hasImageContents)
+        XCTAssertTrue(canvas.presentedImage === next)
+        XCTAssertEqual(canvas.currentZoom, 1)
+    }
+
     func testSpaceAndEscapeRequestTheSameCloseAction() throws {
         let canvas = PhotoViewerCanvasView()
         var closes = 0

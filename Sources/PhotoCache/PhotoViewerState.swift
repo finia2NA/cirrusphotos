@@ -41,6 +41,19 @@ public struct PhotoViewerSelection: Sendable, Equatable {
     }
 }
 
+public struct PhotoViewerNeighbor: Sendable, Equatable {
+    public let itemID: Int64
+    public let thumbnailIdentity: String
+    public let thumbnailData: Data?
+
+    public init(itemID: Int64, thumbnailIdentity: String,
+                thumbnailData: Data?) {
+        self.itemID = itemID
+        self.thumbnailIdentity = thumbnailIdentity
+        self.thumbnailData = thumbnailData
+    }
+}
+
 public enum PhotoViewerResourceStatus: Sendable, Equatable {
     case idle
     case loading
@@ -68,4 +81,7 @@ public struct PhotoViewerState: Sendable {
     public let favoriteUpdating: Bool
     public let favoriteFailure: String?
     public let isClosed: Bool
+    public let thumbnailIdentity: String?
+    public let previousNeighbor: PhotoViewerNeighbor?
+    public let nextNeighbor: PhotoViewerNeighbor?
 }
