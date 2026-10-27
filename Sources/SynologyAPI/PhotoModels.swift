@@ -84,6 +84,21 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
         additional?.gps.flatMap { $0.isValid ? $0 : nil }
     }
 
+    /// A local rotation result changes only rotation/media presentation metadata.
+    /// Concurrent favorite, EXIF and location updates remain on the canonical item.
+    public func withRotationMetadata(from replacement: PhotoItem) -> PhotoItem {
+        guard replacement.id == id, let value = replacement.additional else { return self }
+        var item = self
+        let current = additional
+        item.additional = Additional(thumbnail: value.thumbnail, resolution: value.resolution,
+                                     orientation: value.orientation, orientationOriginal: value.orientationOriginal,
+                                     videoConvert: current?.videoConvert, videoMeta: current?.videoMeta,
+                                     exif: current?.exif, gps: current?.gps, folderPath: current?.folderPath,
+                                     favorite: current?.favorite)
+        item.pendingRotationQuarterTurns = replacement.pendingRotationQuarterTurns
+        return item
+    }
+
     public func withFavorite(_ favorite: Bool) -> PhotoItem {
         var copy = self
         if copy.additional == nil {
@@ -565,7 +580,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
     case libraryFilter(UUID)
 
     /// Stable cache/restoration identity. Personal Library and Favorites keep their
-    /// historical raw values so existing cache keys do not move.
+    /// stable raw values for persistent collection identity.
     public var rawValue: String {
         switch self {
         case .personalLibrary: "personal"

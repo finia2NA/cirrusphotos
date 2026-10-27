@@ -31,6 +31,7 @@ public actor PhotoViewerSession {
     var favoriteValues: [Int64: Bool] = [:]
     var favoriteTask: Task<Void, Never>?
     var itemMutationTask: Task<Void, Never>?
+    var metadataChangeTask: Task<Void, Never>?
     var metadataResetTask: Task<Void, Never>?
     var appliedMetadataResetRevision: UInt64 = 0
     var playlist = ViewerPlaylist()
@@ -135,6 +136,7 @@ public actor PhotoViewerSession {
         favoriteTask?.cancel()
         itemMutationTask?.cancel()
         metadataResetTask?.cancel()
+        metadataChangeTask?.cancel()
         publish()
         for observer in observers.values { observer.finish() }
         observers.removeAll()
@@ -168,6 +170,13 @@ public actor PhotoViewerSession {
                 await self?.resetMetadata(revision: revision)
             }
         }
+        metadataChangeTask = Task { [weak self, collection] in
+            let observation = await repository.observeMetadataChanges(collection: collection.usesPersonalLibrarySource ? .personalLibrary : collection)
+            for await _ in observation.changes {
+                guard !Task.isCancelled else { return }
+                if let change = await repository.takeMetadataChanges(observation.id) { await self?.invalidateMetadataPages(change) }
+            }
+        }
         startAssetsForCurrentMetadata()
         ensurePage(desired.sectionIndex, visible: true)
         scheduleThumbnailNeighbors()
@@ -176,7 +185,7 @@ public actor PhotoViewerSession {
 
     func select(_ location: PhotoViewerLocation) {
         let targetResource = metadata.pages[location.sectionIndex]
-            .flatMap { $0.items.indices.contains(location.pageOffset) ? $0.items[location.pageOffset] : nil }?
+            .flatMap { $0.slot(at: location.pageOffset)?.item }?
             .fullImageResource
         generation &+= 1
         desired = location

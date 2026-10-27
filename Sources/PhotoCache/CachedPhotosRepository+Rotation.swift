@@ -37,6 +37,7 @@ extension CachedPhotosRepository {
     public func rotate(_ action: SelectionRotationAction,
                        direction: PhotoRotationDirection) async throws {
         guard !action.itemIDs.isEmpty else { return }
+        let mutationCacheEpoch = metadata.admissionEpoch
         guard action.itemIDs.allSatisfy({ action.itemsByID[$0]?.hasDisplayableStillImage == true }) else {
             throw SynologyAPIError.unsupported("Only photos and Live Photo still images can be rotated.")
         }
@@ -56,7 +57,7 @@ extension CachedPhotosRepository {
                 ($0, direction == .clockwise ? 1 : -1)
             })
         ))
-        await patchRotationPages(action: action, replacements: optimistic)
+        await patchRotationPages(action: action, replacements: optimistic, metadataEpoch: mutationCacheEpoch)
         var attemptedWrite = false
         do {
             try await connect()
@@ -68,14 +69,14 @@ extension CachedPhotosRepository {
             let refreshed = try await lookupAllRotationItems(action.itemIDs)
             guard refreshed.count == action.itemIDs.count else { throw SynologyAPIError.invalidResponse }
             let replacements = Dictionary(uniqueKeysWithValues: refreshed.map { ($0.id, $0) })
-            await patchRotationPages(action: action, replacements: replacements)
+            await patchRotationPages(action: action, replacements: replacements, metadataEpoch: mutationCacheEpoch)
             itemMutations.publish(PhotoItemChange(items: replacements))
         } catch {
             var recovery = originals
             if attemptedWrite, let refreshed = try? await lookupAllRotationItems(action.itemIDs) {
                 for item in refreshed { recovery[item.id] = item }
             }
-            await patchRotationPages(action: action, replacements: recovery)
+            await patchRotationPages(action: action, replacements: recovery, metadataEpoch: mutationCacheEpoch)
             itemMutations.publish(PhotoItemChange(items: recovery))
             throw error
         }
@@ -122,6 +123,7 @@ extension CachedPhotosRepository {
         operation: ThumbnailRotationOperation,
         continuation: AsyncStream<ThumbnailRotationProgress>.Continuation
     ) async {
+        let mutationCacheEpoch = metadata.admissionEpoch
         let total = action.itemIDs.count
         var completed = 0
         var failures: [String] = []
@@ -305,7 +307,8 @@ extension CachedPhotosRepository {
                     )
                     await recoverThumbnailAfterAmbiguousFailure(
                         action: action, itemID: id, descriptor: descriptor,
-                        unitIDs: [descriptor.unitID]
+                        unitIDs: [descriptor.unitID],
+                        mutationCacheEpoch: mutationCacheEpoch
                     )
                     throw error
                 }
@@ -315,7 +318,8 @@ extension CachedPhotosRepository {
                     )
                     await recoverThumbnailAfterAmbiguousFailure(
                         action: action, itemID: id, descriptor: descriptor,
-                        unitIDs: Array(Set(units.map(\.unitID) + [descriptor.unitID]))
+                        unitIDs: Array(Set(units.map(\.unitID) + [descriptor.unitID])),
+                        mutationCacheEpoch: mutationCacheEpoch
                     )
                     throw SynologyAPIError.invalidResponse
                 }
@@ -347,7 +351,7 @@ extension CachedPhotosRepository {
                                              itemProgress: 1, activity: activity))
                     let refreshedItem = try await waitForThumbnailRevision(itemID: id,
                                                                            oldCacheKey: descriptor.cacheKey)
-                    await patchRotationPages(action: action, replacements: [id: refreshedItem])
+                    await patchRotationPages(action: action, replacements: [id: refreshedItem], metadataEpoch: mutationCacheEpoch)
                     itemMutations.publish(PhotoItemChange(items: [id: refreshedItem]))
                     activity.append("Photo \(id): applied \(Self.rotationDescription(clockwiseQuarterTurns)).")
                     SynologyDiagnostics.rotations.info(
@@ -359,7 +363,8 @@ extension CachedPhotosRepository {
                     )
                     await recoverThumbnailAfterAmbiguousFailure(
                         action: action, itemID: id, descriptor: descriptor,
-                        unitIDs: [unit.unitID]
+                        unitIDs: [unit.unitID],
+                        mutationCacheEpoch: mutationCacheEpoch
                     )
                     throw error
                 }
@@ -491,7 +496,8 @@ extension CachedPhotosRepository {
         action: SelectionRotationAction,
         itemID: Int64,
         descriptor: ThumbnailInfo,
-        unitIDs: [Int64]
+        unitIDs: [Int64],
+        mutationCacheEpoch: UInt64
     ) async {
         await restoreRegeneratingUnits(unitIDs)
         let client = client
@@ -514,7 +520,7 @@ extension CachedPhotosRepository {
             )
             return
         }
-        await patchRotationPages(action: action, replacements: [itemID: refreshed])
+        await patchRotationPages(action: action, replacements: [itemID: refreshed], metadataEpoch: mutationCacheEpoch)
         itemMutations.publish(PhotoItemChange(items: [itemID: refreshed]))
     }
 
@@ -533,55 +539,19 @@ extension CachedPhotosRepository {
     }
 
     private func patchRotationPages(action: SelectionRotationAction,
-                                    replacements: [Int64: PhotoItem]) async {
-        var sections: Set<TimelineSection> = []
-        var patchCollection = action.collection
-        if let filterID = action.collection.libraryFilterID,
-           let filter = metadata.libraryFilters[filterID],
-           let sourceSections = metadata.latestTimelines[.personalLibrary]?.sections {
-            patchCollection = .personalLibrary
-            let wanted = Set(replacements.keys)
-            let sourceIndices = Set(filter.referencesBySection.values
-                .flatMap { $0 }
-                .filter { wanted.contains($0.itemID) }
-                .map(\.sourceSectionIndex))
-            for index in sourceIndices where sourceSections.indices.contains(index) {
-                sections.insert(sourceSections[index])
-            }
-        } else {
-            for id in replacements.keys {
-                if let section = action.sectionsByID[id] { sections.insert(section) }
-            }
+                                    replacements: [Int64: PhotoItem], metadataEpoch: UInt64) async {
+        guard metadataEpoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
+        if metadata.initialized,
+           replacements.values.allSatisfy({ $0.pendingRotationQuarterTurns == 0 }),
+           let admission = try? await store.metadataAdmission(metadataNamespace) {
+            guard metadataEpoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
+            try? await store.applyMetadataRotationValues(replacements, namespace: metadataNamespace, admission: admission)
+            guard metadataEpoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
+            let canonical = try? await store.metadataDetails(metadataNamespace, ids: Array(replacements.keys), currentRun: runID)
+            guard metadataEpoch == metadata.admissionEpoch else { return }
+            publishLocationItemChanges(canonical?.values.compactMap(\.item) ?? [])
         }
-        for section in sections {
-            guard let key = CacheKey.page(namespace: namespace, section: section,
-                                          collection: patchCollection) else { continue }
-            for _ in 0..<3 {
-                guard let cached = try? await store.get(key),
-                      let items = try? JSONDecoder().decode([PhotoItem].self, from: cached.data),
-                      let data = try? JSONEncoder().encode(items.map { replacements[$0.id] ?? $0 }) else { break }
-                let generation = await store.currentGeneration()
-                let metadataGeneration = await store.currentMetadataGeneration()
-                let result = try? await store.putMetadata(
-                    key, kind: .page, data: data, validatedRun: cached.validatedRun,
-                    etag: cached.etag, lastModified: cached.lastModified,
-                    expectedGeneration: generation, expectedMetadataGeneration: metadataGeneration,
-                    replacing: .revision(cached.revision)
-                )
-                if result == .superseded { continue }
-                break
-            }
-        }
-        if action.collection.isMapFilter {
-            for (key, items) in metadata.mapFilterPages {
-                metadata.mapFilterPages[key] = items.map { replacements[$0.id] ?? $0 }
-            }
-        }
-        if action.collection.isLibraryFilter {
-            for (key, items) in metadata.libraryFilterPages {
-                metadata.libraryFilterPages[key] = items.map { replacements[$0.id] ?? $0 }
-            }
-        }
+
     }
 
     nonisolated private static func rotatedFiles(

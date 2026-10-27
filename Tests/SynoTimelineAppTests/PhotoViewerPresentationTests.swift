@@ -16,9 +16,9 @@ private actor PresentationTransport: PhotosTransport {
     init(preview: Data) { self.preview = preview }
     func releaseThumbnail(_ id: Int64) { releasedThumbnails.insert(id) }
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {}
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
         timelineCalls.append((collection, initial))
-        return TimelineSnapshot(sections: [])
+        return try fixtureDayCatalog(TimelineSnapshot(sections: []), initial: initial)
     }
     func albums() async throws -> [AlbumSummary] {
         albumListCalls += 1

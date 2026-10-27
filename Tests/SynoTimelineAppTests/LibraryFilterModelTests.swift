@@ -33,7 +33,7 @@ final class LibraryFilterModelTests: XCTestCase {
         let sections = [
             TimelineSection(offset: 0, limit: 1,
                 list: [TimelineDay(year: 2024, month: 4, day: 20, itemCount: 1)]),
-            TimelineSection(offset: 1, limit: 1,
+            TimelineSection(offset: 0, limit: 1,
                 list: [TimelineDay(year: 2024, month: 4, day: 19, itemCount: 1)]),
         ]
         let video = try filterItem(id: 1, filename: "clip.MOV", type: "video", time: 1_713_571_200)
@@ -117,12 +117,23 @@ private actor FilterModelTransport: PhotosTransport {
         self.delay = delay
     }
 
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
-        collection == .personalLibrary ? snapshot : TimelineSnapshot(sections: [])
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
+        return try fixtureDayCatalog(collection == .personalLibrary ? snapshot : TimelineSnapshot(sections: []), initial: initial)
     }
 
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
+    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        let section = fixtureSection(request)
+        let collection = request.collection
+
         try await Task.sleep(for: delay)
-        return pages[section.offset] ?? []
+        var rows: [PhotoItem] = []
+        for (index, descriptor) in snapshot.sections.enumerated() {
+            let raw = descriptor.list[0]
+            let day = try CaptureDay(year: raw.year, month: raw.month, day: raw.day)
+            if day <= request.newestDay && day >= request.oldestDay {
+                rows += try (pages[index] ?? []).map { try fixtureItem($0, on: day) }
+            }
+        }
+        return CollectionBatchResult(items: rows, profile: fields)
     }
 }

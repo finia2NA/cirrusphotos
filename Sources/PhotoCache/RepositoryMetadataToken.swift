@@ -19,11 +19,6 @@ struct MetadataWorkToken: Sendable {
     let mutationEpoch: UInt64?
 }
 
-struct CachedMetadata<Value: Sendable>: Sendable {
-    let value: Value
-    let entry: CacheEntry
-}
-
 enum MetadataAdmissionError: LocalizedError {
     case resetInProgress
     case superseded
@@ -37,25 +32,6 @@ enum MetadataAdmissionError: LocalizedError {
 }
 
 extension CachedPhotosRepository {
-    func readCachedMetadata<Value: Decodable & Sendable>(
-        _ type: Value.Type,
-        key: String
-    ) async throws -> CachedMetadata<Value>? {
-        let epoch = metadata.admissionEpoch
-        guard !metadata.resetInProgress else { throw MetadataAdmissionError.resetInProgress }
-        guard let entry = try await store.get(key) else {
-            guard epoch == metadata.admissionEpoch, !metadata.resetInProgress else {
-                throw MetadataAdmissionError.superseded
-            }
-            return nil
-        }
-        guard epoch == metadata.admissionEpoch, !metadata.resetInProgress else {
-            throw MetadataAdmissionError.superseded
-        }
-        guard let value = try? JSONDecoder().decode(type, from: entry.data) else { return nil }
-        return CachedMetadata(value: value, entry: entry)
-    }
-
     func captureMetadataWorkToken(
         resource: MetadataWorkResource,
         jobID: UUID,
@@ -112,31 +88,4 @@ extension CachedPhotosRepository {
             metadataGeneration == token.metadataGeneration
     }
 
-    func commitMetadata<Value: Encodable & Sendable>(
-        _ value: Value,
-        key: String,
-        kind: CacheKind,
-        validatedRun: String?,
-        token: MetadataWorkToken,
-        replacing expectation: MetadataRowExpectation
-    ) async throws -> MetadataCommitResult {
-        guard await metadataTokenIsCurrent(token) else { return .generationChanged }
-        let bytes = try JSONEncoder().encode(value)
-        let result = try await store.putMetadata(
-            key,
-            kind: kind,
-            data: bytes,
-            validatedRun: validatedRun,
-            expectedGeneration: token.wholeGeneration,
-            expectedMetadataGeneration: token.metadataGeneration,
-            replacing: expectation
-        )
-        guard await metadataTokenIsCurrent(token) else { return .generationChanged }
-        if kind == .page, case .stored = result { publishPersonalPage(key: key) }
-        return result
-    }
-
-    func rowExpectation(for entry: CacheEntry?) -> MetadataRowExpectation {
-        entry.map { .revision($0.revision) } ?? .absent
-    }
 }

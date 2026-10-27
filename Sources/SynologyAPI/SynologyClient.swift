@@ -81,10 +81,44 @@ public actor SynologyClient: PhotosTransport {
         }
     }
 
-    public func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
+    public func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
+        let sections = try await fetchTimelineSections(collection: collection, initial: initial)
+        return try CollectionDayCatalog(sections: sections, completeness: initial ? .partial : .complete)
+    }
+
+    public func readAlbumCatalogBatch(albumID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry] {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        guard offset >= 0, limit > 0, limit <= 1000 else { throw SynologyAPIError.invalidResponse }
+        let response: APIEnvelope<ItemData> = try await post(
+            path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item",
+            parameters: ["api": "SYNO.Foto.Browse.Item", "version": "7", "method": "list",
+                         "offset": String(offset), "limit": String(limit), "album_id": String(albumID),
+                         "sort_by": "\"takentime\"", "sort_direction": "\"desc\"", "additional": "[]", "_sid": sid], authenticated: true)
+        guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+        return data.list.map { DayTimelineEntry(id: $0.id, time: $0.time) }
+    }
+
+    public func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        guard !request.collection.usesPersonalLibrarySource else { throw SynologyAPIError.invalidResponse }
+        var parameters = ["api": "SYNO.Foto.Browse.Item", "version": "7", "method": "list",
+                          "offset": String(request.offset), "limit": String(request.limit),
+                          "start_time": String(request.oldestDay.startTime), "end_time": String(request.newestDay.endTime),
+                          "additional": Self.additionalParameter(for: fields.additional), "_sid": sid]
+        if request.collection.favoriteOnly { parameters["favorite_only"] = "true" }
+        if let albumID = request.collection.albumID { parameters["album_id"] = String(albumID) }
+        if request.order == .takenTimeDescending {
+            parameters["sort_by"] = "\"takentime\""; parameters["sort_direction"] = "\"desc\""
+        }
+        let response: APIEnvelope<ItemData> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item", parameters: parameters, authenticated: true)
+        guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+        return CollectionBatchResult(items: data.list, profile: fields)
+    }
+
+    private func fetchTimelineSections(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> [TimelineSection] {
         guard let sid else { throw SynologyAPIError.api(119) }
         guard collection.albumID == nil else {
-            throw SynologyAPIError.unsupported("Albums do not use Browse.Timeline; use albumTimeline(albumID:).")
+            throw SynologyAPIError.unsupported("Albums use bounded item catalog enumeration.")
         }
         guard !initial || collection.supportsInitialTimeline else {
             throw SynologyAPIError.unsupported("Favorites does not support the initial timeline endpoint.")
@@ -100,7 +134,7 @@ public actor SynologyClient: PhotosTransport {
             parameters: parameters, authenticated: true
         )
         guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
-        return TimelineSnapshot(sections: data.section)
+        return data.section
     }
 
     public func albums() async throws -> [AlbumSummary] {
@@ -128,64 +162,7 @@ public actor SynologyClient: PhotosTransport {
         return collected
     }
 
-    public func albumTimeline(albumID: Int64) async throws -> TimelineSnapshot {
-        guard let sid else { throw SynologyAPIError.api(119) }
-        let pageLimit = 1000
-        let pageCap = 2048
-        var entries: [DayTimelineEntry] = []
-        var offset = 0
-        var pages = 0
-        while true {
-            guard pages < pageCap else {
-                throw SynologyAPIError.unsupported("Album \(albumID) exceeds the scan page cap.")
-            }
-            let response: APIEnvelope<ItemData> = try await post(
-                path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item",
-                parameters: [
-                    "api": "SYNO.Foto.Browse.Item", "version": "7", "method": "list",
-                    "offset": String(offset), "limit": String(pageLimit),
-                    "album_id": String(albumID),
-                    "sort_by": "\"takentime\"", "sort_direction": "\"desc\"",
-                    "additional": "[]", "_sid": sid
-                ], authenticated: true
-            )
-            guard response.success, let data = response.data else {
-                throw SynologyAPIError.api(response.error?.code ?? -1)
-            }
-            pages += 1
-            guard !data.list.isEmpty else { break }
-            entries.append(contentsOf: data.list.map { DayTimelineEntry(id: $0.id, time: $0.time) })
-            guard data.list.count == pageLimit else { break }
-            offset += pageLimit
-        }
-        return DayGroupedTimelineBuilder.build(entries: entries).snapshot
-    }
-
-    public func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
-        guard let sid else { throw SynologyAPIError.api(119) }
-        guard let bounds = section.dateBounds else { throw SynologyAPIError.invalidResponse }
-        var parameters = [
-            "api": "SYNO.Foto.Browse.Item", "version": "7", "method": "list",
-            "offset": String(section.offset), "limit": String(section.limit),
-            "start_time": String(bounds.start), "end_time": String(bounds.end),
-            "additional": Self.additionalParameter(),
-            "_sid": sid
-        ]
-        if collection.favoriteOnly { parameters["favorite_only"] = "true" }
-        if let albumID = collection.albumID {
-            parameters["album_id"] = String(albumID)
-            parameters["sort_by"] = "\"takentime\""
-            parameters["sort_direction"] = "\"desc\""
-        }
-        let response: APIEnvelope<ItemData> = try await post(
-            path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item",
-            parameters: parameters, authenticated: true
-        )
-        guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
-        return data.list
-    }
-
-    public func locationScanPage(offset: Int, limit: Int) async throws -> [PhotoItem] {
+    public func readPersonalInventoryBatch(offset: Int, limit: Int) async throws -> [PhotoItem] {
         guard let sid else { throw SynologyAPIError.api(119) }
         let response: APIEnvelope<ItemData> = try await post(
             path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item",
@@ -207,7 +184,7 @@ public actor SynologyClient: PhotosTransport {
         let response: APIEnvelope<DiffVersionData> = try await postBounded(
             path: "/webapi/entry.cgi/SYNO.Foto.Browse.Diff",
             parameters: [
-                "api": "SYNO.Foto.Browse.Diff", "version": "1",
+                "api": "SYNO.Foto.Browse.Diff", "version": "7",
                 "method": "get_version", "_sid": sid,
             ],
             authenticated: true,
@@ -224,7 +201,9 @@ public actor SynologyClient: PhotosTransport {
         let response: APIEnvelope<PhotoDiffData> = try await postBounded(
             path: "/webapi/entry.cgi/SYNO.Foto.Browse.Diff",
             parameters: [
-                "api": "SYNO.Foto.Browse.Diff", "version": "1", "method": "get",
+                "api": "SYNO.Foto.Browse.Diff", "version": "7", "method": "list",
+                "geocoding_accept_language": "enu",
+                "additional": Self.additionalParameter(),
                 "diff_version": String(cursor.diffVersion),
                 "version_time": String(cursor.versionTime), "_sid": sid,
             ],
@@ -235,26 +214,6 @@ public actor SynologyClient: PhotosTransport {
             throw SynologyAPIError.api(response.error?.code ?? -1)
         }
         return data.value
-    }
-
-    public func locationItems(ids: [Int64]) async throws -> LocationItemLookup {
-        guard let sid else { throw SynologyAPIError.api(119) }
-        guard !ids.isEmpty, ids.count <= 100 else {
-            throw SynologyAPIError.unsupported("Location lookup requires 1–100 item IDs.")
-        }
-        let response: APIEnvelope<ItemData> = try await post(
-            path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item",
-            parameters: [
-                "api": "SYNO.Foto.Browse.Item", "version": "7", "method": "get",
-                "id": "[" + ids.map(String.init).joined(separator: ",") + "]",
-                "additional": Self.additionalParameter(for: PhotosRequestFields.locationScanAdditional),
-                "_sid": sid,
-            ], authenticated: true
-        )
-        guard response.success, let data = response.data else {
-            throw SynologyAPIError.api(response.error?.code ?? -1)
-        }
-        return LocationItemLookup(requestedIDs: ids, items: data.list)
     }
 
     private static func additionalParameter(

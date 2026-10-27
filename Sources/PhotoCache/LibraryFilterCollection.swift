@@ -16,17 +16,12 @@ extension CachedPhotosRepository {
             throw SynologyAPIError.unsupported("An invalid library filter registration was supplied.")
         }
         guard !metadata.resetInProgress else { throw MetadataAdmissionError.resetInProgress }
+        if let source = metadata.latestTimelines[.personalLibrary], LibraryIndex(snapshot: source).fingerprint != registration.sourceFingerprint {
+            throw SynologyAPIError.unsupported("The source collection changed before this filter was registered.")
+        }
         var mapping: [TimelineSection: [LibraryFilterReference]] = [:]
         for (section, references) in zip(registration.snapshot.sections, registration.referencesBySection) {
             mapping[section] = references
-        }
-        if let prior = metadata.libraryFilters[id] {
-            for section in prior.registration.snapshot.sections {
-                if let key = CacheKey.page(namespace: namespace, section: section, collection: registration.descriptor) {
-                    metadata.libraryFilterPages.removeValue(forKey: key)
-                    metadata.libraryFilterPageOrder.removeAll { $0 == key }
-                }
-            }
         }
         metadata.libraryFilters[id] = .init(registrationID: UUID(), metadataEpoch: metadata.admissionEpoch,
                                             registration: registration, referencesBySection: mapping)
@@ -36,138 +31,67 @@ extension CachedPhotosRepository {
     public func unregisterLibraryFilter(_ descriptor: PhotoCollectionDescriptor) {
         guard let id = descriptor.libraryFilterID,
               let state = metadata.libraryFilters.removeValue(forKey: id) else { return }
-        for section in state.registration.snapshot.sections {
-            if let key = CacheKey.page(namespace: namespace, section: section, collection: descriptor) {
-                metadata.libraryFilterPages.removeValue(forKey: key)
-                metadata.libraryFilterPageOrder.removeAll { $0 == key }
-            }
-        }
         metadata.latestTimelines.removeValue(forKey: descriptor)
     }
 
     func libraryFilterPage(_ section: TimelineSection, collection: PhotoCollectionDescriptor,
-                           allowNetwork: Bool, priority: RequestPriority) -> AsyncStream<ResourceEvent<[PhotoItem]>> {
+                           allowNetwork: Bool, priority: RequestPriority) -> AsyncStream<ResourceEvent<PhotoPageSnapshot>> {
         let producer = StreamProducer()
         return AsyncStream(bufferingPolicy: .bufferingNewest(3)) { continuation in
             producer.task = Task {
-                guard let id = collection.libraryFilterID, let state = metadata.libraryFilters[id],
-                      let references = state.referencesBySection[section] else {
-                    continuation.yield(.failure("This library filter is no longer available."))
-                    continuation.finish(); return
-                }
-                let key = CacheKey.page(namespace: namespace, section: section, collection: collection)
-                if let key, let cached = metadata.libraryFilterPages[key] {
-                    continuation.yield(.value(favorites.applyingOverrides(cached), verified: true))
-                    continuation.finish(); return
-                }
-                let registrationID = state.registrationID
-                let sourceSnapshot = metadata.latestTimelines[.personalLibrary]
-                let grouped = Dictionary(grouping: references, by: \.sourceSectionIndex)
-                var contributions: [Int: (items: [PhotoItem], verified: Bool)] = [:]
-                var failure: String?
-
-                func isCurrent() -> Bool {
-                    guard !Task.isCancelled else { return false }
-                    guard metadata.admissionEpoch == state.metadataEpoch else { return false }
-                    guard metadata.libraryFilters[id]?.registrationID == registrationID else { return false }
-                    return metadata.latestTimelines[.personalLibrary]?.sections == sourceSnapshot?.sections
-                }
-
-                func assembled() -> (items: [PhotoItem], verified: Bool) {
-                    let items = references.compactMap { reference -> PhotoItem? in
-                        guard let source = contributions[reference.sourceSectionIndex],
-                              source.items.indices.contains(reference.sourcePageOffset) else { return nil }
-                        let item = source.items[reference.sourcePageOffset]
-                        guard item.id == reference.itemID, state.registration.filter.matches(item) else { return nil }
-                        return item
-                    }
-                    let verified = contributions.count == grouped.count &&
-                        contributions.values.allSatisfy(\.verified) && items.count == references.count
-                    return (favorites.applyingOverrides(items), verified)
-                }
-
-                func emit() -> Bool {
-                    let value = assembled()
-                    if value.verified, let key {
-                        metadata.libraryFilterPages[key] = value.items
-                        metadata.libraryFilterPageOrder.removeAll { $0 == key }
-                        metadata.libraryFilterPageOrder.append(key)
-                        while metadata.libraryFilterPageOrder.count > 8 {
-                            metadata.libraryFilterPages.removeValue(forKey: metadata.libraryFilterPageOrder.removeFirst())
-                        }
-                    }
-                    if !value.items.isEmpty || references.isEmpty {
-                        continuation.yield(.value(value.items, verified: value.verified))
-                    }
-                    return value.verified
-                }
-
-                // Read all cached contributions before any network-backed stream
-                // can suspend, including cached sources after an uncached source.
-                for sourceIndex in grouped.keys.sorted() {
-                    guard isCurrent() else { continuation.finish(); return }
-                    guard let sections = sourceSnapshot?.sections, sections.indices.contains(sourceIndex) else {
-                        failure = "A source section is no longer available."
-                        continue
-                    }
-                    for await event in page(sections[sourceIndex], collection: .personalLibrary,
-                                            allowNetwork: false, priority: priority) {
-                        guard isCurrent() else { continuation.finish(); return }
-                        switch event {
-                        case .value(let items, let verified): contributions[sourceIndex] = (items, verified)
-                        case .failure(let message): failure = message
-                        }
-                    }
-                    guard isCurrent() else { continuation.finish(); return }
-                }
-                let complete = emit()
-                if complete || !allowNetwork {
-                    if let failure { continuation.yield(.failure(failure)) }
-                    continuation.finish(); return
-                }
-
+                let subscriber = UUID()
+                metadata.directSubscribers.insert(subscriber)
+                defer { metadata.directSubscribers.remove(subscriber); cancelIdleLogin() }
                 do {
-                    _ = try await verifiedTimelineSnapshot(collection: .personalLibrary)
-                } catch {
-                    if isCurrent() { continuation.yield(.failure(error.localizedDescription)) }
-                    continuation.finish(); return
-                }
-                guard isCurrent() else { continuation.finish(); return }
-                for sourceIndex in grouped.keys.sorted() {
-                    guard let sections = sourceSnapshot?.sections, sections.indices.contains(sourceIndex) else { continue }
-                    for await event in page(sections[sourceIndex], collection: .personalLibrary,
-                                            allowNetwork: true, priority: priority) {
-                        guard isCurrent() else { continuation.finish(); return }
-                        switch event {
-                        case .value(let items, let verified):
-                            contributions[sourceIndex] = (items, verified)
-                        case .failure(let message): failure = message
-                        }
+                    try await initializeMetadataEngine()
+                    guard let id = collection.libraryFilterID, let state = metadata.libraryFilters[id],
+                          let references = state.referencesBySection[section] else { throw SynologyAPIError.unsupported("This library filter is no longer available.") }
+                    let address = try DayPageAddress(section: section, collection: collection)
+                    let ids = references.map(\.itemID)
+                    func current() -> Bool {
+                        guard !Task.isCancelled, metadata.admissionEpoch == state.metadataEpoch,
+                              metadata.libraryFilters[id]?.registrationID == state.registrationID else { return false }
+                        if let source = metadata.latestTimelines[.personalLibrary], LibraryIndex(snapshot: source).fingerprint != state.registration.sourceFingerprint { return false }
+                        return true
                     }
-                    guard isCurrent() else { continuation.finish(); return }
+                    func snapshot(_ details: [Int64: PhotoItemSlot]) -> PhotoPageSnapshot {
+                        let slots = ids.map { id -> PhotoItemSlot in
+                            guard let detail = details[id], let item = detail.item,
+                                  state.registration.filter.matches(item), (try? CaptureDay(time: item.time)) == address.day else {
+                                return PhotoItemSlot(itemID: id, item: nil, verified: false)
+                            }
+                            return detail
+                        }
+                        return PhotoPageSnapshot(address: address, membershipRevision: state.registration.revision, membershipVerified: true, slots: slots)
+                    }
+                    let cached = snapshot(try await store.metadataDetails(metadataNamespace, ids: ids, currentRun: runID))
+                    guard current() else { continuation.finish(); return }
+                    if cached.slots.contains(where: { $0.item != nil }) {
+                        continuation.yield(.value(applyingFavoriteOverrides(cached), verified: cached.verified))
+                    }
+                    guard allowNetwork && !cached.verified else { continuation.finish(); return }
+                    try await connect()
+                    try await reconcileMetadataSource()
+                    guard current() else { continuation.finish(); return }
+                    _ = try await resolveMetadataItems(ids, priority: priority)
+                    guard current() else { continuation.finish(); return }
+                    let result = snapshot(try await store.metadataDetails(metadataNamespace, ids: ids, currentRun: runID))
+                    guard current() else { continuation.finish(); return }
+                    guard result.verified else { throw SynologyAPIError.unsupported("The requested photos no longer match this filter.") }
+                    continuation.yield(.value(applyingFavoriteOverrides(result), verified: true))
+                } catch {
+                    if !Task.isCancelled { continuation.yield(.failure(error.localizedDescription)) }
                 }
-                _ = emit()
-                if let failure { continuation.yield(.failure(failure)) }
                 continuation.finish()
             }
             continuation.onTermination = { @Sendable _ in producer.task?.cancel() }
         }
     }
 
-    private func sourceSnapshotSection(_ index: Int) -> TimelineSection? {
-        guard let sections = metadata.latestTimelines[.personalLibrary]?.sections,
-              sections.indices.contains(index) else { return nil }
-        return sections[index]
-    }
-
     func promoteLibraryFilterSources(_ section: TimelineSection, collection: PhotoCollectionDescriptor) {
-        guard let id = collection.libraryFilterID, let state = metadata.libraryFilters[id],
-              let references = state.referencesBySection[section] else { return }
-        for sourceIndex in Set(references.map(\.sourceSectionIndex)) {
-            guard let source = sourceSnapshotSection(sourceIndex),
-                  let key = CacheKey.page(namespace: namespace, section: source, collection: .personalLibrary),
-                  !metadata.pendingPagePromotions.contains(key) else { continue }
-            metadata.pendingPagePromotions.append(key)
+        guard let id = collection.libraryFilterID, let references = metadata.libraryFilters[id]?.referencesBySection[section] else { return }
+        for reference in references {
+            if let job = metadata.detailJobByID[reference.itemID] { Task { await gate.promote(job) } }
         }
     }
 }

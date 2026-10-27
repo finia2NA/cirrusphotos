@@ -30,16 +30,12 @@ final class SelectionFavoritesTests: XCTestCase {
 
     private func seedPage(_ items: [PhotoItem], section: TimelineSection,
                           repository: CachedPhotosRepository) async throws {
-        let key = try pageKey(for: section)
-        try await repository.store.put(key, kind: .page, data: JSONEncoder().encode(items), validatedRun: nil)
+        try await seedMetadataPage(items, section: section, repository: repository)
     }
 
     private func cachedPage(_ section: TimelineSection,
                             repository: CachedPhotosRepository) async throws -> [PhotoItem] {
-        let key = try pageKey(for: section)
-        let stored = try await repository.store.get(key)
-        let entry = try XCTUnwrap(stored)
-        return try JSONDecoder().decode([PhotoItem].self, from: entry.data)
+        return try await repository.store.metadataPage(try DayPageAddress(section: section, collection: .personalLibrary), namespace: repository.metadataNamespace, currentRun: repository.runID)?.completeItems ?? []
     }
 
     // MARK: - Target Calculation Tests
@@ -175,15 +171,10 @@ final class SelectionFavoritesTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = SelectionFavoritesMockTransport()
 
-        // Day 1: 3 items (id 1, 2 in section 0; id 3 in section 1)
-        // Day 2: 1 item (id 4 in section 1)
-        let sec0 = TimelineSection(offset: 0, limit: 2, list: [TimelineDay(year: 2024, month: 4, day: 2, itemCount: 3)])
-        let sec1 = TimelineSection(offset: 2, limit: 2, list: [
-            TimelineDay(year: 2024, month: 4, day: 2, itemCount: 3),
-            TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)
-        ])
+        let sec0 = TimelineSection(offset: 0, limit: 2, list: [TimelineDay(year: 2024, month: 4, day: 2, itemCount: 2)])
+        let sec1 = TimelineSection(offset: 0, limit: 2, list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 2)])
         await transport.setPage([makeItem(id: 1, isFavorite: true), makeItem(id: 2, isFavorite: true)], offset: 0)
-        await transport.setPage([makeItem(id: 3, isFavorite: false), makeItem(id: 4, isFavorite: false)], offset: 2)
+        await transport.setPage([makeItem(id: 3), makeItem(id: 4)], offset: 2)
 
         let snapshot = TimelineSnapshot(sections: [sec0, sec1])
         await transport.setTimeline(snapshot, for: .personalLibrary)
@@ -477,15 +468,15 @@ final class SelectionFavoritesTests: XCTestCase {
         XCTAssertEqual(stored.first?.filename, "NEW.jpg",
                        "The authoritative page should win for ordinary metadata")
         XCTAssertEqual(stored.first?.isFavorite, true,
-                       "The newer durable optimistic patch must survive the page commit")
+                       "A response admitted before the confirmed write must not overwrite it")
     }
 
-    func testBatchObserversRewriteEachRetainedPageOnce() async throws {
+    func testBatchObserversUpdateCanonicalRowsAcrossRetainedDays() async throws {
         let root = temporaryTestRoot("PageWindowBatch")
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = SelectionFavoritesMockTransport()
         let sec0 = TimelineSection(offset: 0, limit: 2, list: [TimelineDay(year: 2024, month: 4, day: 2, itemCount: 2)])
-        let sec1 = TimelineSection(offset: 2, limit: 2, list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 2)])
+        let sec1 = TimelineSection(offset: 0, limit: 2, list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 2)])
         await transport.setPage([makeItem(id: 1, isFavorite: false), makeItem(id: 2, isFavorite: false)], offset: 0)
         await transport.setPage([makeItem(id: 3, isFavorite: false), makeItem(id: 4, isFavorite: false)], offset: 2)
         let snapshot = TimelineSnapshot(sections: [sec0, sec1])
@@ -564,7 +555,7 @@ final class SelectionFavoritesTests: XCTestCase {
 
         let sec = TimelineSection(offset: 0, limit: 250, list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 250)])
         // A single page holds one item from the completed chunk (ID 1) and one from the failed chunk (ID 150).
-        try await seedPage([makeItem(id: 1, isFavorite: false), makeItem(id: 150, isFavorite: false)],
+        try await seedPage((1...250).map { makeItem(id: Int64($0)) },
                            section: sec, repository: repo)
 
         let ids = (1...250).map { Int64($0) }
@@ -715,19 +706,33 @@ actor SelectionFavoritesMockTransport: PhotosTransport {
 
     func login(credentials: SynologyCredentials) async throws {}
 
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
         timelineCallCounts[collection, default: 0] += 1
-        return timelineSnapshots[collection] ?? TimelineSnapshot(sections: [])
+        if let snapshot = timelineSnapshots[collection] { return try fixtureDayCatalog(snapshot, initial: initial) }
+        return try CollectionDayCatalog(days: (1...3).map { try CollectionDayCount(day: CaptureDay(year: 2024, month: 4, day: $0), count: pages[0]?.count ?? 0) }, completeness: initial ? .partial : .complete)
     }
 
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
+    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        let section = fixtureSection(request)
+        let collection = request.collection
+
         itemCallCount += 1
         for waiter in itemStartWaiters { waiter.resume() }
         itemStartWaiters.removeAll()
         if itemsBlocked {
             await withCheckedContinuation { itemWaiters.append($0) }
         }
-        return pages[section.offset] ?? []
+        if let snapshot = timelineSnapshots[request.collection] {
+            let days = try fixtureDayCatalog(snapshot, initial: false).days
+            let keys = pages.keys.sorted()
+            var rows: [PhotoItem] = []
+            for (index, day) in days.enumerated() where day.day <= request.newestDay && day.day >= request.oldestDay {
+                guard index < keys.count else { continue }
+                rows += try (pages[keys[index]] ?? []).map { try fixtureItem($0, on: day.day) }
+            }
+            return CollectionBatchResult(items: rows, profile: fields)
+        }
+        return try fixtureBatch(pages[section.offset] ?? [], request: request, fields: fields)
     }
 
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
@@ -739,6 +744,7 @@ actor SelectionFavoritesMockTransport: PhotosTransport {
         if failAllWrites || failOnChunkIndex == chunkIndex {
             throw TestFailure("Mock transport setFavorite failed")
         }
+        for key in pages.keys { pages[key] = pages[key]?.map { itemIDs.contains($0.id) ? $0.withFavorite(favorite) : $0 } }
     }
 
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {

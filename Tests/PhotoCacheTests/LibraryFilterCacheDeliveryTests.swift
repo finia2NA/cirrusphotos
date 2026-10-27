@@ -15,10 +15,7 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
     }
 
     private func seed(_ repository: CachedPhotosRepository) async throws {
-        let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(
-            server: SynologyClient.defaultBaseURL, account: "audit"), section: section))
-        try await repository.store.put(key, kind: .page,
-            data: JSONEncoder().encode([photo()]), validatedRun: "previous-run")
+        try await seedMetadataPage([photo()], section: section, repository: repository)
     }
 
     func testOrdinaryPageEmitsCacheBeforeBlockedValidation() async throws {
@@ -30,7 +27,7 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         let values = AuditValues()
         let reading = Task { [section] in
             for await event in await repository.page(section) {
-                if case .value(let items, _) = event { await values.add(items) }
+                if case .value(let items, _) = event { let items = items.completeItems ?? []; await values.add(items) }
             }
         }
         let started = await waitUntil { await transport.started }
@@ -52,11 +49,11 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         try await repository.registerLibraryFilter(.init(descriptor: descriptor,
             snapshot: .init(sections: [section]), referencesBySection: [[
                 .init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: 1)
-            ]], filter: LibraryFilter(), revision: 1))
+            ]], filter: LibraryFilter(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: .init(sections: [section])).fingerprint))
         let values = AuditValues()
         let reading = Task { [section] in
             for await event in await repository.page(section, collection: descriptor) {
-                if case .value(let items, _) = event { await values.add(items) }
+                if case .value(let items, _) = event { let items = items.completeItems ?? []; await values.add(items) }
             }
         }
         let started = await waitUntil { await transport.started }
@@ -110,36 +107,29 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         XCTAssertEqual(observers, 0)
     }
 
-    func testCachedSecondSourceArrivesBeforeFirstSourceValidation() async throws {
-        let root = temporaryTestRoot("FilterMultipleSources")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let second = TimelineSection(offset: 0, limit: 1,
-            list: [TimelineDay(year: 2024, month: 4, day: 19, itemCount: 1)])
-        let snapshot = TimelineSnapshot(sections: [section, second])
-        let transport = AuditBlockedTransport(snapshot: snapshot, items: [try photo()])
-        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw", otpSecret: "unused"), cacheRoot: root, transport: transport)
+    func testKnownSecondSlotArrivesBeforeMissingFirstDetailLookup() async throws {
+        let root = temporaryTestRoot("FilterSparseCanonical"); defer { try? FileManager.default.removeItem(at: root) }
+        let daySection = TimelineSection(offset: 0, limit: 2, list: [.init(year: 2024, month: 4, day: 20, itemCount: 2)])
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(photo())) as! [String: Any]
+        json["id"] = 99
+        let missing = try JSONDecoder().decode(PhotoItem.self, from: JSONSerialization.data(withJSONObject: json))
+        let snapshot = TimelineSnapshot(sections: [daySection])
+        let transport = AuditBlockedTransport(snapshot: snapshot, items: [missing, try photo()])
+        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw"), cacheRoot: root, transport: transport)
         for await _ in await repository.timeline() {}
-        let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(
-            server: SynologyClient.defaultBaseURL, account: "audit"), section: second))
-        try await repository.store.put(key, kind: .page, data: JSONEncoder().encode([photo()]), validatedRun: "previous-run")
+        try await seedMetadataPage([missing, photo()], section: daySection, repository: repository)
+        try await repository.store.evictMetadataDetails(namespace: repository.metadataNamespace, itemIDs: [99])
         let descriptor = PhotoCollectionDescriptor.libraryFilter(UUID())
-        try await repository.registerLibraryFilter(.init(descriptor: descriptor,
-            snapshot: .init(sections: [second]), referencesBySection: [[
-                .init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: 99),
-                .init(sourceSectionIndex: 1, sourcePageOffset: 0, itemID: 1)
-            ]], filter: LibraryFilter(), revision: 1))
-        let values = AuditValues()
-        let reading = Task {
-            for await event in await repository.page(second, collection: descriptor) {
-                if case .value(let items, _) = event { await values.add(items) }
-            }
-        }
-        let started = await waitUntil { await transport.started }
-        XCTAssertTrue(started)
-        let cachedArrived = await waitUntil { await values.latestIDs == [1] }
-        XCTAssertTrue(cachedArrived)
+        try await repository.registerLibraryFilter(.init(descriptor: descriptor, snapshot: snapshot, referencesBySection: [[
+            .init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: 99), .init(sourceSectionIndex: 0, sourcePageOffset: 1, itemID: 1)
+        ]], filter: .init(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: snapshot).fingerprint))
+        var iterator = await repository.page(daySection, collection: descriptor).makeAsyncIterator()
+        guard case .value(let cached, false) = await iterator.next() else { return XCTFail("Missing sparse cached page") }
+        XCTAssertEqual(cached.slots.map(\.itemID), [99, 1])
+        XCTAssertNil(cached.slots[0].item); XCTAssertEqual(cached.slots[1].item?.id, 1)
         await transport.release()
-        await reading.value
+        guard case .value(let current, true) = await iterator.next() else { return XCTFail("Missing current replacement") }
+        XCTAssertEqual(current.slots.map(\.itemID), [99, 1])
     }
 
     func testFailedValidationKeepsCachedFilteredItems() async throws {
@@ -153,13 +143,13 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         try await repository.registerLibraryFilter(.init(descriptor: descriptor,
             snapshot: .init(sections: [section]), referencesBySection: [[
                 .init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: 1)
-            ]], filter: LibraryFilter(), revision: 1))
+            ]], filter: LibraryFilter(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: .init(sections: [section])).fingerprint))
         await transport.release()
         var latest: [Int64] = []
         var sawFailure = false
         for await event in await repository.page(section, collection: descriptor) {
             switch event {
-            case .value(let items, let verified):
+            case .value(let items, let verified): let items = items.completeItems ?? [];
                 XCTAssertFalse(verified)
                 latest = items.map(\.id)
             case .failure: sawFailure = true
@@ -188,11 +178,11 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         try await repository.registerLibraryFilter(.init(descriptor: descriptor,
             snapshot: .init(sections: [section]), referencesBySection: [[
                 .init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: 1)
-            ]], filter: LibraryFilter(), revision: 1))
+            ]], filter: LibraryFilter(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: .init(sections: [section])).fingerprint))
         let values = AuditValues()
         let reading = Task { [section] in
             for await event in await repository.page(section, collection: descriptor) {
-                if case .value(let items, _) = event { await values.add(items) }
+                if case .value(let items, _) = event { let items = items.completeItems ?? []; await values.add(items) }
             }
         }
         let started = await waitUntil { await transport.started }
@@ -268,12 +258,23 @@ private actor AuditBlockedTransport: PhotosTransport {
     init(snapshot: TimelineSnapshot, items: [PhotoItem], failAfterRelease: Bool = false) {
         self.snapshot = snapshot; values = items; self.failAfterRelease = failAfterRelease
     }
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot { snapshot }
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
+        return try fixtureDayCatalog(snapshot, initial: initial)
+    }
+    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        let section = fixtureSection(request)
+        let collection = request.collection
+
         started = true
         if !released { await withCheckedContinuation { blocked = $0 } }
         if failAfterRelease { throw TestFailure("Validation unavailable") }
-        return values
+        return try fixtureBatch(values, request: request, fields: fields)
+    }
+    func items(ids: [Int64]) async throws -> [PhotoItem] {
+        started = true
+        if !released { await withCheckedContinuation { blocked = $0 } }
+        if failAfterRelease { throw TestFailure("Validation unavailable") }
+        return values.filter { ids.contains($0.id) }
     }
     func release() { released = true; blocked?.resume(); blocked = nil }
 }

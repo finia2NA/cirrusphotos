@@ -308,10 +308,11 @@ public struct LibraryViewportGeometry {
         itemFrames.removeAll(keepingCapacity: true); itemSlotFrames.removeAll(keepingCapacity: true)
         var loaded: [Int: RowItem] = [:], starts = Set<Int>()
         for (section, page) in pages {
-            for (offset, photo) in page.items.enumerated() {
+            for (offset, slot) in page.slots.enumerated() {
+                guard let photo = slot.item else { continue }
                 guard let ordinal = index.ordinal(sectionIndex: section, pageOffset: offset),
                       let location = index.location(forOrdinal: ordinal), let dayStart = index.dayStart(location.dayID) else { continue }
-                loaded[ordinal] = RowItem(photo: photo, verified: page.verified, sectionIndex: section,
+                loaded[ordinal] = RowItem(photo: photo, verified: slot.verified, sectionIndex: section,
                                           pageOffset: offset, ordinal: ordinal)
                 starts.insert(dayStart + (location.dayOffset / itemsPerRow) * itemsPerRow)
             }

@@ -1,5 +1,6 @@
 import Foundation
 import SynologyAPI
+@testable import PhotoCache
 
 struct TestFailure: LocalizedError {
     let message: String
@@ -31,7 +32,7 @@ func waitUntil(
 extension PhotosTransport {
     func login(credentials: SynologyCredentials) async throws {}
 
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
         throw TestFailure("Unexpected timeline request")
     }
 
@@ -39,29 +40,29 @@ extension PhotosTransport {
         throw TestFailure("Unexpected album-list request")
     }
 
-    func albumTimeline(albumID: Int64) async throws -> TimelineSnapshot {
+    func readAlbumCatalogBatch(albumID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry] {
         throw TestFailure("Unexpected album-timeline request")
     }
 
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
+    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        let section = fixtureSection(request)
+        let collection = request.collection
+
         throw TestFailure("Unexpected item-page request")
     }
 
-    func locationScanPage(offset: Int, limit: Int) async throws -> [PhotoItem] {
+    func readPersonalInventoryBatch(offset: Int, limit: Int) async throws -> [PhotoItem] {
         throw TestFailure("Unexpected location-scan request")
     }
 
     func diffVersion() async throws -> DiffCursor {
-        throw TestFailure("Unexpected Diff version request")
+        throw SynologyAPIError.api(103)
     }
 
     func changes(since cursor: DiffCursor) async throws -> PhotoDiff {
         throw TestFailure("Unexpected Diff request")
     }
 
-    func locationItems(ids: [Int64]) async throws -> LocationItemLookup {
-        throw TestFailure("Unexpected location lookup")
-    }
 
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
         throw TestFailure("Unexpected favorite write")
@@ -89,4 +90,60 @@ extension PhotosTransport {
     ) async throws -> FullImageResponse {
         throw TestFailure("Unexpected original-image request")
     }
+}
+
+/// Fixtures seed the current normalized model directly, never legacy page payloads.
+func seedMetadataCatalog(_ snapshot: TimelineSnapshot, repository: CachedPhotosRepository,
+                         collection: PhotoCollectionDescriptor = .personalLibrary,
+                         currentRun: Bool = false) async throws {
+    try await repository.initializeMetadataEngine()
+    let namespace = await repository.metadataNamespace
+    let store = await repository.store
+    let days = try snapshot.sections.flatMap(\.list).map { try CollectionDayCount(day: CaptureDay(year: $0.year, month: $0.month, day: $0.day), count: $0.itemCount) }
+    let catalog = try CollectionDayCatalog(days: days, completeness: .complete)
+    let run = currentRun ? await repository.runID : "fixture-previous-run"
+    try await store.storeMetadataCatalog(catalog, key: CollectionKey(namespace: namespace, collection: collection), validatedRun: run, admission: store.metadataAdmission(namespace))
+}
+func seedMetadataPage(_ items: [PhotoItem], section: TimelineSection, repository: CachedPhotosRepository,
+                      collection: PhotoCollectionDescriptor = .personalLibrary,
+                      validatedRun: String? = nil) async throws {
+    try await repository.initializeMetadataEngine()
+    let namespace = await repository.metadataNamespace
+    let store = await repository.store
+    let key = CollectionKey(namespace: namespace, collection: collection)
+    let address = try DayPageAddress(section: section, collection: collection)
+    var counts = try await store.metadataCatalog(key)?.catalog.days ?? []
+    counts.removeAll { $0.day == address.day }
+    counts.append(try CollectionDayCount(day: address.day, count: section.list[0].itemCount))
+    let catalog = try CollectionDayCatalog(days: counts, completeness: .complete)
+    let runID = await repository.runID
+    let run = validatedRun?.hasPrefix(runID) == true ? runID : "fixture-previous-run"
+    let admission = try await store.metadataAdmission(namespace)
+    try await store.storeMetadataCatalog(catalog, key: key, validatedRun: run, admission: admission)
+    let generation = try await store.metadataDayGeneration(key, day: address.day)!
+    let page = try DayPageRead(address: address, dayCount: section.list[0].itemCount, membershipGeneration: UInt64(generation))
+    try await store.storeMetadataPage(page, items: try items.map { try fixtureItem($0, on: address.day) }, profile: .fullPage, namespace: namespace, currentRun: run, admission: admission)
+}
+
+func fixtureDayCatalog(_ snapshot: TimelineSnapshot, initial: Bool) throws -> CollectionDayCatalog {
+    try CollectionDayCatalog(sections: snapshot.sections, completeness: initial ? .partial : .complete)
+}
+func fixtureSection(_ request: CollectionPageRequest) -> TimelineSection {
+    let days = [request.newestDay, request.oldestDay].reduce(into: [CaptureDay]()) { if !$0.contains($1) { $0.append($1) } }
+    return TimelineSection(offset: request.offset, limit: request.limit, list: days.map {
+        TimelineDay(year: $0.year, month: $0.month, day: $0.day, itemCount: request.offset + request.limit)
+    })
+}
+/// Most mock media payloads use a fixed timestamp; place them on their declared
+/// query day so these tests exercise their own behavior rather than malformed dates.
+func fixtureItem(_ item: PhotoItem, on day: CaptureDay) throws -> PhotoItem {
+    var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as! [String: Any]
+    json["time"] = day.startTime + ((item.time % 86400) + 86400) % 86400
+    return try JSONDecoder().decode(PhotoItem.self, from: JSONSerialization.data(withJSONObject: json))
+}
+func fixtureBatch(_ items: [PhotoItem], request: CollectionPageRequest, fields: ItemFieldProfile) throws -> CollectionBatchResult {
+    let corrected = try items.map { item in
+        item.time >= request.oldestDay.startTime && item.time <= request.newestDay.endTime ? item : try fixtureItem(item, on: request.newestDay)
+    }
+    return CollectionBatchResult(items: corrected, profile: fields)
 }

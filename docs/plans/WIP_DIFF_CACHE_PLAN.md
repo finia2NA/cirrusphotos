@@ -1,12 +1,18 @@
 # Unified metadata engine and stable day pages
 
-Status: **implementation draft, 2026-10-27; no product code implemented.** This
+Status: **implemented and offline-verified, 2026-10-27; live acceptance pending.** This
 supersedes the earlier Map-first/independent-proof proposals. The user prioritizes
 one clean architecture over shipping Map first. Library, Favorites, normal
 Personal albums, Map and derived collections must use one repository-owned
 metadata engine; they must not acquire independent Diff coordinators.
 
-Current behavior remains documented in [PROJECT](../PROJECT.md) and
+The shared engine, stable day pages, normalized store, bounded source recovery,
+sparse consumers and conservative authoritative membership policies are implemented.
+The deterministic offline suite and extracted Timeline capture normalization pass.
+No new live NAS experiment or mutation was run for implementation acceptance;
+the short two-launch/date-membership checks below remain manual follow-up.
+
+Current behavior is documented in [PROJECT](../PROJECT.md) and
 [ARCHITECTURE](../ARCHITECTURE.md). Protocol evidence is in
 [Map/Diff results](../captures/MAP_DIFF_RESULTS_2026-10-26.md) and the
 [Android capture](../captures/ANDROID_MAP_DIFF_CAPTURE_2026-10-26.md). The

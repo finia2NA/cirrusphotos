@@ -38,13 +38,13 @@ final class PreviewThumbnailCacheTests: XCTestCase {
 
     func testPreviewEvictsBeforeFullImage() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
-        let cache = try DiskCache(root: cacheRoot, budget: 20, protectedTimelineKey: "timeline")
-        try await cache.put("timeline", kind: .timeline, data: Data(repeating: 1, count: 4), validatedRun: nil)
-        try await cache.put("page", kind: .page, data: Data(repeating: 2, count: 4), validatedRun: nil)
+        let cache = try DiskCache(root: cacheRoot, budget: 20)
+        try await cache.put("timeline", kind: .thumbnail, data: Data(repeating: 1, count: 4), validatedRun: nil)
+        try await cache.put("page", kind: .thumbnail, data: Data(repeating: 2, count: 4), validatedRun: nil)
         try await cache.put("thumbnail", kind: .thumbnail, data: Data(repeating: 3, count: 4), validatedRun: nil)
         try await cache.put("full", kind: .fullImage, data: Data(repeating: 4, count: 4), validatedRun: nil)
         try await cache.put("preview", kind: .previewThumbnail, data: Data(repeating: 5, count: 4), validatedRun: nil)
-        try await cache.put("another-page", kind: .page, data: Data(repeating: 6, count: 4), validatedRun: nil)
+        try await cache.put("another-page", kind: .thumbnail, data: Data(repeating: 6, count: 4), validatedRun: nil)
 
         let evictedPreview = try await cache.get("preview")
         let retainedFull = try await cache.get("full")
@@ -63,7 +63,7 @@ final class PreviewThumbnailCacheTests: XCTestCase {
 
     func testPreviewWriteCannotDemoteOrdinaryThumbnail() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
-        let cache = try DiskCache(root: cacheRoot, budget: 100, protectedTimelineKey: "timeline")
+        let cache = try DiskCache(root: cacheRoot, budget: 100)
         try await cache.put("shared", kind: .thumbnail, data: Data([1]), validatedRun: "one")
         try await cache.put("shared", kind: .previewThumbnail, data: Data([2]), validatedRun: "two")
         let cached = try await cache.get("shared")

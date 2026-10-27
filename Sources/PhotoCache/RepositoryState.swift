@@ -32,40 +32,7 @@ struct RepositoryAuthenticationState {
     }
 }
 
-struct RepositoryMetadataWork {
-    var admissionEpoch: UInt64 = 0
-    var resetInProgress = false
-    var successfulResetRevision: UInt64 = 0
-    var resetObservers: [UUID: AsyncStream<UInt64>.Continuation] = [:]
-    var resetJob: MetadataResetJob?
-    var timelineJobs: [PhotoCollectionDescriptor: SharedJob<TimelineSnapshot>] = [:]
-    var latestTimelines: [PhotoCollectionDescriptor: TimelineSnapshot] = [:]
-    var initialSubscribers: Set<UUID> = []
-    var mutationEpochs: [PhotoCollectionDescriptor: UInt64] = [:]
-    var refreshObservers: [PhotoCollectionDescriptor: [UUID: AsyncStream<ResourceEvent<TimelineSnapshot>>.Continuation]] = [:]
-    var pageJobs: [String: SharedJob<[PhotoItem]>] = [:]
-    var pageJobEpochs: [String: UInt64] = [:]
-    var personalPageObservers: [UUID: PersonalPageObserver] = [:]
-    var pendingPagePromotions: [String] = []
-    var albumListJob: SharedJob<[AlbumSummary]>?
-    var albumListLatest: [AlbumSummary]?
-    var locationIndexWork: SharedJob<[PhotoLocationRecord]>?
-    var locationIndexObservers: [UUID: AsyncStream<LocationIndexEvent>.Continuation] = [:]
-    var locationRecords: [Int64: PhotoLocationRecord] = [:]
-    var locationRevision: UInt64 = 0
-    var mapFilterInvalidationObservers: [UUID: AsyncStream<PhotoCollectionDescriptor>.Continuation] = [:]
-    var mapFilters: [UUID: MapFilterState] = [:]
-    var mapFilterPages: [String: [PhotoItem]] = [:]
-    var mapFilterPageOrder: [String] = []
-    var libraryFilters: [UUID: LibraryFilterCollectionState] = [:]
-    var libraryFilterPages: [String: [PhotoItem]] = [:]
-    var libraryFilterPageOrder: [String] = []
 
-    var hasDemand: Bool {
-        !initialSubscribers.isEmpty || !timelineJobs.isEmpty || !pageJobs.isEmpty ||
-            albumListJob != nil || locationIndexWork != nil
-    }
-}
 
 enum MetadataResetScope: Sendable {
     case metadata
@@ -84,8 +51,7 @@ struct MapFilterState {
     /// same descriptor. Suspended page assembly must never publish into the latter.
     let registrationID: UUID
     let metadataEpoch: UInt64
-    let locationRevision: UInt64?
-    let source: PhotoCollectionDescriptor
+    let locationRevision: UInt64
     let snapshot: TimelineSnapshot
     let itemIDsBySection: [[Int64]]
     let idsBySection: [TimelineSection: [Int64]]

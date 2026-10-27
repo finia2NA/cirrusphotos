@@ -124,7 +124,7 @@ public struct LibraryIndex: Sendable {
 
     public func ordinalForLoadedItemID(_ itemID: Int64, pages: [Int: LibraryPage]) -> Int? {
         for (section, page) in pages {
-            if let offset = page.items.firstIndex(where: { $0.id == itemID }) {
+            if let offset = page.slots.firstIndex(where: { $0.itemID == itemID }) {
                 return ordinal(sectionIndex: section, pageOffset: offset)
             }
         }

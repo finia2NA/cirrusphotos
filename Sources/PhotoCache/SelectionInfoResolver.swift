@@ -129,7 +129,7 @@ public struct SelectionInfoResolver: Sendable {
                             case .value(let items, _):
                                 delivered = true
                                 updatesContinuation.yield(.value(sectionIndex: sectionIndex,
-                                                                 items: items, offsets: offsets))
+                                                                 items: items.slots.map(\.item), offsets: offsets))
                             case .failure:
                                 delivered = true
                                 updatesContinuation.yield(.failure(sectionIndex: sectionIndex))
@@ -156,7 +156,7 @@ public struct SelectionInfoResolver: Sendable {
 }
 
 private enum SectionUpdate: Sendable {
-    case value(sectionIndex: Int, items: [PhotoItem], offsets: [Int])
+    case value(sectionIndex: Int, items: [PhotoItem?], offsets: [Int])
     case failure(sectionIndex: Int)
 }
 
@@ -226,9 +226,9 @@ private actor SelectionInfoAccumulator {
             var orderedItems: [PhotoItem] = []
             var missing = false
             for offset in offsets {
-                guard items.indices.contains(offset) else { missing = true; continue }
-                resolved[offset] = items[offset]
-                orderedItems.append(items[offset])
+                guard items.indices.contains(offset), let item = items[offset] else { missing = true; continue }
+                resolved[offset] = item
+                orderedItems.append(item)
             }
             itemsBySection[sectionIndex] = resolved
             if missing { sectionsWithMissingItems.insert(sectionIndex) }

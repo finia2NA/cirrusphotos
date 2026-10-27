@@ -33,3 +33,23 @@ Suspected incorrect behavior is tracked in [possiblebugs.md](possiblebugs.md).
 - Photo tools: filmstrip, histogram, peak detection, maybe focus edge detection
 - Airplay: Deferred after unsuccessful receiver testing; see [investigation results and original plan](archive/DEFERRED_AIRPLAY_PLAN.md). Original idea: photo in viewer is sent to TV, stays when exiting the viewer, and switches when another photo opens.
 - Improve UI everywhere
+
+## Prepare for away use
+
+Follow-up recorded 2026-10-27 after the unified metadata engine implementation. This is proposed work, not an implemented offline-availability guarantee.
+
+Metadata and thumbnail warming remain useful for preparing on a fast home connection. Metadata supports immediate cached browsing, Info and filtering; thumbnail warming avoids later image transfers. Keep these capabilities and reuse the common repository engine.
+
+Current limitations:
+
+- The metadata warmer covers Personal Library, Favorites and normal albums, but does not establish Map's complete-inventory checkpoint. Map still needs its initial inventory operation.
+- The metadata warmer defaults to forced reads. “Use Cached Pages” skips complete cached pages and repairs missing details; it does not guarantee that skipped content was refreshed before departure.
+- Later launches still validate demanded metadata and thumbnail bytes. Favorites/album membership and favorite annotations remain authoritative per run; an empty item Diff cannot validate them.
+- Thumbnail warming downloads the selected rendition, not originals or complete videos.
+- All warming uses the ordinary cache budget without pinning. A successful batch can evict content downloaded earlier, so processed counts do not prove retained availability.
+
+Proposed workflow: one **Prepare for Away Use** operation that refreshes metadata through the shared engine, establishes Map inventory coverage, fills missing canonical details, and downloads the chosen thumbnail rendition for the selected scope. Preserve the existing authoritative fallback policies and bounded, cancellable shared jobs; do not introduce another Diff coordinator.
+
+Report retained coverage, unavailable renditions, failures and required/available disk space. Decide explicitly whether preparation reserves/pins selected content or remains best-effort caching. Only promise offline readiness when a final retention check supports it; do not silently increase the budget or imply originals/videos are included. A repeat run should reuse valid retained work rather than force every page again.
+
+Relevant entry points: `TimelineSectionLoadModel.runAll`, `LibraryModel.discoverTimelineWarmingTargets`, `TimelineSectionCacheLoader`, `ThumbnailRangeDownloader.download`, and the repository's shared inventory operation. Compose these behind one preparation coordinator and expose its command in the Library menu; the existing onboarding warming idea can use the same workflow.

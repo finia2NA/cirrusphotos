@@ -120,14 +120,16 @@ public struct ThumbnailRangeDownloader: Sendable {
                 break
             }
             let descriptor = snapshot.sections[sectionIndex]
-            var currentItems: [PhotoItem]?
+            let selectedOffsets = selectedPageOffsets(index: index, sectionIndex: sectionIndex, selectedDays: selectedDays)
+            var currentItems: PhotoPageSnapshot?
             var pageFailed = false
-            for await event in await repository.page(descriptor, collection: .personalLibrary,
+            pageRead: for await event in await repository.page(descriptor, collection: .personalLibrary,
                                                       allowNetwork: true, priority: .prefetch) {
                 if Task.isCancelled { break }
                 switch event {
                 case .value(let items, let verified):
-                    if verified { currentItems = items }
+                    currentItems = items
+                    if selectedOffsets.allSatisfy({ items.slot(at: $0)?.verified == true }) { break pageRead }
                 case .failure:
                     pageFailed = true
                 }
@@ -138,8 +140,6 @@ public struct ThumbnailRangeDownloader: Sendable {
                 break
             }
 
-            let selectedOffsets = selectedPageOffsets(index: index, sectionIndex: sectionIndex,
-                                                      selectedDays: selectedDays)
             guard let items = currentItems, !pageFailed else {
                 summary.errors += selectedOffsets.count
                 summary.processed += selectedOffsets.count
@@ -150,12 +150,12 @@ public struct ThumbnailRangeDownloader: Sendable {
             var candidates: [ThumbnailInfo] = []
             candidates.reserveCapacity(min(selectedOffsets.count, descriptor.limit))
             for offset in selectedOffsets {
-                guard items.indices.contains(offset) else {
+                guard let slot = items.slot(at: offset), slot.verified, let item = slot.item else {
                     summary.errors += 1
                     summary.processed += 1
                     continue
                 }
-                guard let thumbnail = items[offset].additional?.thumbnail,
+                guard let thumbnail = item.additional?.thumbnail,
                       thumbnail.isReady(size) else {
                     summary.unavailable += 1
                     summary.processed += 1

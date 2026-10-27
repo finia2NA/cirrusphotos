@@ -559,7 +559,7 @@ private struct HostedRow: View {
                                   onCommand: onCommand) { source in
                         let page = pages[item.sectionIndex]
                         let seed = PhotoViewerSeed(sectionIndex: item.sectionIndex,
-                            pageOffset: item.pageOffset, item: item.photo, page: page?.items,
+                            pageOffset: item.pageOffset, item: item.photo, page: page?.completeItems,
                             pageVerified: page?.verified ?? item.verified)
                         onOpenPhoto(item.ordinal, PhotoViewerOpenRequest(seed: seed, source: source))
                     }
@@ -717,6 +717,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
 
         func configure(_ input: LibraryBrowserScrollView) {
             guard let scroll else { return }
+            let reusesWindow = collection == input.collection && repository === input.repository && window != nil
             collection = input.collection
             onVisibleDay = input.onVisibleDay
             onRetry = input.onRetry
@@ -758,7 +759,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 let previous = geometry?.anchor(at: visibleTop(in: scroll))
                 cancelPointerInteraction()
                 pendingOpen = nil
-                stopWindow()
+                if reusesWindow { detachWindowEvents() } else { stopWindow() }
                 let newIndex = LibraryIndex(snapshot: input.snapshot)
                 index = newIndex
                 geometry = LibraryViewportGeometry(index: newIndex, width: width,
@@ -770,14 +771,15 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 publishSelection()
                 revision = input.revision
                 allowNetwork = input.allowNetwork
-                window = LibraryPageWindow(repository: input.repository,
-                                           collection: input.collection, maximumPages: 8)
+                if !reusesWindow {
+                    window = LibraryPageWindow(repository: input.repository, collection: input.collection, maximumPages: 8)
+                }
                 updateDocumentHeight()
                 if let geometry, let target = scrollIntent.rebuild(index: newIndex, geometry: geometry,
                     previousIndex: oldIndex, visibleAnchor: previous, timelineVerified: input.allowNetwork) {
                     scrollTo(target)
                 }
-                startEvents()
+                startEvents(rebasingTo: newIndex)
             } else {
                 if allowNetwork != input.allowNetwork {
                     allowNetwork = input.allowNetwork
@@ -886,12 +888,16 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         }
 
         private func stopWindow() {
+            if let window { Task { await window.cancelAll() } }
+            window = nil
+            detachWindowEvents()
+        }
+
+        private func detachWindowEvents() {
             eventTask?.cancel()
             demandTask?.cancel()
-            if let window { Task { await window.cancelAll() } }
             eventTask = nil
             demandTask = nil
-            window = nil
             pages.removeAll()
             errors.removeAll()
             pageSignatures.removeAll()
@@ -903,9 +909,10 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             hostRevisions.removeAll()
         }
 
-        private func startEvents() {
+        private func startEvents(rebasingTo index: LibraryIndex? = nil) {
             guard let window else { return }
             eventTask = Task { [weak self] in
+                if let index { await window.rebase(to: index) }
                 for await event in await window.events() {
                     guard let self, !Task.isCancelled else { break }
                     switch event {
@@ -1005,7 +1012,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                             revision: (viewRevision, 0), wanted: &wanted, document: document)
                 }
                 if let page = pages[section] {
-                    if page.items.count <= slice.source.pageRange.lowerBound {
+                    if page.slots.count <= slice.source.pageRange.lowerBound {
                         addHost("e:\(position)",
                                 frame: CGRect(x: 0, y: slice.y + (slice.heading ? 38 : 0),
                                               width: geometry.width, height: 28),
@@ -1276,8 +1283,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
 
         private func loadedItem(_ ordinal: Int) -> LibraryViewportGeometry.RowItem? {
             guard let location = index?.location(forOrdinal: ordinal), let page = pages[location.sectionIndex],
-                  page.items.indices.contains(location.pageOffset) else { return nil }
-            return LibraryViewportGeometry.RowItem(photo: page.items[location.pageOffset], verified: page.verified,
+                  let slot = page.slot(at: location.pageOffset), let item = slot.item else { return nil }
+            return LibraryViewportGeometry.RowItem(photo: item, verified: slot.verified,
                 sectionIndex: location.sectionIndex, pageOffset: location.pageOffset, ordinal: ordinal)
         }
 
@@ -1312,7 +1319,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             if let anchor = findViewerSourceAnchor(for: item.photo.id, in: document) {
                 let page = pages[item.sectionIndex]
                 let seed = PhotoViewerSeed(sectionIndex: item.sectionIndex, pageOffset: item.pageOffset,
-                    item: item.photo, page: page?.items, pageVerified: page?.verified ?? item.verified)
+                    item: item.photo, page: page?.completeItems, pageVerified: page?.verified ?? item.verified)
                 onOpenPhoto?(PhotoViewerOpenRequest(seed: seed, source: anchor))
                 return
             }
@@ -1327,7 +1334,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             anchor.update(itemID: item.photo.id, image: nil)
             let page = pages[item.sectionIndex]
             let seed = PhotoViewerSeed(sectionIndex: item.sectionIndex, pageOffset: item.pageOffset,
-                item: item.photo, page: page?.items, pageVerified: page?.verified ?? item.verified)
+                item: item.photo, page: page?.completeItems, pageVerified: page?.verified ?? item.verified)
             onOpenPhoto?(PhotoViewerOpenRequest(seed: seed, source: anchor))
         }
 
@@ -1459,9 +1466,11 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private static func signature(_ page: LibraryPage) -> Int {
             var hash = Hasher()
             hash.combine(page.verified)
-            hash.combine(page.items.count)
-            for item in page.items {
-                hash.combine(item.id)
+            hash.combine(page.slots.count)
+            for slot in page.slots {
+                hash.combine(slot.itemID)
+                hash.combine(slot.verified)
+                guard let item = slot.item else { continue }
                 hash.combine(item.isFavorite)
                 hash.combine(item.displayAspectRatio)
                 let thumbnail = item.additional?.thumbnail
@@ -1476,8 +1485,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
 
         private static func membershipSignature(_ page: LibraryPage) -> Int {
             var hash = Hasher()
-            hash.combine(page.items.count)
-            for item in page.items { hash.combine(item.id) }
+            hash.combine(page.slots.count)
+            for slot in page.slots { hash.combine(slot.itemID) }
             return hash.finalize()
         }
 

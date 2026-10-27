@@ -55,19 +55,21 @@ public struct SelectionFavoriteResolver: Sendable {
 
             let repository = self.repository
             let chunkResults = await withTaskGroup(
-                of: (Int, [PhotoItem]?).self,
-                returning: [(Int, [PhotoItem]?)]?.self
+                of: (Int, PhotoPageSnapshot?).self,
+                returning: [(Int, PhotoPageSnapshot?)]?.self
             ) { group in
                 for sectionIndex in currentSections {
                     let descriptor = index.sections[sectionIndex]
+                    let selectedOffsets = (locationsBySection[sectionIndex] ?? []).map(\.pageOffset)
                     group.addTask {
-                        var verifiedItems: [PhotoItem]?
+                        var verifiedItems: PhotoPageSnapshot?
                         for await event in await repository.page(descriptor, collection: collection,
                                                                  allowNetwork: true, priority: .prefetch) {
                             if Task.isCancelled { break }
                             switch event {
                             case .value(let items, let verified):
-                                if verified { verifiedItems = items }
+                                if selectedOffsets.allSatisfy({ items.slot(at: $0)?.verified == true }) { return (sectionIndex, items) }
+                                verifiedItems = items
                             case .failure:
                                 return (sectionIndex, nil)
                             }
@@ -75,7 +77,7 @@ public struct SelectionFavoriteResolver: Sendable {
                         return (sectionIndex, verifiedItems)
                     }
                 }
-                var results: [(Int, [PhotoItem]?)] = []
+                var results: [(Int, PhotoPageSnapshot?)] = []
                 for await result in group {
                     results.append(result)
                 }
@@ -89,8 +91,7 @@ public struct SelectionFavoriteResolver: Sendable {
                 let descriptor = index.sections[sectionIndex]
                 let locs = locationsBySection[sectionIndex] ?? []
                 for loc in locs {
-                    guard items.indices.contains(loc.pageOffset) else { return nil }
-                    let item = items[loc.pageOffset]
+                    guard let slot = items.slot(at: loc.pageOffset), slot.verified, let item = slot.item else { return nil }
 
                     // If verification changes the identity of a selected item that was known when the command began, abort.
                     if let knownID = knownItemIDsByOrdinal[loc.ordinal], knownID != item.id {

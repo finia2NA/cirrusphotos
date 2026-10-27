@@ -3,8 +3,21 @@ import SynologyAPI
 
 public struct LibraryPage: Sendable {
     public let sectionIndex: Int
-    public let items: [PhotoItem]
+    public let slots: [PhotoItemSlot]
     public let verified: Bool
+    public let membershipVerified: Bool
+    public var items: [PhotoItem] { slots.compactMap(\.item) }
+    public var completeItems: [PhotoItem]? {
+        guard slots.allSatisfy({ $0.item != nil }) else { return nil }
+        return slots.compactMap(\.item)
+    }
+    public func slot(at offset: Int) -> PhotoItemSlot? { slots.indices.contains(offset) ? slots[offset] : nil }
+    public init(sectionIndex: Int, slots: [PhotoItemSlot], verified: Bool, membershipVerified: Bool? = nil) {
+        self.sectionIndex = sectionIndex; self.slots = slots; self.verified = verified; self.membershipVerified = membershipVerified ?? verified
+    }
+    public init(sectionIndex: Int, items: [PhotoItem], verified: Bool) {
+        self.init(sectionIndex: sectionIndex, slots: items.map { .init(itemID: $0.id, item: $0, verified: verified) }, verified: verified)
+    }
 }
 
 public enum LibraryPageEvent: Sendable {
@@ -30,12 +43,15 @@ public actor LibraryPageWindow {
     private let collection: PhotoCollectionDescriptor
     public let maximumPages: Int
     private var fingerprint: String?
+    private var sectionDescriptors: [TimelineSection] = []
     private var pages: [Int: LibraryPage] = [:]
     private var requests: [Int: Request] = [:]
     private var completed: [Int: Completion] = [:]
     private var failedSections: Set<Int> = []
     private var retryRevision = 0
     private var observers: [UUID: AsyncStream<LibraryPageEvent>.Continuation] = [:]
+    private var metadataTask: Task<Void, Never>?
+    private var lastDemand: (index: LibraryIndex, allowNetwork: Bool, visible: [Int], prefetch: [Int], retry: Int)?
     private var favoriteTask: Task<Void, Never>?
     private var itemMutationTask: Task<Void, Never>?
     private var favoriteValues: [Int64: Bool] = [:]
@@ -51,6 +67,7 @@ public actor LibraryPageWindow {
     public func events() -> AsyncStream<LibraryPageEvent> {
         observeFavoritesIfNeeded()
         observeItemMutationsIfNeeded()
+        observeMetadataIfNeeded()
         let id = UUID()
         return AsyncStream(bufferingPolicy: .bufferingNewest(maximumPages * 2 + 4)) { continuation in
             observers[id] = continuation
@@ -77,6 +94,8 @@ public actor LibraryPageWindow {
     public func update(index: LibraryIndex, allowNetwork: Bool,
                        visible: [Int], prefetch: [Int], retryRevision: Int = 0) {
         observeFavoritesIfNeeded()
+        observeMetadataIfNeeded()
+        lastDemand = (index, allowNetwork, visible, prefetch, retryRevision)
         if self.retryRevision != retryRevision {
             self.retryRevision = retryRevision
             for section in failedSections {
@@ -85,15 +104,7 @@ public actor LibraryPageWindow {
             }
             failedSections.removeAll()
         }
-        if fingerprint != index.fingerprint {
-            for request in requests.values { request.task.cancel() }
-            requests.removeAll()
-            completed.removeAll()
-            failedSections.removeAll()
-            for section in pages.keys { publish(.removed(sectionIndex: section)) }
-            pages.removeAll()
-            fingerprint = index.fingerprint
-        }
+        rebase(to: index)
         var desired: [Int] = []
         var visibleSet: Set<Int> = []
         for section in visible where index.sections.indices.contains(section) {
@@ -149,6 +160,29 @@ public actor LibraryPageWindow {
         }
     }
 
+    /// Numeric section positions may move while stable day slots remain reusable.
+    public func rebase(to index: LibraryIndex) {
+        guard fingerprint != index.fingerprint else { return }
+        for request in requests.values { request.task.cancel() }
+        requests.removeAll(); completed.removeAll(); failedSections.removeAll()
+        var positions: [DayPageAddress: Int] = [:]
+        for (position, section) in index.sections.enumerated() {
+            if let address = try? DayPageAddress(section: section, collection: collection) { positions[address] = position }
+        }
+        var rebased: [Int: LibraryPage] = [:]
+        for (position, page) in pages {
+            guard sectionDescriptors.indices.contains(position),
+                  let address = try? DayPageAddress(section: sectionDescriptors[position], collection: collection),
+                  let next = positions[address], sectionDescriptors[position].list == index.sections[next].list else { continue }
+            rebased[next] = LibraryPage(sectionIndex: next, slots: page.slots, verified: page.verified, membershipVerified: page.membershipVerified)
+        }
+        for position in pages.keys { publish(.removed(sectionIndex: position)) }
+        pages = rebased
+        sectionDescriptors = index.sections
+        fingerprint = index.fingerprint
+        for page in rebased.values { publish(.page(page, fingerprint: index.fingerprint)) }
+    }
+
     public func cancelAll() {
         for request in requests.values { request.task.cancel() }
         requests.removeAll()
@@ -158,19 +192,22 @@ public actor LibraryPageWindow {
         pages.removeAll()
         favoriteTask?.cancel()
         favoriteTask = nil
+        metadataTask?.cancel()
+        metadataTask = nil
+        lastDemand = nil
     }
 
-    private func receive(_ event: ResourceEvent<[PhotoItem]>, section: Int,
+    private func receive(_ event: ResourceEvent<PhotoPageSnapshot>, section: Int,
                          fingerprint identity: String, id: UUID) {
         guard fingerprint == identity, requests[section]?.id == id else { return }
         switch event {
         case .value(let items, let verified):
             failedSections.remove(section)
             let page = LibraryPage(sectionIndex: section,
-                                   items: items.map { item in
-                                       guard let value = favoriteValues[item.id] else { return item }
-                                       return item.withFavorite(value)
-                                   }, verified: verified)
+                                   slots: items.slots.map { slot in
+                                       let item = slot.item.map { item in favoriteValues[item.id].map { item.withFavorite($0) } ?? item }
+                                       return PhotoItemSlot(itemID: slot.itemID, item: item, verified: slot.verified)
+                                   }, verified: verified, membershipVerified: items.membershipVerified)
             pages[section] = page
             publish(.page(page, fingerprint: identity))
         case .failure(let message):
@@ -209,17 +246,45 @@ public actor LibraryPageWindow {
         }
     }
 
+    private func observeMetadataIfNeeded() {
+        guard metadataTask == nil else { return }
+        metadataTask = Task { [weak self, repository, collection] in
+            let observation = await repository.observeMetadataChanges(collection: collection)
+            for await _ in observation.changes {
+                guard !Task.isCancelled else { return }
+                if let change = await repository.takeMetadataChanges(observation.id) { await self?.invalidate(change) }
+            }
+        }
+    }
+    private func invalidate(_ change: MetadataCollectionInvalidation) {
+        guard let fingerprint else { return }
+        for position in sectionDescriptors.indices {
+            guard let raw = sectionDescriptors[position].list.first,
+                  let day = try? CaptureDay(year: raw.year, month: raw.month, day: raw.day),
+                  change.days == nil || change.days!.contains(day) else { continue }
+            completed.removeValue(forKey: position)
+            if let page = pages[position] {
+                let stale = LibraryPage(sectionIndex: position, slots: page.slots.map { PhotoItemSlot(itemID: $0.itemID, item: $0.item, verified: false) }, verified: false, membershipVerified: false)
+                pages[position] = stale
+                publish(.page(stale, fingerprint: fingerprint))
+            }
+        }
+        if let demand = lastDemand { update(index: demand.index, allowNetwork: demand.allowNetwork, visible: demand.visible, prefetch: demand.prefetch, retryRevision: demand.retry) }
+    }
+
     private func receiveItems(_ change: PhotoItemChange) {
         guard let fingerprint else { return }
         for (section, page) in pages {
             var modified = false
-            let items = page.items.map { item -> PhotoItem in
-                guard let replacement = change.items[item.id] else { return item }
+            let slots = page.slots.map { slot -> PhotoItemSlot in
+                guard let replacement = change.items[slot.itemID] else { return slot }
                 modified = true
-                return replacement
+                let updated = slot.item?.withRotationMetadata(from: replacement) ?? replacement
+                let projected = favoriteValues[slot.itemID].map { updated.withFavorite($0) } ?? updated
+                return PhotoItemSlot(itemID: slot.itemID, item: projected, verified: slot.verified)
             }
             if modified {
-                let updated = LibraryPage(sectionIndex: section, items: items, verified: page.verified)
+                let updated = LibraryPage(sectionIndex: section, slots: slots, verified: page.verified, membershipVerified: page.membershipVerified)
                 pages[section] = updated
                 publish(.page(updated, fingerprint: fingerprint))
             }
@@ -233,15 +298,13 @@ public actor LibraryPageWindow {
         guard let fingerprint else { return }
         for (section, page) in pages {
             var modified = false
-            let items = page.items.map { item -> PhotoItem in
-                if let val = change.values[item.id], item.isFavorite != val {
-                    modified = true
-                    return item.withFavorite(val)
-                }
-                return item
+            let slots = page.slots.map { slot -> PhotoItemSlot in
+                guard let item = slot.item, let value = change.values[slot.itemID], item.isFavorite != value else { return slot }
+                modified = true
+                return PhotoItemSlot(itemID: slot.itemID, item: item.withFavorite(value), verified: slot.verified)
             }
             if modified {
-                let updated = LibraryPage(sectionIndex: section, items: items, verified: page.verified)
+                let updated = LibraryPage(sectionIndex: section, slots: slots, verified: page.verified, membershipVerified: page.membershipVerified)
                 pages[section] = updated
                 publish(.page(updated, fingerprint: fingerprint))
             }

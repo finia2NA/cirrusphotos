@@ -4,7 +4,7 @@ import SQLite3
 import SynologyAPI
 
 public enum CacheKind: Int, Sendable {
-    case previewThumbnail, fullImage, thumbnail, page, timeline, albumList, locationIndex, videoSegment
+    case previewThumbnail = 0, fullImage = 1, thumbnail = 2, videoSegment = 7
 }
 
 public struct CacheEntry: Sendable {
@@ -16,19 +16,6 @@ public struct CacheEntry: Sendable {
     /// Monotonic identity for this row version. Unlike the content digest, this
     /// changes even when a row briefly changes and is restored to identical bytes.
     public let revision: Int64
-}
-
-public enum MetadataRowExpectation: Sendable, Equatable {
-    case absent
-    case revision(Int64)
-    case unconditional
-}
-
-public enum MetadataCommitResult: Sendable, Equatable {
-    case stored(revision: Int64)
-    case generationChanged
-    case superseded
-    case notRetained
 }
 
 public enum CacheBudget {
@@ -47,18 +34,16 @@ public actor DiskCache {
     private static let schemaVersion = 3
     private let root: URL
     private let images: URL
-    nonisolated(unsafe) private var db: OpaquePointer?
+    nonisolated(unsafe) var db: OpaquePointer?
     private var budget: Int64
-    private let protectedTimelineKey: String
-    private var generation = 0
-    private var metadataGeneration = 0
+    var generation = 0
+    var metadataGeneration = 0
     private var configuredThumbnailSize: ThumbnailSize = .m
 
-    public init(root: URL, budget: Int64, protectedTimelineKey: String) throws {
+    public init(root: URL, budget: Int64) throws {
         self.root = root
         images = root.appendingPathComponent("images", isDirectory: true)
         self.budget = budget
-        self.protectedTimelineKey = protectedTimelineKey
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let path = root.appendingPathComponent("index.sqlite").path
         if FileManager.default.fileExists(atPath: path) {
@@ -246,42 +231,7 @@ public actor DiskCache {
         try trim()
     }
 
-    /// Atomically rejects a metadata write when either cache generation changed or
-    /// another writer replaced the same row after it was read.
-    public func putMetadata(
-        _ key: String,
-        kind: CacheKind,
-        data: Data,
-        validatedRun: String?,
-        etag: String? = nil,
-        lastModified: String? = nil,
-        expectedGeneration: Int,
-        expectedMetadataGeneration: Int,
-        replacing expectation: MetadataRowExpectation
-    ) throws -> MetadataCommitResult {
-        guard expectedGeneration == generation,
-              expectedMetadataGeneration == metadataGeneration else {
-            return .generationChanged
-        }
-        guard kind != .thumbnail, kind != .previewThumbnail, kind != .fullImage,
-              kind != .videoSegment else {
-            throw CacheError.storage
-        }
-        let currentRevision = try storedRevision(for: key)
-        switch expectation {
-        case .absent where currentRevision != nil:
-            return .superseded
-        case .revision(let expected) where currentRevision != expected:
-            return .superseded
-        case .absent, .revision, .unconditional:
-            break
-        }
-        try put(key, kind: kind, data: data, validatedRun: validatedRun,
-                etag: etag, lastModified: lastModified,
-                expectedGeneration: expectedGeneration)
-        guard let newRevision = try storedRevision(for: key) else { return .notRetained }
-        return .stored(revision: newRevision)
-    }
+
 
     public func markValidated(_ key: String, run: String, expectedGeneration: Int? = nil) throws {
         if let expectedGeneration, expectedGeneration != generation { return }
@@ -309,7 +259,7 @@ public actor DiskCache {
         let statement = try prepare("SELECT COALESCE(SUM(cost),0) FROM entries")
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW else { throw CacheError.storage }
-        return sqlite3_column_int64(statement, 0)
+        return sqlite3_column_int64(statement, 0) + (try metadataStorageCost())
     }
 
     func retentionClass(forKey key: String) throws -> CacheRetentionClass? {
@@ -334,6 +284,7 @@ public actor DiskCache {
             }
         }
         guard sqlite3_exec(db, "DELETE FROM entries", nil, nil, nil) == SQLITE_OK else { throw CacheError.storage }
+        try clearNormalizedMetadata()
     }
 
     /// Removes only semantic metadata. The generation advances before SQL work and
@@ -345,6 +296,10 @@ public actor DiskCache {
         guard sqlite3_exec(db, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK else {
             throw CacheError.storage
         }
+        do { try clearNormalizedMetadata() } catch {
+            _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            throw error
+        }
         let imageKinds = [CacheKind.previewThumbnail, .fullImage, .thumbnail, .videoSegment]
             .map { String($0.rawValue) }.joined(separator: ",")
         guard sqlite3_exec(db, "DELETE FROM entries WHERE kind NOT IN (\(imageKinds))", nil, nil, nil) == SQLITE_OK,
@@ -355,13 +310,15 @@ public actor DiskCache {
         return metadataGeneration
     }
 
-    private func trim() throws {
+    func trim() throws {
         let reserve = budget >= 200_000_000 ? min(64_000_000, budget / 10) : 0
         while try usage() > budget - reserve {
-            let statement = try prepare("SELECT key FROM entries WHERE key != ? ORDER BY retention_rank ASC, accessed ASC LIMIT 1")
-            bind(protectedTimelineKey, at: 1, in: statement)
-            let key = sqlite3_step(statement) == SQLITE_ROW ? columnString(statement, 0) : nil
+            let statement = try prepare("SELECT key,retention_rank FROM entries ORDER BY retention_rank ASC, accessed ASC LIMIT 1")
+            let found = sqlite3_step(statement) == SQLITE_ROW
+            let key = found ? columnString(statement, 0) : nil
+            let rank = found ? Int(sqlite3_column_int(statement, 1)) : Int.max
             sqlite3_finalize(statement)
+            if try trimNormalizedMetadata(throughRank: rank) { continue }
             guard let key else { break }
             try remove(key)
         }
@@ -464,7 +421,7 @@ public actor DiskCache {
         return .optionalThumbnail
     }
 
-    private func prepare(_ sql: String) throws -> OpaquePointer? {
+    func prepare(_ sql: String) throws -> OpaquePointer? {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw CacheError.storage }
         return statement
@@ -483,11 +440,11 @@ public actor DiskCache {
         guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
         return sqlite3_column_int64(statement, 0)
     }
-    private func bind(_ value: String?, at index: Int32, in statement: OpaquePointer?) {
+    func bind(_ value: String?, at index: Int32, in statement: OpaquePointer?) {
         if let value { _ = value.withCString { sqlite3_bind_text(statement, index, $0, -1, sqliteTransient) } }
         else { sqlite3_bind_null(statement, index) }
     }
-    private func columnString(_ statement: OpaquePointer?, _ index: Int32) -> String? {
+    func columnString(_ statement: OpaquePointer?, _ index: Int32) -> String? {
         guard let text = sqlite3_column_text(statement, index) else { return nil }
         return String(cString: text)
     }

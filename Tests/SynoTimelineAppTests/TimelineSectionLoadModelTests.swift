@@ -137,8 +137,8 @@ private actor LoadModelTransport: PhotosTransport {
         self.delay = delay
     }
 
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
-        snapshot
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
+        return try fixtureDayCatalog(snapshot, initial: initial)
     }
 
     func albums() async throws -> [AlbumSummary] {
@@ -149,16 +149,18 @@ private actor LoadModelTransport: PhotosTransport {
         ]
     }
 
-    func albumTimeline(albumID: Int64) async throws -> TimelineSnapshot {
+    func readAlbumCatalogBatch(albumID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry] {
         requestedAlbumTimelines += 1
-        return snapshot
+        return offset == 0 ? [DayTimelineEntry(id: item.id, time: item.time)] : []
     }
 
-    func items(in section: TimelineSection,
-               collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
+    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        let section = fixtureSection(request)
+        let collection = request.collection
+
         requestedCollections.append(collection)
         if delay != .zero { try await Task.sleep(for: delay) }
-        return [item]
+        return try fixtureBatch([item], request: request, fields: fields)
     }
 
     func itemCollections() -> [PhotoCollectionDescriptor] { requestedCollections }

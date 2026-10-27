@@ -9,8 +9,17 @@ struct ViewerMetadataWindow {
         let count: Int
     }
     struct PageEntry: Sendable {
-        let items: [PhotoItem]
+        let slots: [PhotoItemSlot]
         let verified: Bool
+        let membershipVerified: Bool
+        var items: [PhotoItem] { slots.compactMap(\.item) }
+        func slot(at offset: Int) -> PhotoItemSlot? { slots.indices.contains(offset) ? slots[offset] : nil }
+        init(slots: [PhotoItemSlot], verified: Bool, membershipVerified: Bool? = nil) {
+            self.slots = slots; self.verified = verified; self.membershipVerified = membershipVerified ?? verified
+        }
+        init(items: [PhotoItem], verified: Bool) {
+            self.init(slots: items.map { PhotoItemSlot(itemID: $0.id, item: $0, verified: verified) }, verified: verified)
+        }
     }
     struct PageJob {
         let id: UUID

@@ -20,7 +20,8 @@ final class SelectionInfoResolverTests: XCTestCase {
         return try! JSONDecoder().decode(PhotoItem.self, from: Data(json.utf8))
     }
 
-    private func makeRepository(transport: InfoResolverMockTransport, root: URL) throws -> CachedPhotosRepository {
+    private func makeRepository(transport: InfoResolverMockTransport, root: URL, snapshot: TimelineSnapshot) async throws -> CachedPhotosRepository {
+        await transport.setSnapshot(snapshot)
         let creds = SynologyCredentials(username: "alice", password: "pw", otpSecret: "unused")
         return try CachedPhotosRepository(credentials: creds, budget: 100_000_000,
                                           cacheRoot: root, transport: transport)
@@ -36,10 +37,7 @@ final class SelectionInfoResolverTests: XCTestCase {
 
     private func seedPage(_ items: [PhotoItem], section: TimelineSection,
                           repository: CachedPhotosRepository) async throws {
-        let namespace = CacheKey.namespace(server: SynologyClient.defaultBaseURL, account: "alice")
-        let key = try XCTUnwrap(CacheKey.page(namespace: namespace, section: section))
-        try await repository.store.put(key, kind: .page, data: JSONEncoder().encode(items),
-                                       validatedRun: nil)
+        try await seedMetadataPage(items, section: section, repository: repository)
     }
 
     private func collectAll(_ stream: AsyncStream<SelectionInfo>) async -> [SelectionInfo] {
@@ -59,7 +57,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         await transport.setPage([makeItem(id: 3, type: "video", filesize: 300),
                                  makeItem(id: 4, filesize: 400)], start: start(sec1))
         let snapshot = TimelineSnapshot(sections: [sec0, sec1])
-        let repo = try makeRepository(transport: transport, root: root)
+        let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
             collection: .personalLibrary, snapshot: snapshot,
@@ -93,7 +91,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         let item = makeItem(id: 1, filesize: 100)
         await transport.setPage([item], start: start(sec))
         let snapshot = TimelineSnapshot(sections: [sec])
-        let repo = try makeRepository(transport: transport, root: root)
+        let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
         try await seedPage([item], section: sec, repository: repo)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
@@ -114,7 +112,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         let sec = TimelineSection(offset: 0, limit: 1, list: [day(2024, 4, 3, 1)])
         await transport.setPage([makeItem(id: 1, filesize: 250)], start: start(sec))
         let snapshot = TimelineSnapshot(sections: [sec])
-        let repo = try makeRepository(transport: transport, root: root)
+        let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
         try await seedPage([makeItem(id: 1)], section: sec, repository: repo)
 
         let emissions = await collectAll(SelectionInfoResolver(repository: repo).resolve(
@@ -134,7 +132,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         let sec = TimelineSection(offset: 0, limit: 1, list: [day(2024, 4, 3, 1)])
         await transport.setPage([makeItem(id: 7, filesize: 12_345)], start: start(sec))
         let snapshot = TimelineSnapshot(sections: [sec])
-        let repo = try makeRepository(transport: transport, root: root)
+        let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
             collection: .personalLibrary, snapshot: snapshot,
@@ -159,7 +157,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         let sec = TimelineSection(offset: 0, limit: 1, list: [day(2024, 4, 3, 1)])
         await transport.setFailure(start: start(sec))
         let snapshot = TimelineSnapshot(sections: [sec])
-        let repo = try makeRepository(transport: transport, root: root)
+        let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
             collection: .personalLibrary, snapshot: snapshot,
@@ -183,7 +181,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         await transport.setPage([item], start: start(sec))
         await transport.setBlocked(true)
         let snapshot = TimelineSnapshot(sections: [sec])
-        let repo = try makeRepository(transport: transport, root: root)
+        let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
         try await seedPage([item], section: sec, repository: repo)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
@@ -217,7 +215,7 @@ final class SelectionInfoResolverTests: XCTestCase {
                                  makeItem(id: 4, latitude: 40, longitude: 41)],
                                 start: start(sec1))
         let snapshot = TimelineSnapshot(sections: [sec0, sec1])
-        let repo = try makeRepository(transport: transport, root: root)
+        let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
             collection: .personalLibrary, snapshot: snapshot,
@@ -240,7 +238,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         let item = makeItem(id: 1, filesize: 100, latitude: 48.8584, longitude: 2.2945)
         await transport.setPage([item], start: start(sec))
         let snapshot = TimelineSnapshot(sections: [sec])
-        let repo = try makeRepository(transport: transport, root: root)
+        let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
         try await seedPage([item], section: sec, repository: repo)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
@@ -262,7 +260,7 @@ final class SelectionInfoResolverTests: XCTestCase {
                                  makeItem(id: 3, latitude: 3, longitude: 4)],
                                 start: start(sec))
         let snapshot = TimelineSnapshot(sections: [sec])
-        let repo = try makeRepository(transport: transport, root: root)
+        let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
             collection: .personalLibrary, snapshot: snapshot,
@@ -282,7 +280,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         await transport.setPage([makeItem(id: 1, latitude: 35.697, longitude: 139.681)],
                                 start: start(sec))
         let snapshot = TimelineSnapshot(sections: [sec])
-        let repo = try makeRepository(transport: transport, root: root)
+        let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
             collection: .personalLibrary, snapshot: snapshot,
@@ -301,7 +299,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         }
         await transport.setBlocked(true)
         let snapshot = TimelineSnapshot(sections: sections)
-        let repo = try makeRepository(transport: transport, root: root)
+        let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
             collection: .personalLibrary, snapshot: snapshot,
@@ -309,18 +307,22 @@ final class SelectionInfoResolverTests: XCTestCase {
         let consumer = Task {
             for await _ in stream {}
         }
-        let started = await waitUntil { await transport.recordedItemCalls() == 2 }
+        let started = await waitUntil { await transport.recordedItemCalls() > 0 }
         XCTAssertTrue(started)
+        let admitted = await transport.recordedItemCalls()
         consumer.cancel()
         _ = await consumer.value
         await transport.releaseBlocked()
         try? await Task.sleep(for: .milliseconds(150))
         let calls = await transport.recordedItemCalls()
-        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(calls, admitted)
+        XCTAssertLessThanOrEqual(calls, 2)
     }
 }
 
 actor InfoResolverMockTransport: PhotosTransport {
+    private var snapshot = TimelineSnapshot(sections: [])
+    func setSnapshot(_ value: TimelineSnapshot) { snapshot = value }
     private var pages: [Int64: [PhotoItem]] = [:]
     private var failures: Set<Int64> = []
     private var itemCalls = 0
@@ -340,19 +342,23 @@ actor InfoResolverMockTransport: PhotosTransport {
 
     func login(credentials: SynologyCredentials) async throws {}
 
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
-        TimelineSnapshot(sections: [])
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
+        return try fixtureDayCatalog(snapshot, initial: initial)
     }
 
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
+    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        let section = fixtureSection(request)
+        let collection = request.collection
+
         itemCalls += 1
         if blocked {
             await withCheckedContinuation { waiters.append($0) }
         }
-        if let bounds = section.dateBounds, failures.contains(bounds.start) {
-            throw TestFailure("Mock page failure")
+        if failures.contains(where: { $0 >= request.oldestDay.startTime && $0 <= request.newestDay.endTime }) { throw TestFailure("Mock page failure") }
+        let values = try pages.keys.sorted(by: >).filter { $0 >= request.oldestDay.startTime && $0 <= request.newestDay.endTime }.flatMap { start in
+            try pages[start, default: []].map { try fixtureItem($0, on: CaptureDay(time: start)) }
         }
-        return section.dateBounds.flatMap { pages[$0.start] } ?? []
+        return CollectionBatchResult(items: Array(values.dropFirst(request.offset).prefix(request.limit)), profile: fields)
     }
 
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {

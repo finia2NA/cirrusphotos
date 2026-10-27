@@ -28,14 +28,29 @@ private actor RangeTransport: PhotosTransport {
         blockedPageContinuations.removeAll()
         for waiter in waiters { waiter.resume() }
     }
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
+        try CollectionDayCatalog(days: pages.keys.sorted().enumerated().map { index, key in
+            try CollectionDayCount(day: CaptureDay(year: 2024, month: 4, day: 3-index), count: pages[key]!.count)
+        }, completeness: initial ? .partial : .complete)
+    }
+    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        let section = fixtureSection(request)
+        let collection = request.collection
+
         pageCalls += 1
         for waiter in pageStartWaiters { waiter.resume() }
         pageStartWaiters.removeAll()
         if blockPages {
             await withCheckedContinuation { blockedPageContinuations.append($0) }
         }
-        return pages[section.offset] ?? []
+        var rows: [PhotoItem] = []
+        for (index, key) in pages.keys.sorted().enumerated() {
+            let day = try CaptureDay(year: 2024, month: 4, day: 3-index)
+            if day <= request.newestDay && day >= request.oldestDay {
+                rows += try pages[key]!.map { try fixtureItem($0, on: day) }
+            }
+        }
+        return CollectionBatchResult(items: rows, profile: fields)
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
@@ -64,8 +79,8 @@ final class ThumbnailRangeDownloaderTests: XCTestCase {
             TimelineDay(year: 2024, month: 4, day: 2, itemCount: 3)
         ]
         return TimelineSnapshot(sections: [
-            TimelineSection(offset: 0, limit: 3, list: days),
-            TimelineSection(offset: 3, limit: 2, list: days),
+            TimelineSection(offset: 0, limit: 2, list: [days[0]]),
+            TimelineSection(offset: 0, limit: 3, list: [days[1]]),
             TimelineSection(offset: 0, limit: 1,
                             list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)])
         ])
@@ -81,8 +96,8 @@ final class ThumbnailRangeDownloaderTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = RangeTransport()
         await transport.configure(pages: [
-            0: [try item(1), try item(2), try item(3, ready: false)],
-            3: [try item(4), try item(5)]
+            0: [try item(1), try item(2)],
+            3: [try item(3, ready: false), try item(4), try item(5)]
         ])
         let snapshot = snapshot()
         let range = ThumbnailDateRange(0, 1)

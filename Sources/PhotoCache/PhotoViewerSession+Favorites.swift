@@ -72,15 +72,13 @@ extension PhotoViewerSession {
         var pagesChanged = false
         for (section, page) in metadata.pages {
             var modified = false
-            let items = page.items.map { item -> PhotoItem in
-                if let fav = values[item.id], item.isFavorite != fav {
-                    modified = true
-                    return item.withFavorite(fav)
-                }
-                return item
+            let slots = page.slots.map { slot -> PhotoItemSlot in
+                guard let item = slot.item, let value = values[item.id], item.isFavorite != value else { return slot }
+                modified = true
+                return PhotoItemSlot(itemID: slot.itemID, item: item.withFavorite(value), verified: slot.verified)
             }
             if modified {
-                metadata.pages[section] = ViewerMetadataWindow.PageEntry(items: items, verified: page.verified)
+                metadata.pages[section] = ViewerMetadataWindow.PageEntry(slots: slots, verified: page.verified, membershipVerified: page.membershipVerified)
                 pagesChanged = true
             }
         }

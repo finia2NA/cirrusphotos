@@ -32,8 +32,8 @@ extension PhotoViewerSession {
         }
         for location in locations {
             guard let page = metadata.pages[location.sectionIndex],
-                  page.items.indices.contains(location.pageOffset),
-                  let descriptor = page.items[location.pageOffset].additional?.thumbnail else { continue }
+                  page.slots.indices.contains(location.pageOffset),
+                  let descriptor = page.slot(at: location.pageOffset)?.item?.additional?.thumbnail else { continue }
             for request in neighborThumbnailRequests(for: descriptor) {
                 let key = Self.thumbnailKey(descriptor, size: request.size)
                 wantedKeys.insert(key)
@@ -112,8 +112,8 @@ extension PhotoViewerSession {
 
         var wantedKeys: Set<String> = []
         for location in locations {
-            guard let page = metadata.pages[location.sectionIndex], page.items.indices.contains(location.pageOffset) else { continue }
-            let item = page.items[location.pageOffset]
+            guard let page = metadata.pages[location.sectionIndex], page.slots.indices.contains(location.pageOffset) else { continue }
+            guard let item = page.slot(at: location.pageOffset)?.item else { continue }
             guard let resource = item.fullImageResource else { continue }
             let key = Self.resourceKey(resource)
             wantedKeys.insert(key)

@@ -91,6 +91,14 @@ extension CachedPhotosRepository {
     }
 
     private func cancelMetadataJobsForReset() {
+        cancelNormalizedMetadataWork()
+        for recovery in metadata.collectionRecoveries.values { recovery.task.cancel() }
+        for job in metadata.detailJobs.values { job.task.cancel() }
+        metadata.detailJobs.removeAll()
+        metadata.detailJobByID.removeAll()
+        metadata.reconciliation?.cancel()
+        metadata.locationPublicationTask?.cancel()
+        metadata.clearSourceWork()
         for observer in metadata.personalPageObservers.values { observer.continuation.finish() }
         metadata.personalPageObservers.removeAll()
         for job in metadata.timelineJobs.values { job.task.cancel() }
@@ -102,6 +110,8 @@ extension CachedPhotosRepository {
         metadata.timelineJobs.removeAll()
         metadata.pageJobs.removeAll()
         metadata.pageJobEpochs.removeAll()
+        metadata.pageJobSourceRevisions.removeAll()
+        metadata.forcedMembershipJobs.removeAll()
         metadata.albumListJob = nil
         metadata.locationIndexWork = nil
         metadata.initialSubscribers.removeAll()
@@ -114,11 +124,7 @@ extension CachedPhotosRepository {
         metadata.locationRecords.removeAll()
         metadata.locationRevision &+= 1
         metadata.mapFilters.removeAll()
-        metadata.mapFilterPages.removeAll()
-        metadata.mapFilterPageOrder.removeAll()
         metadata.libraryFilters.removeAll()
-        metadata.libraryFilterPages.removeAll()
-        metadata.libraryFilterPageOrder.removeAll()
         // Mutation epochs and favorite overrides remain monotonic/live. Already
         // submitted NAS writes are not duplicated or canceled by a local reset.
     }

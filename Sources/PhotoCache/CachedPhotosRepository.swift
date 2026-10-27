@@ -16,7 +16,7 @@ public actor CachedPhotosRepository {
     let fullImageGate = FullImageGate()
     let videoTransferGate = VideoTransferGate()
     var authenticationState = RepositoryAuthenticationState()
-    var metadata = RepositoryMetadataWork()
+    var metadata = MetadataEngineState()
     var imageWork = RepositoryImageWork()
     var favorites = RepositoryFavoriteState()
     var itemMutations = RepositoryItemMutationState()
@@ -33,11 +33,14 @@ public actor CachedPhotosRepository {
         } else {
             root = CacheLocation.defaultRoot().appendingPathComponent(namespace, isDirectory: true)
         }
-        store = try DiskCache(root: root, budget: budget,
-                              protectedTimelineKey: CacheKey.timeline(namespace: namespace))
+        store = try DiskCache(root: root, budget: budget)
     }
 
-    public func setBudget(_ bytes: Int64) async throws { try await store.setBudget(bytes) }
+    public func setBudget(_ bytes: Int64) async throws {
+        try await store.setBudget(bytes)
+        if metadata.initialized, let state = try? await store.metadataState(metadataNamespace), !state.inventoryComplete { metadata.inventoryCurrent = false }
+        await publishStoredLocationProjection()
+    }
 
     public func usage() async throws -> Int64 { try await store.usage() }
 

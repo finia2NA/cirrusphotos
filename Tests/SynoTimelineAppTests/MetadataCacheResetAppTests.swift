@@ -9,9 +9,8 @@ private actor MetadataResetAppTransport: PhotosTransport {
 
     init(snapshot: TimelineSnapshot) { self.snapshot = snapshot }
 
-    func timeline(collection: PhotoCollectionDescriptor,
-                  initial: Bool) async throws -> TimelineSnapshot {
-        snapshot
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
+        return try fixtureDayCatalog(snapshot, initial: initial)
     }
 }
 

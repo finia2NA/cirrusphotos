@@ -111,7 +111,7 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
 
     func testExactArrivalMakesRedundantSmallerRenditionOptional() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
-        let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
+        let cache = try DiskCache(root: root, budget: 100)
         try await cache.setConfiguredThumbnailSize(.m)
         let small = ThumbnailCacheIdentity(key: "small", family: "family", size: .sm)
         let medium = ThumbnailCacheIdentity(key: "medium", family: "family", size: .m)
@@ -133,7 +133,7 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
 
     func testLargerRenditionSurvivesDowngradeUntilBudgetPressure() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
-        let cache = try DiskCache(root: root, budget: 12, protectedTimelineKey: "timeline")
+        let cache = try DiskCache(root: root, budget: 12)
         let large = ThumbnailCacheIdentity(key: "large", family: "family", size: .xl)
         let small = ThumbnailCacheIdentity(key: "small", family: "family", size: .sm)
         try await cache.setConfiguredThumbnailSize(.xl)
@@ -147,11 +147,11 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
         XCTAssertEqual(largeClass, .optionalThumbnail)
         try await cache.put(small.key, kind: .thumbnail, data: Data(repeating: 2, count: 4),
                             validatedRun: nil, thumbnail: small)
-        try await cache.put("page", kind: .page, data: Data(repeating: 3, count: 4), validatedRun: nil)
+        try await cache.put("page", kind: .thumbnail, data: Data(repeating: 3, count: 4), validatedRun: nil)
         let retainedWithinBudget = try await cache.get(large.key)
         XCTAssertNotNil(retainedWithinBudget)
 
-        try await cache.put("second-page", kind: .page, data: Data(repeating: 4, count: 4), validatedRun: nil)
+        try await cache.put("second-page", kind: .thumbnail, data: Data(repeating: 4, count: 4), validatedRun: nil)
         let evictedLarge = try await cache.get(large.key)
         let retainedSmall = try await cache.get(small.key)
         XCTAssertNil(evictedLarge)
@@ -160,7 +160,7 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
 
     func testSmallerFallbackOutranksOriginalAndOptionalLargerRendition() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
-        let cache = try DiskCache(root: root, budget: 12, protectedTimelineKey: "timeline")
+        let cache = try DiskCache(root: root, budget: 12)
         try await cache.setConfiguredThumbnailSize(.m)
         let smaller = ThumbnailCacheIdentity(key: "small", family: "needs-medium", size: .sm)
         let larger = ThumbnailCacheIdentity(key: "large", family: "other", size: .xl)
@@ -169,7 +169,7 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
         try await cache.put("original", kind: .fullImage, data: Data(repeating: 2, count: 4), validatedRun: nil)
         try await cache.put(larger.key, kind: .previewThumbnail, data: Data(repeating: 3, count: 4),
                             validatedRun: nil, thumbnail: larger)
-        try await cache.put("page", kind: .page, data: Data(repeating: 4, count: 4), validatedRun: nil)
+        try await cache.put("page", kind: .thumbnail, data: Data(repeating: 4, count: 4), validatedRun: nil)
 
         let evictedLarger = try await cache.get(larger.key)
         let retainedOriginal = try await cache.get("original")

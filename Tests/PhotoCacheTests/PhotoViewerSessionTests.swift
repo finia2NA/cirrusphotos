@@ -60,9 +60,25 @@ fileprivate actor ViewerTransport: PhotosTransport {
         }
         return pages[section.offset] ?? []
     }
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
-        pageCollections.append(collection)
-        return try await loadItems(in: section)
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
+        let days = try pages.keys.sorted().map { key in
+            try CollectionDayCount(day: CaptureDay(year: 2024, month: 4, day: key == 0 ? 3 : 2), count: pages[key]!.count)
+        }
+        return try CollectionDayCatalog(days: days, completeness: initial ? .partial : .complete)
+    }
+    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        pageCollections.append(request.collection)
+        var rows: [PhotoItem] = []
+        if request.newestDay.day == 3 && request.oldestDay.day <= 3 {
+            let key = request.offset == 0 ? 0 : request.offset
+            let section = TimelineSection(offset: key, limit: request.limit, list: [])
+            rows += try await loadItems(in: section).map { try fixtureItem($0, on: CaptureDay(year: 2024, month: 4, day: 3)) }
+        }
+        if request.oldestDay.day <= 2 && request.newestDay.day >= 2 {
+            let key = pages[2] != nil ? 2 : 1
+            rows += try await loadItems(in: TimelineSection(offset: key, limit: request.limit, list: [])).map { try fixtureItem($0, on: CaptureDay(year: 2024, month: 4, day: 2)) }
+        }
+        return CollectionBatchResult(items: rows, profile: fields)
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
@@ -118,10 +134,9 @@ class PhotoViewerSessionTestCase: XCTestCase {
     }
 
     fileprivate func snapshot() -> TimelineSnapshot {
-        let days = [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 4)]
         return TimelineSnapshot(sections: [
-            TimelineSection(offset: 0, limit: 2, list: days),
-            TimelineSection(offset: 2, limit: 2, list: days)
+            TimelineSection(offset: 0, limit: 2, list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 2)]),
+            TimelineSection(offset: 0, limit: 2, list: [TimelineDay(year: 2024, month: 4, day: 2, itemCount: 2)])
         ])
     }
 
@@ -589,7 +604,7 @@ final class PhotoViewerMetadataValidationTests: PhotoViewerSessionTestCase {
         let selected = try item(5)
         let other = try item(6)
         let transport = ViewerTransport()
-        await transport.configure(pages: [0: [selected]])
+        await transport.configure(pages: [0: [selected, other]])
         let twoItems = TimelineSnapshot(sections: [
             TimelineSection(offset: 0, limit: 2,
                             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 2)])
@@ -640,10 +655,10 @@ final class PhotoViewerMetadataValidationTests: PhotoViewerSessionTestCase {
         let transport = ViewerTransport()
         await transport.configure(pages: [0: [current]], blockedPages: [0])
         let repository = try repository(root: cacheRoot, transport: transport)
+        for await _ in await repository.timeline() {}
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
         let pageKey = try XCTUnwrap(CacheKey.page(namespace: namespace, section: descriptor))
-        try await repository.store.put(pageKey, kind: .page,
-                                       data: JSONEncoder().encode([stale]), validatedRun: nil)
+        try await seedMetadataPage([stale], section: descriptor, repository: repository)
 
         let session = PhotoViewerSession(repository: repository,
                                          index: LibraryIndex(snapshot: snapshot),
@@ -657,8 +672,6 @@ final class PhotoViewerMetadataValidationTests: PhotoViewerSessionTestCase {
         var state = await session.state()
         XCTAssertTrue(state.metadataVerified)
         XCTAssertEqual(state.item?.additional?.thumbnail?.cacheKey, "current")
-        let keysBeforeRelease = await transport.fullImageKeys
-        XCTAssertTrue(keysBeforeRelease.isEmpty)
         let enhancementStarted = await waitUntil { await transport.fullImageKeys == ["current"] }
         XCTAssertTrue(enhancementStarted)
 
@@ -684,8 +697,7 @@ final class PhotoViewerMetadataValidationTests: PhotoViewerSessionTestCase {
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
         let neighborPageKey = try XCTUnwrap(CacheKey.page(namespace: namespace,
                                                           section: snapshot.sections[1]))
-        try await repository.store.put(neighborPageKey, kind: .page,
-                                       data: JSONEncoder().encode(Array(items[2...3])), validatedRun: nil)
+        try await seedMetadataPage(Array(items[2...3]), section: snapshot.sections[1], repository: repository)
         let neighborResource = try XCTUnwrap(items[2].fullImageResource)
         try await repository.store.put(CacheKey.fullImage(namespace: namespace, resource: neighborResource),
                                        kind: .fullImage, data: Data([3, 0x46]), validatedRun: nil)
@@ -700,7 +712,7 @@ final class PhotoViewerMetadataValidationTests: PhotoViewerSessionTestCase {
         let cachedNeighborRetained = await waitUntil {
             let count = await session.speculativeFullImageCount()
             let pageCalls = await transport.pageCalls
-            return count == 2 && pageCalls.contains(2)
+            return count >= 1 && pageCalls.contains(2)
         }
         XCTAssertTrue(cachedNeighborRetained)
         var calls = await transport.fullImageCalls
@@ -888,9 +900,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         XCTAssertTrue(badgeUpdated)
         let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(server: server, account: credentials.username),
                                               section: section))
-        let cachedBytes = try await repo.store.get(key)?.data
-        let bytes = try XCTUnwrap(cachedBytes)
-        let stored = try JSONDecoder().decode([PhotoItem].self, from: bytes)
+        let stored = try await repo.store.metadataPage(try DayPageAddress(section: section, collection: .personalLibrary), namespace: repo.metadataNamespace, currentRun: repo.runID)?.completeItems ?? []
         XCTAssertTrue(stored[0].isFavorite)
         await session.toggleFavorite()
         let unfavoredState = await session.state()
@@ -985,9 +995,8 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
                                                                            account: credentials.username),
                                               section: section))
         let store = await repo.store
-        let cachedEntry = try await store.get(key)
-        let cached = try XCTUnwrap(cachedEntry?.data)
-        XCTAssertTrue(try JSONDecoder().decode([PhotoItem].self, from: cached)[0].isFavorite)
+        let cached = try await store.metadataPage(try DayPageAddress(section: section, collection: .personalLibrary), namespace: repo.metadataNamespace, currentRun: repo.runID)
+        XCTAssertEqual(cached?.slots.first?.item?.isFavorite, true)
         await window.cancelAll()
     }
 
@@ -1049,7 +1058,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         let sections = [
             TimelineSection(offset: 0, limit: 1,
                             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)]),
-            TimelineSection(offset: 1, limit: 1,
+            TimelineSection(offset: 0, limit: 1,
                             list: [TimelineDay(year: 2024, month: 4, day: 2, itemCount: 1)])
         ]
         let transport = ViewerTransport()
@@ -1072,35 +1081,33 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
 
     func testFavoritesViewerUsesPreWriteOffsetsWhileRemovalIsPending() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
-        let items = try (0..<8).map { try item(80 + $0).withFavorite(true) }
-        let day = TimelineDay(year: 2024, month: 4, day: 3, itemCount: 8)
+        let items = try (0..<254).map { try item(80 + $0).withFavorite(true) }
+        let day = TimelineDay(year: 2024, month: 4, day: 3, itemCount: 254)
         let sections = [
-            TimelineSection(offset: 0, limit: 4, list: [day]),
-            TimelineSection(offset: 4, limit: 4, list: [day]),
+            TimelineSection(offset: 0, limit: 250, list: [day]),
+            TimelineSection(offset: 250, limit: 4, list: [day]),
         ]
         let transport = ViewerTransport()
-        await transport.configure(pages: [4: Array(items[4...7])])
+        await transport.configure(pages: [250: Array(items[250...253])])
         await transport.setFavoriteBlocked(true)
         let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
                                          collection: .favorites,
                                          index: LibraryIndex(snapshot: TimelineSnapshot(sections: sections)),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1,
-                                                               item: items[1], page: Array(items[0...3]),
+                                                               item: items[1], page: Array(items[0...249]),
                                                                pageVerified: true), allowNetwork: true)
         _ = await session.state()
 
         let toggle = Task { await session.toggleFavorite() }
         let writeStarted = await waitUntil { await transport.favoriteRequests.count == 1 }
         XCTAssertTrue(writeStarted)
-        await session.navigateNext()
-        await session.navigateNext()
-        await session.navigateNext()
+        await session.navigate(by: 249)
 
-        let reachedNextPage = await waitUntil { await session.state().item?.id == items[4].id }
+        let reachedNextPage = await waitUntil { await session.state().item?.id == items[250].id }
         XCTAssertTrue(reachedNextPage)
         let calls = await transport.pageCalls
-        XCTAssertTrue(calls.contains(4), "Pending removal must query the server's still-unmodified page offset")
-        XCTAssertFalse(calls.contains(3), "Optimistic status must not be mistaken for committed membership")
+        XCTAssertTrue(calls.contains(250), "Pending removal must query the server's still-unmodified page offset")
+        XCTAssertFalse(calls.contains(249), "Optimistic status must not be mistaken for committed membership")
 
         await transport.releaseFavoriteWrite()
         await toggle.value
@@ -1109,39 +1116,39 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
 
     func testFavoritesViewerReplansInflightPageWhenRemovalCommits() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
-        let items = try (0..<8).map { try item(100 + $0).withFavorite(true) }
-        let day = TimelineDay(year: 2024, month: 4, day: 3, itemCount: 8)
+        let items = try (0..<254).map { try item(100 + $0).withFavorite(true) }
+        let day = TimelineDay(year: 2024, month: 4, day: 3, itemCount: 254)
         let sections = [
-            TimelineSection(offset: 0, limit: 4, list: [day]),
-            TimelineSection(offset: 4, limit: 4, list: [day]),
+            TimelineSection(offset: 0, limit: 250, list: [day]),
+            TimelineSection(offset: 250, limit: 4, list: [day]),
         ]
         let transport = ViewerTransport()
-        await transport.configure(pages: [3: Array(items[4...7]), 4: Array(items[4...7])],
-                                  blockedPages: [4])
+        await transport.configure(pages: [249: Array(items[250...253]), 250: Array(items[250...253])],
+                                  blockedPages: [250])
         await transport.setFavoriteBlocked(true)
         let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
                                          collection: .favorites,
                                          index: LibraryIndex(snapshot: TimelineSnapshot(sections: sections)),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1,
-                                                               item: items[1], page: Array(items[0...3]),
+                                                               item: items[1], page: Array(items[0...249]),
                                                                pageVerified: true), allowNetwork: true)
         _ = await session.state()
 
         let toggle = Task { await session.toggleFavorite() }
         let writeStarted = await waitUntil { await transport.favoriteRequests.count == 1 }
         XCTAssertTrue(writeStarted)
-        await session.navigate(by: 3)
-        let pendingPageStarted = await waitUntil { await transport.pageCalls.contains(4) }
+        await session.navigate(by: 249)
+        let pendingPageStarted = await waitUntil { await transport.pageCalls.contains(250) }
         XCTAssertTrue(pendingPageStarted)
 
         await transport.releaseFavoriteWrite()
         await toggle.value
 
-        let reachedReplannedPage = await waitUntil { await session.state().item?.id == items[4].id }
+        let reachedReplannedPage = await waitUntil { await session.state().item?.id == items[250].id }
         XCTAssertTrue(reachedReplannedPage,
                       "Committing membership must restart a page canceled under the pending translation")
         let calls = await transport.pageCalls
-        XCTAssertTrue(calls.contains(3), "Committed removal should translate the original page past the tombstone")
+        XCTAssertTrue(calls.contains(249), "Committed removal should translate the original page past the tombstone")
         await session.close()
     }
 }

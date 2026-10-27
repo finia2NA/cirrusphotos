@@ -1,0 +1,215 @@
+import Foundation
+import SynologyAPI
+
+extension CachedPhotosRepository {
+    var metadataNamespace: MetadataNamespace { MetadataNamespace(account: namespace) }
+
+    /// Enroll the normalized format only when its consumer pipeline is admitted.
+    func initializeMetadataEngine() async throws {
+        guard !metadata.initialized else { return }
+        let epoch = metadata.admissionEpoch
+        try await store.initializeMetadataStore()
+        guard epoch == metadata.admissionEpoch, !metadata.resetInProgress else { throw MetadataAdmissionError.superseded }
+        metadata.initialized = true
+    }
+
+    /// Every destination joins this source job. Unproven annotation/membership
+    /// sources deliberately retain ordinary current-run authoritative reads.
+    func reconcileMetadataSource(force: Bool = false) async throws {
+        try await initializeMetadataEngine()
+        if metadata.sourceUnavailable { return }
+        if metadata.reconciled && !force { return }
+        if let job = metadata.reconciliation { return try await job.value }
+        metadata.reconciled = false
+        let id = UUID()
+        let epoch = metadata.admissionEpoch
+        let job = Task<Void, Error> {
+            defer {
+                if metadata.reconciliationID == id {
+                    metadata.reconciliation = nil
+                    metadata.reconciliationID = nil
+                }
+            }
+            try await connect()
+            let admission = try await store.metadataAdmission(metadataNamespace)
+            let prior = try await store.metadataState(metadataNamespace)
+            do {
+                guard let cursor = prior.cursor else {
+                    let boundary = try await metadataSourceRequest { try await client.diffVersion() }
+                    try requireMetadataEngineAdmission(epoch: epoch, id: id)
+                    try await store.applyMetadataChanges(namespace: metadataNamespace, cursor: boundary, replacements: [], deletedIDs: [], affectedDays: [],
+                                                         invalidateAll: true, currentRun: runID, admission: admission)
+                    let committed = try await store.metadataState(metadataNamespace)
+                    try requireMetadataEngineAdmission(epoch: epoch, id: id)
+                    metadata.revision = committed.revision
+                    metadata.reconciled = true
+                    return
+                }
+                let interval = try await metadataSourceRequest { try await client.changes(since: cursor) }
+                try requireMetadataEngineAdmission(epoch: epoch, id: id)
+                guard interval.isBoundedTerminal else {
+                    try await recoverMetadataSource(admission: admission, epoch: epoch, id: id)
+                    return
+                }
+                if interval.isEmpty {
+                    try await store.applyMetadataChanges(namespace: metadataNamespace, cursor: interval.cursor, replacements: [], deletedIDs: [], affectedDays: [],
+                                                         invalidateAll: false, currentRun: runID, admission: admission)
+                    let committed = try await store.metadataState(metadataNamespace)
+                    try requireMetadataEngineAdmission(epoch: epoch, id: id)
+                    metadata.revision = committed.revision
+                    metadata.reconciled = true
+                    return
+                }
+                let old = try await store.metadataItemTimes(metadataNamespace, ids: interval.modifiedItemIDs + interval.deletedItemIDs)
+                var replacements: [PhotoItem] = []
+                for start in stride(from: 0, to: interval.modifiedItemIDs.count, by: MetadataReadPlanner.lookupBatchSize) {
+                    let end = min(start + MetadataReadPlanner.lookupBatchSize, interval.modifiedItemIDs.count)
+                    let ids = Array(interval.modifiedItemIDs[start..<end])
+                    let items = try await metadataSourceRequest { try await client.items(ids: ids) }
+                    guard items.count == ids.count, Set(items.map(\.id)) == Set(ids) else {
+                        try await recoverMetadataSource(admission: admission, epoch: epoch, id: id)
+                        return
+                    }
+                    replacements.append(contentsOf: items)
+                }
+                let candidate = try MetadataChangeApplication.prepare(diff: interval, oldInventory: old,
+                                                                      inventoryComplete: prior.inventoryComplete, lookup: replacements)
+                let fence = interval.isEmpty ? interval : try await metadataSourceRequest { try await client.changes(since: interval.cursor) }
+                guard fence.isEmpty else {
+                    try await recoverMetadataSource(admission: admission, epoch: epoch, id: id)
+                    return
+                }
+                try requireMetadataEngineAdmission(epoch: epoch, id: id)
+                try await store.applyMetadataChanges(namespace: metadataNamespace, cursor: fence.cursor,
+                                                     replacements: candidate.replacements, deletedIDs: candidate.deletedIDs,
+                                                     affectedDays: candidate.affectedDays, invalidateAll: candidate.invalidateAll,
+                                                     currentRun: runID, admission: admission)
+                let committed = try await store.metadataState(metadataNamespace)
+                try requireMetadataEngineAdmission(epoch: epoch, id: id)
+                metadata.revision = committed.revision
+                metadata.reconciled = true
+                publishMetadataInvalidation(days: candidate.invalidateAll ? nil : candidate.affectedDays)
+                publishLocationItemChanges(candidate.replacements, deletedIDs: candidate.deletedIDs, coverageChanged: true)
+            } catch {
+                try requireMetadataEngineAdmission(epoch: epoch, id: id)
+                if let api = error as? SynologyAPIError {
+                    switch api {
+                    case .api(let code) where [102, 103, 104, 105].contains(code):
+                        try await disableMetadataSource(admission: admission, epoch: epoch, id: id)
+                    case .api(700), .invalidResponse, .responseTooLarge:
+                        try await recoverMetadataSource(admission: admission, epoch: epoch, id: id)
+                    default: throw error
+                    }
+                } else if error is DecodingError || error is CollectionCatalogError {
+                    try await recoverMetadataSource(admission: admission, epoch: epoch, id: id)
+                } else { throw error }
+            }
+        }
+        metadata.reconciliationID = id
+        metadata.reconciliation = job
+        try await job.value
+    }
+
+    private func metadataSourceRequest<Value: Sendable>(_ operation: () async throws -> Value) async throws -> Value {
+        let id = UUID()
+        try await gate.acquire(.metadata, priority: .visible, id: id)
+        do {
+            let value = try await operation()
+            await gate.release(.metadata)
+            return value
+        } catch {
+            await gate.release(.metadata)
+            throw error
+        }
+    }
+    private func disableMetadataSource(admission: MetadataStoreAdmission, epoch: UInt64, id: UUID) async throws {
+        try requireMetadataEngineAdmission(epoch: epoch, id: id)
+        try await store.applyMetadataChanges(namespace: metadataNamespace, cursor: nil, replacements: [], deletedIDs: [], affectedDays: [],
+                                             invalidateAll: true, currentRun: runID, admission: admission)
+        let committed = try await store.metadataState(metadataNamespace)
+        try requireMetadataEngineAdmission(epoch: epoch, id: id)
+        metadata.revision = committed.revision
+        metadata.sourceUnavailable = true
+        publishMetadataInvalidation()
+        await publishStoredLocationProjection()
+    }
+
+    private func requireMetadataEngineAdmission(epoch: UInt64, id: UUID) throws {
+        guard !metadata.resetInProgress, metadata.admissionEpoch == epoch,
+              metadata.reconciliationID == id, !Task.isCancelled else { throw MetadataAdmissionError.superseded }
+    }
+    private func recoverMetadataSource(admission: MetadataStoreAdmission, epoch: UInt64, id: UUID) async throws {
+        let fresh: DiffCursor
+        do { fresh = try await metadataSourceRequest { try await client.diffVersion() } }
+        catch {
+            try requireMetadataEngineAdmission(epoch: epoch, id: id)
+            // A rejected interval has already lost its authority. Failure to obtain
+            // a fresh boundary must not preserve its old complete-inventory proof.
+            try await disableMetadataSource(admission: admission, epoch: epoch, id: id)
+            return
+        }
+        try requireMetadataEngineAdmission(epoch: epoch, id: id)
+        try await store.applyMetadataChanges(namespace: metadataNamespace, cursor: fresh, replacements: [], deletedIDs: [], affectedDays: [],
+                                             invalidateAll: true, currentRun: runID, admission: admission)
+        let committed = try await store.metadataState(metadataNamespace)
+        try requireMetadataEngineAdmission(epoch: epoch, id: id)
+        metadata.revision = committed.revision
+        metadata.reconciled = true
+        publishMetadataInvalidation()
+        await publishStoredLocationProjection()
+    }
+
+    /// Complete Personal inventory acquisition is a shared engine operation, not
+    /// a Map synchronization path. SQL staging keeps all non-geotagged IDs too.
+    func buildMetadataInventory(token: MetadataWorkToken, id: UUID) async throws -> [PhotoLocationRecord] {
+            try await reconcileMetadataSource(force: true)
+            _ = try await verifiedTimelineSnapshot(collection: .personalLibrary)
+            let admission = try await store.metadataAdmission(metadataNamespace)
+            let prior = try await store.metadataState(metadataNamespace)
+            guard let catalog = try await store.metadataCatalog(CollectionKey(namespace: metadataNamespace, collection: .personalLibrary))?.catalog else { throw CollectionCatalogError.invalidCoverage }
+            let total = catalog.itemCount
+            var scanned = 0
+            do {
+                for page in 0..<Self.locationScanPageCap {
+                    let items = try await metadataReadRequest(priority: .prefetch, id: id) {
+                        try await client.readPersonalInventoryBatch(offset: page * Self.locationScanPageLimit, limit: Self.locationScanPageLimit)
+                    }
+                    guard await metadataTokenIsCurrent(token) else { throw MetadataAdmissionError.superseded }
+                    guard items.count <= Self.locationScanPageLimit, items.count <= total - scanned else { throw CollectionCatalogError.invalidCoverage }
+                    try await store.stageMetadataInventory(items, job: id, namespace: metadataNamespace, admission: admission)
+                    scanned += items.count
+                    publishLocationIndexProgress(scanned: scanned, total: total)
+                    if items.count < Self.locationScanPageLimit {
+                        guard scanned == total else { throw CollectionCatalogError.invalidCoverage }
+                        var fenceCursor = prior.cursor
+                        if let cursor = prior.cursor, !metadata.sourceUnavailable {
+                            let fence = try await metadataReadRequest(priority: .prefetch, id: id) { try await client.changes(since: cursor) }
+                            guard fence.isEmpty else {
+                                let boundary = try await metadataReadRequest(priority: .prefetch, id: id) { try await client.diffVersion() }
+                                try await store.applyMetadataChanges(namespace: metadataNamespace, cursor: boundary, replacements: [], deletedIDs: [], affectedDays: [],
+                                                                     invalidateAll: true, currentRun: runID, admission: admission)
+                                throw CollectionCatalogError.invalidCoverage
+                            }
+                            fenceCursor = fence.cursor
+                        }
+                        guard await metadataTokenIsCurrent(token) else { throw MetadataAdmissionError.superseded }
+                        try await store.commitMetadataInventory(id, namespace: metadataNamespace, catalog: catalog, cursor: fenceCursor, admission: admission)
+                        guard await metadataTokenIsCurrent(token) else { throw MetadataAdmissionError.superseded }
+                        let projection = try await store.metadataLocationProjection(metadataNamespace, currentOnly: true)
+                        guard projection.state.inventoryComplete, projection.state.resetEpoch == admission.resetEpoch else {
+                            metadata.inventoryCurrent = false
+                            throw CollectionCatalogError.invalidCoverage
+                        }
+                        metadata.inventoryCurrent = true
+                        await publishStoredLocationProjection()
+                        return projection.records
+                    }
+                }
+                throw CollectionCatalogError.exceedsLimit
+            } catch {
+                try? await store.discardMetadataInventoryStage(id)
+                throw error
+            }
+    }
+
+}

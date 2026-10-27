@@ -40,10 +40,6 @@ public enum CachePriorityPolicy {
         case .previewThumbnail: .optionalThumbnail
         case .fullImage: .fullImage
         case .thumbnail: .configuredThumbnail
-        case .page: .metadataPage
-        case .timeline: .activeTimeline
-        case .albumList: .activeTimeline
-        case .locationIndex: .locationIndex
         case .videoSegment: .videoPlayback
         }
     }

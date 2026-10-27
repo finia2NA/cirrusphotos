@@ -24,7 +24,7 @@ private actor AlbumFakeTransport: PhotosTransport {
                    albumListFailure: String? = nil,
                    pageFailure: String? = nil) {
         self.albumList = albumList
-        self.albumEntriesByID = albumEntriesByID
+        self.albumEntriesByID = albumEntriesByID.isEmpty && !pageItems.isEmpty ? [54: pageItems.map { DayTimelineEntry(id: $0.id, time: $0.time) }] : albumEntriesByID
         self.timelineSnapshot = timelineSnapshot
         self.pageItems = pageItems
         self.albumListFailure = albumListFailure
@@ -33,9 +33,9 @@ private actor AlbumFakeTransport: PhotosTransport {
 
     func login(credentials: SynologyCredentials) async throws {}
 
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
         collectionTimelineCalls.append((collection, initial))
-        return timelineSnapshot
+        return try fixtureDayCatalog(timelineSnapshot, initial: initial)
     }
 
     func albums() async throws -> [AlbumSummary] {
@@ -44,15 +44,18 @@ private actor AlbumFakeTransport: PhotosTransport {
         return albumList
     }
 
-    func albumTimeline(albumID: Int64) async throws -> TimelineSnapshot {
-        albumTimelineCalls.append(albumID)
-        return DayGroupedTimelineBuilder.build(entries: albumEntriesByID[albumID] ?? []).snapshot
+    func readAlbumCatalogBatch(albumID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry] {
+        if offset == 0 { albumTimelineCalls.append(albumID) }
+        return Array((albumEntriesByID[albumID] ?? []).dropFirst(offset).prefix(limit))
     }
 
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
+    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        let section = fixtureSection(request)
+        let collection = request.collection
+
         itemRequests.append((section, collection))
         if let pageFailure { throw TestFailure(pageFailure) }
-        return pageItems
+        return try fixtureBatch(pageItems, request: request, fields: fields)
     }
 
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
@@ -81,7 +84,7 @@ final class AlbumBrowserTests: XCTestCase {
         try CachedPhotosRepository(credentials: credentials, baseURL: server, cacheRoot: root, transport: transport)
     }
 
-    private func section(_ day: Int, offset: Int = 0, limit: Int = 2, count: Int = 2) -> TimelineSection {
+    private func section(_ day: Int, offset: Int = 0, limit: Int = 1, count: Int = 1) -> TimelineSection {
         TimelineSection(offset: offset, limit: limit,
                         list: [TimelineDay(year: 2024, month: 4, day: day, itemCount: count)])
     }
@@ -155,12 +158,10 @@ final class AlbumBrowserTests: XCTestCase {
         let timelineCalls = await transport.collectionTimelineCalls
         XCTAssertTrue(timelineCalls.isEmpty, "Albums must never call Browse.Timeline")
 
-        let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let cached = try await repository.store.get(
-            CacheKey.timeline(namespace: namespace, collection: .album(54)))
-        let entry = try XCTUnwrap(cached)
-        XCTAssertEqual(try JSONDecoder().decode(TimelineSnapshot.self, from: entry.data).sections,
-                       snapshot.sections)
+        let namespace = await repository.metadataNamespace
+        let cached = try await repository.store.metadataCatalog(.init(namespace: namespace, collection: .album(54)))
+        XCTAssertEqual(cached?.catalog.days.map(\.day.id), ["2024-01-01", "2023-12-31"])
+
     }
 
     func testEmptyAlbumScanProducesNoSections() async throws {
@@ -182,7 +183,7 @@ final class AlbumBrowserTests: XCTestCase {
         let repository = try makeRepository(root: root, transport: transport)
         var verifiedItems: [PhotoItem] = []
         for await event in await repository.page(descriptor, collection: .album(54)) {
-            if case .value(let items, true) = event { verifiedItems = items }
+            if case .value(let items, true) = event { let items = items.completeItems ?? []; verifiedItems = items }
         }
         XCTAssertEqual(verifiedItems.map(\.id), [7])
         let requests = await transport.itemRequests
@@ -190,10 +191,9 @@ final class AlbumBrowserTests: XCTestCase {
         XCTAssertEqual(requests.first?.1, .album(54))
         XCTAssertEqual(requests.first?.0, descriptor)
 
-        let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let key = try XCTUnwrap(CacheKey.page(namespace: namespace, section: descriptor, collection: .album(54)))
-        let cached = try await repository.store.get(key)
-        XCTAssertNotNil(cached)
+        let cached = try await repository.store.metadataPage(try XCTUnwrap(DayPageAddress(section: descriptor, collection: .album(54))), namespace: repository.metadataNamespace, currentRun: repository.runID)
+        XCTAssertEqual(cached?.slots.map(\.itemID), [7])
+
     }
 
     func testAlbumAndPersonalPageKeysAreIsolated() {
@@ -201,63 +201,27 @@ final class AlbumBrowserTests: XCTestCase {
         let descriptor = section(1)
         XCTAssertNotEqual(CacheKey.page(namespace: namespace, section: descriptor, collection: .personalLibrary),
                           CacheKey.page(namespace: namespace, section: descriptor, collection: .album(54)))
-        XCTAssertNotEqual(CacheKey.timeline(namespace: namespace, collection: .album(54)),
-                          CacheKey.timeline(namespace: namespace, collection: .album(55)))
+        XCTAssertNotEqual(CacheKey.page(namespace: namespace, section: descriptor, collection: .album(54)),
+                          CacheKey.page(namespace: namespace, section: descriptor, collection: .album(55)))
     }
 
-    func testAlbumFavoriteBatchPatchesAlbumPagesAndLeavesPersonalUntouched() async throws {
+    func testConfirmedFavoriteSharesCanonicalDetailsAcrossCollections() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
-        let namespace = CacheKey.namespace(server: server, account: credentials.username)
         let transport = AlbumFakeTransport()
         let descriptor = section(1)
         let photo = try item(7)
-        await transport.configure(timelineSnapshot: TimelineSnapshot(sections: []))
         let repository = try makeRepository(root: root, transport: transport)
-        let albumKey = try XCTUnwrap(CacheKey.page(namespace: namespace, section: descriptor, collection: .album(54)))
-        let personalKey = try XCTUnwrap(CacheKey.page(namespace: namespace, section: descriptor, collection: .personalLibrary))
-        try await repository.store.put(albumKey, kind: .page,
-                                       data: JSONEncoder().encode([photo]), validatedRun: nil)
-        try await repository.store.put(personalKey, kind: .page,
-                                       data: JSONEncoder().encode([photo]), validatedRun: nil)
-
+        for collection: PhotoCollectionDescriptor in [.album(54), .personalLibrary] {
+            try await seedMetadataPage([photo], section: descriptor, repository: repository, collection: collection)
+        }
         let action = SelectionFavoriteAction(affectedIDs: [photo.id], targetFavorite: true,
-                                             sectionsByID: [photo.id: descriptor],
-                                             collection: .album(54), itemsByID: [photo.id: photo])
+            sectionsByID: [photo.id: descriptor], collection: .album(54), itemsByID: [photo.id: photo])
         try await repository.setFavoritesBatch(action: action)
-
-        let albumCached = try await repository.store.get(albumKey)
-        let personalCached = try await repository.store.get(personalKey)
-        let albumEntry = try XCTUnwrap(albumCached)
-        let personalEntry = try XCTUnwrap(personalCached)
-        let albumItems = try JSONDecoder().decode([PhotoItem].self, from: albumEntry.data)
-        let personalItems = try JSONDecoder().decode([PhotoItem].self, from: personalEntry.data)
-        XCTAssertTrue(albumItems[0].isFavorite)
-        XCTAssertFalse(personalItems[0].isFavorite, "Album favorites must not patch Personal Library pages")
+        for collection: PhotoCollectionDescriptor in [.album(54), .personalLibrary] {
+            let cached = try await repository.store.metadataPage(try XCTUnwrap(DayPageAddress(section: descriptor, collection: collection)), namespace: repository.metadataNamespace, currentRun: repository.runID)
+            XCTAssertEqual(cached?.slots.first?.item?.isFavorite, true)
+        }
         let writes = await transport.favoriteWrites
         XCTAssertEqual(writes.map(\.0), [photo.id])
-    }
-
-    func testFavoritesBatchStillPatchesPersonalPagesByDay() async throws {
-        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
-        let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let transport = AlbumFakeTransport()
-        let descriptor = section(1)
-        let photo = try item(9)
-        await transport.configure(timelineSnapshot: TimelineSnapshot(sections: [descriptor]))
-        let repository = try makeRepository(root: root, transport: transport)
-        for await _ in await repository.timeline(collection: .personalLibrary) {}
-        let personalKey = try XCTUnwrap(CacheKey.page(namespace: namespace, section: descriptor, collection: .personalLibrary))
-        try await repository.store.put(personalKey, kind: .page,
-                                       data: JSONEncoder().encode([photo]), validatedRun: nil)
-
-        let action = SelectionFavoriteAction(affectedIDs: [photo.id], targetFavorite: true,
-                                             sectionsByID: [photo.id: descriptor],
-                                             collection: .favorites, itemsByID: [photo.id: photo])
-        try await repository.setFavoritesBatch(action: action)
-
-        let personalCached = try await repository.store.get(personalKey)
-        let personalEntry = try XCTUnwrap(personalCached)
-        let personalItems = try JSONDecoder().decode([PhotoItem].self, from: personalEntry.data)
-        XCTAssertTrue(personalItems[0].isFavorite, "Favorites actions still patch Personal Library pages")
     }
 }

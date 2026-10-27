@@ -35,13 +35,12 @@ final class RotationTests: XCTestCase {
         let store = await repository.store
         let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(
             server: SynologyClient.defaultBaseURL, account: "rotation"), section: section))
-        try await store.put(key, kind: .page, data: JSONEncoder().encode([original]), validatedRun: "run")
+        try await seedMetadataPage([original], section: section, repository: repository)
         try await repository.rotate(action, direction: .clockwise)
         let calls = await transport.rotateCalls
         XCTAssertEqual(calls.first?.0, [1])
         XCTAssertEqual(calls.first?.1, .clockwise)
-        let cached = try await store.get(key)
-        let cachedItems = try JSONDecoder().decode([PhotoItem].self, from: XCTUnwrap(cached).data)
+        let cachedItems = try await store.metadataPage(try DayPageAddress(section: section, collection: .personalLibrary), namespace: repository.metadataNamespace, currentRun: repository.runID)?.completeItems ?? []
         XCTAssertEqual(cachedItems.first?.additional?.thumbnail?.cacheKey, "new")
         XCTAssertEqual(cachedItems.first?.additional?.resolution?.width, 300)
     }
@@ -59,14 +58,13 @@ final class RotationTests: XCTestCase {
         let store = await repository.store
         let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(
             server: SynologyClient.defaultBaseURL, account: "rotation"), section: section))
-        try await store.put(key, kind: .page, data: JSONEncoder().encode([original]), validatedRun: "run")
+        try await seedMetadataPage([original], section: section, repository: repository)
         do {
             try await repository.rotate(action, direction: .clockwise)
             XCTFail("Expected rotation failure")
         } catch {}
-        let stored = try await store.get(key)
-        let cached = try XCTUnwrap(stored)
-        let item = try XCTUnwrap(JSONDecoder().decode([PhotoItem].self, from: cached.data).first)
+        let page = try await store.metadataPage(try DayPageAddress(section: section, collection: .personalLibrary), namespace: repository.metadataNamespace, currentRun: repository.runID)
+        let item = try XCTUnwrap(page?.slots.first?.item)
         XCTAssertEqual(item.additional?.thumbnail?.cacheKey, "old")
         XCTAssertEqual(item.additional?.resolution?.width, 400)
         XCTAssertEqual(item.additional?.orientation, 1)
@@ -88,14 +86,14 @@ final class RotationTests: XCTestCase {
         let store = await repository.store
         let sourceKey = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(
             server: SynologyClient.defaultBaseURL, account: "rotation"), section: sourceSection))
-        try await store.put(sourceKey, kind: .page, data: JSONEncoder().encode([original]), validatedRun: "prior")
+        try await seedMetadataPage([original], section: sourceSection, repository: repository)
 
         let built = DayGroupedTimelineBuilder.build(entries: [.init(id: original.id, time: original.time)])
         let descriptor = PhotoCollectionDescriptor.libraryFilter(UUID())
         let registration = LibraryFilterRegistration(
             descriptor: descriptor, snapshot: built.snapshot,
             referencesBySection: [[.init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: original.id)]],
-            filter: LibraryFilter(mediaKinds: [.photo]), revision: 1)
+            filter: LibraryFilter(mediaKinds: [.photo]), revision: 1, sourceFingerprint: LibraryIndex(snapshot: .init(sections: [sourceSection])).fingerprint)
         try await repository.registerLibraryFilter(registration)
         let filteredSection = try XCTUnwrap(built.snapshot.sections.first)
         let action = SelectionRotationAction(itemIDs: [original.id],
@@ -109,7 +107,7 @@ final class RotationTests: XCTestCase {
         var rederived: [PhotoItem] = []
         for await event in await repository.page(filteredSection, collection: descriptor,
                                                   allowNetwork: false) {
-            if case .value(let items, _) = event { rederived = items }
+            if case .value(let items, _) = event { let items = items.completeItems ?? []; rederived = items }
         }
         XCTAssertEqual(rederived.first?.additional?.thumbnail?.cacheKey, "rotated")
         XCTAssertEqual(rederived.first?.additional?.orientation, 6)
@@ -179,16 +177,15 @@ final class RotationTests: XCTestCase {
         let store = await repository.store
         let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(
             server: SynologyClient.defaultBaseURL, account: "rotation"), section: section))
-        try await store.put(key, kind: .page, data: JSONEncoder().encode([original]), validatedRun: "run")
+        try await seedMetadataPage([original], section: section, repository: repository)
         var final: ThumbnailRotationProgress?
         for await progress in await repository.rotateThumbnails(action, direction: .clockwise) { final = progress }
         XCTAssertEqual(final?.stage, .finished)
         XCTAssertFalse(final?.failures.isEmpty == true)
         let restored = await transport.restoredUnits
         XCTAssertEqual(restored, [[111]])
-        let stored = try await store.get(key)
-        let cached = try XCTUnwrap(stored)
-        let cachedItem = try XCTUnwrap(JSONDecoder().decode([PhotoItem].self, from: cached.data).first)
+        let page = try await store.metadataPage(try DayPageAddress(section: section, collection: .personalLibrary), namespace: repository.metadataNamespace, currentRun: repository.runID)
+        let cachedItem = try XCTUnwrap(page?.slots.first?.item)
         XCTAssertEqual(cachedItem.additional?.thumbnail?.cacheKey, "committed")
     }
 
@@ -207,13 +204,12 @@ final class RotationTests: XCTestCase {
         let store = await repository.store
         let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(
             server: SynologyClient.defaultBaseURL, account: "rotation"), section: section))
-        try await store.put(key, kind: .page, data: JSONEncoder().encode([original]), validatedRun: "run")
+        try await seedMetadataPage([original], section: section, repository: repository)
         for await _ in await repository.rotateThumbnails(action, direction: .clockwise) {}
         let restored = await transport.restoredUnits
         XCTAssertEqual(restored, [[112]])
-        let stored = try await store.get(key)
-        let cached = try XCTUnwrap(stored)
-        let cachedItem = try XCTUnwrap(JSONDecoder().decode([PhotoItem].self, from: cached.data).first)
+        let page = try await store.metadataPage(try DayPageAddress(section: section, collection: .personalLibrary), namespace: repository.metadataNamespace, currentRun: repository.runID)
+        let cachedItem = try XCTUnwrap(page?.slots.first?.item)
         XCTAssertEqual(cachedItem.additional?.thumbnail?.cacheKey, "set-committed")
     }
 
@@ -530,12 +526,15 @@ private actor RotationTransport: PhotosTransport {
         pageItems = []
     }
 
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
         guard let timelineSnapshot else { throw TestFailure("Unexpected timeline request") }
-        return timelineSnapshot
+        return try fixtureDayCatalog(timelineSnapshot, initial: initial)
     }
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
-        pageItems
+    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        let section = fixtureSection(request)
+        let collection = request.collection
+
+        return try fixtureBatch(pageItems, request: request, fields: fields)
     }
 
     func rotate(itemIDs: [Int64], direction: PhotoRotationDirection) async throws {

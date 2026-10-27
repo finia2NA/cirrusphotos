@@ -8,16 +8,18 @@ extension CachedPhotosRepository {
         let producer = StreamProducer()
         return AsyncStream(bufferingPolicy: .bufferingNewest(3)) { continuation in
             producer.task = Task {
-                let key = CacheKey.albumList(namespace: namespace)
+                do { try await initializeMetadataEngine() }
+                catch { continuation.yield(.failure(error.localizedDescription)); continuation.finish(); return }
                 let validation = albumListValidationRun()
-                let cached = try? await readCachedMetadata([AlbumSummary].self, key: key)
-                guard !Task.isCancelled else { continuation.finish(); return }
-                let list = cached?.value
+                let epoch = metadata.admissionEpoch
+                let cached = try? await store.metadataAlbumSummaries(metadataNamespace)
+                guard !Task.isCancelled, epoch == metadata.admissionEpoch, !metadata.resetInProgress else { continuation.finish(); return }
+                let list = cached?.albums
                 if let list {
                     metadata.albumListLatest = list
-                    continuation.yield(.value(list, verified: cached?.entry.validatedRun == validation))
+                    continuation.yield(.value(list, verified: cached?.validatedRun == validation))
                 }
-                if cached?.entry.validatedRun == validation, list != nil { continuation.finish(); return }
+                if cached?.validatedRun == validation, list != nil { continuation.finish(); return }
                 do {
                     let requestedValidation = albumListValidationRun()
                     let task = registerAlbumList(subscriber: subscriber)
@@ -50,23 +52,14 @@ extension CachedPhotosRepository {
         let validation = albumListValidationRun()
         let task = Task<[AlbumSummary], Error> {
             let token = try await captureMetadataWorkToken(resource: .albumList, jobID: id)
-            let key = CacheKey.albumList(namespace: namespace)
-            let prior = try? await store.get(key)
-            try await gate.acquire(.metadata, priority: .visible, id: id)
-            defer { Task { await gate.release(.metadata) } }
-            try Task.checkCancellation()
             try await connect()
-            let list = try await client.albums()
+            try await reconcileMetadataSource()
+            let admission = try await store.metadataAdmission(metadataNamespace)
+            let list = try await metadataReadRequest(priority: .visible, id: id) { try await client.albums() }
             try Task.checkCancellation()
-            guard validation == albumListValidationRun(),
-                  await metadataTokenIsCurrent(token) else { throw CancellationError() }
-            let commit = try? await commitMetadata(
-                list, key: key, kind: .albumList, validatedRun: validation,
-                token: token, replacing: rowExpectation(for: prior)
-            )
-            if commit == .superseded || commit == .generationChanged {
-                throw CancellationError()
-            }
+            guard validation == albumListValidationRun(), await metadataTokenIsCurrent(token) else { throw CancellationError() }
+            try await store.storeMetadataAlbumSummaries(list, namespace: metadataNamespace, currentRun: validation, admission: admission)
+            guard await metadataTokenIsCurrent(token) else { throw MetadataAdmissionError.superseded }
             return list
         }
         metadata.albumListJob = SharedJob(id: id, task: task, subscribers: [subscriber])

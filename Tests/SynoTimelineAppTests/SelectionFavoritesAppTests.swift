@@ -313,17 +313,31 @@ actor AppMockTransport: PhotosTransport {
     private var favoriteFailure = false
 
     func setTimeline(_ snapshot: TimelineSnapshot) { timeline = snapshot }
-    func setPage(_ items: [PhotoItem], offset: Int) { pages[offset] = items }
+    func setPage(_ items: [PhotoItem], offset: Int) {
+        let count = timeline.sections.first?.list.first?.itemCount ?? items.count
+        var complete = items
+        if let prototype = items.first, count > items.count {
+            for index in items.count..<count {
+                var json = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(prototype)) as! [String: Any]
+                json["id"] = 900_000 + index
+                complete.append(try! JSONDecoder().decode(PhotoItem.self, from: JSONSerialization.data(withJSONObject: json)))
+            }
+        }
+        pages[offset] = complete
+    }
     func setFavoriteFailure(_ enabled: Bool) { favoriteFailure = enabled }
 
     func login(credentials: SynologyCredentials) async throws {}
 
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
-        timeline
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
+        return try fixtureDayCatalog(timeline, initial: initial)
     }
 
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
-        pages[section.offset] ?? []
+    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        let section = fixtureSection(request)
+        let collection = request.collection
+
+        return try fixtureBatch(Array((pages[0] ?? []).dropFirst(request.offset).prefix(request.limit)), request: request, fields: fields)
     }
 
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {

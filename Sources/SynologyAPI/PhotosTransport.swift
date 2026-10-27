@@ -89,18 +89,17 @@ public struct TransferProgress: Sendable, Equatable {
 
 public protocol PhotosTransport: Sendable {
     func login(credentials: SynologyCredentials) async throws
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog
+    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult
+    func readAlbumCatalogBatch(albumID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry]
     func albums() async throws -> [AlbumSummary]
-    func albumTimeline(albumID: Int64) async throws -> TimelineSnapshot
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem]
 
     /// One page of the whole-library location scan: `Browse.Item` list v7 with no
     /// date bounds, `additional` from `PhotosRequestFields.locationScanAdditional`.
     /// Returns at most `limit` items newest-first; an empty or short page ends the scan.
-    func locationScanPage(offset: Int, limit: Int) async throws -> [PhotoItem]
+    func readPersonalInventoryBatch(offset: Int, limit: Int) async throws -> [PhotoItem]
     func diffVersion() async throws -> DiffCursor
     func changes(since cursor: DiffCursor) async throws -> PhotoDiff
-    func locationItems(ids: [Int64]) async throws -> LocationItemLookup
 
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws
     func items(ids: [Int64]) async throws -> [PhotoItem]

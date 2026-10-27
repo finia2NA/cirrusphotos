@@ -24,20 +24,24 @@ public struct SelectionRotationResolver: Sendable {
         for start in stride(from: 0, to: sectionIndices.count, by: 2) {
             guard !Task.isCancelled else { return nil }
             let chunk = Array(sectionIndices[start..<min(start + 2, sectionIndices.count)])
-            let results = await withTaskGroup(of: (Int, [PhotoItem]?).self) { group in
+            let results = await withTaskGroup(of: (Int, PhotoPageSnapshot?).self) { group in
                 for sectionIndex in chunk {
                     let section = index.sections[sectionIndex]
+                    let selectedOffsets = (grouped[sectionIndex] ?? []).map(\.pageOffset)
                     group.addTask {
-                        var verified: [PhotoItem]?
+                        var verified: PhotoPageSnapshot?
                         for await event in await repository.page(section, collection: collection,
                                                                  allowNetwork: true, priority: .prefetch) {
-                            if case .value(let items, let current) = event, current { verified = items }
+                            if case .value(let items, _) = event {
+                                if selectedOffsets.allSatisfy({ items.slot(at: $0)?.verified == true }) { return (sectionIndex, items) }
+                                verified = items
+                            }
                             if case .failure = event { return (sectionIndex, nil) }
                         }
                         return (sectionIndex, verified)
                     }
                 }
-                var values: [(Int, [PhotoItem]?)] = []
+                var values: [(Int, PhotoPageSnapshot?)] = []
                 for await value in group { values.append(value) }
                 return values
             }
@@ -45,8 +49,7 @@ public struct SelectionRotationResolver: Sendable {
                 guard let items else { return nil }
                 let section = index.sections[sectionIndex]
                 for location in grouped[sectionIndex] ?? [] {
-                    guard items.indices.contains(location.pageOffset) else { return nil }
-                    let item = items[location.pageOffset]
+                    guard let slot = items.slot(at: location.pageOffset), slot.verified, let item = slot.item else { return nil }
                     if let known = knownItemIDsByOrdinal[location.ordinal], known != item.id { return nil }
                     guard item.hasDisplayableStillImage, item.additional?.thumbnail != nil else { continue }
                     itemsByID[item.id] = item

@@ -20,7 +20,7 @@ final class VideoRangeCacheTests: XCTestCase {
     func testVideoSegmentsAreLowestRetentionAndSurviveMetadataClear() async throws {
         let root = temporaryTestRoot("VideoSegmentCache")
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = try DiskCache(root: root, budget: 1_000_000, protectedTimelineKey: "timeline")
+        let cache = try DiskCache(root: root, budget: 1_000_000)
         try await cache.put("video", kind: .videoSegment, data: Data([1, 2, 3]),
                             validatedRun: "run")
         try await cache.put("preview", kind: .previewThumbnail, data: Data([4]),

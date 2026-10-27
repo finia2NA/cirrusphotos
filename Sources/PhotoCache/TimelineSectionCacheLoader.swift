@@ -148,7 +148,7 @@ public actor TimelineSectionCacheLoader {
 
     private func runScheduler() async {
         while !Task.isCancelled, !pending.isEmpty {
-            let group = Array(pending.prefix(2))
+            let group = Array(pending.prefix(64))
             pending.removeFirst(group.count)
             activeIndices.formUnion(group.map(\.index))
             let results = await read(group)
@@ -177,7 +177,8 @@ public actor TimelineSectionCacheLoader {
     }
 
     private func read(_ reads: [QueuedRead]) async -> [ReadResult] {
-        await withTaskGroup(of: ReadResult.self, returning: [ReadResult].self) { tasks in
+        let admission = await repository.beginMetadataPageDemandBatch(reads.map { snapshot.sections[$0.index] }, collection: collection)
+        let result =         await withTaskGroup(of: ReadResult.self, returning: [ReadResult].self) { tasks in
             for read in reads {
                 let section = snapshot.sections[read.index]
                 let collection = collection
@@ -188,7 +189,7 @@ public actor TimelineSectionCacheLoader {
                             allowNetwork: false, priority: .prefetch
                         ) {
                             guard !Task.isCancelled else { break }
-                            if case .value = event {
+                            if case .value(let page, _) = event, page.completeItems != nil {
                                 return .init(index: read.index, useCachedPages: true,
                                              usedCachedPage: true, verified: false, failure: nil)
                             }
@@ -199,7 +200,7 @@ public actor TimelineSectionCacheLoader {
                     for await event in await repository.page(
                         section,
                         collection: collection,
-                        useCachedPages: false,
+                        useCachedPages: read.useCachedPages,
                         allowNetwork: true,
                         priority: .prefetch
                     ) {
@@ -219,6 +220,8 @@ public actor TimelineSectionCacheLoader {
             for await result in tasks { results.append(result) }
             return results
         }
+        await repository.endMetadataPageDemandBatch(admission)
+        return result
     }
 
     private func makeProgress() -> TimelineSectionCacheProgress {

@@ -26,6 +26,7 @@ final class MapBrowserModel: ObservableObject {
     private static let pinPitch: CGFloat = 52
 
     private var repository: CachedPhotosRepository?
+    private var projectionTask: Task<Void, Never>?
     private var indexTask: Task<Void, Never>?
     private var reclusterTask: Task<Void, Never>?
     private var recordIndices: [Int64: Int] = [:]
@@ -38,13 +39,29 @@ final class MapBrowserModel: ObservableObject {
     /// `retry()` reset the subscription after a failure.
     func start(repository: CachedPhotosRepository?) {
         if let repository { self.repository = repository }
-        guard indexTask == nil, let repository = self.repository else { return }
+        guard let repository = self.repository else { return }
+        if projectionTask == nil {
+            projectionTask = Task { [weak self] in
+                for await event in await repository.locationIndexChanges() {
+                    guard !Task.isCancelled else { return }
+                    self?.receive(event)
+                }
+            }
+        }
+        guard indexTask == nil else { return }
         indexTask = Task { [weak self] in
             for await event in await repository.locationIndex() {
                 guard !Task.isCancelled else { return }
                 self?.receive(event)
             }
         }
+    }
+
+    deinit { projectionTask?.cancel() }
+
+    func stopObservingProjection() {
+        projectionTask?.cancel()
+        projectionTask = nil
     }
 
     func retry() {

@@ -33,52 +33,27 @@ public struct DayGroupedTimeline: Sendable {
 /// filter reuses the same grouping for an arbitrary item set.
 public enum DayGroupedTimelineBuilder {
     /// Maximum items a single generated section may describe.
-    public static let defaultSectionLimit = 1000
+    public static let defaultSectionLimit = CollectionDayPager.capacity
 
     public static func build(entries: [DayTimelineEntry],
                              sectionLimit: Int = defaultSectionLimit) -> DayGroupedTimeline {
-        let sectionLimit = max(1, sectionLimit)
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-
-        struct DayBucket {
-            let year: Int
-            let month: Int
-            let day: Int
-            var ids: [Int64] = []
-        }
-
-        var days: [DayBucket] = []
-        var indexByDayID: [String: Int] = [:]
+        // Inputs come from bounded, validated server enumerations or repository-owned
+        // derived membership. The same pager defines every collection's geometry.
+        var ids: [CaptureDay: [Int64]] = [:]
         for entry in entries {
-            let parts = calendar.dateComponents([.year, .month, .day],
-                                                from: Date(timeIntervalSince1970: TimeInterval(entry.time)))
-            guard let year = parts.year, let month = parts.month, let day = parts.day else { continue }
-            let dayID = String(format: "%04d-%02d-%02d", year, month, day)
-            if let index = indexByDayID[dayID] {
-                days[index].ids.append(entry.id)
-            } else {
-                indexByDayID[dayID] = days.count
-                days.append(DayBucket(year: year, month: month, day: day, ids: [entry.id]))
-            }
+            guard let day = try? CaptureDay(time: entry.time) else { continue }
+            ids[day, default: []].append(entry.id)
         }
-
-        var sections: [TimelineSection] = []
-        var itemIDsBySection: [[Int64]] = []
-        for day in days {
-            let count = day.ids.count
-            guard count > 0 else { continue }
-            let timelineDay = TimelineDay(year: day.year, month: day.month, day: day.day,
-                                          itemCount: count)
-            var offset = 0
-            while offset < count {
-                let limit = min(sectionLimit, count - offset)
-                sections.append(TimelineSection(offset: offset, limit: limit, list: [timelineDay]))
-                itemIDsBySection.append(Array(day.ids[offset..<(offset + limit)]))
-                offset += limit
-            }
+        guard let counts = try? ids.map({ try CollectionDayCount(day: $0.key, count: $0.value.count) }),
+              let catalog = try? CollectionDayCatalog(days: counts, completeness: .complete),
+              let snapshot = try? CollectionDayPager.snapshot(catalog: catalog, capacity: sectionLimit) else {
+            return DayGroupedTimeline(snapshot: TimelineSnapshot(sections: []), itemIDsBySection: [])
         }
-        return DayGroupedTimeline(snapshot: TimelineSnapshot(sections: sections),
-                                  itemIDsBySection: itemIDsBySection)
+        let memberships = snapshot.sections.map { section -> [Int64] in
+            let raw = section.list[0]
+            let day = try! CaptureDay(year: raw.year, month: raw.month, day: raw.day)
+            return Array(ids[day]![section.offset..<(section.offset + section.limit)])
+        }
+        return DayGroupedTimeline(snapshot: snapshot, itemIDsBySection: memberships)
     }
 }

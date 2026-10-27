@@ -43,24 +43,24 @@ final class AlbumTimelineBuilderTests: XCTestCase {
         let times = (0..<1500).map { base + Int64($0) }
         let built = DayGroupedTimelineBuilder.build(entries: entries(times))
         let snapshot = built.snapshot
-        XCTAssertEqual(snapshot.sections.count, 2)
+        XCTAssertEqual(snapshot.sections.count, 6)
         let day = TimelineDay(year: 2024, month: 1, day: 1, itemCount: 1500)
-        XCTAssertEqual(snapshot.sections[0], TimelineSection(offset: 0, limit: 1000, list: [day]))
-        XCTAssertEqual(snapshot.sections[1], TimelineSection(offset: 1000, limit: 500, list: [day]))
+        XCTAssertEqual(snapshot.sections[0], TimelineSection(offset: 0, limit: 250, list: [day]))
+        XCTAssertEqual(snapshot.sections[5], TimelineSection(offset: 1250, limit: 250, list: [day]))
         XCTAssertEqual(snapshot.timeline.days.map(\.id), ["2024-01-01"])
         XCTAssertEqual(snapshot.timeline.days.map(\.count), [1500])
-        XCTAssertEqual(built.itemIDsBySection[0], Array(0..<1000).map(Int64.init))
-        XCTAssertEqual(built.itemIDsBySection[1], Array(1000..<1500).map(Int64.init))
+        XCTAssertEqual(built.itemIDsBySection[0], Array(0..<250).map(Int64.init))
+        XCTAssertEqual(built.itemIDsBySection[5], Array(1250..<1500).map(Int64.init))
     }
 
     func testExactlyAtLimitIsNotSplit() {
         let base = Int64(1_704_067_200)
-        let times = (0..<1000).map { base + Int64($0) }
+        let times = (0..<250).map { base + Int64($0) }
         let built = DayGroupedTimelineBuilder.build(entries: entries(times))
         XCTAssertEqual(built.snapshot.sections.count, 1)
         XCTAssertEqual(built.snapshot.sections[0].offset, 0)
-        XCTAssertEqual(built.snapshot.sections[0].limit, 1000)
-        XCTAssertEqual(built.itemIDsBySection, [Array(0..<1000).map(Int64.init)])
+        XCTAssertEqual(built.snapshot.sections[0].limit, 250)
+        XCTAssertEqual(built.itemIDsBySection, [Array(0..<250).map(Int64.init)])
     }
 
     func testCustomSectionLimitSplitsSmaller() {

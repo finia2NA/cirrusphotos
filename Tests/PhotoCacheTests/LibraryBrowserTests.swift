@@ -26,14 +26,14 @@ fileprivate actor FakeTransport: PhotosTransport {
 
     func configure(loginBlocked: Bool = false, itemBlocked: Bool = false, items: [PhotoItem] = [],
                    loginFailure: String? = nil, timelineFailure: String? = nil, itemFailure: String? = nil,
-                   timelineSnapshot: TimelineSnapshot = TimelineSnapshot(sections: [])) {
+                   timelineSnapshot: TimelineSnapshot? = nil) {
         self.loginBlocked = loginBlocked
         self.itemBlocked = itemBlocked
         pageItems = items
         self.loginFailure = loginFailure
         self.timelineFailure = timelineFailure
         self.itemFailure = itemFailure
-        self.timelineSnapshot = timelineSnapshot
+        self.timelineSnapshot = timelineSnapshot ?? DayGroupedTimelineBuilder.build(entries: items.map { DayTimelineEntry(id: $0.id, time: $0.time) }).snapshot
     }
     func login(credentials: SynologyCredentials) async throws {
         loginCalls += 1
@@ -41,10 +41,10 @@ fileprivate actor FakeTransport: PhotosTransport {
         try Task.checkCancellation()
         if let loginFailure { throw TestFailure(loginFailure) }
     }
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot {
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
         collectionTimelineCalls.append((collection, initial))
         if let timelineFailure { throw TestFailure(timelineFailure) }
-        return timelineSnapshot
+        return try fixtureDayCatalog(timelineSnapshot, initial: initial)
     }
     private func loadItems(in section: TimelineSection) async throws -> [PhotoItem] {
         itemCalls += 1
@@ -55,9 +55,12 @@ fileprivate actor FakeTransport: PhotosTransport {
         if let itemFailure { throw TestFailure(itemFailure) }
         return pageItems
     }
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
+    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        let section = fixtureSection(request)
+        let collection = request.collection
+
         collectionItemCalls.append(collection)
-        return try await loadItems(in: section)
+        return try fixtureBatch(try await loadItems(in: section), request: request, fields: fields)
     }
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
         favoriteRequests.append(contentsOf: itemIDs.map { ($0, favorite) })
@@ -92,7 +95,7 @@ class LibraryBrowserTestCase: XCTestCase {
     fileprivate let server = URL(string: "https://example.invalid")!
     fileprivate let credentials = SynologyCredentials(username: "test", password: "unused", otpSecret: "unused")
 
-    fileprivate func section(_ day: Int, offset: Int = 0, limit: Int = 2, count: Int = 2) -> TimelineSection {
+    fileprivate func section(_ day: Int, offset: Int = 0, limit: Int = 1, count: Int = 1) -> TimelineSection {
         TimelineSection(offset: offset, limit: limit,
                         list: [TimelineDay(year: 2024, month: 4, day: day, itemCount: count)])
     }
@@ -104,14 +107,10 @@ class LibraryBrowserTestCase: XCTestCase {
         try CachedPhotosRepository(credentials: credentials, baseURL: server, cacheRoot: root, transport: transport)
     }
     fileprivate func seed(_ items: [PhotoItem], section: TimelineSection, repository: CachedPhotosRepository) async throws {
-        let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let key = try XCTUnwrap(CacheKey.page(namespace: namespace, section: section))
-        try await repository.store.put(key, kind: .page, data: JSONEncoder().encode(items), validatedRun: nil)
+        try await seedMetadataPage(items, section: section, repository: repository)
     }
     fileprivate func seedTimeline(_ snapshot: TimelineSnapshot, repository: CachedPhotosRepository) async throws {
-        let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        try await repository.store.put(CacheKey.timeline(namespace: namespace), kind: .timeline,
-                                       data: JSONEncoder().encode(snapshot), validatedRun: nil)
+        try await seedMetadataCatalog(snapshot, repository: repository)
     }
 }
 
@@ -140,8 +139,8 @@ final class LibraryIndexAndCacheIdentityTests: LibraryBrowserTestCase {
         let descriptor = section(3)
         XCTAssertEqual(PhotoCollectionDescriptor.personalLibrary.rawValue, "personal",
                        "Collection refactoring must preserve the existing Personal Library cache keys")
-        XCTAssertNotEqual(CacheKey.timeline(namespace: namespace, collection: .personalLibrary),
-                          CacheKey.timeline(namespace: namespace, collection: .favorites))
+        XCTAssertNotEqual(CacheKey.page(namespace: namespace, section: section(1), collection: .personalLibrary),
+                          CacheKey.page(namespace: namespace, section: section(1), collection: .favorites))
         XCTAssertNotEqual(CacheKey.page(namespace: namespace, section: descriptor, collection: .personalLibrary),
                           CacheKey.page(namespace: namespace, section: descriptor, collection: .favorites))
     }
@@ -215,16 +214,13 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         let finalItemCallCount = await transport.collectionItemCalls.count
         XCTAssertEqual(finalItemCallCount, 1)
 
-        let namespace = CacheKey.namespace(server: server, account: credentials.username)
+        let namespace = await repository.metadataNamespace
         let store = await repository.store
-        let cachedTimeline = try await store.get(
-            CacheKey.timeline(namespace: namespace, collection: .favorites))
-        let timelineEntry = try XCTUnwrap(cachedTimeline)
-        XCTAssertTrue(try JSONDecoder().decode(TimelineSnapshot.self, from: timelineEntry.data).sections.isEmpty)
-        let oldPageKey = try XCTUnwrap(CacheKey.page(namespace: namespace, section: descriptor,
-                                                     collection: .favorites))
-        let oldPage = try await repository.store.get(oldPageKey)
-        XCTAssertNotNil(oldPage, "The last cached page stays visible until new geometry demands replacement")
+        let catalog = try await store.metadataCatalog(.init(namespace: namespace, collection: .favorites))
+        XCTAssertEqual(catalog?.catalog.days.count, 0)
+        let oldPage = try await store.metadataPage(try DayPageAddress(section: descriptor, collection: .favorites), namespace: namespace, currentRun: repository.runID)
+        XCTAssertNil(oldPage, "Removed days retire their membership slots")
+
     }
 
     func testFavoriteAdditionWaitsForWriteThenUsesServerOrdering() async throws {
@@ -303,6 +299,8 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         let optimisticChange = await favoriteChanges.next()
         XCTAssertEqual(optimisticChange?.values[photo.id], false)
 
+        // A concurrent authoritative read must persist the response, never the pending overlay.
+        for await _ in await repository.page(descriptor, collection: .favorites, useCachedPages: false) {}
         await transport.releaseFavoriteWrite(failing: true)
         do {
             try await mutation.value
@@ -311,17 +309,11 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         let rollbackChange = await favoriteChanges.next()
         XCTAssertEqual(rollbackChange?.values[photo.id], true)
 
-        let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let pageKey = try XCTUnwrap(CacheKey.page(namespace: namespace, section: descriptor,
-                                                  collection: .favorites))
-        let store = await repository.store
-        let cachedPage = try await store.get(pageKey)
-        let pageEntry = try XCTUnwrap(cachedPage)
-        let restoredItems = try JSONDecoder().decode([PhotoItem].self, from: pageEntry.data)
-        XCTAssertEqual(restoredItems.map(\.id), [photo.id])
-        XCTAssertTrue(restoredItems[0].isFavorite)
+        let page = try await repository.store.metadataPage(try DayPageAddress(section: descriptor, collection: .favorites), namespace: repository.metadataNamespace, currentRun: repository.runID)
+        XCTAssertEqual(page?.slots.map(\.itemID), [photo.id])
+        XCTAssertEqual(page?.slots.first?.item?.isFavorite, true)
         let timelineCalls = await transport.collectionTimelineCalls.filter { $0.0 == .favorites }.count
-        XCTAssertEqual(timelineCalls, 1)
+        XCTAssertEqual(timelineCalls, 2, "The explicit overlapping forced read revalidates its catalog")
     }
 
     func testFavoriteMutationRejectsAnOlderInFlightFavoritesPage() async throws {
@@ -335,7 +327,7 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         let staleRequest = Task { () -> [[Int64]] in
             var values: [[Int64]] = []
             for await event in await repository.page(descriptor, collection: .favorites) {
-                if case .value(let items, _) = event { values.append(items.map(\.id)) }
+                if case .value(let items, _) = event { let items = items.completeItems ?? []; values.append(items.map(\.id)) }
             }
             return values
         }
@@ -350,10 +342,10 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         XCTAssertEqual(staleValues, [],
                        "A response from the prior Favorites generation must not be published")
         for await event in await repository.page(descriptor, collection: .favorites) {
-            if case .value(let items, true) = event { XCTAssertTrue(items.isEmpty) }
+            if case .value(let items, true) = event { let items = items.completeItems ?? []; XCTAssertTrue(items.isEmpty) }
         }
         let itemCalls = await transport.collectionItemCalls.count
-        XCTAssertEqual(itemCalls, 2)
+        XCTAssertEqual(itemCalls, 1)
     }
 }
 
@@ -363,11 +355,11 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         let fake = FakeTransport()
         await fake.configure(loginBlocked: true)
         let repository = try repository(root: root, transport: fake)
-        let descriptor = section(2)
+        let descriptor = section(1)
         try await seed([try item(1)], section: descriptor, repository: repository)
 
         var offline = await repository.page(descriptor, allowNetwork: false).makeAsyncIterator()
-        if case .value(let items, let verified) = await offline.next() {
+        if case .value(let items, let verified) = await offline.next() { let items = items.completeItems ?? [];
             XCTAssertEqual(items.map(\.id), [1]); XCTAssertFalse(verified)
         } else { XCTFail("Missing offline cache") }
         let offlineEnd = await offline.next()
@@ -377,7 +369,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
 
         let stream = await repository.page(descriptor)
         var iterator = stream.makeAsyncIterator()
-        if case .value(let items, let verified) = await iterator.next() {
+        if case .value(let items, let verified) = await iterator.next() { let items = items.completeItems ?? [];
             XCTAssertEqual(items.map(\.id), [1]); XCTAssertFalse(verified)
         } else { XCTFail("Cache waited for login") }
         let itemCalls = await fake.itemCalls
@@ -394,12 +386,12 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         let fake = FakeTransport()
         await fake.configure(items: [try item(7), try item(8)])
         let repository = try repository(root: root, transport: fake)
-        let descriptor = section(2)
+        let descriptor = section(1, limit: 2, count: 2)
         try await seed([try item(1), try item(2)], section: descriptor, repository: repository)
         var iterator = await repository.page(descriptor).makeAsyncIterator()
-        if case .value(let cached, false) = await iterator.next() { XCTAssertEqual(cached.map(\.id), [1, 2]) }
+        if case .value(let cached, false) = await iterator.next() { XCTAssertEqual(cached.slots.map(\.itemID), [1, 2]) }
         else { XCTFail("Missing old page") }
-        if case .value(let current, true) = await iterator.next() { XCTAssertEqual(current.map(\.id), [7, 8]) }
+        if case .value(let current, true) = await iterator.next() { XCTAssertEqual(current.slots.map(\.itemID), [7, 8]) }
         else { XCTFail("Equal-count replacement was skipped") }
         let end = await iterator.next()
         XCTAssertNil(end)
@@ -412,13 +404,13 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         let fake = FakeTransport()
         await fake.configure(itemBlocked: true, items: [try item(9)])
         let repository = try repository(root: root, transport: fake)
-        let descriptor = section(2)
+        let descriptor = section(1)
         let first = await repository.page(descriptor)
         let second = await repository.page(descriptor)
         let firstTask = Task { for await _ in first {} }
         let secondTask = Task { () -> [Int64] in
             for await event in second {
-                if case .value(let items, true) = event { return items.map(\.id) }
+                if case .value(let items, true) = event { let items = items.completeItems ?? []; return items.map(\.id) }
             }
             return []
         }
@@ -438,11 +430,11 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         await fake.configure(loginBlocked: true, items: [try item(5)])
         let repository = try repository(root: root, transport: fake)
         let first = await repository.page(section(1))
-        let second = await repository.page(section(2))
+        let second = await repository.page(section(1), collection: .favorites)
         let firstTask = Task { for await _ in first {} }
         let secondTask = Task { () -> [Int64] in
             for await event in second {
-                if case .value(let items, true) = event { return items.map(\.id) }
+                if case .value(let items, true) = event { let items = items.completeItems ?? []; return items.map(\.id) }
             }
             return []
         }
@@ -452,8 +444,8 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         await fake.releaseLogin()
         let secondResult = await secondTask.value
         XCTAssertEqual(secondResult, [5])
-        var third = await repository.page(section(3)).makeAsyncIterator()
-        if case .value(let items, true) = await third.next() { XCTAssertEqual(items.map(\.id), [5]) }
+        var third = await repository.page(section(1), useCachedPages: false).makeAsyncIterator()
+        if case .value(let items, true) = await third.next() { let items = items.completeItems ?? []; XCTAssertEqual(items.map(\.id), [5]) }
         else { XCTFail("Later demand did not load") }
         let loginCalls = await fake.loginCalls
         XCTAssertEqual(loginCalls, 1)
@@ -464,10 +456,10 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         let fake = FakeTransport()
         await fake.configure(itemBlocked: true, items: [try item(42)])
         let repository = try repository(root: root, transport: fake)
-        let descriptor = section(2)
+        let descriptor = section(1)
         let result = Task { () -> [Int64] in
             for await event in await repository.page(descriptor) {
-                if case .value(let items, true) = event { return items.map(\.id) }
+                if case .value(let items, true) = event { let items = items.completeItems ?? []; return items.map(\.id) }
             }
             return []
         }
@@ -518,9 +510,9 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
     func testWindowRetryReopensFailedPageWithoutDroppingCachedPage() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
         let fake = FakeTransport()
-        await fake.configure(itemFailure: "Page unavailable")
+        await fake.configure(items: [try item(8)], itemFailure: "Page unavailable")
         let repository = try repository(root: root, transport: fake)
-        let descriptor = section(2)
+        let descriptor = section(1)
         try await seed([try item(8)], section: descriptor, repository: repository)
         let window = LibraryPageWindow(repository: repository)
         let index = LibraryIndex(snapshot: TimelineSnapshot(sections: [descriptor]))
@@ -585,7 +577,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         let loggingIn = await firstStatus.next()
         XCTAssertEqual(loggingIn, .loggingIn)
         var page = await repository.page(snapshot.sections[0], allowNetwork: false).makeAsyncIterator()
-        if case .value(let items, false) = await page.next() { XCTAssertEqual(items.map(\.id), [12]) }
+        if case .value(let items, false) = await page.next() { let items = items.completeItems ?? []; XCTAssertEqual(items.map(\.id), [12]) }
         else { XCTFail("Cached page unavailable during login") }
 
         await fake.releaseLogin()
@@ -644,9 +636,9 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         var status = await repository.authentication().makeAsyncIterator()
         let authenticated = await status.next()
         XCTAssertEqual(authenticated, .signedIn)
-        await fake.configure(items: [try item(21)])
+        await fake.configure(items: [try item(21)], timelineSnapshot: snapshot)
         for await event in await repository.page(snapshot.sections[0]) {
-            if case .value(let items, true) = event { XCTAssertEqual(items.map(\.id), [21]) }
+            if case .value(let items, true) = event { let items = items.completeItems ?? []; XCTAssertEqual(items.map(\.id), [21]) }
         }
         let loginCalls = await fake.loginCalls
         XCTAssertEqual(loginCalls, 1)

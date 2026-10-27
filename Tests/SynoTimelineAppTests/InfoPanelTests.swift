@@ -57,12 +57,10 @@ final class InfoPanelTests: XCTestCase {
                                       list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         let namespace = CacheKey.namespace(server: SynologyClient.defaultBaseURL, account: "alice")
         let standard = try XCTUnwrap(CacheKey.page(namespace: namespace, section: section))
-        XCTAssertEqual(standard,
-                       CacheKey.page(namespace: namespace, section: section,
-                                     additional: PhotosRequestFields.pageAdditional))
-        let alternate = try XCTUnwrap(CacheKey.page(namespace: namespace, section: section,
-                                                    additional: ["thumbnail"]))
-        XCTAssertNotEqual(standard, alternate)
+        XCTAssertEqual(standard, CacheKey.page(namespace: namespace, section: section))
+        let growth = TimelineSection(offset: 0, limit: 2, list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 2)])
+        XCTAssertEqual(standard, CacheKey.page(namespace: namespace, section: growth))
+
     }
 
     // MARK: - Model
@@ -383,7 +381,7 @@ final class InfoPanelTests: XCTestCase {
         let repo = try CachedPhotosRepository(credentials: credentials, budget: 100_000_000,
                                               cacheRoot: root, transport: transport)
         return Context(model: InfoPanelModel(), repo: repo, transport: transport,
-                       snapshot: TimelineSnapshot(sections: [section]))
+                       snapshot: try CollectionDayPager.snapshot(catalog: fixtureDayCatalog(TimelineSnapshot(sections: [section]), initial: false)))
     }
 
     private func makeItem(id: Int64, time: Int64 = 1712102400, type: String = "photo",
@@ -422,7 +420,13 @@ actor InfoPanelMockTransport: PhotosTransport {
     func recordedCancellations() -> Int { cancellations }
     func setBlocked(_ value: Bool) { blocked = value }
 
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
+        try CollectionDayCatalog(days: pages.map { try CollectionDayCount(day: CaptureDay(time: $0.key), count: $0.value.count) }, completeness: initial ? .partial : .complete)
+    }
+    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        let section = fixtureSection(request)
+        let collection = request.collection
+
         itemCalls += 1
         do {
             while blocked { try await Task.sleep(for: .milliseconds(10)) }
@@ -430,6 +434,6 @@ actor InfoPanelMockTransport: PhotosTransport {
             cancellations += 1
             throw CancellationError()
         }
-        return section.dateBounds.flatMap { pages[$0.start] } ?? []
+        return try fixtureBatch(Array((pages[request.newestDay.startTime] ?? []).dropFirst(request.offset).prefix(request.limit)), request: request, fields: fields)
     }
 }

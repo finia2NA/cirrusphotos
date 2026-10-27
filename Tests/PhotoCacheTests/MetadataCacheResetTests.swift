@@ -1,183 +1,88 @@
 import Foundation
+import SQLite3
 import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-private actor MetadataResetTransport: PhotosTransport {}
-
-final class MetadataCacheResetTests: XCTestCase {
-    private let server = URL(string: "https://example.invalid")!
-    private let credentials = SynologyCredentials(username: "test", password: "unused", otpSecret: "unused")
-
-    private func root() -> URL { temporaryTestRoot("SynoMetadataResetTest") }
-
-    private func repository(root: URL) throws -> CachedPhotosRepository {
-        try CachedPhotosRepository(
-            credentials: credentials,
-            baseURL: server,
-            budget: 50_000_000,
-            cacheRoot: root,
-            transport: MetadataResetTransport()
-        )
+final class MetadataCacheResetTests: XCTestCase, @unchecked Sendable {
+    private let namespace = MetadataNamespace(account: "reset-account")
+    private func open(_ root: URL) async throws -> DiskCache {
+        let store = try DiskCache(root: root, budget: 10_000_000)
+        try await store.initializeMetadataStore()
+        return store
     }
-
-    func testMetadataClearRemovesEveryMetadataKindAndPreservesImageBytesAndMarkers() async throws {
-        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
-        let repository = try repository(root: root)
-        let metadataKeys: [(String, CacheKind)] = [
-            ("timeline", .timeline), ("page", .page), ("albums", .albumList),
-            ("locations", .locationIndex),
-        ]
-        for (key, kind) in metadataKeys {
-            try await repository.store.put(key, kind: kind, data: Data(key.utf8), validatedRun: "metadata-run")
+    private func catalog() throws -> CollectionDayCatalog {
+        try CollectionDayCatalog(days: [.init(day: CaptureDay(year: 2024, month: 1, day: 1), count: 1)], completeness: .complete)
+    }
+    func testMetadataClearRemovesNormalizedCoverageAndPreservesEveryMediaKindAndHTTPMarkers() async throws {
+        let root = temporaryTestRoot("normalized-reset"); defer { try? FileManager.default.removeItem(at: root) }
+        let store = try await open(root)
+        let admission = try await store.metadataAdmission(namespace)
+        try await store.storeMetadataCatalog(catalog(), key: .init(namespace: namespace, collection: .personalLibrary), validatedRun: "run", admission: admission)
+        try await store.storeMetadataAlbumSummaries([.init(id: 1, name: "fixture", itemCount: 1)], namespace: namespace, currentRun: "run", admission: admission)
+        try await store.applyMetadataChanges(namespace: namespace, cursor: .init(diffVersion: 1, versionTime: 1), replacements: [], deletedIDs: [], affectedDays: [], invalidateAll: true, currentRun: "run", admission: admission)
+        for kind in [CacheKind.thumbnail, .previewThumbnail, .fullImage, .videoSegment] {
+            try await store.put("media-\(kind.rawValue)", kind: kind, data: Data([1, 2, 3]), validatedRun: "media-run", etag: "fixture-etag", lastModified: "fixture-modified")
         }
-        let images: [(String, CacheKind, Data)] = [
-            ("thumbnail", .thumbnail, Data([1, 2, 3])),
-            ("preview", .previewThumbnail, Data([4, 5, 6])),
-            ("original", .fullImage, Data([7, 8, 9])),
-        ]
-        for (key, kind, data) in images {
-            try await repository.store.put(key, kind: kind, data: data, validatedRun: "image-run",
-                                           etag: "etag-\(key)")
-        }
-        let wholeBefore = await repository.store.currentGeneration()
-        let metadataBefore = await repository.store.currentMetadataGeneration()
-
-        var resets = await repository.metadataCacheResets().makeAsyncIterator()
-        let initialRevision = await resets.next()
-        XCTAssertEqual(initialRevision, 0)
-        try await repository.clearMetadataCache()
-        let nextRevision = await resets.next()
-        let revision = try XCTUnwrap(nextRevision)
-        XCTAssertGreaterThan(revision, 0)
-
-        let wholeAfter = await repository.store.currentGeneration()
-        let metadataAfter = await repository.store.currentMetadataGeneration()
-        XCTAssertEqual(wholeAfter, wholeBefore)
-        XCTAssertGreaterThan(metadataAfter, metadataBefore)
-        for (key, _) in metadataKeys {
-            let entry = try await repository.store.get(key)
-            XCTAssertNil(entry, "Metadata row \(key) survived metadata-only clear")
-        }
-        for (key, _, data) in images {
-            let loaded = try await repository.store.get(key)
-            let entry = try XCTUnwrap(loaded)
-            XCTAssertEqual(entry.data, data)
-            XCTAssertEqual(entry.validatedRun, "image-run")
-            XCTAssertEqual(entry.etag, "etag-\(key)")
+        let wholeGeneration = await store.currentGeneration()
+        _ = try await store.clearMetadata()
+        let catalog = try await store.metadataCatalog(.init(namespace: namespace, collection: .personalLibrary))
+        let albums = try await store.metadataAlbumSummaries(namespace)
+        let state = try await store.metadataState(namespace)
+        XCTAssertNil(catalog); XCTAssertNil(albums); XCTAssertNil(state.cursor); XCTAssertFalse(state.inventoryComplete)
+        let currentWhole = await store.currentGeneration()
+        XCTAssertEqual(currentWhole, wholeGeneration)
+        for kind in [CacheKind.thumbnail, .previewThumbnail, .fullImage, .videoSegment] {
+            let entry = try await store.get("media-\(kind.rawValue)")
+            XCTAssertEqual(entry?.data, Data([1, 2, 3])); XCTAssertEqual(entry?.etag, "fixture-etag")
+            XCTAssertEqual(entry?.lastModified, "fixture-modified"); XCTAssertEqual(entry?.validatedRun, "media-run")
         }
     }
-
-    func testOldMetadataGenerationCannotWriteAfterClear() async throws {
-        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
-        let repository = try repository(root: root)
-        let whole = await repository.store.currentGeneration()
-        let metadata = await repository.store.currentMetadataGeneration()
-
-        try await repository.clearMetadataCache()
-        let result = try await repository.store.putMetadata(
-            "late",
-            kind: .page,
-            data: Data([1]),
-            validatedRun: nil,
-            expectedGeneration: whole,
-            expectedMetadataGeneration: metadata,
-            replacing: .absent
-        )
-        XCTAssertEqual(result, .generationChanged)
-        let late = try await repository.store.get("late")
-        XCTAssertNil(late)
-    }
-
-    func testConditionalCommitRejectsStaleSameRowWriter() async throws {
-        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
-        let repository = try repository(root: root)
-        try await repository.store.put("page", kind: .page, data: Data([1]), validatedRun: "one")
-        let firstLoaded = try await repository.store.get("page")
-        let first = try XCTUnwrap(firstLoaded)
-        let whole = await repository.store.currentGeneration()
-        let metadata = await repository.store.currentMetadataGeneration()
-
-        let newer = try await repository.store.putMetadata(
-            "page", kind: .page, data: Data([2]), validatedRun: "two",
-            expectedGeneration: whole, expectedMetadataGeneration: metadata,
-            replacing: .revision(first.revision)
-        )
-        guard case .stored = newer else { return XCTFail("Newer writer was not stored") }
-        let stale = try await repository.store.putMetadata(
-            "page", kind: .page, data: Data([3]), validatedRun: "stale",
-            expectedGeneration: whole, expectedMetadataGeneration: metadata,
-            replacing: .revision(first.revision)
-        )
-        XCTAssertEqual(stale, .superseded)
-        let retainedLoaded = try await repository.store.get("page")
-        let retained = try XCTUnwrap(retainedLoaded)
-        XCTAssertEqual(retained.data, Data([2]))
-        XCTAssertEqual(retained.validatedRun, "two")
-    }
-
-    func testConditionalCommitRejectsABAReplacementWithIdenticalBytes() async throws {
-        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
-        let repository = try repository(root: root)
-        try await repository.store.put("page", kind: .page, data: Data([1]), validatedRun: "first")
-        let firstLoaded = try await repository.store.get("page")
-        let first = try XCTUnwrap(firstLoaded)
-        let whole = await repository.store.currentGeneration()
-        let metadata = await repository.store.currentMetadataGeneration()
-
-        let secondResult = try await repository.store.putMetadata(
-            "page", kind: .page, data: Data([2]), validatedRun: "second",
-            expectedGeneration: whole, expectedMetadataGeneration: metadata,
-            replacing: .revision(first.revision)
-        )
-        guard case .stored(let secondRevision) = secondResult else {
-            return XCTFail("Second row version was not stored")
+    func testOldAdmissionCannotWriteNormalizedRowsAfterMetadataOrFullClear() async throws {
+        for full in [false, true] {
+            let root = temporaryTestRoot("normalized-late-write"); defer { try? FileManager.default.removeItem(at: root) }
+            let store = try await open(root)
+            let old = try await store.metadataAdmission(namespace)
+            if full { try await store.clear() } else { _ = try await store.clearMetadata() }
+            do {
+                try await store.storeMetadataCatalog(catalog(), key: .init(namespace: namespace, collection: .personalLibrary), validatedRun: "late", admission: old)
+                XCTFail("Pre-reset metadata writer was admitted")
+            } catch { }
+            let value = try await store.metadataCatalog(.init(namespace: namespace, collection: .personalLibrary))
+            XCTAssertNil(value)
         }
-        let restored = try await repository.store.putMetadata(
-            "page", kind: .page, data: Data([1]), validatedRun: "restored",
-            expectedGeneration: whole, expectedMetadataGeneration: metadata,
-            replacing: .revision(secondRevision)
-        )
-        guard case .stored = restored else { return XCTFail("Restored bytes were not stored") }
-
-        let stale = try await repository.store.putMetadata(
-            "page", kind: .page, data: Data([3]), validatedRun: "stale",
-            expectedGeneration: whole, expectedMetadataGeneration: metadata,
-            replacing: .revision(first.revision)
-        )
-        XCTAssertEqual(stale, .superseded,
-                       "A content digest cannot serve as a same-row revision because it misses ABA writes")
-        let retainedLoaded = try await repository.store.get("page")
-        let retained = try XCTUnwrap(retainedLoaded)
-        XCTAssertEqual(retained.data, Data([1]))
-        XCTAssertEqual(retained.validatedRun, "restored")
     }
-
-    func testMetadataResetInvalidatesRegisteredMapFilters() async throws {
-        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
-        let repository = try repository(root: root)
-        let section = TimelineSection(
-            offset: 0,
-            limit: 1,
-            list: [TimelineDay(year: 2024, month: 1, day: 1, itemCount: 1)]
-        )
-        let descriptor = PhotoCollectionDescriptor.mapFilter(UUID())
-        try await repository.registerMapFilter(
-            descriptor,
-            source: .personalLibrary,
-            snapshot: TimelineSnapshot(sections: [section]),
-            itemIDsBySection: [[1]]
-        )
-        let registered = await repository.latestTimelineSnapshot(collection: descriptor)
-        XCTAssertNotNil(registered)
-
-        try await repository.clearMetadataCache()
-        let cleared = await repository.latestTimelineSnapshot(collection: descriptor)
-        XCTAssertNil(cleared)
-        var failure: String?
-        for await event in await repository.page(section, collection: descriptor, allowNetwork: false) {
-            if case .failure(let message) = event { failure = message }
-        }
-        XCTAssertNotNil(failure)
+    func testIncompatibleNormalizedFormatDiscardsMetadataAndPreservesUnchangedMediaFormat() async throws {
+        let root = temporaryTestRoot("normalized-format"); defer { try? FileManager.default.removeItem(at: root) }
+        let store = try await open(root)
+        try await store.storeMetadataCatalog(catalog(), key: .init(namespace: namespace, collection: .personalLibrary), validatedRun: "old", admission: store.metadataAdmission(namespace))
+        try await store.put("photo", kind: .thumbnail, data: Data([7, 8]), validatedRun: "media", etag: "validator")
+        var connection: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(root.appendingPathComponent("index.sqlite").path, &connection), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(connection, "UPDATE metadata_format SET version=999", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(connection)
+        let reopened = try await open(root)
+        let value = try await reopened.metadataCatalog(.init(namespace: namespace, collection: .personalLibrary))
+        let image = try await reopened.get("photo")
+        XCTAssertNil(value); XCTAssertEqual(image?.data, Data([7, 8])); XCTAssertEqual(image?.etag, "validator")
+    }
+    func testDayGenerationRejectsABAReplacementEvenWhenCatalogCountsReturnToOldValues() async throws {
+        let root = temporaryTestRoot("normalized-aba"); defer { try? FileManager.default.removeItem(at: root) }
+        let store = try await open(root)
+        let key = CollectionKey(namespace: namespace, collection: .personalLibrary)
+        let old = try catalog()
+        let admission = try await store.metadataAdmission(namespace)
+        try await store.storeMetadataCatalog(old, key: key, validatedRun: "run", admission: admission)
+        let address = try DayPageAddress(collection: .personalLibrary, day: old.days[0].day, offset: 0)
+        let read = try DayPageRead(address: address, dayCount: 1, membershipGeneration: 1)
+        try await store.storeMetadataCatalog(.init(days: [.init(day: address.day, count: 2)], completeness: .complete), key: key, validatedRun: "run", admission: admission)
+        try await store.storeMetadataCatalog(old, key: key, validatedRun: "run", admission: admission)
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data(#"{"id":1,"time":1704067200,"type":"photo"}"#.utf8))
+        do {
+            try await store.storeMetadataPage(read, items: [item], profile: .fullPage, namespace: namespace, currentRun: "run", admission: admission)
+            XCTFail("A stale day membership writer passed an ABA count change")
+        } catch { }
+        let page = try await store.metadataPage(address, namespace: namespace, currentRun: "run")
+        XCTAssertNil(page)
     }
 }

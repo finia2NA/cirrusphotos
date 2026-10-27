@@ -3,14 +3,39 @@ import SynologyAPI
 
 // Actor-isolated metadata coordination; task identities remain owned by the session.
 extension PhotoViewerSession {
+    func invalidateMetadataPages(_ change: MetadataCollectionInvalidation) {
+        guard !closed, !(collection == .favorites && playlist.hasEntries) else { return }
+        var affectedCurrent = false
+        for position in index.sections.indices {
+            guard let raw = index.sections[position].list.first,
+                  let day = try? CaptureDay(year: raw.year, month: raw.month, day: raw.day),
+                  change.days == nil || change.days!.contains(day) else { continue }
+            if let page = metadata.pages[position] {
+                metadata.pages[position] = ViewerMetadataWindow.PageEntry(slots: page.slots.map { PhotoItemSlot(itemID: $0.itemID, item: $0.item, verified: false) }, verified: false, membershipVerified: false)
+            }
+            if position == desired.sectionIndex { affectedCurrent = true }
+        }
+        if affectedCurrent {
+            metadataVerified = false
+            metadataStatus = .ready(verified: false, validationFailure: nil)
+            ensurePage(desired.sectionIndex, visible: true)
+            publish()
+        }
+    }
+
     func applyItemChanges(_ change: PhotoItemChange) {
         for (section, page) in metadata.pages {
-            let updated = page.items.map { change.items[$0.id] ?? $0 }
-            metadata.pages[section] = ViewerMetadataWindow.PageEntry(items: updated, verified: page.verified)
+            let updated = page.slots.map { slot in
+                PhotoItemSlot(itemID: slot.itemID, item: change.items[slot.itemID].map { replacement in
+                    applyingFavorite(slot.item?.withRotationMetadata(from: replacement) ?? replacement)
+                } ?? slot.item, verified: slot.verified)
+            }
+            metadata.pages[section] = ViewerMetadataWindow.PageEntry(slots: updated, verified: page.verified, membershipVerified: page.membershipVerified)
         }
         guard let id = currentItem?.id, let replacement = change.items[id] else { return }
-        currentItem = applyingFavorite(replacement)
-        currentIdentity = Self.identity(of: replacement)
+        let updated = currentItem?.withRotationMetadata(from: replacement) ?? replacement
+        currentItem = applyingFavorite(updated)
+        currentIdentity = Self.identity(of: updated)
         if change.quarterTurns[id] == nil {
             generation &+= 1
             images.resetSelection(keeping: replacement.fullImageResource)
@@ -51,7 +76,10 @@ extension PhotoViewerSession {
                         live, plan: plan, playlistRevision: playlistRevision
                     )
                     guard let items else { return }
-                    await self?.receivePage(.value(items, verified: true), sectionIndex: sectionIndex,
+                    guard let address = try? DayPageAddress(section: descriptor, collection: collection) else { return }
+                    let page = PhotoPageSnapshot(address: address, membershipRevision: 0, membershipVerified: true,
+                                                 slots: items.map { PhotoItemSlot(itemID: $0.id, item: $0, verified: true) })
+                    await self?.receivePage(.value(page, verified: true), sectionIndex: sectionIndex,
                                             id: id, retryRevision: revision)
                 } catch {
                     guard !Task.isCancelled else { return }
@@ -74,18 +102,18 @@ extension PhotoViewerSession {
         metadata.pageJobs[sectionIndex] = ViewerMetadataWindow.PageJob(id: id, allowNetwork: network, task: task)
     }
 
-    func receivePage(_ event: ResourceEvent<[PhotoItem]>, sectionIndex: Int,
+    func receivePage(_ event: ResourceEvent<PhotoPageSnapshot>, sectionIndex: Int,
                              id: UUID, retryRevision: Int) {
         guard !closed, self.retryRevision == retryRevision, metadata.pageJobs[sectionIndex]?.id == id else { return }
         switch event {
         case .value(let items, let verified):
             if metadata.pages[sectionIndex]?.verified == true && !verified { return }
             if sectionIndex == desired.sectionIndex && metadataVerified && !verified { return }
-            let items = applyingFavorites(items)
-            metadata.pages[sectionIndex] = ViewerMetadataWindow.PageEntry(items: items, verified: verified)
+            let slots = items.slots.map { slot in PhotoItemSlot(itemID: slot.itemID, item: slot.item.map(applyingFavorite), verified: slot.verified) }
+            metadata.pages[sectionIndex] = ViewerMetadataWindow.PageEntry(slots: slots, verified: verified, membershipVerified: items.membershipVerified)
             metadata.trimPages(around: desired)
             if sectionIndex == desired.sectionIndex {
-                applyCurrentPage(ViewerMetadataWindow.PageEntry(items: items, verified: verified), at: desired)
+                applyCurrentPage(ViewerMetadataWindow.PageEntry(slots: slots, verified: verified, membershipVerified: items.membershipVerified), at: desired)
             }
             if images.prefetchEnabledGeneration == generation { scheduleLoadedNeighbors() }
             scheduleThumbnailNeighbors()
@@ -105,25 +133,31 @@ extension PhotoViewerSession {
     func applyCurrentPage(_ page: ViewerMetadataWindow.PageEntry, at location: PhotoViewerLocation) {
         guard desired == location else { return }
         var item: PhotoItem
-        if let selected = currentItem, page.verified {
-            if let shiftedOffset = page.items.firstIndex(where: { $0.id == selected.id }) {
+        if let selected = currentItem, page.membershipVerified {
+            if let shiftedOffset = page.slots.firstIndex(where: { $0.itemID == selected.id }) {
                 let spanStart = metadata.spans[location.sectionIndex].start
                 desired = PhotoViewerLocation(sectionIndex: location.sectionIndex,
                                               pageOffset: shiftedOffset,
                                               ordinal: spanStart + shiftedOffset)
-                item = page.items[shiftedOffset]
+                guard let resolved = page.slot(at: shiftedOffset)?.item else {
+                    metadataVerified = false
+                    metadataStatus = .ready(verified: false, validationFailure: nil)
+                    publish()
+                    return
+                }
+                item = resolved
             } else {
                 clearCurrentForMissingItem("The selected item is no longer in this page.")
                 return
             }
         } else {
-            guard page.items.indices.contains(location.pageOffset) else {
-                if page.verified {
-                    clearCurrentForMissingItem("The selected item is no longer in this page.")
-                }
+            guard let slot = page.slot(at: location.pageOffset), let resolved = slot.item else {
+                metadataVerified = false
+                metadataStatus = .ready(verified: false, validationFailure: nil)
+                publish()
                 return
             }
-            item = page.items[location.pageOffset]
+            item = resolved
             if let selected = currentItem, item.id != selected.id {
                 // A stale cached page must not replace the exact item supplied by the grid.
                 return
@@ -139,8 +173,8 @@ extension PhotoViewerSession {
         } else {
             currentItem = item
         }
-        metadataVerified = page.verified
-        metadataStatus = .ready(verified: page.verified, validationFailure: nil)
+        metadataVerified = page.slot(at: desired.pageOffset)?.verified == true
+        metadataStatus = .ready(verified: metadataVerified, validationFailure: nil)
         startAssetsForCurrentMetadata()
         publish()
     }

@@ -45,6 +45,7 @@ struct MapBrowserView: View {
         .task(id: library.repository.map(ObjectIdentifier.init)) {
             model.start(repository: library.repository)
         }
+        .onDisappear { model.stopObservingProjection() }
     }
 
     @ViewBuilder

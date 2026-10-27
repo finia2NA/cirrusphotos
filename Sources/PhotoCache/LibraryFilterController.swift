@@ -52,6 +52,7 @@ public struct LibraryFilterRegistration: Sendable {
     public let referencesBySection: [[LibraryFilterReference]]
     public let filter: LibraryFilter
     public let revision: UInt64
+    public let sourceFingerprint: String
 }
 
 public struct LibraryFilterControllerEvent: Sendable {
@@ -75,7 +76,7 @@ public actor LibraryFilterController {
     private struct ReadResult: Sendable {
         let index: Int
         let useCachedPages: Bool
-        let emissions: [(items: [PhotoItem], verified: Bool)]
+        let emissions: [(items: [PhotoItem?], verified: Bool)]
         let failure: String?
     }
 
@@ -132,7 +133,7 @@ public actor LibraryFilterController {
 
     func ingest(sectionIndex: Int, items: [PhotoItem], verified: Bool) {
         guard !stopped, states.indices.contains(sectionIndex) else { return }
-        if replace(sectionIndex: sectionIndex, items: items, verified: verified) { publish() }
+        if replace(sectionIndex: sectionIndex, items: items.map(Optional.some), verified: verified) { publish() }
     }
 
     public func apply(_ filter: LibraryFilter) async -> LibraryFilterRegistration {
@@ -317,7 +318,7 @@ public actor LibraryFilterController {
             for index in indices {
                 let section = sourceSnapshot.sections[index]
                 tasks.addTask { [repository] in
-                    var emissions: [(items: [PhotoItem], verified: Bool)] = []
+                    var emissions: [(items: [PhotoItem?], verified: Bool)] = []
                     var failure: String?
                     for await event in await repository.page(section, collection: .personalLibrary,
                                                               useCachedPages: useCachedPages,
@@ -325,7 +326,7 @@ public actor LibraryFilterController {
                                                               priority: .prefetch) {
                         if Task.isCancelled { break }
                         switch event {
-                        case .value(let items, let verified): emissions.append((items, verified))
+                        case .value(let items, let verified): emissions.append((items.slots.map(\.item), verified))
                         case .failure(let message): failure = message
                         }
                     }
@@ -340,13 +341,12 @@ public actor LibraryFilterController {
     }
 
     @discardableResult
-    private func replace(sectionIndex: Int, items: [PhotoItem], verified: Bool) -> Bool {
+    private func replace(sectionIndex: Int, items: [PhotoItem?], verified: Bool) -> Bool {
         if !verified && states[sectionIndex] == .verified { return false }
-        let records = items.enumerated().map {
-            LibraryFilterRecord(reference: .init(sourceSectionIndex: sectionIndex,
-                                                  sourcePageOffset: $0.offset,
-                                                  itemID: $0.element.id),
-                                time: $0.element.time, values: LibraryFilterValues($0.element))
+        let records = items.enumerated().compactMap { offset, optional -> LibraryFilterRecord? in
+            guard let item = optional else { return nil }
+            return LibraryFilterRecord(reference: .init(sourceSectionIndex: sectionIndex, sourcePageOffset: offset, itemID: item.id),
+                                       time: item.time, values: LibraryFilterValues(item))
         }
         let nextState: LibraryFilterSectionState = verified ? .verified : .provisional
         guard recordsBySection[sectionIndex] != records || states[sectionIndex] != nextState else { return false }
@@ -377,7 +377,7 @@ public actor LibraryFilterController {
         let built = DayGroupedTimelineBuilder.build(entries: entries)
         let refs = built.itemIDsBySection.map { $0.compactMap { referencesByID[$0] } }
         return LibraryFilterRegistration(descriptor: descriptor, snapshot: built.snapshot,
-                                         referencesBySection: refs, filter: filter, revision: revision)
+                                         referencesBySection: refs, filter: filter, revision: revision, sourceFingerprint: LibraryIndex(snapshot: sourceSnapshot).fingerprint)
     }
 
     private func makeCatalog() -> LibraryFilterCatalog {

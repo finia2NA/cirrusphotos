@@ -35,12 +35,12 @@ final class PhotoCacheTests: XCTestCase {
         XCTAssertEqual(sqlite3_exec(db, "CREATE TABLE entries (key TEXT PRIMARY KEY, kind INTEGER)", nil, nil, nil), SQLITE_OK)
         sqlite3_close(db)
 
-        let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
+        let cache = try DiskCache(root: root, budget: 100)
         let old = try await cache.get("old")
         XCTAssertNil(old)
         XCTAssertFalse(FileManager.default.fileExists(atPath: images.appendingPathComponent("old.img").path))
         XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("keep.txt")), Data([9]))
-        try await cache.put("new", kind: .timeline, data: Data([2]), validatedRun: nil)
+        try await cache.put("new", kind: .thumbnail, data: Data([2]), validatedRun: nil)
         let new = try await cache.get("new")
         XCTAssertEqual(new?.data, Data([2]))
     }
@@ -49,10 +49,10 @@ final class PhotoCacheTests: XCTestCase {
         let root = temporaryTestRoot("SynoCurrentCache")
         defer { try? FileManager.default.removeItem(at: root) }
         do {
-            let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
+            let cache = try DiskCache(root: root, budget: 100)
             try await cache.put("image", kind: .thumbnail, data: Data([4, 5]), validatedRun: "run")
         }
-        let reopened = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
+        let reopened = try DiskCache(root: root, budget: 100)
         let image = try await reopened.get("image")
         XCTAssertEqual(image?.data, Data([4, 5]))
     }
@@ -62,8 +62,8 @@ final class PhotoCacheTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try Data("not sqlite".utf8).write(to: root.appendingPathComponent("index.sqlite"))
-        let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
-        try await cache.put("new", kind: .timeline, data: Data([6]), validatedRun: nil)
+        let cache = try DiskCache(root: root, budget: 100)
+        try await cache.put("new", kind: .thumbnail, data: Data([6]), validatedRun: nil)
         let new = try await cache.get("new")
         XCTAssertEqual(new?.data, Data([6]))
     }
@@ -72,15 +72,15 @@ final class PhotoCacheTests: XCTestCase {
         let root = temporaryTestRoot("SynoFutureCache")
         defer { try? FileManager.default.removeItem(at: root) }
         do {
-            let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
-            try await cache.put("old", kind: .timeline, data: Data([1]), validatedRun: nil)
+            let cache = try DiskCache(root: root, budget: 100)
+            try await cache.put("old", kind: .thumbnail, data: Data([1]), validatedRun: nil)
         }
         var db: OpaquePointer?
         XCTAssertEqual(sqlite3_open(root.appendingPathComponent("index.sqlite").path, &db), SQLITE_OK)
         XCTAssertEqual(sqlite3_exec(db, "PRAGMA user_version=999", nil, nil, nil), SQLITE_OK)
         sqlite3_close(db)
 
-        let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
+        let cache = try DiskCache(root: root, budget: 100)
         let old = try await cache.get("old")
         XCTAssertNil(old)
     }
@@ -90,12 +90,12 @@ final class PhotoCacheTests: XCTestCase {
         let alice = CacheKey.namespace(server: server, account: "alice")
         let bob = CacheKey.namespace(server: server, account: "bob")
         XCTAssertNotEqual(alice, bob)
-        let section = TimelineSection(offset: 113, limit: 111,
-            list: [TimelineDay(year: 2024, month: 3, day: 1, itemCount: 224)])
-        let changed = TimelineSection(offset: 114, limit: 111, list: section.list)
+        let section = TimelineSection(offset: 0, limit: 250,
+            list: [TimelineDay(year: 2024, month: 3, day: 1, itemCount: 501)])
+        let changed = TimelineSection(offset: 250, limit: 250, list: section.list)
         XCTAssertNotEqual(CacheKey.page(namespace: alice, section: section),
                           CacheKey.page(namespace: alice, section: changed))
-        XCTAssertNotEqual(CacheKey.timeline(namespace: alice), CacheKey.timeline(namespace: bob))
+        XCTAssertNotEqual(CacheKey.page(namespace: alice, section: section), CacheKey.page(namespace: bob, section: section))
         let original = FullImageResource(unitID: 42, cacheKey: "revision-1", filename: "one.jpg")
         let renamed = FullImageResource(unitID: 42, cacheKey: "revision-1", filename: "renamed.jpg")
         let revised = FullImageResource(unitID: 42, cacheKey: "revision-2", filename: "one.jpg")
@@ -124,31 +124,28 @@ final class PhotoCacheTests: XCTestCase {
         XCTAssertEqual(CacheBudget.fraction(for: CacheBudget.bytes(at: 0.5)), 0.5, accuracy: 0.00001)
     }
 
-    func testPriorityEvictsOldThumbnailsBeforePinnedTimeline() async throws {
-        let root = temporaryTestRoot("SynoCacheTest")
+    func testThumbnailEvictionUsesReadRecency() async throws {
+        let root = temporaryTestRoot("ThumbnailLRU")
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = try DiskCache(root: root, budget: 12, protectedTimelineKey: "timeline")
-        try await cache.put("timeline", kind: .timeline, data: Data(repeating: 1, count: 5), validatedRun: "run")
-        try await cache.put("old", kind: .thumbnail, data: Data(repeating: 2, count: 7), validatedRun: nil)
-        try await cache.put("new", kind: .thumbnail, data: Data(repeating: 3, count: 7), validatedRun: nil)
-        let old = try await cache.get("old")
-        let new = try await cache.get("new")
-        let timeline = try await cache.get("timeline")
-        let usage = try await cache.usage()
-        XCTAssertNil(old)
-        XCTAssertNotNil(new)
-        XCTAssertNotNil(timeline)
-        XCTAssertEqual(usage, 12)
+        let cache = try DiskCache(root: root, budget: 8)
+        try await cache.put("one", kind: .thumbnail, data: Data(repeating: 1, count: 4), validatedRun: nil)
+        try await cache.put("two", kind: .thumbnail, data: Data(repeating: 2, count: 4), validatedRun: nil)
+        _ = try await cache.get("one")
+        try await cache.put("three", kind: .thumbnail, data: Data(repeating: 3, count: 4), validatedRun: nil)
+        let evicted = try await cache.get("two")
+        let retained = try await cache.get("one")
+        XCTAssertNil(evicted)
+        XCTAssertNotNil(retained)
     }
 
     func testFullImagesEvictBeforeThumbnails() async throws {
         let root = temporaryTestRoot("SynoFullImageEvictionTest")
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = try DiskCache(root: root, budget: 12, protectedTimelineKey: "timeline")
-        try await cache.put("timeline", kind: .timeline, data: Data(repeating: 1, count: 4), validatedRun: "run")
+        let cache = try DiskCache(root: root, budget: 12)
+        try await cache.put("timeline", kind: .thumbnail, data: Data(repeating: 1, count: 4), validatedRun: "run")
         try await cache.put("thumbnail", kind: .thumbnail, data: Data(repeating: 2, count: 4), validatedRun: "run")
         try await cache.put("original", kind: .fullImage, data: Data(repeating: 3, count: 4), validatedRun: "run")
-        try await cache.put("page", kind: .page, data: Data(repeating: 4, count: 4), validatedRun: "run")
+        try await cache.put("page", kind: .thumbnail, data: Data(repeating: 4, count: 4), validatedRun: "run")
         let original = try await cache.get("original")
         let thumbnail = try await cache.get("thumbnail")
         let page = try await cache.get("page")
@@ -162,8 +159,8 @@ final class PhotoCacheTests: XCTestCase {
     func testOversizedFullImageSelfEvictsWithoutPurgingThumbnails() async throws {
         let root = temporaryTestRoot("SynoOversizedFullImageTest")
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = try DiskCache(root: root, budget: 12, protectedTimelineKey: "timeline")
-        try await cache.put("timeline", kind: .timeline, data: Data(repeating: 1, count: 4), validatedRun: "run")
+        let cache = try DiskCache(root: root, budget: 12)
+        try await cache.put("timeline", kind: .thumbnail, data: Data(repeating: 1, count: 4), validatedRun: "run")
         try await cache.put("thumbnail", kind: .thumbnail, data: Data(repeating: 2, count: 4), validatedRun: "run")
         try await cache.put("oversized", kind: .fullImage, data: Data(repeating: 3, count: 20), validatedRun: "run")
         let oversized = try await cache.get("oversized")
@@ -177,7 +174,7 @@ final class PhotoCacheTests: XCTestCase {
     func testCorruptImageIsDiscarded() async throws {
         let root = temporaryTestRoot("SynoCacheCorruptTest")
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
+        let cache = try DiskCache(root: root, budget: 100)
         try await cache.put("thumb", kind: .thumbnail, data: Data([1, 2, 3]), validatedRun: "old")
         try Data([4, 5, 6]).write(to: root.appendingPathComponent("images/thumb.img"))
         let entry = try await cache.get("thumb")
@@ -189,7 +186,7 @@ final class PhotoCacheTests: XCTestCase {
     func testClearRejectsLateWrite() async throws {
         let root = temporaryTestRoot("SynoCacheClearTest")
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = try DiskCache(root: root, budget: 100, protectedTimelineKey: "timeline")
+        let cache = try DiskCache(root: root, budget: 100)
         let generation = await cache.currentGeneration()
         try await cache.clear()
         try await cache.put("late", kind: .thumbnail, data: Data([1]), validatedRun: "run",
@@ -217,7 +214,7 @@ final class PhotoCacheTests: XCTestCase {
         XCTAssertGreaterThan(timeline.sections.count, 207)
         var page: [PhotoItem] = []
         for await event in await first.page(timeline.sections[207]) {
-            if case .value(let items, let verified) = event, verified { page = items }
+            if case .value(let items, let verified) = event, verified { let items = items.completeItems ?? []; page = items }
             if case .failure(let message) = event { XCTFail(message) }
         }
         XCTAssertEqual(page.count, timeline.sections[207].limit)

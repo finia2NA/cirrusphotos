@@ -13,7 +13,7 @@ final class LibraryFilterControllerTests: XCTestCase {
 
     private func sections(_ count: Int) -> [TimelineSection] {
         (0..<count).map { index in
-            TimelineSection(offset: index, limit: 1,
+            TimelineSection(offset: 0, limit: 1,
                 list: [TimelineDay(year: 2024, month: 4, day: 20 - index, itemCount: 1)])
         }
     }
@@ -52,14 +52,13 @@ final class LibraryFilterControllerTests: XCTestCase {
         let snapshot = TimelineSnapshot(sections: sourceSections)
         let transport = ScannerTransport(snapshot: snapshot, pages: [:])
         let repository = try repository(transport: transport, root: root)
-        let namespace = CacheKey.namespace(server: SynologyClient.defaultBaseURL, account: "filter")
+        try await seedMetadataCatalog(snapshot, repository: repository)
         for index in [0, 3, 5] {
             let cached = try item(Int64(index + 1),
                                   day: 1_713_571_200 - Int64(index * 86_400),
                                   camera: "DSC-HX60")
-            let key = try XCTUnwrap(CacheKey.page(namespace: namespace, section: sourceSections[index]))
-            try await repository.store.put(key, kind: .page, data: JSONEncoder().encode([cached]),
-                                           validatedRun: "old-run")
+            try await seedMetadataPage([cached], section: sourceSections[index], repository: repository)
+
         }
         let controller = LibraryFilterController(repository: repository, snapshot: snapshot)
 
@@ -74,16 +73,14 @@ final class LibraryFilterControllerTests: XCTestCase {
         let root = temporaryTestRoot("FilterObsoleteCache")
         defer { try? FileManager.default.removeItem(at: root) }
         let current = sections(2)
-        let obsolete = TimelineSection(offset: 99, limit: 1,
+        let obsolete = TimelineSection(offset: 0, limit: 1,
             list: [TimelineDay(year: 2020, month: 1, day: 1, itemCount: 1)])
         let snapshot = TimelineSnapshot(sections: current)
         let transport = ScannerTransport(snapshot: snapshot, pages: [:])
         let repository = try repository(transport: transport, root: root)
-        let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(
-            server: SynologyClient.defaultBaseURL, account: "filter"), section: obsolete))
         let cached = try item(99, day: 1_577_836_800, camera: "Obsolete")
-        try await repository.store.put(key, kind: .page, data: JSONEncoder().encode([cached]),
-                                       validatedRun: "old-run")
+        try await seedMetadataPage([cached], section: obsolete, repository: repository)
+
 
         let registration = await LibraryFilterController(repository: repository, snapshot: snapshot)
             .apply(LibraryFilter(cameras: ["Obsolete"]))
@@ -117,7 +114,11 @@ final class LibraryFilterControllerTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let sourceSections = sections(20)
         let snapshot = TimelineSnapshot(sections: sourceSections)
-        let transport = ScannerTransport(snapshot: snapshot, pages: [:], delay: .milliseconds(10))
+        var pages: [Int: [PhotoItem]] = [:]
+        for index in sourceSections.indices {
+            pages[index] = [try item(Int64(index + 1), day: 1_713_571_200 - Int64(index * 86_400), camera: "Other")]
+        }
+        let transport = ScannerTransport(snapshot: snapshot, pages: pages, delay: .milliseconds(10))
         let controller = LibraryFilterController(
             repository: try repository(transport: transport, root: root), snapshot: snapshot
         )
@@ -176,9 +177,8 @@ final class LibraryFilterControllerTests: XCTestCase {
         let current = try item(1, day: 1_713_571_200, camera: "Current Camera")
         let snapshot = TimelineSnapshot(sections: [section])
         let repository = try repository(transport: ScannerTransport(snapshot: snapshot, pages: [0: [current]]), root: root)
-        let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(
-            server: SynologyClient.defaultBaseURL, account: "filter"), section: section))
-        try await repository.store.put(key, kind: .page, data: JSONEncoder().encode([cached]), validatedRun: "old-run")
+        try await seedMetadataPage([cached], section: section, repository: repository)
+
         let controller = LibraryFilterController(repository: repository, snapshot: snapshot)
         let box = FilterEventBox()
         let observation = Task {
@@ -228,11 +228,11 @@ final class LibraryFilterControllerTests: XCTestCase {
     func testDerivedPageRestoresSparseSyntheticOrder() async throws {
         let root = temporaryTestRoot("FilterSparse")
         defer { try? FileManager.default.removeItem(at: root) }
-        let sourceSections = sections(2)
+        let sourceSections = [TimelineSection(offset: 0, limit: 2, list: [TimelineDay(year: 2024, month: 4, day: 20, itemCount: 2)])]
         let first = try item(1, day: 1_713_571_200, camera: "A")
-        let second = try item(2, day: 1_713_484_800, camera: "B")
+        let second = try item(2, day: 1_713_571_200, camera: "B")
         let snapshot = TimelineSnapshot(sections: sourceSections)
-        let transport = ScannerTransport(snapshot: snapshot, pages: [0: [first], 1: [second]])
+        let transport = ScannerTransport(snapshot: snapshot, pages: [0: [first, second]])
         let repository = try repository(transport: transport, root: root)
         for await _ in await repository.timeline(collection: .personalLibrary) {}
         let synthetic = TimelineSection(offset: 0, limit: 2,
@@ -241,13 +241,13 @@ final class LibraryFilterControllerTests: XCTestCase {
         let registration = LibraryFilterRegistration(descriptor: descriptor,
             snapshot: TimelineSnapshot(sections: [synthetic]),
             referencesBySection: [[
-                .init(sourceSectionIndex: 1, sourcePageOffset: 0, itemID: second.id),
+                .init(sourceSectionIndex: 0, sourcePageOffset: 1, itemID: second.id),
                 .init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: first.id),
-            ]], filter: LibraryFilter(), revision: 1)
+            ]], filter: LibraryFilter(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: snapshot).fingerprint)
         try await repository.registerLibraryFilter(registration)
         var result: [PhotoItem] = []
         for await event in await repository.page(synthetic, collection: descriptor) {
-            if case .value(let items, let verified) = event, verified { result = items }
+            if case .value(let items, let verified) = event, verified { let items = items.completeItems ?? []; result = items }
         }
         XCTAssertEqual(result.map(\.id), [2, 1])
     }
@@ -276,15 +276,28 @@ private actor ScannerTransport: PhotosTransport {
         self.persistentFailures = persistentFailures; self.delay = delay
     }
 
-    func timeline(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> TimelineSnapshot { snapshot }
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
+        return try fixtureDayCatalog(snapshot, initial: initial)
+    }
 
-    func items(in section: TimelineSection, collection: PhotoCollectionDescriptor) async throws -> [PhotoItem] {
-        calls[section.offset, default: 0] += 1
+    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        let indices = snapshot.sections.indices.filter { position in
+            guard let bounds = snapshot.sections[position].dateBounds else { return false }
+            return bounds.start >= request.oldestDay.startTime && bounds.end <= request.newestDay.endTime
+        }
+        for index in indices { calls[index, default: 0] += 1 }
         active += 1; maximumActive = max(maximumActive, active)
         defer { active -= 1 }
         if delay != .zero { try await Task.sleep(for: delay) }
-        if persistentFailures.contains(section.offset) { throw TestFailure("persistent failure") }
-        return pages[section.offset] ?? []
+        if indices.contains(where: persistentFailures.contains) { throw TestFailure("persistent failure") }
+        let rows = try indices.flatMap { index in
+            try pages[index, default: []].map { try fixtureItem($0, on: CaptureDay(time: snapshot.sections[index].dateBounds!.start)) }
+        }
+        return .init(items: Array(rows.dropFirst(request.offset).prefix(request.limit)), profile: fields)
+    }
+    func items(ids: [Int64]) async throws -> [PhotoItem] {
+        let rows = Dictionary(pages.values.flatMap { $0 }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return ids.compactMap { rows[$0] }
     }
 
     func callCount(offset: Int) -> Int { calls[offset, default: 0] }

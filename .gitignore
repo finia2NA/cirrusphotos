@@ -1,8 +1,7 @@
 # Local secrets and captured traffic
 .env
 *.har
-.cache/
-.cache2/
+.cache*/
 
 # macOS
 .DS_Store

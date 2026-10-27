@@ -22,24 +22,10 @@ public enum CacheKey {
         digest("cirrus-cache-v1|\(server.absoluteString.lowercased())|\(account)")
     }
 
-    public static func timeline(namespace: String,
-                                collection: PhotoCollectionDescriptor = .personalLibrary) -> String {
-        digest("\(namespace)|\(collection.rawValue)|timeline|v6|full|day")
-    }
-
-    public static func albumList(namespace: String) -> String {
-        digest("\(namespace)|album|v4|list|normal|album_name|asc|sharing_info,thumbnail")
-    }
-
-    public static func locationIndex(namespace: String) -> String {
-        digest("\(namespace)|personal|location-index|v1")
-    }
-
     public static func page(namespace: String, section: TimelineSection,
-                            collection: PhotoCollectionDescriptor = .personalLibrary,
-                            additional: [String] = PhotosRequestFields.pageAdditional) -> String? {
-        guard let bounds = section.dateBounds else { return nil }
-        return digest("\(namespace)|\(collection.rawValue)|item|v7|\(bounds.start)|\(bounds.end)|\(section.offset)|\(section.limit)|\(additional.joined(separator: ","))")
+                            collection: PhotoCollectionDescriptor = .personalLibrary) -> String? {
+        guard let address = try? DayPageAddress(section: section, collection: collection) else { return nil }
+        return digest("\(namespace)|personal|\(collection.rawValue)|day-page|\(address.day.id)|\(address.offset)|\(address.capacity)|\(address.order.rawValue)")
     }
 
     public static func thumbnail(namespace: String, descriptor: ThumbnailInfo,
