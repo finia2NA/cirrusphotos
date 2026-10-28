@@ -850,7 +850,7 @@ Keep authentication out of persistent identity and logs. Use unit ID plus cache 
 
 ## Photo locations and map data
 
-Read-only probes against `cirrus` on 2026-10-06 established the location data path used by the map implementation (`docs/plans/archive/DONE_MAP_PLAN.md`). The Synology mobile map has no desktop web equivalent, so these shapes were discovered directly rather than from a HAR.
+Read-only probes against `cirrus` on 2026-10-06 established the location data path used by the map implementation ([completed Map plan](https://github.com/finia2NA/syno/issues/46)). The Synology mobile map has no desktop web equivalent, so these shapes were discovered directly rather than from a HAR.
 
 ### Item GPS
 
