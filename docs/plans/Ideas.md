@@ -33,6 +33,7 @@ Suspected incorrect behavior is tracked in [possiblebugs.md](possiblebugs.md).
 - Photo tools: filmstrip, histogram, peak detection, maybe focus edge detection
 - Airplay: Deferred after unsuccessful receiver testing; see [investigation results and original plan](archive/DEFERRED_AIRPLAY_PLAN.md). Original idea: photo in viewer is sent to TV, stays when exiting the viewer, and switches when another photo opens.
 - Improve UI everywhere
+- Videos need to show when they are loading, in general the loading info needs to be better. maybe a linear indicator that is the bottom edge of the top bar?
 
 ## Prepare for away use
 

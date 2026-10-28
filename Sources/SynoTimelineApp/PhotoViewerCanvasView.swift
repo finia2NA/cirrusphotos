@@ -2,7 +2,7 @@ import AppKit
 import QuartzCore
 import TimelineCore
 
-/// Full-window still-photo canvas.
+/// Full-window media canvas.
 ///
 /// Rendering is compositor-backed: an appearance-matched backdrop layer and a separate image layer
 /// hold the displayed bitmap, and all transitions animate only layer geometry and
@@ -26,7 +26,7 @@ final class PhotoViewerCanvasView: NSView {
         didSet { if toolbarInset != oldValue { updateGeometry() } }
     }
     var reduceMotion = false
-    /// Videos and Reduce Motion never offer the spatial interactive gestures.
+    /// Reduce Motion disables the spatial interactive gestures.
     var interactiveDismissalEnabled = true
     var interactivePagingEnabled = true
     var previousImage: NSImage?
@@ -74,6 +74,9 @@ final class PhotoViewerCanvasView: NSView {
     private var nextLayerImage: NSImage?
     private var neighborConfigurationGeneration: UInt64?
     private var pagingLayer: CALayer { pageDirection == .previous ? previousLayer : nextLayer }
+    private var videoView: VideoPlayerContainerView?
+    private var pendingVideo: VideoConfiguration?
+    private var scrollMonitor: Any?
     private var image: NSImage?
     private var selectionGeneration: UInt64 = 0
     private var transform = PhotoViewportTransform(imageSize: CGSize(width: 1, height: 1), viewport: .zero)
@@ -167,10 +170,21 @@ final class PhotoViewerCanvasView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil {
+            if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor); self.scrollMonitor = nil }
+            videoView?.stop()
             cancelTransition()
             return
         }
         configureLayersIfNeeded()
+        if scrollMonitor == nil {
+            scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self, self.videoView != nil, event.window === self.window,
+                      event.hasPreciseScrollingDeltas,
+                      self.bounds.contains(self.convert(event.locationInWindow, from: nil)) else { return event }
+                self.scrollWheel(with: event)
+                return nil
+            }
+        }
         updateBackingScale()
         if !hasAcquiredFocus {
             hasAcquiredFocus = true
@@ -194,6 +208,7 @@ final class PhotoViewerCanvasView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         backdropLayer.backgroundColor = (match == .darkAqua ? NSColor.black : NSColor.white).cgColor
+        syncVideoFrame()
         CATransaction.commit()
     }
 
@@ -210,6 +225,44 @@ final class PhotoViewerCanvasView: NSView {
     override func layout() {
         super.layout()
         updateGeometry()
+    }
+
+    func setVideo(_ configuration: VideoConfiguration?) {
+        pendingVideo = configuration
+        guard !isPagingPhase, phase != .closing else { return }
+        reconcileVideo()
+    }
+
+    private func reconcileVideo() {
+        guard !isPagingPhase, phase != .closing else { return }
+        guard let configuration = pendingVideo else {
+            videoView?.stop()
+            videoView?.removeFromSuperview()
+            videoView = nil
+            return
+        }
+        let view: VideoPlayerContainerView
+        if let existing = videoView { view = existing }
+        else {
+            view = VideoPlayerContainerView()
+            videoView = view
+            addSubview(view)
+        }
+        view.onPrevious = onPrevious
+        view.onNext = onNext
+        view.onClose = onClose
+        view.toolbarInset = 0
+        view.configure(repository: configuration.repository, resource: configuration.resource,
+                       generation: configuration.generation, allowNetwork: configuration.allowNetwork,
+                       poster: configuration.poster, isMuted: configuration.isMuted,
+                       onMuteChanged: configuration.onMuteChanged)
+        syncVideoFrame()
+    }
+
+    private func syncVideoFrame() {
+        guard let view = videoView else { return }
+        view.frame = imageLayer.frame
+        view.layer?.opacity = imageLayer.opacity
     }
 
     // MARK: - Image
@@ -245,6 +298,7 @@ final class PhotoViewerCanvasView: NSView {
             backdropLayer.opacity = 1
             imageLayer.opacity = 1
             imageLayer.frame = transform.imageFrame
+            syncVideoFrame()
             CATransaction.commit()
             clearNeighborLayers()
             if !hasOpened { openingSourceRect = openingSourceRectInWindow }
@@ -308,6 +362,7 @@ final class PhotoViewerCanvasView: NSView {
         imageLayer.frame = next == nil ? .zero : transform.imageFrame
         imageLayer.opacity = 1
         backdropLayer.opacity = 1
+        syncVideoFrame()
         CATransaction.commit()
         clearNeighborLayers()
         hasOpened = true
@@ -345,6 +400,7 @@ final class PhotoViewerCanvasView: NSView {
             imageLayer.frame = transform.imageFrame
             imageLayer.opacity = 1
             backdropLayer.opacity = 1
+            syncVideoFrame()
             CATransaction.commit()
         } else {
             image = nil
@@ -354,6 +410,7 @@ final class PhotoViewerCanvasView: NSView {
             imageLayer.frame = .zero
             imageLayer.opacity = 1
             backdropLayer.opacity = 1
+            syncVideoFrame()
             CATransaction.commit()
         }
         clearNeighborLayers()
@@ -595,6 +652,7 @@ final class PhotoViewerCanvasView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         imageLayer.frame = transform.imageFrame.offsetBy(dx: pagingInitialOffset, dy: 0)
+        syncVideoFrame()
         CATransaction.commit()
     }
 
@@ -643,6 +701,7 @@ final class PhotoViewerCanvasView: NSView {
         CATransaction.setDisableActions(true)
         pagingLayer.frame = pagingRestFrame
         pagingLayer.opacity = 1
+        syncVideoFrame()
         CATransaction.commit()
         phase = .interactivePaging
         applyPagingFrame()
@@ -661,6 +720,7 @@ final class PhotoViewerCanvasView: NSView {
         imageLayer.opacity = 1
         pagingLayer.opacity = 1
         backdropLayer.opacity = 1
+        syncVideoFrame()
         CATransaction.commit()
     }
 
@@ -729,6 +789,7 @@ final class PhotoViewerCanvasView: NSView {
             snapLayerToRest()
         }
         syncNeighborLayers()
+        reconcileVideo()
         onZoomChanged?(1)
     }
 
@@ -739,10 +800,12 @@ final class PhotoViewerCanvasView: NSView {
         imageLayer.frame = transform.imageFrame
         imageLayer.opacity = 1
         backdropLayer.opacity = 1
+        syncVideoFrame()
         CATransaction.commit()
         resetPagingState()
         phase = .resting
         syncNeighborLayers()
+        reconcileVideo()
     }
 
     private func cancelPaging() {
@@ -754,10 +817,12 @@ final class PhotoViewerCanvasView: NSView {
         imageLayer.frame = transform.imageFrame
         imageLayer.opacity = 1
         backdropLayer.opacity = 1
+        syncVideoFrame()
         CATransaction.commit()
         resetPagingState()
         phase = .resting
         syncNeighborLayers()
+        reconcileVideo()
     }
 
     private func clearNeighborLayers() {
@@ -771,6 +836,7 @@ final class PhotoViewerCanvasView: NSView {
         }
         previousLayerImage = nil
         nextLayerImage = nil
+        syncVideoFrame()
         CATransaction.commit()
     }
 
@@ -786,6 +852,7 @@ final class PhotoViewerCanvasView: NSView {
         CATransaction.setDisableActions(true)
         updateNeighbor(previousLayer, image: previousImage, cached: &previousLayerImage, previous: true)
         updateNeighbor(nextLayer, image: nextImage, cached: &nextLayerImage, previous: false)
+        syncVideoFrame()
         CATransaction.commit()
     }
 
@@ -842,6 +909,7 @@ final class PhotoViewerCanvasView: NSView {
                          from: NSValue(point: CGPoint(x: pagingFrom.midX, y: pagingFrom.midY)),
                          to: NSValue(point: CGPoint(x: pagingTarget.midX, y: pagingTarget.midY)),
                          duration: duration, timing: timing, to: pagingLayer)
+            animateVideoGeometry(from: currentFrom, to: currentTarget, duration: duration, timing: timing)
         } else {
             imageLayer.removeAllAnimations()
             pagingLayer.removeAllAnimations()
@@ -849,10 +917,12 @@ final class PhotoViewerCanvasView: NSView {
         imageLayer.frame = currentTarget
         pagingLayer.frame = pagingTarget
         if duration <= 0 {
+            syncVideoFrame()
             CATransaction.commit()
             completion()
             return
         }
+        syncVideoFrame()
         CATransaction.commit()
     }
 
@@ -893,6 +963,7 @@ final class PhotoViewerCanvasView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         backdropLayer.frame = bounds
+        syncVideoFrame()
         CATransaction.commit()
         transform.configure(imageSize: image?.size ?? CGSize(width: 1, height: 1), viewport: viewportRect())
         switch phase {
@@ -938,6 +1009,7 @@ final class PhotoViewerCanvasView: NSView {
                 retargetActiveTransition(to: target)
             }
         }
+        syncVideoFrame()
         if !hasOpened { beginOpeningIfPossible() }
     }
 
@@ -955,6 +1027,7 @@ final class PhotoViewerCanvasView: NSView {
             imageLayer.frame = transform.imageFrame
             imageLayer.opacity = 1
             backdropLayer.opacity = 0
+            syncVideoFrame()
             CATransaction.commit()
             startTransition(from: transform.imageFrame, to: transform.imageFrame,
                             backdropTo: 1, imageTo: 1, duration: 0.12,
@@ -969,6 +1042,7 @@ final class PhotoViewerCanvasView: NSView {
             imageLayer.frame = source
             imageLayer.opacity = 1
             backdropLayer.opacity = 0
+            syncVideoFrame()
             CATransaction.commit()
             startTransition(from: source, to: transform.imageFrame,
                             backdropTo: 1, imageTo: 1, duration: 0.26,
@@ -1018,6 +1092,7 @@ final class PhotoViewerCanvasView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         imageLayer.contents = image.flatMap(Self.cgImage)
+        syncVideoFrame()
         CATransaction.commit()
     }
 
@@ -1027,6 +1102,7 @@ final class PhotoViewerCanvasView: NSView {
         CATransaction.setDisableActions(true)
         imageLayer.magnificationFilter = filter
         imageLayer.minificationFilter = filter
+        syncVideoFrame()
         CATransaction.commit()
     }
 
@@ -1038,6 +1114,7 @@ final class PhotoViewerCanvasView: NSView {
             neighbor.magnificationFilter = filter
             neighbor.minificationFilter = filter
         }
+        syncVideoFrame()
         CATransaction.commit()
     }
 
@@ -1047,6 +1124,7 @@ final class PhotoViewerCanvasView: NSView {
         imageLayer.frame = transform.imageFrame
         imageLayer.opacity = 1
         backdropLayer.opacity = 1
+        syncVideoFrame()
         CATransaction.commit()
     }
 
@@ -1057,6 +1135,7 @@ final class PhotoViewerCanvasView: NSView {
         imageLayer.frame = draggedFrame()
         imageLayer.opacity = 1
         backdropLayer.opacity = Float(metrics.backdropOpacity)
+        syncVideoFrame()
         CATransaction.commit()
     }
 
@@ -1114,6 +1193,7 @@ final class PhotoViewerCanvasView: NSView {
             addAnimation(keyPath: "opacity", from: NSNumber(value: Float(fromBackdropOpacity)),
                          to: NSNumber(value: Float(transition.backdropTo)),
                          duration: duration, timing: timing, to: backdropLayer)
+            animateVideoGeometry(from: frame, to: transition.targetFrame, duration: duration, timing: timing)
         } else {
             imageLayer.removeAllAnimations()
             backdropLayer.removeAllAnimations()
@@ -1121,6 +1201,7 @@ final class PhotoViewerCanvasView: NSView {
         imageLayer.frame = transition.targetFrame
         imageLayer.opacity = Float(transition.imageTo)
         backdropLayer.opacity = Float(transition.backdropTo)
+        syncVideoFrame()
         CATransaction.commit()
     }
 
@@ -1135,6 +1216,23 @@ final class PhotoViewerCanvasView: NSView {
         layer.add(animation, forKey: "transition.\(keyPath)")
     }
 
+    /// AppKit owns the view layer's anchor point. Convert frame endpoints explicitly
+    /// rather than copying the centered bitmap layer's position animation.
+    private func animateVideoGeometry(from: CGRect, to: CGRect, duration: TimeInterval,
+                                      timing: CAMediaTimingFunction) {
+        guard let videoLayer = videoView?.layer else { return }
+        let anchor = videoLayer.anchorPoint
+        func position(in frame: CGRect) -> CGPoint {
+            CGPoint(x: frame.minX + frame.width * anchor.x,
+                    y: frame.minY + frame.height * anchor.y)
+        }
+        addAnimation(keyPath: "position", from: NSValue(point: position(in: from)),
+                     to: NSValue(point: position(in: to)), duration: duration, timing: timing, to: videoLayer)
+        addAnimation(keyPath: "bounds", from: NSValue(rect: CGRect(origin: .zero, size: from.size)),
+                     to: NSValue(rect: CGRect(origin: .zero, size: to.size)),
+                     duration: duration, timing: timing, to: videoLayer)
+    }
+
     private func addAnimation(keyPath: String, from: NSNumber, to: NSNumber,
                               duration: TimeInterval, timing: CAMediaTimingFunction,
                               to layer: CALayer) {
@@ -1144,11 +1242,13 @@ final class PhotoViewerCanvasView: NSView {
         animation.duration = duration
         animation.timingFunction = timing
         layer.add(animation, forKey: "transition.\(keyPath)")
+        if layer === imageLayer { videoView?.layer?.add(animation, forKey: "transition.\(keyPath)") }
     }
 
     private func cancelTransition() {
         animationGeneration &+= 1
         imageLayer.removeAllAnimations()
+        videoView?.layer?.removeAllAnimations()
         backdropLayer.removeAllAnimations()
         previousLayer.removeAllAnimations()
         nextLayer.removeAllAnimations()

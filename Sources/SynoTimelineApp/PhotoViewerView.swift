@@ -6,6 +6,8 @@ struct PhotoViewerView: View {
     let toolbarInset: CGFloat
     let reduceMotion: Bool
     let pixelInterpolation: PixelInterpolationPreference
+    let videoMuted: Bool
+    let onVideoMuteChanged: (Bool) -> Void
     let onSelectionChanged: (PhotoViewerState) -> Void
     let onClose: () -> Void
     let onInteractiveDismiss: () -> Void
@@ -18,10 +20,8 @@ struct PhotoViewerView: View {
                               toolbarInset: toolbarInset,
                               openingSourceRect: viewer.source.rectInWindowContent(),
                               reduceMotion: reduceMotion,
-                              interactiveDismissalEnabled: !reduceMotion
-                                && viewer.state?.item?.isVideo != true,
-                              interactivePagingEnabled: !reduceMotion
-                                && viewer.state?.item?.isVideo != true,
+                              interactiveDismissalEnabled: !reduceMotion,
+                              interactivePagingEnabled: !reduceMotion,
                               previousImage: viewer.previousNeighborImage,
                               nextImage: viewer.nextNeighborImage,
                               previousItemID: viewer.previousNeighborItemID,
@@ -32,22 +32,21 @@ struct PhotoViewerView: View {
                               pagingInterpolation: pixelInterpolation.imageInterpolation(
                                 isFullResolution: false
                               ),
+                              videoConfiguration: viewer.state.flatMap { state in
+                                state.videoResource.map { resource in
+                                    VideoConfiguration(repository: viewer.repository, resource: resource,
+                                                       generation: state.selection.generation,
+                                                       allowNetwork: state.allowNetwork && state.metadataVerified,
+                                                       poster: viewer.image, isMuted: videoMuted,
+                                                       onMuteChanged: onVideoMuteChanged)
+                                }
+                              },
                               controller: viewer.canvasController,
                               onPrevious: viewer.navigatePrevious,
                               onNext: viewer.navigateNext,
                               onClose: onClose,
                               onInteractiveDismiss: onInteractiveDismiss) { viewer.zoom = Double($0) }
                 .accessibilityLabel(viewer.filename)
-
-            if let state = viewer.state, let resource = state.videoResource {
-                VideoPlayerView(repository: viewer.repository, resource: resource,
-                                selectionGeneration: state.selection.generation,
-                                allowNetwork: state.allowNetwork && state.metadataVerified,
-                                poster: viewer.image, toolbarInset: toolbarInset,
-                                onPrevious: viewer.navigatePrevious,
-                                onNext: viewer.navigateNext, onClose: onClose)
-                    .accessibilityLabel(viewer.filename)
-            }
 
             if viewer.image == nil, viewer.state?.item?.isVideo != true,
                viewer.invalidationMessage == nil {

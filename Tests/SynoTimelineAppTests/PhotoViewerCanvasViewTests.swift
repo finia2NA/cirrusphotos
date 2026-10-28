@@ -1,5 +1,7 @@
 import AppKit
 import XCTest
+import PhotoCache
+import SynologyAPI
 @testable import SynoTimelineApp
 
 @MainActor
@@ -301,6 +303,108 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         XCTAssertEqual(canvas.presentedImageFrame.midX, restFrame.midX, accuracy: 0.5)
         try? await Task.sleep(for: .milliseconds(100))
         XCTAssertFalse(canvas.hasPagingContents)
+    }
+
+    func testVideoMuteChangesFollowPlayerAndCarryToNextVideo() async throws {
+        let root = temporaryTestRoot("VideoMute")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = try CachedPhotosRepository(
+            credentials: SynologyCredentials(username: "test", password: "test", otpSecret: ""),
+            budget: 100_000_000, cacheRoot: root, transport: AppMockTransport())
+        let view = VideoPlayerContainerView()
+        var muted = false
+        let first = VideoPlaybackResource(unitID: 1, cacheKey: "key", filename: "one.mp4", variant: .original)
+        view.configure(repository: repository, resource: first, generation: 1, allowNetwork: false,
+                       poster: nil, isMuted: muted, onMuteChanged: { muted = $0 })
+        let player = try XCTUnwrap(view.player)
+        XCTAssertFalse(player.isMuted)
+        player.isMuted = true
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertTrue(muted)
+        let second = VideoPlaybackResource(unitID: 2, cacheKey: "key2", filename: "two.mp4", variant: .original)
+        view.configure(repository: repository, resource: second, generation: 2, allowNetwork: false,
+                       poster: nil, isMuted: muted, onMuteChanged: { muted = $0 })
+        XCTAssertTrue(try XCTUnwrap(view.player).isMuted)
+        view.configure(repository: repository, resource: second, generation: 2, allowNetwork: false,
+                       poster: nil, isMuted: false, onMuteChanged: { muted = $0 })
+        XCTAssertFalse(try XCTUnwrap(view.player).isMuted)
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertFalse(muted)
+        view.stop()
+    }
+
+    func testVideoFollowsPagingAndRemainsUntilCommitCompletes() async throws {
+        let root = temporaryTestRoot("VideoCanvasPaging")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = try CachedPhotosRepository(
+            credentials: SynologyCredentials(username: "test", password: "test", otpSecret: ""),
+            budget: 100_000_000, cacheRoot: root, transport: AppMockTransport())
+        let (canvas, window) = makeCanvas()
+        defer { window.contentView = nil; window.orderOut(nil) }
+        let poster = try bitmapImage(width: 400, height: 300)
+        canvas.setVideo(VideoConfiguration(repository: repository,
+            resource: VideoPlaybackResource(unitID: 1, cacheKey: "key", filename: "video.mp4", variant: .original),
+            generation: 1, allowNetwork: false, poster: poster))
+        let video = try XCTUnwrap(canvas.subviews.first as? VideoPlayerContainerView)
+        canvas.nextImage = try bitmapImage(width: 200, height: 100)
+        canvas.nextItemID = 3
+        canvas.syncNeighbors(generation: 1)
+        canvas.pagingAnimationDuration = 0
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: -350, height: 0), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+        XCTAssertEqual(video.frame, canvas.presentedImageFrame)
+        canvas.setVideo(nil)
+        XCTAssertTrue(video.superview === canvas)
+        canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 0.2)
+        XCTAssertTrue(video.superview === canvas)
+        canvas.resetForSelection(2, image: canvas.nextImage, itemID: 3)
+        XCTAssertNil(video.superview)
+    }
+
+    func testVideoAnimationGeometryMatchesPhotoWithDifferentAnchors() async throws {
+        let root = temporaryTestRoot("VideoAnimationAnchor")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = try CachedPhotosRepository(
+            credentials: SynologyCredentials(username: "test", password: "test", otpSecret: ""),
+            budget: 100_000_000, cacheRoot: root, transport: AppMockTransport())
+        let (canvas, window) = makeCanvas()
+        defer { window.contentView = nil; window.orderOut(nil) }
+        canvas.setVideo(VideoConfiguration(repository: repository,
+            resource: VideoPlaybackResource(unitID: 1, cacheKey: "key", filename: "video.mp4", variant: .original),
+            generation: 1, allowNetwork: false, poster: canvas.presentedImage))
+        let video = try XCTUnwrap(canvas.subviews.first as? VideoPlayerContainerView)
+        let videoLayer = try XCTUnwrap(video.layer)
+        XCTAssertNotEqual(videoLayer.anchorPoint, canvas.currentImageLayer.anchorPoint)
+        func assertMatchingFrames(file: StaticString = #filePath, line: UInt = #line) throws {
+            let photoPosition = try XCTUnwrap(canvas.currentImageLayer.animation(forKey: "transition.position") as? CABasicAnimation)
+            let photoBounds = canvas.currentImageLayer.animation(forKey: "transition.bounds") as? CABasicAnimation
+            let videoPosition = try XCTUnwrap(videoLayer.animation(forKey: "transition.position") as? CABasicAnimation)
+            let videoBounds = try XCTUnwrap(videoLayer.animation(forKey: "transition.bounds") as? CABasicAnimation)
+            for start in [true, false] {
+                let photoPoint = try XCTUnwrap((start ? photoPosition.fromValue : photoPosition.toValue) as? NSValue).pointValue
+                let photoSize = ((start ? photoBounds?.fromValue : photoBounds?.toValue) as? NSValue)?.rectValue.size ?? canvas.currentImageLayer.bounds.size
+                let videoPoint = try XCTUnwrap((start ? videoPosition.fromValue : videoPosition.toValue) as? NSValue).pointValue
+                let videoSize = try XCTUnwrap((start ? videoBounds.fromValue : videoBounds.toValue) as? NSValue).rectValue.size
+                let photoOrigin = CGPoint(x: photoPoint.x - photoSize.width * 0.5, y: photoPoint.y - photoSize.height * 0.5)
+                let videoOrigin = CGPoint(x: videoPoint.x - videoSize.width * videoLayer.anchorPoint.x,
+                                          y: videoPoint.y - videoSize.height * videoLayer.anchorPoint.y)
+                XCTAssertEqual(videoOrigin.x, photoOrigin.x, accuracy: 0.001, file: file, line: line)
+                XCTAssertEqual(videoOrigin.y, photoOrigin.y, accuracy: 0.001, file: file, line: line)
+                XCTAssertEqual(videoSize, photoSize, file: file, line: line)
+            }
+        }
+        canvas.nextImage = try bitmapImage(width: 200, height: 100)
+        canvas.nextItemID = 3
+        canvas.syncNeighbors(generation: 1)
+        canvas.pagingAnimationDuration = 0.5
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: -300, height: 0), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+        canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 0.2)
+        try assertMatchingFrames()
+        canvas.collapse(to: CGRect(x: 40, y: 40, width: 100, height: 75), reduceMotion: false) {}
+        try assertMatchingFrames()
     }
 
     func testSmallHorizontalSwipeReturnsWithoutPaging() async throws {

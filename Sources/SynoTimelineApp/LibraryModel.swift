@@ -86,6 +86,9 @@ final class LibraryModel: ObservableObject {
     ) ?? .off {
         didSet { UserDefaults.standard.set(pixelInterpolation.rawValue, forKey: "pixelInterpolation") }
     }
+    @Published var videoMuted: Bool = UserDefaults.standard.bool(forKey: "videoMuted") {
+        didSet { UserDefaults.standard.set(videoMuted, forKey: "videoMuted") }
+    }
     @Published var videoQuality: VideoQualityPreference = VideoQualityPreference(
         rawValue: UserDefaults.standard.string(forKey: "videoQuality") ?? "automatic"
     ) ?? .automatic {

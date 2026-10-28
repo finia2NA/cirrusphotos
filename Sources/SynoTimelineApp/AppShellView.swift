@@ -245,6 +245,8 @@ struct AppShellView: View {
                                     toolbarInset: topInset,
                                     reduceMotion: reduceMotion,
                                     pixelInterpolation: model.pixelInterpolation,
+                                    videoMuted: model.videoMuted,
+                                    onVideoMuteChanged: { model.videoMuted = $0 },
                                     onSelectionChanged: followViewer,
                                     onClose: closeViewer,
                                     onInteractiveDismiss: closeViewer)
@@ -458,6 +460,13 @@ struct AppShellView: View {
             .sharedBackgroundVisibility(.hidden)
             ToolbarSpacer(.flexible, placement: .primaryAction)
             ToolbarItemGroup(placement: .primaryAction) {
+                if viewer.state?.item?.isVideo == true {
+                    Button { model.videoMuted.toggle() } label: {
+                        Image(systemName: model.videoMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    }
+                    .help(model.videoMuted ? "Unmute Video" : "Mute Video")
+                    .accessibilityLabel(model.videoMuted ? "Unmute Video" : "Mute Video")
+                }
                 if viewer.state?.item?.isVideo != true {
                     ViewerRotationControls(viewer: viewer)
                         .frame(height: ToolbarMetrics.controlHeight)

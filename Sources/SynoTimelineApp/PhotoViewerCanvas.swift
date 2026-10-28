@@ -66,6 +66,7 @@ struct PhotoViewerCanvas: NSViewRepresentable {
     let nextItemID: Int64?
     let interpolation: NSImageInterpolation
     let pagingInterpolation: NSImageInterpolation
+    let videoConfiguration: VideoConfiguration?
     let controller: PhotoViewerCanvasController
     let onPrevious: () -> Void
     let onNext: () -> Void
@@ -87,6 +88,7 @@ struct PhotoViewerCanvas: NSViewRepresentable {
                       openingSourceRectInWindow: openingSourceRect)
         view.syncNeighbors(generation: selectionGeneration)
         view.setZoom(CGFloat(zoom))
+        view.setVideo(videoConfiguration)
     }
 
     private func configure(_ view: PhotoViewerCanvasView) {

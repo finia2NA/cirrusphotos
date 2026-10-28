@@ -6,34 +6,14 @@ import SwiftUI
 import SynologyAPI
 import UniformTypeIdentifiers
 
-struct VideoPlayerView: NSViewRepresentable {
+struct VideoConfiguration {
     let repository: CachedPhotosRepository
     let resource: VideoPlaybackResource
-    let selectionGeneration: UInt64
+    let generation: UInt64
     let allowNetwork: Bool
     let poster: NSImage?
-    let toolbarInset: CGFloat
-    let onPrevious: () -> Void
-    let onNext: () -> Void
-    let onClose: () -> Void
-
-    func makeNSView(context: Context) -> VideoPlayerContainerView {
-        VideoPlayerContainerView()
-    }
-
-    func updateNSView(_ view: VideoPlayerContainerView, context: Context) {
-        view.toolbarInset = toolbarInset
-        view.onPrevious = onPrevious
-        view.onNext = onNext
-        view.onClose = onClose
-        view.configure(repository: repository, resource: resource,
-                       generation: selectionGeneration, allowNetwork: allowNetwork,
-                       poster: poster)
-    }
-
-    static func dismantleNSView(_ view: VideoPlayerContainerView, coordinator: ()) {
-        view.stop()
-    }
+    var isMuted: Bool = false
+    var onMuteChanged: (Bool) -> Void = { _ in }
 }
 
 final class VideoPlayerContainerView: NSView {
@@ -43,22 +23,25 @@ final class VideoPlayerContainerView: NSView {
     var toolbarInset: CGFloat = 0 { didSet { needsLayout = true } }
 
     private let playerView = NavigatingPlayerView()
-    private let posterView = NSImageView()
+    private let posterView = VideoPosterView()
     private var loader: VideoAssetLoader?
-    private var player: AVPlayer?
+    private(set) var player: AVPlayer?
     private var timeObservation: NSKeyValueObservation?
+    private var muteObservation: NSKeyValueObservation?
+    private var displayObservation: NSKeyValueObservation?
     private var itemStatusObservation: NSKeyValueObservation?
     private var identity: String?
+    private var onMuteChanged: (Bool) -> Void = { _ in }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.cgColor
+        layer?.backgroundColor = NSColor.clear.cgColor
         posterView.imageScaling = .scaleProportionallyUpOrDown
         playerView.controlsStyle = .floating
         playerView.videoGravity = .resizeAspect
-        addSubview(posterView)
         addSubview(playerView)
+        installPoster()
         playerView.onPrevious = { [weak self] in self?.onPrevious?() }
         playerView.onNext = { [weak self] in self?.onNext?() }
         playerView.onClose = { [weak self] in self?.onClose?() }
@@ -70,15 +53,31 @@ final class VideoPlayerContainerView: NSView {
         super.layout()
         let frame = CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width,
                            height: max(0, bounds.height - toolbarInset))
-        posterView.frame = frame
         playerView.frame = frame
+        installPoster()
+        if let overlay = playerView.contentOverlayView {
+            posterView.frame = overlay.bounds
+        }
+    }
+
+    private func installPoster() {
+        guard let overlay = playerView.contentOverlayView, posterView.superview !== overlay else { return }
+        posterView.removeFromSuperview()
+        posterView.frame = overlay.bounds
+        posterView.autoresizingMask = [.width, .height]
+        overlay.addSubview(posterView)
     }
 
     func configure(repository: CachedPhotosRepository, resource: VideoPlaybackResource,
-                   generation: UInt64, allowNetwork: Bool, poster: NSImage?) {
+                   generation: UInt64, allowNetwork: Bool, poster: NSImage?,
+                   isMuted: Bool = false, onMuteChanged: @escaping (Bool) -> Void = { _ in }) {
         posterView.image = poster
+        self.onMuteChanged = onMuteChanged
         let nextIdentity = "\(generation)|\(resource.unitID)|\(resource.cacheKey)|\(resource.variant.cacheComponent)|\(allowNetwork)"
-        guard identity != nextIdentity else { return }
+        if identity == nextIdentity {
+            if player?.isMuted != isMuted { player?.isMuted = isMuted }
+            return
+        }
         stop()
         identity = nextIdentity
         SynologyDiagnostics.videoPlayer.info(
@@ -94,7 +93,15 @@ final class VideoPlayerContainerView: NSView {
         let item = AVPlayerItem(asset: asset)
         let player = AVPlayer(playerItem: item)
         self.player = player
+        player.isMuted = isMuted
         playerView.player = player
+        muteObservation = player.observe(\.isMuted, options: [.new]) { [weak self, weak player] _, change in
+            guard let muted = change.newValue else { return }
+            DispatchQueue.main.async { [weak self, weak player] in
+                guard let self, let player, self.player === player, player.isMuted == muted else { return }
+                self.onMuteChanged(muted)
+            }
+        }
         itemStatusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
             switch item.status {
             case .unknown:
@@ -117,10 +124,14 @@ final class VideoPlayerContainerView: NSView {
                 )
             }
         }
-        timeObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] player, _ in
-            DispatchQueue.main.async {
-                if player.timeControlStatus == .playing { self?.posterView.isHidden = true }
+        displayObservation = playerView.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self, weak player] _, change in
+            let ready = change.newValue ?? false
+            DispatchQueue.main.async { [weak self, weak player] in
+                guard let self, let player, self.player === player else { return }
+                self.posterView.isHidden = ready
             }
+        }
+        timeObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { player, _ in
             let reason = player.reasonForWaitingToPlay?.rawValue ?? "none"
             SynologyDiagnostics.videoPlayer.info(
                 "Video player time control changed unit_id=\(resource.unitID, privacy: .public) quality=\(resource.variant.cacheComponent, privacy: .public) status=\(player.timeControlStatus.rawValue, privacy: .public) waiting_reason=\(reason, privacy: .public)"
@@ -131,6 +142,8 @@ final class VideoPlayerContainerView: NSView {
 
     func stop() {
         timeObservation = nil
+        muteObservation = nil
+        displayObservation = nil
         itemStatusObservation = nil
         player?.pause()
         playerView.player = nil
@@ -139,6 +152,11 @@ final class VideoPlayerContainerView: NSView {
         loader = nil
         identity = nil
     }
+}
+
+/// The poster sits between video and controls without intercepting their input.
+private final class VideoPosterView: NSImageView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 final class NavigatingPlayerView: AVPlayerView {
