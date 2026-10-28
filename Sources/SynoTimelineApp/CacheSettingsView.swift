@@ -4,6 +4,7 @@ import SynologyAPI
 
 struct CacheSettingsView: View {
     @EnvironmentObject private var library: LibraryModel
+    @AppStorage("viewerHighlightThreshold") private var highlightThreshold = 100.0
 
     var body: some View {
         Form {
@@ -18,6 +19,12 @@ struct CacheSettingsView: View {
                 ForEach(PixelInterpolationPreference.allCases, id: \.self) { preference in
                     Text(preference.displayName).tag(preference)
                 }
+            }
+            HStack {
+                Text("Highlight peaking threshold")
+                Slider(value: $highlightThreshold, in: 80...100, step: 1)
+                Text("\(Int(highlightThreshold))%")
+                    .frame(width: 45, alignment: .trailing)
             }
             Picker("Default video quality", selection: $library.videoQuality) {
                 ForEach(VideoQualityPreference.allCases, id: \.self) { quality in

@@ -1,9 +1,12 @@
 import AppKit
+import PhotoCache
 import SwiftUI
+import TimelineCore
 
 struct ViewerFilmstrip: View {
     @ObservedObject var viewer: PhotoViewerPresentation
     let height: CGFloat
+    let cropsToSquare: Bool
 
     var body: some View {
         GeometryReader { geometry in
@@ -13,85 +16,149 @@ struct ViewerFilmstrip: View {
             let center = viewer.state?.desiredLocation.ordinal ?? 0
             let items = (viewer.state?.filmstrip ?? []).filter { abs($0.ordinal - center) <= count / 2 }
             HStack(spacing: 6) {
-                ForEach(items, id: \.ordinal) { item in
-                    Button { viewer.navigateToOrdinal(item.ordinal) } label: {
+                ForEach(items, id: \.ordinal) { slot in
+                    let frame = FixedPhotoGrid.visibleFrame(in: CGRect(x: 0, y: 0, width: side, height: side),
+                        aspectRatio: slot.item?.displayAspectRatio ?? 1, cropsToSquare: cropsToSquare)
+                    Button { viewer.navigateToOrdinal(slot.ordinal) } label: {
                         Group {
-                            if item.ordinal == center, let image = viewer.image {
-                                Image(nsImage: image).resizable().scaledToFill()
-                            } else if let identity = item.neighbor?.thumbnailIdentity,
+                            if slot.ordinal == center, let image = viewer.image {
+                                thumbnail(image)
+                            } else if let identity = slot.neighbor?.thumbnailIdentity,
                                       let image = viewer.decodedThumbnails[identity] {
-                                Image(nsImage: image).resizable().scaledToFill()
+                                thumbnail(image)
                             } else {
                                 Rectangle().fill(.secondary.opacity(0.2))
                             }
                         }
-                        .frame(width: side, height: side).clipped()
-                        .overlay { if item.ordinal == center { Rectangle().stroke(.primary, lineWidth: 2) } }
+                        .frame(width: frame.width, height: frame.height).clipped()
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .overlay { if let item = slot.item { ThumbnailBadgeOverlay(item: item) } }
+                        .overlay { if slot.ordinal == center { RoundedRectangle(cornerRadius: 4).stroke(.primary, lineWidth: 2) } }
+                        .frame(width: side, height: side)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(item.ordinal == center ? "Current photo" : "Photo \(item.ordinal + 1)")
+                    .accessibilityLabel(slot.ordinal == center ? "Current photo" : "Photo \(slot.ordinal + 1)")
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(.regularMaterial)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
+
+    @ViewBuilder private func thumbnail(_ image: NSImage) -> some View {
+        if cropsToSquare { Image(nsImage: image).resizable().scaledToFill() }
+        else { Image(nsImage: image).resizable().scaledToFit() }
+    }
+}
+
+/// AppKit owns the resize drag so the adjacent compositor-backed canvas cannot intercept it.
+struct FilmstripDivider: NSViewRepresentable {
+    @Binding var height: CGFloat
+    func makeNSView(context: Context) -> DividerView { DividerView() }
+    func updateNSView(_ view: DividerView, context: Context) {
+        view.height = height
+        view.onChange = { height = $0 }
+    }
+    final class DividerView: NSView {
+        var height: CGFloat = 100
+        var onChange: ((CGFloat) -> Void)?
+        private var startY: CGFloat = 0
+        private var startHeight: CGFloat = 0
+        override var isFlipped: Bool { true }
+        override func resetCursorRects() { addCursorRect(bounds, cursor: .resizeUpDown) }
+        override func draw(_ dirtyRect: NSRect) {
+            NSColor.separatorColor.setFill()
+            NSRect(x: 0, y: bounds.midY - 0.5, width: bounds.width, height: 1).fill()
+        }
+        override func mouseDown(with event: NSEvent) {
+            startY = event.locationInWindow.y
+            startHeight = height
+        }
+        override func mouseDragged(with event: NSEvent) {
+            onChange?(min(220, max(56, startHeight + event.locationInWindow.y - startY)))
+        }
+    }
+}
+
+struct HistogramBins: Sendable {
+    let luminance: [Int]
+    let red: [Int]
+    let green: [Int]
+    let blue: [Int]
 }
 
 struct ViewerHistogram: View {
     let image: NSImage
-    @State private var bins: [Int] = []
+    @State private var bins: HistogramBins?
     @State private var corner: Alignment = .bottomTrailing
     @State private var drag: CGSize = .zero
+    @AppStorage("viewerHistogramShowsColor") private var showsColor = false
 
     var body: some View {
         GeometryReader { geometry in
             Canvas { context, size in
-                guard let peak = bins.max(), peak > 0 else { return }
-                var path = Path()
-                for (index, value) in bins.enumerated() {
-                    let x = CGFloat(index) * size.width / CGFloat(bins.count)
-                    let h = CGFloat(value) / CGFloat(peak) * size.height
-                    path.addRect(CGRect(x: x, y: size.height - h, width: max(1, size.width / CGFloat(bins.count)), height: h))
+                guard let bins else { return }
+                let channels = showsColor ? [bins.red, bins.green, bins.blue] : [bins.luminance]
+                guard let peak = channels.flatMap({ $0 }).max(), peak > 0 else { return }
+                for (channel, values) in channels.enumerated() {
+                    var path = Path()
+                    for (index, value) in values.enumerated() {
+                        let x = CGFloat(index) * size.width / CGFloat(values.count)
+                        let h = CGFloat(value) / CGFloat(peak) * size.height
+                        path.addRect(CGRect(x: x, y: size.height - h, width: max(1, size.width / CGFloat(values.count)), height: h))
+                    }
+                    let color: Color = showsColor ? [Color.red, .green, .blue][channel].opacity(0.65) : .primary
+                    context.blendMode = .normal
+                    context.fill(path, with: .color(color))
                 }
-                context.fill(path, with: .color(.primary))
             }
             .padding(8)
             .frame(width: 180, height: 80)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .onTapGesture { showsColor.toggle() }
             .offset(drag)
-            .gesture(DragGesture().onChanged { drag = $0.translation }.onEnded { value in
-                let initialX: CGFloat = corner == .topLeading || corner == .bottomLeading ? 0 : geometry.size.width
-                let initialY: CGFloat = corner == .topLeading || corner == .topTrailing ? 0 : geometry.size.height
-                let left = initialX + value.translation.width < geometry.size.width / 2
-                let top = initialY + value.translation.height < geometry.size.height / 2
+            .gesture(DragGesture().onChanged { value in
+                let initialX: CGFloat = corner == .topLeading || corner == .bottomLeading ? 0 : max(0, geometry.size.width - 180)
+                let initialY: CGFloat = corner == .topLeading || corner == .topTrailing ? 0 : max(0, geometry.size.height - 80)
+                drag = CGSize(width: min(max(0, geometry.size.width - 180) - initialX, max(-initialX, value.translation.width)),
+                              height: min(max(0, geometry.size.height - 80) - initialY, max(-initialY, value.translation.height)))
+            }.onEnded { _ in
+                let initialX: CGFloat = corner == .topLeading || corner == .bottomLeading ? 0 : max(0, geometry.size.width - 180)
+                let initialY: CGFloat = corner == .topLeading || corner == .topTrailing ? 0 : max(0, geometry.size.height - 80)
+                let left = initialX + drag.width + 90 < geometry.size.width / 2
+                let top = initialY + drag.height + 40 < geometry.size.height / 2
                 corner = top ? (left ? .topLeading : .topTrailing) : (left ? .bottomLeading : .bottomTrailing)
                 drag = .zero
             })
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: corner)
         }
-        .accessibilityLabel("Luminance histogram")
+        .accessibilityLabel(showsColor ? "Color histogram" : "Luminance histogram")
+        .accessibilityHint("Click to switch histogram mode. Drag to move.")
         .task(id: ObjectIdentifier(image)) {
-            guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { bins = []; return }
+            guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { bins = nil; return }
             let result = await ViewerInspectionEngine.shared.histogram(cgImage)
             guard !Task.isCancelled else { return }
             bins = result
         }
     }
 
-    nonisolated static func histogram(_ image: CGImage) -> [Int] {
+    nonisolated static func histogram(_ image: CGImage) -> HistogramBins? {
         let width = 256, height = 256
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         guard let context = CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8,
                                       bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return [] }
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         context.interpolationQuality = .low
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        var result = [Int](repeating: 0, count: 64)
+        var luminance = [Int](repeating: 0, count: 64)
+        var red = luminance, green = luminance, blue = luminance
         for offset in stride(from: 0, to: pixels.count, by: 4) {
-            let luminance = (Int(pixels[offset]) * 54 + Int(pixels[offset + 1]) * 183 + Int(pixels[offset + 2]) * 19) >> 8
-            result[min(63, luminance / 4)] += 1
+            let r = Int(pixels[offset]), g = Int(pixels[offset + 1]), b = Int(pixels[offset + 2])
+            luminance[min(63, ((r * 54 + g * 183 + b * 19) >> 8) / 4)] += 1
+            red[r / 4] += 1; green[g / 4] += 1; blue[b / 4] += 1
         }
-        return result
+        return HistogramBins(luminance: luminance, red: red, green: green, blue: blue)
     }
 }

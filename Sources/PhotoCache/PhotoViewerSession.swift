@@ -240,7 +240,12 @@ public actor PhotoViewerSession {
             filmstrip: filmstripEnabled ? (-10...10).compactMap { offset in
                 let ordinal = desired.ordinal + offset
                 guard ordinal >= 0, ordinal < metadata.totalCount else { return nil }
-                return PhotoViewerFilmstripItem(ordinal: ordinal, neighbor: neighborState(at: ordinal))
+                let location = metadata.location(for: ordinal)
+                let item = ordinal == desired.ordinal ? currentItem : location.flatMap { location in
+                    metadata.pages[location.sectionIndex]?.slot(at: location.pageOffset)?.item
+                }
+                return PhotoViewerFilmstripItem(ordinal: ordinal, neighbor: neighborState(at: ordinal),
+                                               item: item.map(applyingFavorite))
             } : []
         )
     }

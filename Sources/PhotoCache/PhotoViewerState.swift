@@ -59,6 +59,7 @@ public struct PhotoViewerNeighbor: Sendable, Equatable {
 public struct PhotoViewerFilmstripItem: Sendable {
     public let ordinal: Int
     public let neighbor: PhotoViewerNeighbor?
+    public let item: PhotoItem?
 }
 
 public enum PhotoViewerResourceStatus: Sendable, Equatable {

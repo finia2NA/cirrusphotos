@@ -27,6 +27,8 @@ final class VideoPlayerContainerView: NSView {
     var onPrevious: (() -> Void)?
     var onNext: (() -> Void)?
     var onClose: (() -> Void)?
+    var onFirstFrame: (() -> Void)?
+    var onPlaybackFinished: (() -> Void)?
     var toolbarInset: CGFloat = 0 { didSet { needsLayout = true } }
 
     var isMotionPlayback = false {
@@ -45,6 +47,7 @@ final class VideoPlayerContainerView: NSView {
     private var muteObservation: NSKeyValueObservation?
     private var displayObservation: NSKeyValueObservation?
     private var itemStatusObservation: NSKeyValueObservation?
+    private var endObserver: NSObjectProtocol?
     private var identity: String?
     private var onMuteChanged: (Bool) -> Void = { _ in }
 
@@ -108,6 +111,10 @@ final class VideoPlayerContainerView: NSView {
         let item = AVPlayerItem(asset: asset)
         let player = AVPlayer(playerItem: item)
         self.player = player
+        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self, weak player] _ in
+            guard let self, let player, self.player === player else { return }
+            self.onPlaybackFinished?()
+        }
         player.isMuted = isMuted
         playerView.player = player
         muteObservation = player.observe(\.isMuted, options: [.new]) { [weak self, weak player] _, change in
@@ -132,7 +139,11 @@ final class VideoPlayerContainerView: NSView {
                 SynologyDiagnostics.videoPlayer.error(
                     "Video player item failed unit_id=\(resource.unitID, privacy: .public) quality=\(resource.variant.cacheComponent, privacy: .public) error_domain=\(error?.domain ?? "nil", privacy: .public) error_code=\(error?.code ?? 0, privacy: .public)"
                 )
-                Task { @MainActor [weak self] in self?.loader?.cancelAll() }
+                Task { @MainActor [weak self, weak player] in
+                    guard let self, let player, self.player === player else { return }
+                    self.loader?.cancelAll()
+                    self.onPlaybackFinished?()
+                }
             @unknown default:
                 SynologyDiagnostics.videoPlayer.error(
                     "Video player item returned unknown status unit_id=\(resource.unitID, privacy: .public) quality=\(resource.variant.cacheComponent, privacy: .public)"
@@ -144,6 +155,7 @@ final class VideoPlayerContainerView: NSView {
             DispatchQueue.main.async { [weak self, weak player] in
                 guard let self, let player, self.player === player else { return }
                 self.posterView.isHidden = ready
+                if ready { self.onFirstFrame?() }
             }
         }
         timeObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { player, _ in
@@ -160,6 +172,7 @@ final class VideoPlayerContainerView: NSView {
         muteObservation = nil
         displayObservation = nil
         itemStatusObservation = nil
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver); self.endObserver = nil }
         player?.pause()
         playerView.player = nil
         player = nil

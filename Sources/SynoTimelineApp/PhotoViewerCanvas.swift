@@ -69,11 +69,13 @@ struct PhotoViewerCanvas: NSViewRepresentable {
     let pagingInterpolation: NSImageInterpolation
     let videoConfiguration: VideoConfiguration?
     var livePhotoConfiguration: LivePhotoConfiguration? = nil
+    var showsLivePhotoIndicator = false
     let controller: PhotoViewerCanvasController
     let onPrevious: () -> Void
     let onNext: () -> Void
     let onClose: () -> Void
     let onInteractiveDismiss: () -> Void
+    var onBackdropOpacityChanged: ((CGFloat, TimeInterval) -> Void)? = nil
     let onZoomChanged: (CGFloat) -> Void
 
     func makeNSView(context: Context) -> PhotoViewerCanvasView {
@@ -92,7 +94,7 @@ struct PhotoViewerCanvas: NSViewRepresentable {
         view.syncNeighbors(generation: selectionGeneration)
         view.setZoom(CGFloat(zoom))
         view.setVideo(videoConfiguration)
-        view.setLivePhoto(livePhotoConfiguration)
+        view.setLivePhoto(livePhotoConfiguration, visible: showsLivePhotoIndicator)
     }
 
     private func configure(_ view: PhotoViewerCanvasView) {
@@ -101,6 +103,7 @@ struct PhotoViewerCanvas: NSViewRepresentable {
         view.onNext = onNext
         view.onClose = onClose
         view.onInteractiveDismiss = onInteractiveDismiss
+        view.onBackdropOpacityChanged = onBackdropOpacityChanged
         view.toolbarInset = toolbarInset
         view.reduceMotion = reduceMotion
         view.interactiveDismissalEnabled = interactiveDismissalEnabled

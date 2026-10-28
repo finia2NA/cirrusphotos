@@ -42,6 +42,22 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         return image
     }
 
+    func testFilmstripDividerTracksDragAndClampsHeight() throws {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        defer { window.orderOut(nil) }
+        let divider = FilmstripDivider.DividerView(frame: CGRect(x: 0, y: 0, width: 800, height: 10))
+        window.contentView = divider
+        divider.height = 100
+        var updated: CGFloat = 0
+        divider.onChange = { updated = $0 }
+        divider.mouseDown(with: try mouseEvent(.leftMouseDown, at: CGPoint(x: 20, y: 100), in: window))
+        divider.mouseDragged(with: try mouseEvent(.leftMouseDragged, at: CGPoint(x: 20, y: 150), in: window))
+        XCTAssertEqual(updated, 150)
+        divider.mouseDragged(with: try mouseEvent(.leftMouseDragged, at: CGPoint(x: 20, y: 500), in: window))
+        XCTAssertEqual(updated, 220)
+    }
+
     func testViewportUsesFullDetailWidthAndReservesToolbarHeight() {
         let canvas = PhotoViewerCanvasView(frame: CGRect(x: 0, y: 0, width: 840, height: 560))
         canvas.toolbarInset = 72
@@ -122,6 +138,25 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         XCTAssertTrue(canvas.isAwaitingInteractiveDismissal)
         try? await Task.sleep(for: .milliseconds(30))
         XCTAssertEqual(dismisses, 1)
+    }
+
+    func testImageOverlayFollowsDismissalAndReportsBackdropFade() throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        let image = try bitmapImage(width: 20, height: 10)
+        canvas.setInspectionOverlay(try XCTUnwrap(image.cgImage(forProposedRect: nil, context: nil, hints: nil)))
+        let container = try XCTUnwrap(canvas.currentImageLayer.sublayers?.first)
+        XCTAssertEqual(container.frame, canvas.currentImageLayer.bounds)
+        var opacity: CGFloat = 1
+        canvas.onBackdropOpacityChanged = { value, _ in opacity = value }
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: 0, height: -80), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+        XCTAssertEqual(container.frame, canvas.currentImageLayer.bounds)
+        XCTAssertEqual(opacity, canvas.backdropOpacity, accuracy: 0.001)
+        canvas.collapse(to: CGRect(x: 40, y: 40, width: 100, height: 75), reduceMotion: false) {}
+        XCTAssertNotNil(canvas.currentImageLayer.animation(forKey: "transition.transform"))
+        XCTAssertEqual(container.frame, canvas.currentImageLayer.bounds)
     }
 
     func testSmallDownwardSwipeReturnsWithoutDismissal() async {
@@ -305,33 +340,49 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         XCTAssertFalse(canvas.hasPagingContents)
     }
 
-    func testLivePhotoHoldStartsControlsFreePlaybackAndReleaseCancelsPendingWork() async throws {
+    func testLivePhotoForcePressAndIndicatorClick() async throws {
         let root = temporaryTestRoot("LivePhotoHold")
         defer { try? FileManager.default.removeItem(at: root) }
-        let transport = LivePhotoCanvasTransport()
         let repository = try CachedPhotosRepository(
             credentials: SynologyCredentials(username: "test", password: "test", otpSecret: ""),
-            budget: 100_000_000, cacheRoot: root, transport: transport)
+            budget: 100_000_000, cacheRoot: root, transport: LivePhotoCanvasTransport())
         let (canvas, window) = makeCanvas()
         defer { window.contentView = nil; window.orderOut(nil) }
         canvas.setLivePhoto(LivePhotoConfiguration(repository: repository, itemID: 12,
                                                    generation: 1, isMuted: true))
         let point = CGPoint(x: 400, y: 300)
         canvas.mouseDown(with: try mouseEvent(.leftMouseDown, at: point, in: window))
-        try await Task.sleep(for: .milliseconds(250))
-        canvas.mouseUp(with: try mouseEvent(.leftMouseUp, at: point, in: window))
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertFalse(canvas.livePhotoLoading, "Ordinary hold is reserved for other interactions")
+        canvas.handlePressure(stage: 2, at: point)
+        XCTAssertTrue(canvas.livePhotoLoading)
+        canvas.handlePressure(stage: 1, at: point)
+        XCTAssertFalse(canvas.livePhotoLoading)
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertFalse(canvas.subviews.contains { $0 is VideoPlayerContainerView })
+        canvas.mouseUp(with: try mouseEvent(.leftMouseUp, at: point, in: window))
 
-        canvas.mouseDown(with: try mouseEvent(.leftMouseDown, at: point, in: window))
+        let frame = canvas.presentedImageFrame
+        let icon = CGPoint(x: frame.minX + 28, y: frame.maxY - 28)
+        canvas.mouseDown(with: try mouseEvent(.leftMouseDown, at: icon, in: window))
+        canvas.mouseUp(with: try mouseEvent(.leftMouseUp, at: icon, in: window))
+        XCTAssertTrue(canvas.livePhotoLoading, "Click playback persists after mouse release")
         let started = await waitUntil { canvas.subviews.contains { $0 is VideoPlayerContainerView } }
         XCTAssertTrue(started)
         let video = try XCTUnwrap(canvas.subviews.first as? VideoPlayerContainerView)
         XCTAssertTrue(video.isMotionPlayback)
         XCTAssertNil(video.hitTest(.zero))
-        canvas.mouseUp(with: try mouseEvent(.leftMouseUp, at: point, in: window))
+        video.onFirstFrame?()
+        XCTAssertFalse(canvas.livePhotoLoading)
+        video.onPlaybackFinished?()
         XCTAssertNil(video.superview)
         XCTAssertNil(video.player)
+
+        canvas.mouseDown(with: try mouseEvent(.leftMouseDown, at: icon, in: window))
+        canvas.mouseUp(with: try mouseEvent(.leftMouseUp, at: icon, in: window))
+        XCTAssertTrue(canvas.livePhotoLoading)
+        canvas.resetForSelection(2, image: canvas.presentedImage, itemID: 13)
+        XCTAssertFalse(canvas.livePhotoLoading)
     }
 
     func testVideoMuteChangesFollowPlayerAndCarryToNextVideo() async throws {
@@ -407,12 +458,14 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         XCTAssertNotEqual(videoLayer.anchorPoint, canvas.currentImageLayer.anchorPoint)
         func assertMatchingFrames(file: StaticString = #filePath, line: UInt = #line) throws {
             let photoPosition = try XCTUnwrap(canvas.currentImageLayer.animation(forKey: "transition.position") as? CABasicAnimation)
-            let photoBounds = canvas.currentImageLayer.animation(forKey: "transition.bounds") as? CABasicAnimation
+            let photoTransform = canvas.currentImageLayer.animation(forKey: "transition.transform") as? CABasicAnimation
             let videoPosition = try XCTUnwrap(videoLayer.animation(forKey: "transition.position") as? CABasicAnimation)
             let videoBounds = try XCTUnwrap(videoLayer.animation(forKey: "transition.bounds") as? CABasicAnimation)
             for start in [true, false] {
                 let photoPoint = try XCTUnwrap((start ? photoPosition.fromValue : photoPosition.toValue) as? NSValue).pointValue
-                let photoSize = ((start ? photoBounds?.fromValue : photoBounds?.toValue) as? NSValue)?.rectValue.size ?? canvas.currentImageLayer.bounds.size
+                let scale = ((start ? photoTransform?.fromValue : photoTransform?.toValue) as? NSValue)?.caTransform3DValue ?? CATransform3DIdentity
+                let photoSize = CGSize(width: canvas.currentImageLayer.bounds.width * scale.m11,
+                                       height: canvas.currentImageLayer.bounds.height * scale.m22)
                 let videoPoint = try XCTUnwrap((start ? videoPosition.fromValue : videoPosition.toValue) as? NSValue).pointValue
                 let videoSize = try XCTUnwrap((start ? videoBounds.fromValue : videoBounds.toValue) as? NSValue).rectValue.size
                 let photoOrigin = CGPoint(x: photoPoint.x - photoSize.width * 0.5, y: photoPoint.y - photoSize.height * 0.5)

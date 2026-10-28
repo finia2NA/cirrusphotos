@@ -22,6 +22,7 @@ final class PhotoViewerCanvasView: NSView {
     /// threshold. The canvas holds the dragged visual state until the shell calls
     /// `collapse(to:reduceMotion:completion:)`.
     var onInteractiveDismiss: (() -> Void)?
+    var onBackdropOpacityChanged: ((CGFloat, TimeInterval) -> Void)?
     var toolbarInset: CGFloat = 0 {
         didSet { if toolbarInset != oldValue { updateGeometry() } }
     }
@@ -68,6 +69,8 @@ final class PhotoViewerCanvasView: NSView {
 
     private let backdropLayer = CALayer()
     private var imageLayer = CALayer()
+    // Every image-relative overlay is attached here and follows the image layer’s transform.
+    private let imageOverlayContainer = CALayer()
     private let inspectionLayer = CALayer()
     private var previousLayer = CALayer()
     private var nextLayer = CALayer()
@@ -80,7 +83,16 @@ final class PhotoViewerCanvasView: NSView {
     private var livePhotoConfiguration: LivePhotoConfiguration?
     private var motionView: VideoPlayerContainerView?
     private var motionTask: Task<Void, Never>?
+    private enum MotionTrigger { case force, once }
+    private var motionTrigger: MotionTrigger?
     private var motionPressOrigin: CGPoint?
+    private var indicatorPressed = false
+    private let liveIndicatorLayer = CALayer()
+    private let liveIndicatorSymbol = CALayer()
+    private var liveIndicatorSymbolName: String?
+    private var liveIndicatorReducedMotion = false
+    private(set) var livePhotoLoading = false
+    private var liveIndicatorVisible = false
     private var scrollMonitor: Any?
     private var image: NSImage?
     private var selectionGeneration: UInt64 = 0
@@ -265,48 +277,136 @@ final class PhotoViewerCanvasView: NSView {
         syncVideoFrame()
     }
 
-    func setLivePhoto(_ configuration: LivePhotoConfiguration?) {
+    func setLivePhoto(_ configuration: LivePhotoConfiguration?, visible: Bool = true) {
         if livePhotoConfiguration?.itemID != configuration?.itemID ||
            livePhotoConfiguration?.generation != configuration?.generation || configuration == nil {
             stopLivePhotoMotion()
         }
         livePhotoConfiguration = configuration
+        liveIndicatorVisible = visible
+        updateLiveIndicator()
     }
 
-    private func startLivePhotoMotion(at point: CGPoint) {
+    private func updateLiveIndicator() {
+        installImageOverlay(liveIndicatorLayer)
+        let size: CGFloat = 32
+        liveIndicatorLayer.frame = CGRect(x: 12, y: max(0, imageOverlayContainer.bounds.height - size - 12),
+                                          width: size, height: size)
+        liveIndicatorLayer.autoresizingMask = [.layerMinYMargin]
+        liveIndicatorLayer.cornerRadius = size / 2
+        liveIndicatorLayer.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
+        liveIndicatorLayer.isHidden = !liveIndicatorVisible
+        if liveIndicatorSymbol.superlayer !== liveIndicatorLayer { liveIndicatorLayer.addSublayer(liveIndicatorSymbol) }
+        liveIndicatorSymbol.frame = CGRect(x: 6, y: 6, width: 20, height: 20)
+        liveIndicatorSymbol.contentsGravity = .resizeAspect
+        let name = livePhotoLoading ? "arrow.triangle.2.circlepath" : "livephoto"
+        guard liveIndicatorSymbolName != name || liveIndicatorReducedMotion != reduceMotion else { return }
+        let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(paletteColors: [.white]))
+        if !reduceMotion && liveIndicatorSymbolName != nil {
+            let transition = CATransition()
+            transition.type = .fade
+            transition.duration = 0.16
+            liveIndicatorSymbol.add(transition, forKey: "symbolChange")
+        }
+        liveIndicatorSymbol.contents = symbol?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        liveIndicatorSymbolName = name
+        liveIndicatorReducedMotion = reduceMotion
+        liveIndicatorSymbol.removeAnimation(forKey: "loading")
+        if livePhotoLoading && !reduceMotion {
+            let rotation = CABasicAnimation(keyPath: "transform.rotation.z")
+            rotation.fromValue = 0
+            rotation.toValue = 2 * Double.pi
+            rotation.duration = 1
+            rotation.repeatCount = .infinity
+            liveIndicatorSymbol.add(rotation, forKey: "loading")
+        }
+    }
+
+    private func setLiveLoading(_ loading: Bool) {
+        guard livePhotoLoading != loading else { return }
+        livePhotoLoading = loading
+        updateLiveIndicator()
+    }
+
+    private func indicatorContains(_ point: CGPoint) -> Bool {
+        guard liveIndicatorVisible, !imageLayer.frame.isEmpty else { return false }
+        let local = CGPoint(x: point.x - imageLayer.frame.minX, y: point.y - imageLayer.frame.minY)
+        return liveIndicatorLayer.frame.insetBy(dx: -4, dy: -4).contains(local)
+    }
+
+    private func startLivePhotoMotion(_ trigger: MotionTrigger, at point: CGPoint) {
         guard let configuration = livePhotoConfiguration, imageLayer.frame.contains(point) else { return }
+        stopLivePhotoMotion()
+        motionTrigger = trigger
         motionPressOrigin = point
+        setLiveLoading(true)
         motionTask = Task { @MainActor [weak self] in
             do {
-                try await Task.sleep(for: .milliseconds(200))
                 let resource = try await configuration.repository.livePhotoMotion(itemID: configuration.itemID)
                 try Task.checkCancellation()
-                guard let self, let resource, self.motionPressOrigin != nil,
+                guard let self, self.motionTrigger != nil,
                       self.livePhotoConfiguration?.generation == configuration.generation,
                       self.livePhotoConfiguration?.itemID == configuration.itemID,
                       self.phase == .resting else { return }
+                guard let resource else { self.stopLivePhotoMotion(); return }
                 let view = VideoPlayerContainerView()
                 view.isMotionPlayback = true
+                // Keep rendering the player below the photo while its first frame loads,
+                // so the image-relative progress indicator remains visible.
+                view.layer?.zPosition = -1
                 self.motionView = view
                 self.addSubview(view)
+                view.onFirstFrame = { [weak self, weak view] in
+                    guard let self, let view, self.motionView === view else { return }
+                    self.setLiveLoading(false)
+                    view.layer?.zPosition = 1
+                }
+                view.onPlaybackFinished = { [weak self, weak view] in
+                    guard let self, let view, self.motionView === view else { return }
+                    self.stopLivePhotoMotion()
+                }
                 view.configure(repository: configuration.repository, resource: resource,
                                generation: configuration.generation, allowNetwork: true,
                                poster: self.image, isMuted: configuration.isMuted)
                 self.syncVideoFrame()
-            } catch { }
+            } catch {
+                guard !Task.isCancelled else { return }
+                self?.stopLivePhotoMotion()
+            }
         }
     }
 
     private func stopLivePhotoMotion() {
+        motionTrigger = nil
         motionPressOrigin = nil
         motionTask?.cancel()
         motionTask = nil
         motionView?.stop()
         motionView?.removeFromSuperview()
         motionView = nil
+        setLiveLoading(false)
+    }
+
+    func handlePressure(stage: Int, at point: CGPoint) {
+        if stage >= 2 {
+            guard motionTrigger == nil, !indicatorPressed, dragLocation != nil else { return }
+            startLivePhotoMotion(.force, at: point)
+        } else if motionTrigger == .force {
+            stopLivePhotoMotion()
+        }
+    }
+
+    override func pressureChange(with event: NSEvent) {
+        handlePressure(stage: event.stage, at: convert(event.locationInWindow, from: nil))
     }
 
     private func syncVideoFrame() {
+        if imageOverlayContainer.superlayer === imageLayer {
+            imageOverlayContainer.frame = imageLayer.bounds
+            inspectionLayer.frame = imageOverlayContainer.bounds
+            liveIndicatorLayer.frame.origin = CGPoint(x: 12, y: max(0, imageOverlayContainer.bounds.height - 44))
+        }
         for view in [videoView, motionView].compactMap({ $0 }) {
             view.frame = imageLayer.frame
             view.layer?.opacity = imageLayer.opacity
@@ -505,6 +605,11 @@ final class PhotoViewerCanvasView: NSView {
         guard phase == .resting || phase == .opening else { return }
         window?.makeFirstResponder(self)
         finishOpeningForInteraction()
+        let point = convert(event.locationInWindow, from: nil)
+        if indicatorContains(point) {
+            indicatorPressed = true
+            return
+        }
         guard event.clickCount < 2 else {
             let point = convert(event.locationInWindow, from: nil)
             let target: CGFloat = transform.zoom > 1.01 ? 1 : 2
@@ -514,7 +619,6 @@ final class PhotoViewerCanvasView: NSView {
             return
         }
         dragLocation = convert(event.locationInWindow, from: nil)
-        if let dragLocation { startLivePhotoMotion(at: dragLocation) }
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -531,8 +635,14 @@ final class PhotoViewerCanvasView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if indicatorPressed {
+            indicatorPressed = false
+            if indicatorContains(point) { startLivePhotoMotion(.once, at: point) }
+        } else if motionTrigger == .force {
+            stopLivePhotoMotion()
+        }
         dragLocation = nil
-        stopLivePhotoMotion()
     }
 
     override func magnify(with event: NSEvent) {
@@ -1000,15 +1110,27 @@ final class PhotoViewerCanvasView: NSView {
     func setInspectionOverlay(_ overlay: CGImage?) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        if inspectionLayer.superlayer !== imageLayer {
-            inspectionLayer.removeFromSuperlayer()
-            imageLayer.addSublayer(inspectionLayer)
-        }
-        inspectionLayer.frame = imageLayer.bounds
+        installImageOverlay(inspectionLayer)
+        inspectionLayer.frame = imageOverlayContainer.bounds
         inspectionLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
         inspectionLayer.contentsGravity = .resize
         inspectionLayer.magnificationFilter = .nearest
         inspectionLayer.contents = overlay
+        CATransaction.commit()
+    }
+
+    /// Installs an image-relative layer in the shared transformed container. Callers
+    /// control their own frame and autoresizing within the photo's bounds.
+    func installImageOverlay(_ overlay: CALayer) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if imageOverlayContainer.superlayer !== imageLayer {
+            imageOverlayContainer.removeFromSuperlayer()
+            imageLayer.addSublayer(imageOverlayContainer)
+        }
+        imageOverlayContainer.frame = imageLayer.bounds
+        imageOverlayContainer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        if overlay.superlayer !== imageOverlayContainer { imageOverlayContainer.addSublayer(overlay) }
         CATransaction.commit()
     }
 
@@ -1209,6 +1331,7 @@ final class PhotoViewerCanvasView: NSView {
         imageLayer.frame = draggedFrame()
         imageLayer.opacity = 1
         backdropLayer.opacity = Float(metrics.backdropOpacity)
+        onBackdropOpacityChanged?(metrics.backdropOpacity, 0)
         syncVideoFrame()
         CATransaction.commit()
     }
@@ -1241,6 +1364,9 @@ final class PhotoViewerCanvasView: NSView {
         let fromImageOpacity = imageLayer.presentation()?.opacity ?? imageLayer.opacity
         let fromBackdropOpacity = backdropLayer.presentation()?.opacity ?? backdropLayer.opacity
         let duration = max(0, transition.duration)
+        if phase == .returning || phase == .closing {
+            onBackdropOpacityChanged?(transition.backdropTo, duration)
+        }
         let timing = CAMediaTimingFunction(name: .easeInEaseOut)
 
         CATransaction.begin()
@@ -1257,10 +1383,17 @@ final class PhotoViewerCanvasView: NSView {
                          to: NSValue(point: CGPoint(x: transition.targetFrame.midX,
                                                     y: transition.targetFrame.midY)),
                          duration: duration, timing: timing, to: imageLayer)
-            addAnimation(keyPath: "bounds",
-                         from: NSValue(rect: CGRect(origin: .zero, size: frame.size)),
-                         to: NSValue(rect: CGRect(origin: .zero, size: transition.targetFrame.size)),
-                         duration: duration, timing: timing, to: imageLayer)
+            // Scale the entire image and its overlay container together. Animating
+            // bounds alone leaves sublayers at their final geometry during the transition.
+            if transition.targetFrame.width > 0, transition.targetFrame.height > 0 {
+                let animation = CABasicAnimation(keyPath: "transform")
+                animation.fromValue = CATransform3DMakeScale(frame.width / transition.targetFrame.width,
+                                                            frame.height / transition.targetFrame.height, 1)
+                animation.toValue = CATransform3DIdentity
+                animation.duration = duration
+                animation.timingFunction = timing
+                imageLayer.add(animation, forKey: "transition.transform")
+            }
             addAnimation(keyPath: "opacity", from: NSNumber(value: Float(fromImageOpacity)),
                          to: NSNumber(value: Float(transition.imageTo)),
                          duration: duration, timing: timing, to: imageLayer)

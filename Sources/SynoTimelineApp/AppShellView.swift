@@ -247,6 +247,7 @@ struct AppShellView: View {
                                     pixelInterpolation: model.pixelInterpolation,
                                     videoMuted: model.videoMuted,
                                     showsFilmstrip: model.showsFilmstrip,
+                                    cropsThumbnailsToSquare: model.cropsThumbnailsToSquare,
                                     showsHistogram: model.showsHistogram,
                                     showsHighlightPeaking: model.showsHighlightPeaking,
                                     onVideoMuteChanged: { model.videoMuted = $0 },
@@ -464,17 +465,20 @@ struct AppShellView: View {
             ToolbarSpacer(.flexible, placement: .primaryAction)
             ToolbarItemGroup(placement: .primaryAction) {
                 Button { model.showsFilmstrip.toggle() } label: {
-                    Image(systemName: "film")
+                    Image(systemName: model.showsFilmstrip ? "film.fill" : "film")
+                        .foregroundStyle(model.showsFilmstrip ? Color.accentColor : Color.primary)
                 }
                 .help(model.showsFilmstrip ? "Hide Filmstrip" : "Show Filmstrip")
                 .accessibilityLabel(model.showsFilmstrip ? "Hide Filmstrip" : "Show Filmstrip")
                 Button { model.showsHistogram.toggle() } label: {
                     Image(systemName: "chart.bar.xaxis")
+                        .foregroundStyle(model.showsHistogram ? Color.accentColor : Color.primary)
                 }
                 .help(model.showsHistogram ? "Hide Histogram" : "Show Histogram")
                 .accessibilityLabel(model.showsHistogram ? "Hide Histogram" : "Show Histogram")
                 Button { model.showsHighlightPeaking.toggle() } label: {
                     Image(systemName: "circle.lefthalf.striped.horizontal")
+                        .foregroundStyle(model.showsHighlightPeaking ? Color.accentColor : Color.primary)
                 }
                 .help(model.showsHighlightPeaking ? "Hide Highlight Peaking" : "Show Highlight Peaking")
                 .accessibilityLabel(model.showsHighlightPeaking ? "Hide Highlight Peaking" : "Show Highlight Peaking")

@@ -10,7 +10,11 @@ final class ViewerHistogramTests: XCTestCase {
                                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
             context.setFillColor(red: component, green: component, blue: component, alpha: 1)
             context.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
-            let bins = ViewerHistogram.histogram(try XCTUnwrap(context.makeImage()))
+            let histogram = try XCTUnwrap(ViewerHistogram.histogram(try XCTUnwrap(context.makeImage())))
+            let bins = histogram.luminance
+            XCTAssertEqual(histogram.red[expectedBin], 256 * 256)
+            XCTAssertEqual(histogram.green[expectedBin], 256 * 256)
+            XCTAssertEqual(histogram.blue[expectedBin], 256 * 256)
             XCTAssertEqual(bins.count, 64)
             XCTAssertEqual(bins[expectedBin], 256 * 256)
         }
@@ -26,8 +30,34 @@ extension ViewerHistogramTests {
         context.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
         context.setFillColor(red: 1, green: 1, blue: 0.9, alpha: 1)
         context.fill(CGRect(x: 1, y: 0, width: 1, height: 1))
-        let overlay = try XCTUnwrap(ViewerInspectionModule.highlightPeaking.overlay(for: XCTUnwrap(context.makeImage())))
+        let image = try XCTUnwrap(context.makeImage())
+        let overlay = try XCTUnwrap(ViewerInspectionModule.highlightPeaking(threshold: 100).overlay(for: image))
         let data = try XCTUnwrap(overlay.dataProvider?.data) as Data
         XCTAssertEqual(Array(data), [255, 0, 0, 255, 0, 0, 0, 0])
+        let lowerOverlay = try XCTUnwrap(ViewerInspectionModule.highlightPeaking(threshold: 90).overlay(for: image))
+        let lowerData = try XCTUnwrap(lowerOverlay.dataProvider?.data) as Data
+        XCTAssertEqual(Array(lowerData), [255, 0, 0, 255, 255, 0, 0, 255])
+    }
+}
+
+extension ViewerHistogramTests {
+    func testRGBHistogramSeparatesChannels() throws {
+        let context = try XCTUnwrap(CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8,
+                                             bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(red: 1, green: 0, blue: 0, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+        let bins = try XCTUnwrap(ViewerHistogram.histogram(try XCTUnwrap(context.makeImage())))
+        XCTAssertEqual(bins.red[63], 256 * 256)
+        XCTAssertEqual(bins.green[0], 256 * 256)
+        XCTAssertEqual(bins.blue[0], 256 * 256)
+    }
+
+    func testHighlightOverlayPreservesMoreThan1024Pixels() throws {
+        let context = try XCTUnwrap(CGContext(data: nil, width: 2048, height: 1, bitsPerComponent: 8,
+                                             bytesPerRow: 2048 * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let overlay = try XCTUnwrap(ViewerInspectionModule.highlightPeaking(threshold: 100).overlay(for: XCTUnwrap(context.makeImage())))
+        XCTAssertEqual(overlay.width, 2048)
     }
 }

@@ -8,22 +8,27 @@ struct PhotoViewerView: View {
     let pixelInterpolation: PixelInterpolationPreference
     let videoMuted: Bool
     let showsFilmstrip: Bool
+    let cropsThumbnailsToSquare: Bool
     let showsHistogram: Bool
     let showsHighlightPeaking: Bool
+    @AppStorage("viewerHighlightThreshold") private var highlightThreshold = 100.0
     @State private var inspectionOverlay: CGImage?
+    @State private var inspectionGeneration: UInt64?
+    @State private var histogramOpacity: CGFloat = 1
     @State private var filmstripHeight: CGFloat = 100
-    @State private var dragStartHeight: CGFloat?
     let onVideoMuteChanged: (Bool) -> Void
     let onSelectionChanged: (PhotoViewerState) -> Void
     let onClose: () -> Void
     let onInteractiveDismiss: () -> Void
 
     var body: some View {
+        GeometryReader { geometry in
         VStack(spacing: 0) {
         ZStack {
             PhotoViewerCanvas(image: viewer.image,
                               selectionGeneration: viewer.state?.selection.generation ?? 1,
-                              inspectionOverlay: inspectionOverlay,
+                              inspectionOverlay: showsHighlightPeaking && viewer.state?.item?.isVideo != true &&
+                                viewer.state?.selection.generation == inspectionGeneration ? inspectionOverlay : nil,
                               zoom: viewer.zoom,
                               toolbarInset: toolbarInset,
                               openingSourceRect: viewer.source.rectInWindowContent(),
@@ -57,11 +62,18 @@ struct PhotoViewerView: View {
                                 return LivePhotoConfiguration(repository: viewer.repository, itemID: item.id,
                                                               generation: state.selection.generation, isMuted: videoMuted)
                               },
+                              showsLivePhotoIndicator: viewer.state?.item?.mediaKind == .livePhoto,
                               controller: viewer.canvasController,
                               onPrevious: viewer.navigatePrevious,
                               onNext: viewer.navigateNext,
                               onClose: onClose,
-                              onInteractiveDismiss: onInteractiveDismiss) { viewer.zoom = Double($0) }
+                              onInteractiveDismiss: onInteractiveDismiss,
+                              onBackdropOpacityChanged: { opacity, duration in
+                                DispatchQueue.main.async {
+                                    if duration > 0 { withAnimation(.easeInOut(duration: duration)) { histogramOpacity = opacity } }
+                                    else { histogramOpacity = opacity }
+                                }
+                              }) { viewer.zoom = Double($0) }
                 .accessibilityLabel(viewer.filename)
 
             if viewer.image == nil, viewer.state?.item?.isVideo != true,
@@ -101,28 +113,42 @@ struct PhotoViewerView: View {
         .overlay(alignment: .bottomTrailing) {
             if showsHistogram, viewer.state?.item?.isVideo != true, let image = viewer.image {
                 ViewerHistogram(image: image)
-                    .padding(12)
+                    .padding(.top, toolbarInset + 12)
+                    .padding([.leading, .trailing, .bottom], 12)
+                    .opacity(histogramOpacity)
             }
         }
+        .frame(height: max(0, geometry.size.height - (showsFilmstrip ? filmstripHeight + 10 : 0)))
         if showsFilmstrip {
-            Rectangle().fill(.secondary.opacity(0.4)).frame(height: 6)
-                .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 0).onChanged { value in
-                    if dragStartHeight == nil { dragStartHeight = filmstripHeight }
-                    filmstripHeight = min(220, max(56, (dragStartHeight ?? filmstripHeight) - value.translation.height))
-                }.onEnded { _ in dragStartHeight = nil })
+            FilmstripDivider(height: $filmstripHeight)
+                .frame(height: 10)
+                .background(Color(nsColor: .windowBackgroundColor))
                 .accessibilityLabel("Filmstrip height")
-            ViewerFilmstrip(viewer: viewer, height: filmstripHeight)
+                .accessibilityValue("\(Int(filmstripHeight)) points")
+                .accessibilityAdjustableAction { direction in
+                    switch direction {
+                    case .increment: filmstripHeight = min(220, filmstripHeight + 10)
+                    case .decrement: filmstripHeight = max(56, filmstripHeight - 10)
+                    @unknown default: break
+                    }
+                }
+            ViewerFilmstrip(viewer: viewer, height: filmstripHeight,
+                            cropsToSquare: cropsThumbnailsToSquare)
                 .frame(height: filmstripHeight)
         }
         }
+        }
         .task(id: InspectionRequest(image: viewer.image.map(ObjectIdentifier.init),
-                                    enabled: showsHighlightPeaking && viewer.state?.item?.isVideo != true)) {
-            inspectionOverlay = nil
+                                    generation: viewer.state?.selection.generation,
+                                    enabled: showsHighlightPeaking && viewer.state?.item?.isVideo != true,
+                                    threshold: highlightThreshold)) {
             guard showsHighlightPeaking, viewer.state?.item?.isVideo != true,
-                  let image = viewer.image?.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
-            let result = await ViewerInspectionEngine.shared.overlay(for: image, module: .highlightPeaking)
-            guard !Task.isCancelled else { return }
+                  let generation = viewer.state?.selection.generation,
+                  let source = viewer.image,
+                  let image = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+            let result = await ViewerInspectionEngine.shared.overlay(for: image, module: .highlightPeaking(threshold: highlightThreshold))
+            guard !Task.isCancelled, let result, viewer.state?.selection.generation == generation else { return }
+            inspectionGeneration = generation
             inspectionOverlay = result
         }
         .onAppear {
@@ -141,5 +167,7 @@ struct PhotoViewerView: View {
 
 private struct InspectionRequest: Equatable {
     let image: ObjectIdentifier?
+    let generation: UInt64?
     let enabled: Bool
+    let threshold: Double
 }
