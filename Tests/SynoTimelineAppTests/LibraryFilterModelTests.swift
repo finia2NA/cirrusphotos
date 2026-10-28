@@ -5,6 +5,18 @@ import SynologyAPI
 
 @MainActor
 final class LibraryFilterModelTests: XCTestCase {
+    func testSelectionFollowsIDsWhenFilterMembershipChanges() {
+        var state = BrowserSelectionState()
+        state.bind(to: "old")
+        state.selection.replace(with: IndexSet([0, 2]))
+        state.rebaseFilter(to: "new", oldMembership: [[1, 2], [3]], newMembership: [[9, 1, 2], [3]])
+        XCTAssertEqual(state.selection.indexes, IndexSet([1, 3]))
+        let generation = state.generation
+        state.rebaseFilter(to: "new", oldMembership: [[9, 1, 2], [3]], newMembership: [[9, 2, 3]])
+        XCTAssertEqual(state.selection.indexes, IndexSet([2]))
+        XCTAssertNotEqual(state.generation, generation)
+    }
+
     func testRangeValidationAcceptsDocumentedFormsAndRejectsInvalidBounds() {
         let model = LibraryFilterModel()
         model.apertureMin = "f/2.8"

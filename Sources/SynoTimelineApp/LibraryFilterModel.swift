@@ -31,6 +31,8 @@ final class LibraryFilterModel: ObservableObject {
     private var lastEdgeDemand: EdgeDemandKey?
     private var installedRegistration: LibraryFilterRegistration?
     private var installingRegistration: LibraryFilterRegistration?
+    private var applyToken = UUID()
+    private var needsInitialBatch = false
 
     var isActive: Bool { activeCollection != nil }
     var isReady: Bool { controller != nil }
@@ -85,14 +87,21 @@ final class LibraryFilterModel: ObservableObject {
         if filter.isEmpty { clear(); isPresented = false; return }
         committed = filter
         isPresented = false
+        let token = UUID()
+        applyToken = token
+        needsInitialBatch = true
         Task {
             let registration = await controller.apply(filter)
+            guard applyToken == token else { return }
             await install(registration)
-            if registration.snapshot.sections.isEmpty { await controller.loadInitialBatch() }
+            guard applyToken == token else { return }
+            await receive(await controller.currentEvent())
         }
     }
 
     func clear() {
+        applyToken = UUID()
+        needsInitialBatch = false
         if let descriptor = activeCollection, let repository = library?.repository {
             Task { await repository.unregisterLibraryFilter(descriptor) }
             library?.unregisterSessionCollection(descriptor)
@@ -130,6 +139,10 @@ final class LibraryFilterModel: ObservableObject {
         progress = event.progress
         if let registration = event.registration, activeCollection == registration.descriptor {
             await install(registration)
+            if needsInitialBatch && !event.progress.isDiscoveringCachedPages {
+                needsInitialBatch = false
+                if registration.snapshot.sections.isEmpty { await controller?.loadInitialBatch() }
+            }
         }
     }
 
@@ -137,6 +150,9 @@ final class LibraryFilterModel: ObservableObject {
         guard let library, let repository = library.repository else { return }
         guard !registration.hasSameContent(as: installedRegistration),
               !registration.hasSameContent(as: installingRegistration) else { return }
+        for newer in [installedRegistration, installingRegistration].compactMap({ $0 })
+            where newer.descriptor == registration.descriptor && newer.revision > registration.revision { return }
+        let token = applyToken
         installingRegistration = registration
         defer {
             if registration.hasSameContent(as: installingRegistration) {
@@ -152,9 +168,18 @@ final class LibraryFilterModel: ObservableObject {
                     library.unregisterSessionCollection(old)
                 }
                 try await repository.registerLibraryFilter(registration)
-                activeCollection = registration.descriptor
             }
-            library.registerSessionCollection(registration.descriptor, snapshot: registration.snapshot)
+            guard token == applyToken,
+                  installingRegistration?.descriptor == registration.descriptor,
+                  installingRegistration?.revision == registration.revision else {
+                if activeCollection != registration.descriptor && installingRegistration?.descriptor != registration.descriptor {
+                    await repository.unregisterLibraryFilter(registration.descriptor)
+                }
+                return
+            }
+            activeCollection = registration.descriptor
+            library.registerSessionCollection(registration.descriptor, snapshot: registration.snapshot,
+                                              filterMembership: registration.referencesBySection.map { $0.map(\.itemID) })
             installedRegistration = registration
         } catch {
             validationErrors["scan"] = error.localizedDescription

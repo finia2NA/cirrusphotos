@@ -66,7 +66,7 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         XCTAssertGreaterThan(finalCount, 0)
     }
 
-    func testFilterDiscoversPagesCachedAfterInitialDiscovery() async throws {
+    func testExplicitReconciliationDiscoversDirectlySeededPages() async throws {
         let root = temporaryTestRoot("AuditLateCache")
         defer { try? FileManager.default.removeItem(at: root) }
         let snapshot = TimelineSnapshot(sections: [section])
@@ -74,13 +74,17 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw", otpSecret: "unused"), cacheRoot: root, transport: transport)
         let controller = LibraryFilterController(repository: repository, snapshot: snapshot)
         await controller.indexCachedPages()
-        // Represents a page cached later by thumbnail warming or another repository consumer.
+        // Direct store seeding bypasses repository page notifications.
         try await seed(repository)
-        let registration = await controller.apply(LibraryFilter(cameras: ["Audit Camera"]))
-        XCTAssertEqual(registration.referencesBySection.flatMap { $0 }.map(\.itemID), [1])
+        _ = await controller.apply(LibraryFilter(cameras: ["Audit Camera"]))
+        await controller.indexCachedPages(reconcile: true)
+        let registration = await controller.currentEvent().registration
+        XCTAssertEqual(registration?.referencesBySection.flatMap { $0 }.map(\.itemID), [1])
         let freshController = LibraryFilterController(repository: repository, snapshot: snapshot)
-        let fresh = await freshController.apply(LibraryFilter(cameras: ["Audit Camera"]))
-        XCTAssertEqual(fresh.referencesBySection.flatMap { $0 }.map(\.itemID), [1])
+        _ = await freshController.apply(LibraryFilter(cameras: ["Audit Camera"]))
+        await freshController.indexCachedPages()
+        let fresh = await freshController.currentEvent().registration
+        XCTAssertEqual(fresh?.referencesBySection.flatMap { $0 }.map(\.itemID), [1])
         await controller.shutdown()
         await freshController.shutdown()
     }

@@ -62,9 +62,12 @@ final class LibraryFilterControllerTests: XCTestCase {
         }
         let controller = LibraryFilterController(repository: repository, snapshot: snapshot)
 
-        let registration = await controller.apply(LibraryFilter(cameras: ["DSC-HX60"]))
-
-        XCTAssertEqual(registration.referencesBySection.flatMap { $0 }.map(\.itemID), [1, 4, 6])
+        let initial = await controller.apply(LibraryFilter(cameras: ["DSC-HX60"]))
+        XCTAssertTrue(initial.referencesBySection.isEmpty, "Apply must not wait for cache discovery")
+        await controller.indexCachedPages()
+        let event = await controller.currentEvent()
+        XCTAssertEqual(event.registration?.referencesBySection.flatMap { $0 }.map(\.itemID), [1, 4, 6])
+        XCTAssertEqual(event.catalog.cameras, ["DSC-HX60"])
         let calls = await transport.totalCalls()
         XCTAssertEqual(calls, 0)
     }

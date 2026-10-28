@@ -53,6 +53,20 @@ struct BrowserSelectionState: Equatable {
         selection.bind(to: "\(fingerprint):0")
     }
 
+    mutating func rebaseFilter(to fingerprint: String, oldMembership: [[Int64]], newMembership: [[Int64]]) {
+        let oldIDs = oldMembership.flatMap { $0 }
+        let selected = Set(selection.indexes.compactMap { oldIDs.indices.contains($0) ? oldIDs[$0] : nil })
+        let newIDs = newMembership.flatMap { $0 }
+        if descriptorFingerprint == fingerprint {
+            membershipRevision += 1
+            if let generation { selection.bind(to: generation) }
+        } else {
+            bind(to: fingerprint)
+        }
+        selection.replace(with: IndexSet(newIDs.enumerated().compactMap { selected.contains($0.element) ? $0.offset : nil }))
+        membershipSignatures.removeAll()
+    }
+
     @discardableResult
     mutating func reconcileMembership(_ updates: [Int: Int]) -> Bool {
         let changed = updates.contains { section, signature in
@@ -212,6 +226,7 @@ struct LibraryBrowserView: View {
                 VStack(spacing: 0) {
                     HStack(spacing: 0) {
                         LibraryBrowserScrollView(snapshot: snapshot,
+                                             filterMembership: library.filterMembership(for: collection),
                                              collection: collection,
                                              revision: library.snapshotRevision(for: collection),
                                              retryRevision: library.retryRevision,
@@ -544,7 +559,7 @@ private struct HostedRow: View {
     let repository: CachedPhotosRepository
     let size: ThumbnailSize
     let failures: ThumbnailFailureRegistry
-    let pages: [Int: LibraryPage]
+    let pageForSection: (Int) -> LibraryPage?
     let onSelect: (Int) -> Void
     let onCommand: (BrowserSelectionCommand) -> Void
     let onOpenPhoto: (Int, PhotoViewerOpenRequest) -> Void
@@ -566,7 +581,7 @@ private struct HostedRow: View {
                                   isSelected: selection.indexes.contains(item.ordinal),
                                   onSelect: { onSelect(item.ordinal) },
                                   onCommand: onCommand) { source in
-                        let page = pages[item.sectionIndex]
+                        let page = pageForSection(item.sectionIndex)
                         let seed = PhotoViewerSeed(sectionIndex: item.sectionIndex,
                             pageOffset: item.pageOffset, item: item.photo, page: page?.completeItems,
                             pageVerified: page?.verified ?? item.verified)
@@ -596,6 +611,7 @@ private struct HostedPlaceholder: View {
 
 struct LibraryBrowserScrollView: NSViewRepresentable {
     let snapshot: TimelineSnapshot
+    let filterMembership: [[Int64]]?
     let collection: PhotoCollectionDescriptor
     let revision: Int
     let retryRevision: Int
@@ -682,6 +698,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var eventTask: Task<Void, Never>?
         private var demandTask: Task<Void, Never>?
         private var revision = -1
+        private var filterMembership: [[Int64]]?
+        private var rebasing = false
         private var retryRevision = 0
         private var allowNetwork = false
         private var thumbnailSize: ThumbnailSize = .m
@@ -769,15 +787,33 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 let previous = geometry?.anchor(at: visibleTop(in: scroll))
                 cancelPointerInteraction()
                 pendingOpen = nil
-                if reusesWindow { detachWindowEvents() } else { stopWindow() }
+                let preserveFilter = reusesWindow && collection.isLibraryFilter &&
+                    filterMembership != nil && input.filterMembership != nil
+                if preserveFilter {
+                    eventTask?.cancel()
+                    demandTask?.cancel()
+                    demandedVisible = []
+                    demandedPrefetch = []
+                    rebasing = true
+                } else if reusesWindow { detachWindowEvents() } else { stopWindow() }
                 let newIndex = LibraryIndex(snapshot: input.snapshot)
                 index = newIndex
                 geometry = LibraryViewportGeometry(index: newIndex, width: width,
                                                    itemsPerRow: input.itemsPerRow,
                                                    cropsThumbnailsToSquare: input.cropsThumbnailsToSquare)
                 snapPresentation(input.cropsThumbnailsToSquare)
-                selectionState = input.selectionState
-                selectionState.bind(to: newIndex.fingerprint)
+                if preserveFilter, let oldMembership = filterMembership, let newMembership = input.filterMembership {
+                    pages = FilterPageRebaser.rebase(pages: pages, membership: newMembership)
+                    geometry?.reconcile(pages: pages)
+                    selectionState.rebaseFilter(to: newIndex.fingerprint, oldMembership: oldMembership,
+                                                newMembership: newMembership)
+                    pageSignatures = Dictionary(uniqueKeysWithValues: pages.map { ($0.key, Self.signature($0.value)) })
+                    errors.removeAll()
+                } else {
+                    selectionState = input.selectionState
+                    selectionState.bind(to: newIndex.fingerprint)
+                }
+                filterMembership = input.filterMembership
                 publishSelection()
                 revision = input.revision
                 allowNetwork = input.allowNetwork
@@ -789,7 +825,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     previousIndex: oldIndex, visibleAnchor: previous, timelineVerified: input.allowNetwork) {
                     scrollTo(target)
                 }
-                startEvents(rebasingTo: newIndex)
+                startEvents(rebasingTo: newIndex, filterMembership: preserveFilter ? input.filterMembership : nil)
             } else {
                 if allowNetwork != input.allowNetwork {
                     allowNetwork = input.allowNetwork
@@ -908,6 +944,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             demandTask?.cancel()
             eventTask = nil
             demandTask = nil
+            rebasing = false
             pages.removeAll()
             errors.removeAll()
             pageSignatures.removeAll()
@@ -919,10 +956,16 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             hostRevisions.removeAll()
         }
 
-        private func startEvents(rebasingTo index: LibraryIndex? = nil) {
+        private func startEvents(rebasingTo index: LibraryIndex? = nil, filterMembership: [[Int64]]? = nil) {
             guard let window else { return }
             eventTask = Task { [weak self] in
-                if let index { await window.rebase(to: index) }
+                guard !Task.isCancelled else { return }
+                if let index { await window.rebase(to: index, filterMembership: filterMembership) }
+                guard !Task.isCancelled else { return }
+                if let self, self.window === window {
+                    self.rebasing = false
+                    self.viewportChanged()
+                } else { return }
                 for await event in await window.events() {
                     guard let self, !Task.isCancelled else { break }
                     switch event {
@@ -958,7 +1001,6 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     self.errors = self.errors.filter { self.demandedVisible.contains($0.key) }
                     self.geometry?.reconcile(pages: self.pages)
                     self.refreshMarqueeSelection()
-                    self.viewRevision += 1
                     self.updateDocumentHeight()
                     if let index = self.index, let geometry = self.geometry {
                         switch self.scrollIntent.reconcile(pages: self.pages, index: index,
@@ -1016,14 +1058,14 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 let slice = geometry.slices[position]
                 let section = slice.source.sectionIndex
                 if slice.heading {
-                    addHost("h:\(position)", frame: CGRect(x: 0, y: slice.y, width: geometry.width, height: 32),
+                    addHost("h:\(slice.source.dayID)", frame: CGRect(x: 0, y: slice.y, width: geometry.width, height: 32),
                             content: AnyView(Text(slice.source.dayID).font(.headline)
                                 .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 10)),
                             revision: (viewRevision, 0), wanted: &wanted, document: document)
                 }
                 if let page = pages[section] {
                     if page.slots.count <= slice.source.pageRange.lowerBound {
-                        addHost("e:\(position)",
+                        addHost("e:\(slice.source.dayID):\(slice.source.dayRange.lowerBound)",
                                 frame: CGRect(x: 0, y: slice.y + (slice.heading ? 38 : 0),
                                               width: geometry.width, height: 28),
                                 content: AnyView(HostedPlaceholder(message: "No photos in this section")),
@@ -1032,7 +1074,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     }
                 } else {
                     let message = errors[section] ?? (unavailableOffline ? "Unavailable offline" : "Loading photos…")
-                    addHost("p:\(position)",
+                    addHost("p:\(slice.source.dayID):\(slice.source.dayRange.lowerBound)",
                             frame: CGRect(x: 0, y: slice.y + (slice.heading ? 38 : 0),
                                           width: geometry.width, height: 28),
                             content: AnyView(HStack {
@@ -1046,10 +1088,11 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     let rowY = slice.y + row.y
                     guard rowY + row.layout.height >= y - overscan,
                           rowY <= y + height + overscan else { continue }
-                    addHost("r:\(position):\(rowIndex)",
+                    addHost("r:\(slice.source.dayID):\(slice.source.dayRange.lowerBound):\(rowIndex)",
                             frame: CGRect(x: 0, y: rowY, width: geometry.width, height: row.layout.height),
                             content: AnyView(HostedRow(row: row, repository: repository,
-                                                       size: thumbnailSize, failures: thumbnailFailures, pages: pages,
+                                                       size: thumbnailSize, failures: thumbnailFailures,
+                                                       pageForSection: { [weak self] in self?.pages[$0] },
                                                        onSelect: { [weak self] in self?.selectFromAccessibility($0) },
                                                        onCommand: { [weak self] in self?.perform($0) },
                                                        onOpenPhoto: { [weak self] ordinal, request in
@@ -1057,7 +1100,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                                                        },
                                                        selection: selectionObservation,
                                                        presentation: presentation)),
-                            revision: (viewRevision, rowRevisions[section] ?? 0),
+                            revision: (viewRevision, Self.rowSignature(row, pages: pages)),
                             wanted: &wanted, document: document, passThrough: true)
                 }
             }
@@ -1088,7 +1131,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                !demandedSections.contains(restorationSection) {
                 demandedSections.append(restorationSection)
             }
-            if demandedSections != demandedVisible || prefetch != demandedPrefetch {
+            if !rebasing && (demandedSections != demandedVisible || prefetch != demandedPrefetch) {
                 demandedVisible = demandedSections
                 demandedPrefetch = prefetch
                 demandTask?.cancel()
@@ -1489,6 +1532,32 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 hash.combine(thumbnail?.sm)
                 hash.combine(thumbnail?.m)
                 hash.combine(thumbnail?.xl)
+            }
+            return hash.finalize()
+        }
+
+        private static func rowSignature(_ row: LibraryViewportGeometry.Row, pages: [Int: LibraryPage]) -> Int {
+            var hash = Hasher()
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .sortedKeys
+            hash.combine(row.firstOrdinal)
+            hash.combine(row.slots.count)
+            for slot in row.slots {
+                guard let slot else { hash.combine(false); continue }
+                hash.combine(true)
+                hash.combine(slot.photo.id)
+                hash.combine(slot.ordinal)
+                hash.combine(slot.sectionIndex)
+                hash.combine(slot.pageOffset)
+                hash.combine(slot.verified)
+                hash.combine(try? encoder.encode(slot.photo))
+                hash.combine(slot.photo.pendingRotationQuarterTurns)
+                hash.combine(slot.photo.isFavorite)
+                hash.combine(slot.photo.displayAspectRatio)
+                let thumbnail = slot.photo.additional?.thumbnail
+                hash.combine(thumbnail?.unitID); hash.combine(thumbnail?.cacheKey)
+                hash.combine(thumbnail?.sm); hash.combine(thumbnail?.m); hash.combine(thumbnail?.xl)
+                hash.combine(pages[slot.sectionIndex]?.verified)
             }
             return hash.finalize()
         }

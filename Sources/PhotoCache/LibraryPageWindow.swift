@@ -20,6 +20,26 @@ public struct LibraryPage: Sendable {
     }
 }
 
+/// Reconstructs derived pages from exact membership while retaining available item details.
+public enum FilterPageRebaser {
+    public static func rebase(pages: [Int: LibraryPage], membership: [[Int64]]) -> [Int: LibraryPage] {
+        var known: [Int64: PhotoItemSlot] = [:]
+        for page in pages.values {
+            for slot in page.slots where slot.item != nil { known[slot.itemID] = slot }
+        }
+        var result: [Int: LibraryPage] = [:]
+        for (section, ids) in membership.enumerated() {
+            guard ids.contains(where: { known[$0] != nil }) else { continue }
+            let slots = ids.map { known[$0] ?? PhotoItemSlot(itemID: $0, item: nil, verified: false) }
+            let unchanged = pages.values.contains { $0.slots.map(\.itemID) == ids && $0.verified }
+            result[section] = LibraryPage(sectionIndex: section, slots: slots,
+                                          verified: unchanged && slots.allSatisfy { $0.item != nil && $0.verified },
+                                          membershipVerified: true)
+        }
+        return result
+    }
+}
+
 public enum LibraryPageEvent: Sendable {
     case page(LibraryPage, fingerprint: String)
     case removed(sectionIndex: Int)
@@ -161,8 +181,8 @@ public actor LibraryPageWindow {
     }
 
     /// Numeric section positions may move while stable day slots remain reusable.
-    public func rebase(to index: LibraryIndex) {
-        guard fingerprint != index.fingerprint else { return }
+    public func rebase(to index: LibraryIndex, filterMembership: [[Int64]]? = nil) {
+        guard fingerprint != index.fingerprint || filterMembership != nil else { return }
         for request in requests.values { request.task.cancel() }
         requests.removeAll(); completed.removeAll(); failedSections.removeAll()
         var positions: [DayPageAddress: Int] = [:]
@@ -170,11 +190,15 @@ public actor LibraryPageWindow {
             if let address = try? DayPageAddress(section: section, collection: collection) { positions[address] = position }
         }
         var rebased: [Int: LibraryPage] = [:]
+        if let filterMembership {
+            rebased = FilterPageRebaser.rebase(pages: pages, membership: filterMembership)
+        } else {
         for (position, page) in pages {
             guard sectionDescriptors.indices.contains(position),
                   let address = try? DayPageAddress(section: sectionDescriptors[position], collection: collection),
                   let next = positions[address], sectionDescriptors[position].list == index.sections[next].list else { continue }
             rebased[next] = LibraryPage(sectionIndex: next, slots: page.slots, verified: page.verified, membershipVerified: page.membershipVerified)
+        }
         }
         for position in pages.keys { publish(.removed(sectionIndex: position)) }
         pages = rebased

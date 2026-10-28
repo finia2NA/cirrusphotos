@@ -80,9 +80,13 @@ public actor LibraryFilterController {
         let failure: String?
     }
 
+    private static let cacheReadBatchSize = 16
     private let repository: CachedPhotosRepository
+    private let sourceFingerprint: String
     private let sourceSnapshot: TimelineSnapshot
     private var recordsBySection: [Int: [LibraryFilterRecord]] = [:]
+    private var cachedCatalog: LibraryFilterCatalog?
+    private var cachedRegistration: LibraryFilterRegistration?
     private var states: [LibraryFilterSectionState]
     private var activeFilter: LibraryFilter?
     private var descriptor: PhotoCollectionDescriptor?
@@ -103,6 +107,7 @@ public actor LibraryFilterController {
     public init(repository: CachedPhotosRepository, snapshot: TimelineSnapshot) {
         self.repository = repository
         sourceSnapshot = snapshot
+        sourceFingerprint = LibraryIndex(snapshot: snapshot).fingerprint
         states = Array(repeating: .unseen, count: snapshot.sections.count)
     }
 
@@ -119,7 +124,12 @@ public actor LibraryFilterController {
 
     public func indexCachedPages(reconcile: Bool = false) async {
         guard !stopped else { return }
-        if cacheDiscoveryComplete && !reconcile { return }
+        startCacheDiscovery(reconcile: reconcile)
+        await cacheDiscoveryTask?.value
+    }
+
+    private func startCacheDiscovery(reconcile: Bool = false) {
+        guard !stopped, !(cacheDiscoveryComplete && !reconcile) else { return }
         if cacheDiscoveryTask == nil {
             cacheDiscoveryComplete = false
             cacheDiscoveryTask = Task {
@@ -128,7 +138,6 @@ public actor LibraryFilterController {
             }
             publish()
         }
-        await cacheDiscoveryTask?.value
     }
 
     func ingest(sectionIndex: Int, items: [PhotoItem], verified: Bool) {
@@ -136,15 +145,18 @@ public actor LibraryFilterController {
         if replace(sectionIndex: sectionIndex, items: items.map(Optional.some), verified: verified) { publish() }
     }
 
-    public func apply(_ filter: LibraryFilter) async -> LibraryFilterRegistration {
-        await indexCachedPages(reconcile: true)
+    public func apply(_ filter: LibraryFilter) -> LibraryFilterRegistration {
+        startCacheDiscovery()
         activeFilter = filter
         descriptor = .libraryFilter(UUID())
         revision &+= 1
+        cachedRegistration = nil
         let registration = makeRegistration()!
         publish(registration)
         return registration
     }
+
+    public func currentEvent() -> LibraryFilterControllerEvent { makeEvent() }
 
     public func demandVisibleResultSections(_ syntheticSectionIndices: [Int],
                                             direction: LibraryFilterScanDirection,
@@ -187,6 +199,7 @@ public actor LibraryFilterController {
     public func unregisterFilter() {
         activeFilter = nil
         descriptor = nil
+        cachedRegistration = nil
         lastDemand = nil
         revision &+= 1
         publish(nil)
@@ -206,9 +219,9 @@ public actor LibraryFilterController {
     }
 
     private func discoverCachedPages() async {
-        for start in stride(from: 0, to: states.count, by: 2) {
+        for start in stride(from: 0, to: states.count, by: Self.cacheReadBatchSize) {
             guard !stopped, !Task.isCancelled else { break }
-            let indices = Array(start..<min(start + 2, states.count))
+            let indices = Array(start..<min(start + Self.cacheReadBatchSize, states.count))
             let results = await read(indices: indices, useCachedPages: true, allowNetwork: false)
             guard !stopped, !Task.isCancelled else { break }
             var changed = false
@@ -245,9 +258,9 @@ public actor LibraryFilterController {
 
     private func receiveCachedPages(_ sections: Set<TimelineSection>) async {
         let indices = sourceSnapshot.sections.indices.filter { sections.contains(sourceSnapshot.sections[$0]) }
-        for start in stride(from: 0, to: indices.count, by: 2) {
+        for start in stride(from: 0, to: indices.count, by: Self.cacheReadBatchSize) {
             guard !stopped, !Task.isCancelled else { return }
-            let batch = Array(indices[start..<min(start + 2, indices.count)])
+            let batch = Array(indices[start..<min(start + Self.cacheReadBatchSize, indices.count)])
             let results = await read(indices: batch, useCachedPages: true, allowNetwork: false)
             guard !stopped, !Task.isCancelled else { return }
             var changed = false
@@ -326,7 +339,10 @@ public actor LibraryFilterController {
                                                               priority: .prefetch) {
                         if Task.isCancelled { break }
                         switch event {
-                        case .value(let items, let verified): emissions.append((items.slots.map(\.item), verified))
+                        case .value(let items, let verified):
+                            let slots = items.slots.map(\.item)
+                            emissions.append((slots, verified))
+                            if allowNetwork { await self.receiveScanEmission(index: index, items: slots, verified: verified) }
                         case .failure(let message): failure = message
                         }
                     }
@@ -340,6 +356,11 @@ public actor LibraryFilterController {
         }
     }
 
+    private func receiveScanEmission(index: Int, items: [PhotoItem?], verified: Bool) {
+        guard !stopped, !Task.isCancelled else { return }
+        if replace(sectionIndex: index, items: items, verified: verified) { publish() }
+    }
+
     @discardableResult
     private func replace(sectionIndex: Int, items: [PhotoItem?], verified: Bool) -> Bool {
         if !verified && states[sectionIndex] == .verified { return false }
@@ -351,6 +372,8 @@ public actor LibraryFilterController {
         let nextState: LibraryFilterSectionState = verified ? .verified : .provisional
         guard recordsBySection[sectionIndex] != records || states[sectionIndex] != nextState else { return false }
         recordsBySection[sectionIndex] = records
+        cachedCatalog = nil
+        cachedRegistration = nil
         states[sectionIndex] = nextState
         if verified {
             failureMessages.removeValue(forKey: sectionIndex)
@@ -369,6 +392,7 @@ public actor LibraryFilterController {
 
     private func makeRegistration() -> LibraryFilterRegistration? {
         guard let filter = activeFilter, let descriptor else { return nil }
+        if let cachedRegistration { return cachedRegistration }
         let matching = orderedRecords().filter { filter.matches($0.values) }
         let entries = matching.map { DayTimelineEntry(id: $0.reference.itemID, time: $0.time) }
         let referencesByID = Dictionary(uniqueKeysWithValues: matching.map {
@@ -376,11 +400,14 @@ public actor LibraryFilterController {
         })
         let built = DayGroupedTimelineBuilder.build(entries: entries)
         let refs = built.itemIDsBySection.map { $0.compactMap { referencesByID[$0] } }
-        return LibraryFilterRegistration(descriptor: descriptor, snapshot: built.snapshot,
-                                         referencesBySection: refs, filter: filter, revision: revision, sourceFingerprint: LibraryIndex(snapshot: sourceSnapshot).fingerprint)
+        let registration = LibraryFilterRegistration(descriptor: descriptor, snapshot: built.snapshot,
+                                         referencesBySection: refs, filter: filter, revision: revision, sourceFingerprint: sourceFingerprint)
+        cachedRegistration = registration
+        return registration
     }
 
     private func makeCatalog() -> LibraryFilterCatalog {
+        if let cachedCatalog { return cachedCatalog }
         var cameraByKey: [String: String] = [:], lensByKey: [String: String] = [:]
         var extensions = Set<String>()
         for record in orderedRecords() {
@@ -397,10 +424,11 @@ public actor LibraryFilterController {
         result.cameras = cameraByKey.values.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         result.lenses = lensByKey.values.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         result.extensions = extensions.sorted()
+        cachedCatalog = result
         return result
     }
 
-    private func makeProgress() -> TimelineSectionLoadProgress {
+    private func makeProgress(registration: LibraryFilterRegistration?) -> TimelineSectionLoadProgress {
         let verified = states.filter { $0 == .verified }.count
         let provisional = states.filter { $0 == .provisional }.count
         let failed = states.filter { $0 == .failed }.count
@@ -412,7 +440,7 @@ public actor LibraryFilterController {
                      isDiscoveringCachedPages: discovering,
                      hasInitialUnverifiedSection: states.contains { $0 == .unseen || $0 == .provisional },
                      currentSectionLabel: scheduler == nil ? nil : "Loading Personal Library sections",
-                     matchCount: makeRegistration()?.referencesBySection.reduce(0) { $0 + $1.count },
+                     matchCount: registration?.referencesBySection.reduce(0) { $0 + $1.count },
                      state: scheduler == nil ? (verified == states.count ? .finished : .idle) : .running,
                      failures: failureMessages.sorted { $0.key < $1.key }.map {
                          "Section \($0.key + 1): \($0.value)"
@@ -420,12 +448,14 @@ public actor LibraryFilterController {
     }
 
     private func makeEvent() -> LibraryFilterControllerEvent {
-        .init(catalog: makeCatalog(), progress: makeProgress(), registration: makeRegistration())
+        let registration = makeRegistration()
+        return .init(catalog: makeCatalog(), progress: makeProgress(registration: registration), registration: registration)
     }
 
     private func publish(_ registration: LibraryFilterRegistration? = nil) {
-        let event = LibraryFilterControllerEvent(catalog: makeCatalog(), progress: makeProgress(),
-                                                 registration: registration ?? makeRegistration())
+        let registration = registration ?? makeRegistration()
+        let event = LibraryFilterControllerEvent(catalog: makeCatalog(), progress: makeProgress(registration: registration),
+                                                 registration: registration)
         for observer in observers.values { observer.yield(event) }
     }
 
