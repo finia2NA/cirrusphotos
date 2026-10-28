@@ -191,7 +191,7 @@ modifications remained. No new photos were added. See the [capture follow-up](AN
 The earlier next-step list is superseded for the first product slice: stop broad
 probing and implement empty/small complete v7 intervals with an explicit full-scan
 fallback on `has_next=true`, excessive changes or unsupported activity. The
-[revised implementation plan](../plans/WIP_DIFF_CACHE_PLAN.md) details the
+[revised implementation plan](https://github.com/finia2NA/syno/issues/20#issuecomment-6478636002) details the
 bounded algorithm, tests and short acceptance check. Modification continuation,
 service-reset/access experiments and another overnight bulk run are deferred;
 they are not claimed as verified or required to exercise a fallback that declines

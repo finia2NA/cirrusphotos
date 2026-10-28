@@ -153,7 +153,7 @@ swift test
 - Update `docs/PROJECT.md` to state that the shared browser supports persisted aspect-fit or square-cropped thumbnails, has a small content edge inset, and can keep the compact day navigator visible.
 - Update `docs/ARCHITECTURE.md` where fixed-grid rendering and navigator reveal behavior are described. Record that the slot geometry stays fixed while the selected presentation determines the materialized interaction/image frame.
 - Update the root `AGENTS.md` project overview only if this feature materially changes the concise current-scope sentence; keep the overview short and avoid implementation detail.
-- Remove the completed **Square thumbnails** bullet and its sub-bullets from `docs/plans/Ideas.md` only if the user-authored working-tree edit can be preserved cleanly. Do not overwrite or reformat unrelated ideas.
+- Remove the completed **Square thumbnails** bullet and its sub-bullets from [the transferred ideas](https://github.com/finia2NA/syno/issues/1#issuecomment-6478634782) only if the user-authored working-tree edit can be preserved cleanly. Do not overwrite or reformat unrelated ideas.
 
 ## Acceptance criteria
 
