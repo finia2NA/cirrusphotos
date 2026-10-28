@@ -335,6 +335,14 @@ struct LibraryCommands: Commands {
             }
             .disabled(!model.canRotate || model.thumbnailRotationProgress != nil)
         }
+        CommandGroup(after: .toolbar) {
+            Toggle("Show Filmstrip", isOn: $model.showsFilmstrip)
+                .disabled(!model.canCloseViewer)
+            Toggle("Show Histogram", isOn: $model.showsHistogram)
+                .disabled(!model.canCloseViewer)
+            Toggle("Show Highlight Peaking", isOn: $model.showsHighlightPeaking)
+                .disabled(!model.canCloseViewer)
+        }
         CommandMenu("Library") {
             Button("Back") { model.navigateBack() }
                 .keyboardShortcut(.cancelAction)

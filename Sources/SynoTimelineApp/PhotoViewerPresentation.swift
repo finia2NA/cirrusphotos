@@ -226,6 +226,15 @@ final class PhotoViewerPresentation: ObservableObject {
         }
     }
 
+    func setFilmstripEnabled(_ enabled: Bool) {
+        Task { await session.setFilmstripEnabled(enabled) }
+    }
+
+    func navigateToOrdinal(_ ordinal: Int) {
+        guard invalidationMessage == nil, !isClosing, let current = state?.desiredLocation.ordinal else { return }
+        Task { await session.navigate(by: ordinal - current) }
+    }
+
     func navigatePrevious() {
         guard invalidationMessage == nil, !isClosing else { return }
         Task { await session.navigatePrevious() }

@@ -68,6 +68,7 @@ final class PhotoViewerCanvasView: NSView {
 
     private let backdropLayer = CALayer()
     private var imageLayer = CALayer()
+    private let inspectionLayer = CALayer()
     private var previousLayer = CALayer()
     private var nextLayer = CALayer()
     private var previousLayerImage: NSImage?
@@ -937,6 +938,21 @@ final class PhotoViewerCanvasView: NSView {
     }
 
     // MARK: - Geometry
+
+    func setInspectionOverlay(_ overlay: CGImage?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if inspectionLayer.superlayer !== imageLayer {
+            inspectionLayer.removeFromSuperlayer()
+            imageLayer.addSublayer(inspectionLayer)
+        }
+        inspectionLayer.frame = imageLayer.bounds
+        inspectionLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        inspectionLayer.contentsGravity = .resize
+        inspectionLayer.magnificationFilter = .nearest
+        inspectionLayer.contents = overlay
+        CATransaction.commit()
+    }
 
     func viewportRect() -> CGRect {
         let top = min(max(0, measuredToolbarInset()), max(0, bounds.height - 1))

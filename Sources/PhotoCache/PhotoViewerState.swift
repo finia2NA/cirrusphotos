@@ -56,6 +56,11 @@ public struct PhotoViewerNeighbor: Sendable, Equatable {
     }
 }
 
+public struct PhotoViewerFilmstripItem: Sendable {
+    public let ordinal: Int
+    public let neighbor: PhotoViewerNeighbor?
+}
+
 public enum PhotoViewerResourceStatus: Sendable, Equatable {
     case idle
     case loading
@@ -88,4 +93,5 @@ public struct PhotoViewerState: Sendable {
     public let previousNeighbor: PhotoViewerNeighbor?
     public let nextNeighbor: PhotoViewerNeighbor?
     public let thumbnailLookahead: [PhotoViewerNeighbor]
+    public let filmstrip: [PhotoViewerFilmstripItem]
 }

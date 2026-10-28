@@ -177,6 +177,30 @@ final class PhotoViewerNavigationTests: PhotoViewerSessionTestCase {
         await session.close()
     }
 
+    func testFilmstripIsBoundedAndCanNavigateAcrossPages() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let items = try [item(1), item(2), item(3), item(4)]
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: Array(items[0...1]), 2: Array(items[2...3])])
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+                                         index: LibraryIndex(snapshot: snapshot()),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                                                               item: items[0], page: Array(items[0...1]),
+                                                               pageVerified: true), allowNetwork: true)
+        await session.setFilmstripEnabled(true)
+        let initial = await session.state()
+        XCTAssertEqual(initial.filmstrip.map(\.ordinal), [0, 1, 2, 3])
+        await session.navigate(by: 3)
+        let selected = await session.state()
+        XCTAssertEqual(selected.desiredLocation.ordinal, 3)
+        let pageCount = await session.retainedPageCount()
+        XCTAssertLessThanOrEqual(pageCount, 3)
+        await session.setFilmstripEnabled(false)
+        let hidden = await session.state()
+        XCTAssertTrue(hidden.filmstrip.isEmpty)
+        await session.close()
+    }
+
     func testRapidNavigationKeepsLatestDesiredItemAndCancelsObsoleteImage() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let items = try [item(1), item(2), item(3), item(4)]

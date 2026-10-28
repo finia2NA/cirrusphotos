@@ -15,7 +15,8 @@ extension PhotoViewerSession {
     func scheduleThumbnailNeighbors() {
         guard !closed else { return }
         let retainedSections = metadata.retainedSections(around: desired)
-        let locations = [-1, 1, -2, 2].compactMap { metadata.location(for: desired.ordinal + $0) }
+        let offsets = filmstripEnabled ? (1...10).flatMap { [-$0, $0] } : [-1, 1, -2, 2]
+        let locations = offsets.compactMap { metadata.location(for: desired.ordinal + $0) }
             .filter { retainedSections.contains($0.sectionIndex) }
         let wantedSections = Set(locations.map(\.sectionIndex))
         for section in wantedSections where metadata.pages[section] == nil || (allowNetwork && metadata.pages[section]?.verified == false) {

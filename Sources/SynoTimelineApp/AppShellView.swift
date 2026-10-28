@@ -246,6 +246,9 @@ struct AppShellView: View {
                                     reduceMotion: reduceMotion,
                                     pixelInterpolation: model.pixelInterpolation,
                                     videoMuted: model.videoMuted,
+                                    showsFilmstrip: model.showsFilmstrip,
+                                    showsHistogram: model.showsHistogram,
+                                    showsHighlightPeaking: model.showsHighlightPeaking,
                                     onVideoMuteChanged: { model.videoMuted = $0 },
                                     onSelectionChanged: followViewer,
                                     onClose: closeViewer,
@@ -460,6 +463,21 @@ struct AppShellView: View {
             .sharedBackgroundVisibility(.hidden)
             ToolbarSpacer(.flexible, placement: .primaryAction)
             ToolbarItemGroup(placement: .primaryAction) {
+                Button { model.showsFilmstrip.toggle() } label: {
+                    Image(systemName: "film")
+                }
+                .help(model.showsFilmstrip ? "Hide Filmstrip" : "Show Filmstrip")
+                .accessibilityLabel(model.showsFilmstrip ? "Hide Filmstrip" : "Show Filmstrip")
+                Button { model.showsHistogram.toggle() } label: {
+                    Image(systemName: "chart.bar.xaxis")
+                }
+                .help(model.showsHistogram ? "Hide Histogram" : "Show Histogram")
+                .accessibilityLabel(model.showsHistogram ? "Hide Histogram" : "Show Histogram")
+                Button { model.showsHighlightPeaking.toggle() } label: {
+                    Image(systemName: "circle.lefthalf.striped.horizontal")
+                }
+                .help(model.showsHighlightPeaking ? "Hide Highlight Peaking" : "Show Highlight Peaking")
+                .accessibilityLabel(model.showsHighlightPeaking ? "Hide Highlight Peaking" : "Show Highlight Peaking")
                 if viewer.state?.item?.isVideo == true {
                     Button { model.videoMuted.toggle() } label: {
                         Image(systemName: model.videoMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")

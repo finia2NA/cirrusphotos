@@ -34,6 +34,7 @@ public actor PhotoViewerSession {
     var metadataChangeTask: Task<Void, Never>?
     var metadataResetTask: Task<Void, Never>?
     var appliedMetadataResetRevision: UInt64 = 0
+    var filmstripEnabled = false
     var playlist = ViewerPlaylist()
     var playlistRevision: UInt64 = 0
 
@@ -102,6 +103,13 @@ public actor PhotoViewerSession {
         else { candidate = min(metadata.totalCount - 1, max(0, sum.partialValue)) }
         guard candidate != desired.ordinal, let location = metadata.location(for: candidate) else { return }
         select(location)
+    }
+
+    public func setFilmstripEnabled(_ enabled: Bool) {
+        guard filmstripEnabled != enabled, !closed else { return }
+        filmstripEnabled = enabled
+        scheduleThumbnailNeighbors()
+        publish()
     }
 
     public func updateAllowNetwork(_ enabled: Bool) {
@@ -228,7 +236,12 @@ public actor PhotoViewerSession {
             thumbnailIdentity: currentItem?.additional?.thumbnail.map(Self.viewerThumbnailIdentity),
             previousNeighbor: neighborState(at: desired.ordinal - 1),
             nextNeighbor: neighborState(at: desired.ordinal + 1),
-            thumbnailLookahead: [-2, 2].compactMap { neighborState(at: desired.ordinal + $0) }
+            thumbnailLookahead: (filmstripEnabled ? Array(-10...10).filter { $0 != 0 && abs($0) != 1 } : [-2, 2]).compactMap { neighborState(at: desired.ordinal + $0) },
+            filmstrip: filmstripEnabled ? (-10...10).compactMap { offset in
+                let ordinal = desired.ordinal + offset
+                guard ordinal >= 0, ordinal < metadata.totalCount else { return nil }
+                return PhotoViewerFilmstripItem(ordinal: ordinal, neighbor: neighborState(at: ordinal))
+            } : []
         )
     }
 

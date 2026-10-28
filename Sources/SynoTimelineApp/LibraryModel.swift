@@ -31,6 +31,9 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var authenticationStatus: AuthenticationStatus = .notStarted
     @Published private(set) var retryRevision = 0
     @Published private(set) var canToggleViewerFavorite = false
+    @Published var showsFilmstrip = false
+    @Published var showsHistogram = false
+    @Published var showsHighlightPeaking = false
     @Published private(set) var canCloseViewer = false
     @Published private(set) var canNavigateBack = false
     @Published private(set) var canOpenSelectedPhoto = false

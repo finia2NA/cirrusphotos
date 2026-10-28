@@ -62,7 +62,7 @@ struct ViewerMetadataWindow {
     /// Prefer the current page, then nearby pages, while keeping the viewer bounded.
     func retainedSections(around location: PhotoViewerLocation) -> Set<Int> {
         var sections = [location.sectionIndex]
-        for offset in [-1, 1, -2, 2] {
+        for offset in (1...10).flatMap({ [-$0, $0] }) {
             if let adjacent = self.location(for: location.ordinal + offset),
                !sections.contains(adjacent.sectionIndex), sections.count < maximumPages {
                 sections.append(adjacent.sectionIndex)
