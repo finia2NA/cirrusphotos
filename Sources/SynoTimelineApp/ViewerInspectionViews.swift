@@ -90,6 +90,7 @@ struct HistogramBins: Sendable {
 
 struct ViewerHistogram: View {
     let image: NSImage
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var bins: HistogramBins?
     @State private var corner: Alignment = .bottomTrailing
     @State private var drag: CGSize = .zero
@@ -97,6 +98,9 @@ struct ViewerHistogram: View {
 
     var body: some View {
         GeometryReader { geometry in
+            let available = CGSize(width: max(0, geometry.size.width - 180),
+                                   height: max(0, geometry.size.height - 80))
+            let origin = HistogramSnap.origin(for: corner, available: available)
             Canvas { context, size in
                 guard let bins else { return }
                 let channels = showsColor ? [bins.red, bins.green, bins.blue] : [bins.luminance]
@@ -108,8 +112,10 @@ struct ViewerHistogram: View {
                         let h = CGFloat(value) / CGFloat(peak) * size.height
                         path.addRect(CGRect(x: x, y: size.height - h, width: max(1, size.width / CGFloat(values.count)), height: h))
                     }
-                    let color: Color = showsColor ? [Color.red, .green, .blue][channel].opacity(0.65) : .primary
-                    context.blendMode = .normal
+                    let color: Color = showsColor ? [Color(red: 1, green: 0, blue: 0),
+                                                     Color(red: 0, green: 1, blue: 0),
+                                                     Color(red: 0, green: 0, blue: 1)][channel] : .primary
+                    context.blendMode = showsColor ? .plusLighter : .normal
                     context.fill(path, with: .color(color))
                 }
             }
@@ -118,22 +124,24 @@ struct ViewerHistogram: View {
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
             .contentShape(RoundedRectangle(cornerRadius: 8))
             .onTapGesture { showsColor.toggle() }
-            .offset(drag)
-            .gesture(DragGesture().onChanged { value in
-                let initialX: CGFloat = corner == .topLeading || corner == .bottomLeading ? 0 : max(0, geometry.size.width - 180)
-                let initialY: CGFloat = corner == .topLeading || corner == .topTrailing ? 0 : max(0, geometry.size.height - 80)
-                drag = CGSize(width: min(max(0, geometry.size.width - 180) - initialX, max(-initialX, value.translation.width)),
-                              height: min(max(0, geometry.size.height - 80) - initialY, max(-initialY, value.translation.height)))
-            }.onEnded { _ in
-                let initialX: CGFloat = corner == .topLeading || corner == .bottomLeading ? 0 : max(0, geometry.size.width - 180)
-                let initialY: CGFloat = corner == .topLeading || corner == .topTrailing ? 0 : max(0, geometry.size.height - 80)
-                let left = initialX + drag.width + 90 < geometry.size.width / 2
-                let top = initialY + drag.height + 40 < geometry.size.height / 2
-                corner = top ? (left ? .topLeading : .topTrailing) : (left ? .bottomLeading : .bottomTrailing)
-                drag = .zero
+            .gesture(DragGesture(coordinateSpace: .named("histogramContainer")).onChanged { value in
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    drag = CGSize(width: min(available.width - origin.x, max(-origin.x, value.translation.width)),
+                                  height: min(available.height - origin.y, max(-origin.y, value.translation.height)))
+                }
+            }.onEnded { value in
+                let target = HistogramSnap.target(origin: origin, drag: drag, translation: value.translation,
+                                                  predicted: value.predictedEndTranslation, available: available)
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) {
+                    corner = target
+                    drag = .zero
+                }
             })
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: corner)
+            .position(x: origin.x + drag.width + 90, y: origin.y + drag.height + 40)
         }
+        .coordinateSpace(name: "histogramContainer")
         .accessibilityLabel(showsColor ? "Color histogram" : "Luminance histogram")
         .accessibilityHint("Click to switch histogram mode. Drag to move.")
         .task(id: ObjectIdentifier(image)) {
@@ -160,5 +168,21 @@ struct ViewerHistogram: View {
             red[r / 4] += 1; green[g / 4] += 1; blue[b / 4] += 1
         }
         return HistogramBins(luminance: luminance, red: red, green: green, blue: blue)
+    }
+}
+
+enum HistogramSnap {
+    static func origin(for corner: Alignment, available: CGSize) -> CGPoint {
+        CGPoint(x: corner == .topLeading || corner == .bottomLeading ? 0 : available.width,
+                y: corner == .topLeading || corner == .topTrailing ? 0 : available.height)
+    }
+
+    static func target(origin: CGPoint, drag: CGSize, translation: CGSize,
+                       predicted: CGSize, available: CGSize) -> Alignment {
+        let x = origin.x + drag.width + 1.5 * (predicted.width - translation.width)
+        let y = origin.y + drag.height + 1.5 * (predicted.height - translation.height)
+        let left = x < available.width / 2
+        let top = y < available.height / 2
+        return top ? (left ? .topLeading : .topTrailing) : (left ? .bottomLeading : .bottomTrailing)
     }
 }

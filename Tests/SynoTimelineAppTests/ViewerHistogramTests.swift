@@ -22,6 +22,19 @@ final class ViewerHistogramTests: XCTestCase {
 }
 
 extension ViewerHistogramTests {
+    func testHistogramSnapUsesProjectedMomentumFromClampedReleasePosition() {
+        let available = CGSize(width: 800, height: 600)
+        let origin = HistogramSnap.origin(for: .bottomTrailing, available: available)
+        let drag = CGSize(width: -300, height: -200)
+        XCTAssertEqual(HistogramSnap.target(origin: origin, drag: drag, translation: drag,
+                                            predicted: drag, available: available), .bottomTrailing)
+        XCTAssertEqual(HistogramSnap.target(origin: origin, drag: drag, translation: drag,
+                                            predicted: CGSize(width: -300, height: -400), available: available), .topTrailing)
+        XCTAssertEqual(HistogramSnap.target(origin: origin, drag: CGSize(width: -800, height: -600),
+                                            translation: CGSize(width: -1100, height: -900),
+                                            predicted: CGSize(width: -1100, height: -900), available: available), .topLeading)
+    }
+
     func testHighlightPeakingMarksOnlyWhitePixels() throws {
         let context = try XCTUnwrap(CGContext(data: nil, width: 2, height: 1, bitsPerComponent: 8,
                                              bytesPerRow: 8, space: CGColorSpaceCreateDeviceRGB(),
