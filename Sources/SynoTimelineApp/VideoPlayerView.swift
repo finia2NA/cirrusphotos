@@ -16,11 +16,26 @@ struct VideoConfiguration {
     var onMuteChanged: (Bool) -> Void = { _ in }
 }
 
+struct LivePhotoConfiguration {
+    let repository: CachedPhotosRepository
+    let itemID: Int64
+    let generation: UInt64
+    let isMuted: Bool
+}
+
 final class VideoPlayerContainerView: NSView {
     var onPrevious: (() -> Void)?
     var onNext: (() -> Void)?
     var onClose: (() -> Void)?
     var toolbarInset: CGFloat = 0 { didSet { needsLayout = true } }
+
+    var isMotionPlayback = false {
+        didSet { playerView.controlsStyle = isMotionPlayback ? .none : .floating }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        isMotionPlayback ? nil : super.hitTest(point)
+    }
 
     private let playerView = NavigatingPlayerView()
     private let posterView = VideoPosterView()

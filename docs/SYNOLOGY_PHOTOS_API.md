@@ -457,6 +457,8 @@ latter shape used its thumbnail `unit_id` and `cache_key` with the ordinary
 resolution. Treat every `type: "live"` item as having a displayable still image;
 only `type: "video"` enters the unsupported video-playback path.
 
+A web capture of Live Photo playback (`docs/captures/livephoto.har`) and a bounded read-only probe show `SYNO.Foto.Browse.Unit` v1 `get` with `id_item` as an ID array and `additional` containing `orientation`, `resolution`, `thumbnail`, `video_meta`, and `video_convert`. Its `list` associates the requested `id_item` with a `unit` array containing separate `live_type: "photo"` and `live_type: "video"` members. The video member's thumbnail unit ID and cache key plus an advertised quality address the ordinary `SYNO.Foto.Streaming` v2 `type="unit"` stream. The observed High rendition returned a valid partial MP4 response. The web client suppresses motion when the still's current and original orientation differ.
+
 The section identity should include space plus the values supplied by the server, rather than only the array index:
 
 ```swift

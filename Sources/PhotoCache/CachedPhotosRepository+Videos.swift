@@ -2,6 +2,12 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
+    public func livePhotoMotion(itemID: Int64) async throws -> VideoPlaybackResource? {
+        try await connect()
+        defer { cancelIdleLogin() }
+        return try await client.livePhotoMotion(itemID: itemID)
+    }
+
     /// Keep each buffered transport response below AVFoundation's resource-loader
     /// stall window on slow links. URLSession does not publish `data(for:)` bytes
     /// until the complete range response has arrived.

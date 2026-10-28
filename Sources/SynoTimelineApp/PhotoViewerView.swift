@@ -49,6 +49,14 @@ struct PhotoViewerView: View {
                                                        onMuteChanged: onVideoMuteChanged)
                                 }
                               },
+                              livePhotoConfiguration: viewer.state.flatMap { state in
+                                guard let item = state.item, item.mediaKind == .livePhoto,
+                                      state.metadataVerified, state.allowNetwork,
+                                      viewer.isDisplayingFullResolution,
+                                      item.additional?.orientation == item.additional?.orientationOriginal else { return nil }
+                                return LivePhotoConfiguration(repository: viewer.repository, itemID: item.id,
+                                                              generation: state.selection.generation, isMuted: videoMuted)
+                              },
                               controller: viewer.canvasController,
                               onPrevious: viewer.navigatePrevious,
                               onNext: viewer.navigateNext,

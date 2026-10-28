@@ -305,6 +305,35 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         XCTAssertFalse(canvas.hasPagingContents)
     }
 
+    func testLivePhotoHoldStartsControlsFreePlaybackAndReleaseCancelsPendingWork() async throws {
+        let root = temporaryTestRoot("LivePhotoHold")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = LivePhotoCanvasTransport()
+        let repository = try CachedPhotosRepository(
+            credentials: SynologyCredentials(username: "test", password: "test", otpSecret: ""),
+            budget: 100_000_000, cacheRoot: root, transport: transport)
+        let (canvas, window) = makeCanvas()
+        defer { window.contentView = nil; window.orderOut(nil) }
+        canvas.setLivePhoto(LivePhotoConfiguration(repository: repository, itemID: 12,
+                                                   generation: 1, isMuted: true))
+        let point = CGPoint(x: 400, y: 300)
+        canvas.mouseDown(with: try mouseEvent(.leftMouseDown, at: point, in: window))
+        try await Task.sleep(for: .milliseconds(250))
+        canvas.mouseUp(with: try mouseEvent(.leftMouseUp, at: point, in: window))
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertFalse(canvas.subviews.contains { $0 is VideoPlayerContainerView })
+
+        canvas.mouseDown(with: try mouseEvent(.leftMouseDown, at: point, in: window))
+        let started = await waitUntil { canvas.subviews.contains { $0 is VideoPlayerContainerView } }
+        XCTAssertTrue(started)
+        let video = try XCTUnwrap(canvas.subviews.first as? VideoPlayerContainerView)
+        XCTAssertTrue(video.isMotionPlayback)
+        XCTAssertNil(video.hitTest(.zero))
+        canvas.mouseUp(with: try mouseEvent(.leftMouseUp, at: point, in: window))
+        XCTAssertNil(video.superview)
+        XCTAssertNil(video.player)
+    }
+
     func testVideoMuteChangesFollowPlayerAndCarryToNextVideo() async throws {
         let root = temporaryTestRoot("VideoMute")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -732,5 +761,13 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         XCTAssertFalse(canvas.isInteractivelyPaging)
         XCTAssertFalse(canvas.isAwaitingPage)
         XCTAssertEqual(canvas.presentedImageFrame.midX, restFrame.midX, accuracy: 0.5)
+    }
+}
+
+private actor LivePhotoCanvasTransport: PhotosTransport {
+    func livePhotoMotion(itemID: Int64) async throws -> VideoPlaybackResource? {
+        // Ignore cancellation to exercise the canvas's stale-result fence.
+        try? await Task.sleep(for: .milliseconds(150))
+        return VideoPlaybackResource(unitID: 2, cacheKey: "key", filename: "motion.mp4", variant: .converted(.high))
     }
 }

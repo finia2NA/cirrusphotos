@@ -119,6 +119,7 @@ public protocol PhotosTransport: Sendable {
         _ resource: FullImageResource, etag: String?, lastModified: String?,
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> FullImageResponse
+    func livePhotoMotion(itemID: Int64) async throws -> VideoPlaybackResource?
     func videoRange(_ resource: VideoPlaybackResource,
                     range: ClosedRange<Int64>) async throws -> VideoRangeResponse
 }
@@ -136,6 +137,10 @@ public extension PhotosTransport {
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> FullImageResponse {
         try await fullImage(resource, etag: etag, lastModified: lastModified)
+    }
+
+    func livePhotoMotion(itemID: Int64) async throws -> VideoPlaybackResource? {
+        throw SynologyAPIError.unsupported("Live Photo motion transport is unavailable.")
     }
 
     func videoRange(_ resource: VideoPlaybackResource,

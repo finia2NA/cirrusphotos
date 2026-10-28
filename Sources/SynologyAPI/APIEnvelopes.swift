@@ -37,3 +37,27 @@ struct RegeneratingEntry: Decodable {
         case unitID = "unit_id"
     }
 }
+
+struct LivePhotoUnitData: Decodable {
+    let list: [LivePhotoUnitGroup]
+}
+
+struct LivePhotoUnitGroup: Decodable {
+    let itemID: Int64
+    let unit: [LivePhotoUnitMember]
+    enum CodingKeys: String, CodingKey { case itemID = "id_item", unit }
+}
+
+struct LivePhotoUnitMember: Decodable {
+    let liveType: String
+    let filename: String?
+    let additional: PhotoItem.Additional?
+    enum CodingKeys: String, CodingKey { case liveType = "live_type", filename, additional }
+
+    func playbackResource() -> VideoPlaybackResource? {
+        guard liveType == "video", let additional, let thumbnail = additional.thumbnail,
+              let quality = VideoQuality.closest(to: .high, in: Set((additional.videoConvert ?? []).compactMap(\.knownQuality))) else { return nil }
+        return VideoPlaybackResource(unitID: thumbnail.unitID, cacheKey: thumbnail.cacheKey,
+                                     filename: filename, variant: .converted(quality))
+    }
+}

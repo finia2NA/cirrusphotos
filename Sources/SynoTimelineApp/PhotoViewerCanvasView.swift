@@ -77,6 +77,10 @@ final class PhotoViewerCanvasView: NSView {
     private var pagingLayer: CALayer { pageDirection == .previous ? previousLayer : nextLayer }
     private var videoView: VideoPlayerContainerView?
     private var pendingVideo: VideoConfiguration?
+    private var livePhotoConfiguration: LivePhotoConfiguration?
+    private var motionView: VideoPlayerContainerView?
+    private var motionTask: Task<Void, Never>?
+    private var motionPressOrigin: CGPoint?
     private var scrollMonitor: Any?
     private var image: NSImage?
     private var selectionGeneration: UInt64 = 0
@@ -173,6 +177,7 @@ final class PhotoViewerCanvasView: NSView {
         if window == nil {
             if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor); self.scrollMonitor = nil }
             videoView?.stop()
+            stopLivePhotoMotion()
             cancelTransition()
             return
         }
@@ -260,10 +265,52 @@ final class PhotoViewerCanvasView: NSView {
         syncVideoFrame()
     }
 
+    func setLivePhoto(_ configuration: LivePhotoConfiguration?) {
+        if livePhotoConfiguration?.itemID != configuration?.itemID ||
+           livePhotoConfiguration?.generation != configuration?.generation || configuration == nil {
+            stopLivePhotoMotion()
+        }
+        livePhotoConfiguration = configuration
+    }
+
+    private func startLivePhotoMotion(at point: CGPoint) {
+        guard let configuration = livePhotoConfiguration, imageLayer.frame.contains(point) else { return }
+        motionPressOrigin = point
+        motionTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(200))
+                let resource = try await configuration.repository.livePhotoMotion(itemID: configuration.itemID)
+                try Task.checkCancellation()
+                guard let self, let resource, self.motionPressOrigin != nil,
+                      self.livePhotoConfiguration?.generation == configuration.generation,
+                      self.livePhotoConfiguration?.itemID == configuration.itemID,
+                      self.phase == .resting else { return }
+                let view = VideoPlayerContainerView()
+                view.isMotionPlayback = true
+                self.motionView = view
+                self.addSubview(view)
+                view.configure(repository: configuration.repository, resource: resource,
+                               generation: configuration.generation, allowNetwork: true,
+                               poster: self.image, isMuted: configuration.isMuted)
+                self.syncVideoFrame()
+            } catch { }
+        }
+    }
+
+    private func stopLivePhotoMotion() {
+        motionPressOrigin = nil
+        motionTask?.cancel()
+        motionTask = nil
+        motionView?.stop()
+        motionView?.removeFromSuperview()
+        motionView = nil
+    }
+
     private func syncVideoFrame() {
-        guard let view = videoView else { return }
-        view.frame = imageLayer.frame
-        view.layer?.opacity = imageLayer.opacity
+        for view in [videoView, motionView].compactMap({ $0 }) {
+            view.frame = imageLayer.frame
+            view.layer?.opacity = imageLayer.opacity
+        }
     }
 
     // MARK: - Image
@@ -371,6 +418,7 @@ final class PhotoViewerCanvasView: NSView {
 
     func resetForSelection(_ generation: UInt64, image next: NSImage?, itemID: Int64?) {
         guard generation != selectionGeneration else { return }
+        stopLivePhotoMotion()
         if (phase == .pagingCommit || phase == .awaitingPage),
            let itemID, itemID == pendingPagingItemID {
             selectionGeneration = generation
@@ -423,6 +471,7 @@ final class PhotoViewerCanvasView: NSView {
     /// Reads the current presentation geometry, so it works from a resting, opening, or
     /// interactively dragged state without a jump.
     func collapse(to rectInWindow: CGRect?, reduceMotion: Bool, completion: @escaping () -> Void) {
+        stopLivePhotoMotion()
         guard phase != .closing else { return }
         if phase == .interactivePaging || phase == .pagingReturning {
             cancelPaging()
@@ -465,11 +514,15 @@ final class PhotoViewerCanvasView: NSView {
             return
         }
         dragLocation = convert(event.locationInWindow, from: nil)
+        if let dragLocation { startLivePhotoMotion(at: dragLocation) }
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard phase == .resting || phase == .opening else { return }
         let point = convert(event.locationInWindow, from: nil)
+        if let origin = motionPressOrigin, hypot(point.x - origin.x, point.y - origin.y) > 4 {
+            stopLivePhotoMotion()
+        }
         if let previous = dragLocation {
             transform.translate(by: CGSize(width: point.x - previous.x, height: point.y - previous.y))
             snapLayerToRest()
@@ -477,9 +530,13 @@ final class PhotoViewerCanvasView: NSView {
         dragLocation = point
     }
 
-    override func mouseUp(with event: NSEvent) { dragLocation = nil }
+    override func mouseUp(with event: NSEvent) {
+        dragLocation = nil
+        stopLivePhotoMotion()
+    }
 
     override func magnify(with event: NSEvent) {
+        stopLivePhotoMotion()
         guard phase == .resting || phase == .opening else { return }
         finishOpeningForInteraction()
         let anchor = convert(event.locationInWindow, from: nil)
@@ -491,6 +548,7 @@ final class PhotoViewerCanvasView: NSView {
     // MARK: - Scroll input
 
     override func scrollWheel(with event: NSEvent) {
+        stopLivePhotoMotion()
         guard event.hasPreciseScrollingDeltas else {
             guard phase == .resting || phase == .opening else { return }
                 finishOpeningForInteraction()

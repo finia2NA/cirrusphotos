@@ -564,6 +564,23 @@ public actor SynologyClient: PhotosTransport {
                                  lastModified: http.value(forHTTPHeaderField: "Last-Modified"))
     }
 
+    public func livePhotoMotion(itemID: Int64) async throws -> VideoPlaybackResource? {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        let response: APIEnvelope<LivePhotoUnitData> = try await post(
+            path: "/webapi/entry.cgi/SYNO.Foto.Browse.Unit",
+            parameters: ["api": "SYNO.Foto.Browse.Unit", "version": "1", "method": "get",
+                         "id_item": Self.idArray([itemID]),
+                         "additional": Self.additionalParameter(for: ["orientation", "resolution", "thumbnail", "video_meta", "video_convert"]),
+                         "_sid": sid], authenticated: true)
+        guard response.success, let data = response.data, data.list.count == 1,
+              let group = data.list.first, group.itemID == itemID else {
+            throw SynologyAPIError.api(response.error?.code ?? -1)
+        }
+        let members = group.unit.filter { $0.liveType == "video" }
+        guard members.count == 1 else { return nil }
+        return members[0].playbackResource()
+    }
+
     public func videoRange(_ resource: VideoPlaybackResource,
                            range: ClosedRange<Int64>) async throws -> VideoRangeResponse {
         guard let sid else { throw SynologyAPIError.api(119) }

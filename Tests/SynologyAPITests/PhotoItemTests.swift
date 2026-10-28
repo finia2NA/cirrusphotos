@@ -4,6 +4,30 @@ import XCTest
 @testable import SynologyAPI
 
 final class PhotoItemTests: XCTestCase {
+    func testLivePhotoUnitSelectsAdvertisedMotionMember() throws {
+        let json = """
+        {"list":[{"id_item":12,"type":"live","unit":[
+          {"live_type":"photo","additional":{"thumbnail":{"unit_id":21,"cache_key":"still"}}},
+          {"live_type":"video","filename":"motion.mov","additional":{"thumbnail":{"unit_id":22,"cache_key":"motion"},"video_convert":[{"quality":"high","metadata":{}}]}}
+        ]}]}
+        """
+        let group = try XCTUnwrap(JSONDecoder().decode(LivePhotoUnitData.self, from: Data(json.utf8)).list.first)
+        XCTAssertEqual(group.itemID, 12)
+        XCTAssertNil(group.unit[0].playbackResource())
+        let motion = try XCTUnwrap(group.unit[1].playbackResource())
+        XCTAssertEqual(motion.unitID, 22)
+        XCTAssertEqual(motion.cacheKey, "motion")
+        XCTAssertEqual(motion.variant, .converted(.high))
+    }
+
+    func testLivePhotoWithoutAdvertisedRenditionDoesNotInventVideoResource() throws {
+        let member = try JSONDecoder().decode(LivePhotoUnitMember.self, from: Data(
+            """
+            {"live_type":"video","additional":{"thumbnail":{"unit_id":22,"cache_key":"motion"},"video_convert":[]}}
+            """.utf8))
+        XCTAssertNil(member.playbackResource())
+    }
+
     func testMediaKindPreservesUnknownAndRecognizesObservedLiveShapes() throws {
         func item(_ type: String, live: String? = nil) throws -> PhotoItem {
             let liveField = live.map { ",\"live_type\":\"\($0)\"" } ?? ""
