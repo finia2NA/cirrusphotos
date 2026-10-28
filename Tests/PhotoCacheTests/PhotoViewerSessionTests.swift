@@ -567,7 +567,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
 
     func testAdjacentConfiguredThumbnailsAreRetainedForInstantNavigation() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
-        let items = try [item(1), item(2), item(3)]
+        let items = try [item(1), item(2), item(3, type: "live")]
         let transport = ViewerTransport()
         await transport.configure(pages: [0: items])
         let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 3,
@@ -582,9 +582,11 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         let neighborsReady = await waitUntil {
             let state = await session.state()
             return state.previousNeighbor?.itemID == 1 &&
+                state.previousNeighbor?.isLivePhoto == false &&
                 state.previousNeighbor?.thumbnailIdentity == "1:key-1" &&
                 state.previousNeighbor?.thumbnailData == Data([1, 0x54]) &&
                 state.nextNeighbor?.itemID == 3 &&
+                state.nextNeighbor?.isLivePhoto == true &&
                 state.nextNeighbor?.thumbnailIdentity == "3:key-3" &&
                 state.nextNeighbor?.thumbnailData == Data([3, 0x54])
         }

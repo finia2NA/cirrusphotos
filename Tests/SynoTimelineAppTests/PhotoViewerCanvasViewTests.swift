@@ -159,6 +159,56 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         XCTAssertEqual(container.frame, canvas.currentImageLayer.bounds)
     }
 
+    func testLiveIndicatorTracksDismissalWithoutImplicitLayerAnimations() throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        canvas.setLivePhoto(nil, visible: true)
+        let container = try XCTUnwrap(canvas.currentImageLayer.sublayers?.first)
+        let indicator = try XCTUnwrap(container.sublayers?.first { $0.name == "livePhotoIndicator" })
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        for (index, distance) in [40.0, 80.0, 120.0].enumerated() {
+            canvas.routePreciseScroll(delta: CGSize(width: 0, height: -distance), phase: .changed,
+                                      momentumPhase: [], timestamp: Double(index + 1) * 0.01)
+            XCTAssertEqual(container.frame, canvas.currentImageLayer.bounds)
+            XCTAssertEqual(indicator.frame.maxY, max(32, container.bounds.height - 12), accuracy: 0.01)
+            XCTAssertNil(container.animation(forKey: "position"))
+            XCTAssertNil(container.animation(forKey: "bounds"))
+            XCTAssertNil(indicator.animation(forKey: "position"))
+            XCTAssertNil(indicator.animation(forKey: "bounds"))
+        }
+    }
+
+    func testLiveIndicatorsFollowBothPagingNeighborsAndPromotedLayer() throws {
+        for next in [false, true] {
+            let (canvas, window) = makeCanvas()
+            defer { window.orderOut(nil) }
+            canvas.setLivePhoto(nil, visible: false, generation: 1)
+            canvas.previousImage = try bitmapImage(width: 200, height: 300)
+            canvas.nextImage = try bitmapImage(width: 300, height: 200)
+            canvas.previousItemID = 2
+            canvas.nextItemID = 3
+            canvas.previousIsLivePhoto = true
+            canvas.nextIsLivePhoto = true
+            canvas.syncNeighbors(generation: 1)
+            let incoming = next ? canvas.nextImageLayer : canvas.previousImageLayer
+            XCTAssertNotNil(incoming.sublayers?.flatMap { $0.sublayers ?? [] }.first { $0.name == "neighborLiveIndicator" })
+            canvas.pagingAnimationDuration = 0
+            canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+            canvas.routePreciseScroll(delta: CGSize(width: next ? -350 : 350, height: 0), phase: .changed,
+                                      momentumPhase: [], timestamp: 0.01)
+            // An update for the outgoing selection must not relabel the incoming photo.
+            canvas.setLivePhoto(nil, visible: false, generation: 1)
+            XCTAssertNotNil(incoming.sublayers?.flatMap { $0.sublayers ?? [] }.first { $0.name == "neighborLiveIndicator" })
+            canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 0.2)
+            canvas.resetForSelection(2, image: next ? canvas.nextImage : canvas.previousImage, itemID: next ? 3 : 2)
+            let indicator = canvas.currentImageLayer.sublayers?.flatMap { $0.sublayers ?? [] }
+                .first { $0.name == "livePhotoIndicator" }
+            XCTAssertNotNil(indicator)
+            XCTAssertEqual(indicator?.isHidden, false)
+            XCTAssertNil(canvas.currentImageLayer.sublayers?.first { $0.name == "neighborImageOverlay" })
+        }
+    }
+
     func testSmallDownwardSwipeReturnsWithoutDismissal() async {
         let (canvas, window) = makeCanvas()
         defer { window.orderOut(nil) }

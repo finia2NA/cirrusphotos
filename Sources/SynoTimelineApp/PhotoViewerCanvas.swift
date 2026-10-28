@@ -65,6 +65,8 @@ struct PhotoViewerCanvas: NSViewRepresentable {
     let nextImage: NSImage?
     let previousItemID: Int64?
     let nextItemID: Int64?
+    var previousIsLivePhoto = false
+    var nextIsLivePhoto = false
     let interpolation: NSImageInterpolation
     let pagingInterpolation: NSImageInterpolation
     let videoConfiguration: VideoConfiguration?
@@ -94,7 +96,7 @@ struct PhotoViewerCanvas: NSViewRepresentable {
         view.syncNeighbors(generation: selectionGeneration)
         view.setZoom(CGFloat(zoom))
         view.setVideo(videoConfiguration)
-        view.setLivePhoto(livePhotoConfiguration, visible: showsLivePhotoIndicator)
+        view.setLivePhoto(livePhotoConfiguration, visible: showsLivePhotoIndicator, generation: selectionGeneration)
     }
 
     private func configure(_ view: PhotoViewerCanvasView) {
@@ -112,6 +114,8 @@ struct PhotoViewerCanvas: NSViewRepresentable {
         view.nextImage = nextImage
         view.previousItemID = previousItemID
         view.nextItemID = nextItemID
+        view.previousIsLivePhoto = previousIsLivePhoto
+        view.nextIsLivePhoto = nextIsLivePhoto
         view.interpolation = interpolation
         view.pagingInterpolation = pagingInterpolation
     }

@@ -144,6 +144,8 @@ final class PhotoViewerPresentation: ObservableObject {
     var nextNeighborImage: NSImage? { neighborImage(state?.nextNeighbor) }
     var previousNeighborItemID: Int64? { state?.previousNeighbor?.itemID }
     var nextNeighborItemID: Int64? { state?.nextNeighbor?.itemID }
+    var previousNeighborIsLivePhoto: Bool { state?.previousNeighbor?.isLivePhoto == true }
+    var nextNeighborIsLivePhoto: Bool { state?.nextNeighbor?.isLivePhoto == true }
 
     private func neighborImage(_ neighbor: PhotoViewerNeighbor?) -> NSImage? {
         guard let identity = neighbor?.thumbnailIdentity else { return nil }

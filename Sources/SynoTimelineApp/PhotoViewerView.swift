@@ -39,6 +39,8 @@ struct PhotoViewerView: View {
                               nextImage: viewer.nextNeighborImage,
                               previousItemID: viewer.previousNeighborItemID,
                               nextItemID: viewer.nextNeighborItemID,
+                              previousIsLivePhoto: viewer.previousNeighborIsLivePhoto,
+                              nextIsLivePhoto: viewer.nextNeighborIsLivePhoto,
                               interpolation: pixelInterpolation.imageInterpolation(
                                 isFullResolution: viewer.isDisplayingFullResolution
                               ),

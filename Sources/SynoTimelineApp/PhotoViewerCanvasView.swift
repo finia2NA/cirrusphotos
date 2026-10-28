@@ -34,6 +34,8 @@ final class PhotoViewerCanvasView: NSView {
     var nextImage: NSImage?
     var previousItemID: Int64?
     var nextItemID: Int64?
+    var previousIsLivePhoto = false
+    var nextIsLivePhoto = false
     var pagingAnimationDuration: TimeInterval = 0.2
     var interpolation: NSImageInterpolation = .none {
         didSet { if interpolation != oldValue { applyInterpolation() } }
@@ -93,6 +95,7 @@ final class PhotoViewerCanvasView: NSView {
     private var liveIndicatorReducedMotion = false
     private(set) var livePhotoLoading = false
     private var liveIndicatorVisible = false
+    private var pendingLiveIndicatorVisible: (generation: UInt64, visible: Bool)?
     private var scrollMonitor: Any?
     private var image: NSImage?
     private var selectionGeneration: UInt64 = 0
@@ -277,18 +280,24 @@ final class PhotoViewerCanvasView: NSView {
         syncVideoFrame()
     }
 
-    func setLivePhoto(_ configuration: LivePhotoConfiguration?, visible: Bool = true) {
+    func setLivePhoto(_ configuration: LivePhotoConfiguration?, visible: Bool = true, generation: UInt64? = nil) {
         if livePhotoConfiguration?.itemID != configuration?.itemID ||
            livePhotoConfiguration?.generation != configuration?.generation || configuration == nil {
             stopLivePhotoMotion()
         }
         livePhotoConfiguration = configuration
-        liveIndicatorVisible = visible
-        updateLiveIndicator()
+        if isPagingPhase {
+            pendingLiveIndicatorVisible = (generation ?? selectionGeneration, visible)
+        } else {
+            liveIndicatorVisible = visible
+            updateLiveIndicator()
+        }
     }
 
     private func updateLiveIndicator() {
         installImageOverlay(liveIndicatorLayer)
+        liveIndicatorLayer.name = "livePhotoIndicator"
+        liveIndicatorLayer.actions = ["position": NSNull(), "bounds": NSNull(), "hidden": NSNull()]
         let size: CGFloat = 32
         liveIndicatorLayer.frame = CGRect(x: 12, y: max(0, imageOverlayContainer.bounds.height - size - 12),
                                           width: size, height: size)
@@ -931,6 +940,7 @@ final class PhotoViewerCanvasView: NSView {
         // Promote the layer that is already on screen. No contents or layer is removed
         // from the visible photo during the handoff.
         let outgoing = imageLayer
+        let incomingIsLive = pagingLayer.sublayers?.contains { $0.name == "neighborImageOverlay" } == true
         if direction == .next {
             imageLayer = nextLayer
             nextLayer = previousLayer
@@ -944,6 +954,14 @@ final class PhotoViewerCanvasView: NSView {
             previousLayerImage = nextLayerImage
             nextLayerImage = nil
         }
+        imageLayer.sublayers?.first { $0.name == "neighborImageOverlay" }?.removeFromSuperlayer()
+        if let pending = pendingLiveIndicatorVisible, pending.generation == committedPageGeneration {
+            liveIndicatorVisible = pending.visible
+        } else {
+            liveIndicatorVisible = incomingIsLive
+        }
+        pendingLiveIndicatorVisible = nil
+        updateLiveIndicator()
         image = finalImage
         transform.configure(imageSize: incoming.size, viewport: viewportRect())
         transform.reset()
@@ -963,6 +981,7 @@ final class PhotoViewerCanvasView: NSView {
     }
 
     private func finishPagingReturn() {
+        pendingLiveIndicatorVisible = nil
         updateImageContents()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -978,6 +997,7 @@ final class PhotoViewerCanvasView: NSView {
     }
 
     private func cancelPaging() {
+        pendingLiveIndicatorVisible = nil
         imageLayer.removeAllAnimations()
         pagingLayer.removeAllAnimations()
         updateImageContents()
@@ -999,6 +1019,7 @@ final class PhotoViewerCanvasView: NSView {
         CATransaction.setDisableActions(true)
         for neighbor in [previousLayer, nextLayer] {
             neighbor.removeAllAnimations()
+            neighbor.sublayers?.first { $0.name == "neighborImageOverlay" }?.removeFromSuperlayer()
             neighbor.contents = nil
             neighbor.frame = .zero
             neighbor.opacity = 0
@@ -1019,24 +1040,63 @@ final class PhotoViewerCanvasView: NSView {
         guard !isPagingPhase, neighborConfigurationGeneration == selectionGeneration else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        updateNeighbor(previousLayer, image: previousImage, cached: &previousLayerImage, previous: true)
-        updateNeighbor(nextLayer, image: nextImage, cached: &nextLayerImage, previous: false)
+        updateNeighbor(previousLayer, image: previousImage, cached: &previousLayerImage, previous: true, isLivePhoto: previousIsLivePhoto)
+        updateNeighbor(nextLayer, image: nextImage, cached: &nextLayerImage, previous: false, isLivePhoto: nextIsLivePhoto)
         syncVideoFrame()
         CATransaction.commit()
     }
 
-    private func updateNeighbor(_ target: CALayer, image: NSImage?, cached: inout NSImage?, previous: Bool) {
+    private func updateNeighbor(_ target: CALayer, image: NSImage?, cached: inout NSImage?, previous: Bool,
+                                isLivePhoto: Bool) {
         if cached !== image {
             target.contents = image.flatMap(Self.cgImage)
             cached = image
         }
-        guard let image else { target.opacity = 0; return }
+        guard let image else {
+            target.sublayers?.first { $0.name == "neighborImageOverlay" }?.removeFromSuperlayer()
+            target.opacity = 0
+            return
+        }
         let neighborTransform = PhotoViewportTransform(imageSize: image.size, viewport: viewportRect())
         let frame = neighborTransform.imageFrame
         let distance = max(PhotoViewerPaging.pageDistance(viewport: viewportRect(), neighborFrame: frame),
                            PhotoViewerPaging.exitDistance(currentFrame: transform.imageFrame, viewport: viewportRect()))
         target.frame = frame.offsetBy(dx: previous ? -distance : distance, dy: 0)
+        setNeighborLiveIndicator(on: target, visible: isLivePhoto)
         target.opacity = 1
+    }
+
+    private func setNeighborLiveIndicator(on target: CALayer, visible: Bool) {
+        let existing = target.sublayers?.first { $0.name == "neighborImageOverlay" }
+        guard visible else { existing?.removeFromSuperlayer(); return }
+        let container: CALayer
+        let badge: CALayer
+        if let existing, let existingBadge = existing.sublayers?.first {
+            container = existing
+            badge = existingBadge
+        } else {
+            container = CALayer()
+            container.name = "neighborImageOverlay"
+            container.actions = ["position": NSNull(), "bounds": NSNull()]
+            container.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+            badge = CALayer()
+            badge.name = "neighborLiveIndicator"
+            badge.actions = ["position": NSNull(), "bounds": NSNull()]
+            badge.cornerRadius = 16
+            badge.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
+            let symbol = CALayer()
+            symbol.frame = CGRect(x: 6, y: 6, width: 20, height: 20)
+            symbol.contentsGravity = .resizeAspect
+            let image = NSImage(systemSymbolName: "livephoto", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(paletteColors: [.white]))
+            symbol.contents = image?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+            badge.addSublayer(symbol)
+            container.addSublayer(badge)
+            target.addSublayer(container)
+        }
+        container.frame = target.bounds
+        badge.frame = CGRect(x: 12, y: max(0, container.bounds.height - 44), width: 32, height: 32)
+        badge.autoresizingMask = [.layerMinYMargin]
     }
 
     private func resetPagingState() {
@@ -1128,6 +1188,7 @@ final class PhotoViewerCanvasView: NSView {
             imageOverlayContainer.removeFromSuperlayer()
             imageLayer.addSublayer(imageOverlayContainer)
         }
+        imageOverlayContainer.actions = ["position": NSNull(), "bounds": NSNull()]
         imageOverlayContainer.frame = imageLayer.bounds
         imageOverlayContainer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
         if overlay.superlayer !== imageOverlayContainer { imageOverlayContainer.addSublayer(overlay) }

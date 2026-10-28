@@ -46,13 +46,15 @@ public struct PhotoViewerNeighbor: Sendable, Equatable {
     public let thumbnailIdentity: String
     public let thumbnailData: Data?
     public let largePreviewData: Data?
+    public let isLivePhoto: Bool
 
     public init(itemID: Int64, thumbnailIdentity: String,
-                thumbnailData: Data?, largePreviewData: Data? = nil) {
+                thumbnailData: Data?, largePreviewData: Data? = nil, isLivePhoto: Bool) {
         self.itemID = itemID
         self.thumbnailIdentity = thumbnailIdentity
         self.thumbnailData = thumbnailData
         self.largePreviewData = largePreviewData
+        self.isLivePhoto = isLivePhoto
     }
 }
 

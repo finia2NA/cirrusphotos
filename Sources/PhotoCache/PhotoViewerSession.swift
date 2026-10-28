@@ -259,7 +259,8 @@ public actor PhotoViewerSession {
         return PhotoViewerNeighbor(itemID: item.id,
                                    thumbnailIdentity: identity,
                                    thumbnailData: images.thumbnailDataByIdentity[identity],
-                                   largePreviewData: images.largePreviewDataByIdentity[identity])
+                                   largePreviewData: images.largePreviewDataByIdentity[identity],
+                                   isLivePhoto: item.mediaKind == .livePhoto)
     }
 
     func publish() {
