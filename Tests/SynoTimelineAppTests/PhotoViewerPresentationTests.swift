@@ -172,6 +172,9 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         let identity = try XCTUnwrap(viewer.state?.nextNeighbor?.thumbnailIdentity)
         let neighborDecoded = await waitUntil { viewer.decodedThumbnailIdentities.contains(identity) }
         XCTAssertTrue(neighborDecoded)
+        XCTAssertNotNil(viewer.nextNeighborImage)
+        XCTAssertEqual(viewer.nextNeighborItemID, 2)
+        XCTAssertNil(viewer.previousNeighborItemID)
 
         var observedImages: [NSImage?] = []
         let cancellable = viewer.$image.sink { observedImages.append($0) }
@@ -184,6 +187,43 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
                        "Cached arrow navigation must not clear the displayed image")
         XCTAssertEqual(viewer.image?.size.width, 12)
         XCTAssertEqual(viewer.image?.size.height, 8)
+        XCTAssertTrue(viewer.close())
+        await viewer.session.close()
+    }
+
+    func testPrefetchedLargePreviewUpgradesNeighborAndSurvivesNavigation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SynoPresentation-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = ProgressivePresentationTransport(
+            configuredThumbnail: try previewData(width: 6, height: 4),
+            preview: try previewData(width: 12, height: 8),
+            original: try previewData(width: 30, height: 20))
+        let repository = try CachedPhotosRepository(
+            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            baseURL: URL(string: "https://neighbor-preview.example.invalid")!, cacheRoot: root,
+            transport: transport)
+        let items = try [item(1), item(2)]
+        let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 2,
+            list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 2)])])
+        let viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+            request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                item: items[0], page: items, pageVerified: true), source: PhotoViewerSourceAnchor()),
+            thumbnailSize: .m, loadsLargePreviews: true, allowNetwork: true, snapshotRevision: 1)
+        await transport.releaseConfiguredThumbnail()
+        let thumbnailReady = await waitUntil { viewer.nextNeighborImage?.size.width == 6 }
+        XCTAssertTrue(thumbnailReady)
+        await transport.releasePreview()
+        let previewReady = await waitUntil { viewer.nextNeighborImage?.size.width == 12 }
+        XCTAssertTrue(previewReady)
+        var widths: [CGFloat] = []
+        let subscription = viewer.$image.sink { if let width = $0?.size.width { widths.append(width) } }
+        viewer.navigateNext()
+        let selected = await waitUntil { viewer.state?.selection.itemID == 2 }
+        XCTAssertTrue(selected)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(viewer.image?.size.width, 12)
+        XCTAssertFalse(widths.suffix(from: min(1, widths.count)).contains(6))
+        subscription.cancel()
         XCTAssertTrue(viewer.close())
         await viewer.session.close()
     }

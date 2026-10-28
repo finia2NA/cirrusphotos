@@ -59,24 +59,25 @@ struct ViewerMetadataWindow {
         pageJobs.removeAll()
     }
 
+    /// Prefer the current page, then nearby pages, while keeping the viewer bounded.
+    func retainedSections(around location: PhotoViewerLocation) -> Set<Int> {
+        var sections = [location.sectionIndex]
+        for offset in [-1, 1, -2, 2] {
+            if let adjacent = self.location(for: location.ordinal + offset),
+               !sections.contains(adjacent.sectionIndex), sections.count < maximumPages {
+                sections.append(adjacent.sectionIndex)
+            }
+        }
+        return Set(sections)
+    }
+
     mutating func trimPages(around location: PhotoViewerLocation) {
-        var desiredSections = [location.sectionIndex]
-        if let previous = self.location(for: location.ordinal - 1), !desiredSections.contains(previous.sectionIndex) {
-            desiredSections.append(previous.sectionIndex)
-        }
-        if let next = self.location(for: location.ordinal + 1), !desiredSections.contains(next.sectionIndex) {
-            desiredSections.append(next.sectionIndex)
-        }
-        let retained = Set(desiredSections.prefix(maximumPages))
+        let retained = retainedSections(around: location)
         pages = pages.filter { retained.contains($0.key) }
     }
 
     mutating func trimPageJobs(around location: PhotoViewerLocation) {
-        var retained: Set<Int> = [location.sectionIndex]
-        // Neighbor metadata is needed for the always-on thumbnail buffer. Original-image
-        // prefetch remains separately gated on the current original succeeding.
-        if let previous = self.location(for: location.ordinal - 1) { retained.insert(previous.sectionIndex) }
-        if let next = self.location(for: location.ordinal + 1) { retained.insert(next.sectionIndex) }
+        let retained = retainedSections(around: location)
         for (section, job) in pageJobs where !retained.contains(section) {
             job.task.cancel()
             pageJobs.removeValue(forKey: section)

@@ -30,6 +30,16 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         return (canvas, window)
     }
 
+    private func bitmapImage(width: Int, height: Int) throws -> NSImage {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8,
+            samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let image = NSImage(size: NSSize(width: width, height: height))
+        image.addRepresentation(bitmap)
+        return image
+    }
+
     func testViewportUsesFullDetailWidthAndReservesToolbarHeight() {
         let canvas = PhotoViewerCanvasView(frame: CGRect(x: 0, y: 0, width: 840, height: 560))
         canvas.toolbarInset = 72
@@ -47,11 +57,36 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         let next = NSImage(size: NSSize(width: 20, height: 10))
         next.addRepresentation(bitmap)
 
-        canvas.resetForSelection(2, image: next)
+        canvas.resetForSelection(2, image: next, itemID: nil)
 
         XCTAssertTrue(canvas.hasImageContents)
         XCTAssertTrue(canvas.presentedImage === next)
         XCTAssertEqual(canvas.currentZoom, 1)
+    }
+
+    func testReattachedCanvasInstallsLastPresentedImage() throws {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        defer { window.orderOut(nil) }
+        let controller = PhotoViewerCanvasController()
+        let first = PhotoViewerCanvasView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        window.contentView = first
+        first.layoutSubtreeIfNeeded()
+        first.setImage(try bitmapImage(width: 400, height: 300),
+                       selectionGeneration: 1, openingSourceRectInWindow: nil)
+        controller.attach(first)
+        let presented = try bitmapImage(width: 600, height: 400)
+        controller.resetForSelection(2, image: presented, itemID: 3)
+        XCTAssertTrue(first.presentedImage === presented)
+
+        let second = PhotoViewerCanvasView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        window.contentView = second
+        second.layoutSubtreeIfNeeded()
+        controller.attach(second)
+
+        XCTAssertTrue(second.presentedImage === presented)
+        XCTAssertTrue(second.hasImageContents)
+        XCTAssertEqual(second.currentZoom, 1)
     }
 
     func testSpaceAndEscapeRequestTheSameCloseAction() throws {
@@ -219,5 +254,379 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         XCTAssertFalse(canvas.isAwaitingInteractiveDismissal)
         try? await Task.sleep(for: .milliseconds(20))
         XCTAssertEqual(dismisses, 0)
+    }
+
+    func testHorizontalTwoFingerSwipeFollowsFingersAndCommitsToNext() async throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        let restFrame = canvas.presentedImageFrame
+        let neighbor = try bitmapImage(width: 200, height: 100)
+        canvas.nextImage = neighbor
+        canvas.nextItemID = 3
+        canvas.syncNeighbors(generation: 1)
+        canvas.pagingAnimationDuration = 0
+        var nextCalls = 0
+        canvas.onNext = { nextCalls += 1 }
+
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: -50, height: -4), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+
+        XCTAssertTrue(canvas.isInteractivelyPaging)
+        XCTAssertTrue(canvas.hasPagingContents)
+        let distance = canvas.presentedPagingFrame.midX - canvas.presentedImageFrame.midX
+        XCTAssertEqual(distance, 824, accuracy: 0.5)
+        XCTAssertEqual(canvas.presentedImageFrame.midX, restFrame.midX - 67.5, accuracy: 0.5)
+        XCTAssertEqual(canvas.presentedPagingFrame.midX, restFrame.midX + distance - 67.5,
+                       accuracy: 0.5)
+
+        canvas.routePreciseScroll(delta: CGSize(width: -300, height: -4), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.02)
+        canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 0.3)
+
+        XCTAssertTrue(canvas.isAwaitingPage)
+        XCTAssertEqual(canvas.presentedPagingFrame.midX, restFrame.midX, accuracy: 0.5)
+        XCTAssertEqual(canvas.presentedImageFrame.midX, restFrame.midX - distance, accuracy: 0.5)
+        try? await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(nextCalls, 1)
+
+        let confirmed = try bitmapImage(width: 400, height: 300)
+        let incomingLayer = canvas.nextImageLayer
+        canvas.resetForSelection(2, image: confirmed, itemID: 3)
+
+        XCTAssertTrue(canvas.presentedImage === confirmed)
+        XCTAssertTrue(canvas.currentImageLayer === incomingLayer,
+                      "The visible neighbor layer becomes the current layer")
+        XCTAssertFalse(canvas.isAwaitingPage)
+        XCTAssertEqual(canvas.presentedImageFrame.midX, restFrame.midX, accuracy: 0.5)
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(canvas.hasPagingContents)
+    }
+
+    func testSmallHorizontalSwipeReturnsWithoutPaging() async throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        let restFrame = canvas.presentedImageFrame
+        canvas.nextImage = try bitmapImage(width: 200, height: 100)
+        canvas.nextItemID = 3
+        canvas.syncNeighbors(generation: 1)
+        canvas.pagingAnimationDuration = 0
+        var nextCalls = 0
+        canvas.onNext = { nextCalls += 1 }
+
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: -40, height: -2), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+        canvas.routePreciseScroll(delta: CGSize(width: -40, height: -2), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.02)
+        XCTAssertTrue(canvas.isInteractivelyPaging)
+
+        canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 0.3)
+
+        XCTAssertFalse(canvas.isInteractivelyPaging)
+        XCTAssertFalse(canvas.isAwaitingPage)
+        XCTAssertTrue(canvas.hasPagingContents, "The neighbor remains prepared offscreen")
+        XCTAssertEqual(canvas.presentedImageFrame.midX, restFrame.midX, accuracy: 0.5)
+        try? await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(nextCalls, 0)
+    }
+
+    func testHorizontalSwipeRightUsesPreviousNeighbor() async throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        canvas.previousImage = try bitmapImage(width: 200, height: 100)
+        canvas.previousItemID = 1
+        canvas.syncNeighbors(generation: 1)
+        canvas.pagingAnimationDuration = 0
+        var previousCalls = 0
+        canvas.onPrevious = { previousCalls += 1 }
+
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: 300, height: 4), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+        canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 0.2)
+
+        XCTAssertTrue(canvas.isAwaitingPage)
+        try? await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(previousCalls, 1)
+
+        let confirmed = try bitmapImage(width: 400, height: 300)
+        let incomingLayer = canvas.previousImageLayer
+        canvas.resetForSelection(2, image: confirmed, itemID: 1)
+        XCTAssertTrue(canvas.presentedImage === confirmed)
+        XCTAssertTrue(canvas.currentImageLayer === incomingLayer)
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(canvas.hasPagingContents)
+    }
+
+    func testHorizontalSwipeWithoutNeighborImageDoesNotPage() {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        let restFrame = canvas.presentedImageFrame
+        canvas.nextItemID = 3
+        canvas.syncNeighbors(generation: 1)
+        canvas.pagingAnimationDuration = 0
+
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: -300, height: 2), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+
+        XCTAssertFalse(canvas.isInteractivelyPaging)
+        XCTAssertEqual(canvas.presentedImageFrame.midX, restFrame.midX, accuracy: 0.5)
+        canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 0.02)
+    }
+
+    func testPagingConfirmationKeepsPredecodedImageWhenSelectionImageIsUnavailable() async throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        let restFrame = canvas.presentedImageFrame
+        let neighbor = try bitmapImage(width: 200, height: 100)
+        canvas.nextImage = neighbor
+        canvas.nextItemID = 3
+        canvas.syncNeighbors(generation: 1)
+        canvas.pagingAnimationDuration = 0
+
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: -300, height: 2), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+        canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 0.2)
+        XCTAssertTrue(canvas.isAwaitingPage)
+        let pending = try XCTUnwrap(canvas.presentedPagingImage)
+
+        canvas.resetForSelection(2, image: nil, itemID: 3)
+
+        XCTAssertTrue(canvas.presentedImage === pending)
+        XCTAssertTrue(canvas.hasImageContents)
+        XCTAssertEqual(canvas.presentedImageFrame.midX, restFrame.midX, accuracy: 0.5)
+
+        canvas.setImage(nil, selectionGeneration: 2, openingSourceRectInWindow: nil)
+        XCTAssertTrue(canvas.presentedImage === pending,
+                      "A late nil selection image must not clear a committed page")
+
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(canvas.hasImageContents,
+                      "The promoted neighbor remains visible")
+        XCTAssertTrue(canvas.presentedImage === pending)
+        XCTAssertTrue(canvas.hasImageContents)
+
+        let upgraded = try bitmapImage(width: 600, height: 400)
+        canvas.setImage(upgraded, selectionGeneration: 2, openingSourceRectInWindow: nil)
+        XCTAssertTrue(canvas.presentedImage === upgraded)
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(canvas.hasPagingContents)
+        XCTAssertTrue(canvas.hasImageContents)
+    }
+
+    func testMatchingCommittedLayerRemainsCurrentDuringInteraction() async throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        canvas.nextImage = try bitmapImage(width: 200, height: 100)
+        canvas.nextItemID = 3
+        canvas.syncNeighbors(generation: 1)
+        canvas.pagingAnimationDuration = 0
+
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: -300, height: 2), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+        canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 0.2)
+        let pending = try XCTUnwrap(canvas.presentedPagingImage)
+
+        let incomingLayer = canvas.nextImageLayer
+        canvas.resetForSelection(2, image: pending, itemID: 3)
+
+        XCTAssertTrue(canvas.presentedImage === pending)
+        XCTAssertTrue(canvas.currentImageLayer === incomingLayer)
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(canvas.currentImageLayer === incomingLayer)
+
+        canvas.setZoom(1.5)
+        XCTAssertTrue(canvas.currentImageLayer === incomingLayer)
+        XCTAssertEqual(canvas.currentZoom, 1.5, accuracy: 0.001)
+        try? await Task.sleep(for: .milliseconds(20))
+    }
+
+    func testBothNeighborsArePreparedAndLayersRotateInBothDirections() throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        let previous = try bitmapImage(width: 160, height: 100)
+        let next = try bitmapImage(width: 200, height: 100)
+        canvas.previousImage = previous
+        canvas.previousItemID = 1
+        canvas.nextImage = next
+        canvas.nextItemID = 3
+        canvas.syncNeighbors(generation: 1)
+        let initialCurrent = canvas.currentImageLayer
+        let initialPrevious = canvas.previousImageLayer
+        let initialNext = canvas.nextImageLayer
+        XCTAssertNotNil(initialPrevious.contents)
+        XCTAssertNotNil(initialNext.contents)
+        XCTAssertLessThan(initialPrevious.frame.maxX, canvas.bounds.minX)
+        XCTAssertGreaterThan(initialNext.frame.minX, canvas.bounds.maxX)
+        canvas.pagingAnimationDuration = 0
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: -300, height: 0), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+        canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 0.2)
+        canvas.resetForSelection(2, image: next, itemID: 3)
+        XCTAssertTrue(canvas.currentImageLayer === initialNext)
+        XCTAssertTrue(canvas.previousImageLayer === initialCurrent)
+        XCTAssertTrue(canvas.nextImageLayer === initialPrevious)
+
+        canvas.previousImage = previous
+        canvas.previousItemID = 2
+        canvas.nextImage = nil
+        canvas.nextItemID = nil
+        canvas.syncNeighbors(generation: 2)
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 1)
+        canvas.routePreciseScroll(delta: CGSize(width: 300, height: 0), phase: .changed,
+                                  momentumPhase: [], timestamp: 1.01)
+        canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 1.2)
+        canvas.resetForSelection(3, image: previous, itemID: 2)
+        XCTAssertTrue(canvas.currentImageLayer === initialCurrent)
+        XCTAssertTrue(canvas.nextImageLayer === initialNext)
+        XCTAssertTrue(canvas.previousImageLayer === initialPrevious)
+    }
+
+    func testSelectionConfirmationDuringAnimationPromotesIncomingLayer() async throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        let next = try bitmapImage(width: 200, height: 100)
+        canvas.nextImage = next
+        canvas.nextItemID = 3
+        canvas.syncNeighbors(generation: 1)
+        let incomingLayer = canvas.nextImageLayer
+        canvas.pagingAnimationDuration = 0.05
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: -300, height: 0), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+        canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 0.2)
+        canvas.resetForSelection(2, image: next, itemID: 3)
+        XCTAssertTrue(canvas.isAwaitingPage)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertFalse(canvas.isAwaitingPage)
+        XCTAssertTrue(canvas.currentImageLayer === incomingLayer)
+        XCTAssertNotNil(canvas.currentImageLayer.contents)
+    }
+
+    func testConfirmedPageStaysInFlightUntilSettleAnimationFinishes() async throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        let next = try bitmapImage(width: 200, height: 100)
+        canvas.nextImage = next
+        canvas.nextItemID = 3
+        canvas.syncNeighbors(generation: 1)
+        canvas.pagingAnimationDuration = 0.5
+        let incomingLayer = canvas.nextImageLayer
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: -250, height: 0), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+        canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 0.2)
+        canvas.resetForSelection(2, image: next, itemID: 3)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(canvas.isAwaitingPage, "Selection confirmation must not end an active animation")
+        XCTAssertFalse(canvas.currentImageLayer === incomingLayer)
+        if let presentation = incomingLayer.presentation() {
+            XCTAssertGreaterThan(presentation.frame.midX, incomingLayer.frame.midX + 1)
+        }
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertFalse(canvas.isAwaitingPage)
+        XCTAssertTrue(canvas.currentImageLayer === incomingLayer)
+    }
+
+    func testCommittedPageUsesSmoothBrakingAnimation() throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        canvas.nextImage = try bitmapImage(width: 200, height: 100)
+        canvas.nextItemID = 3
+        canvas.syncNeighbors(generation: 1)
+        let incoming = canvas.nextImageLayer
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: -300, height: 0), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+        canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 0.2)
+        let animation = try XCTUnwrap(incoming.animation(forKey: "transition.position"))
+        XCTAssertEqual(animation.duration, 0.2, accuracy: 0.001)
+        let timing = try XCTUnwrap(animation.timingFunction)
+        var controlPoint: [Float] = [0, 0]
+        timing.getControlPoint(at: 2, values: &controlPoint)
+        XCTAssertEqual(controlPoint[1], 1, accuracy: 0.001, "The animation ends at zero velocity")
+    }
+
+    func testNewSwipeInterruptsConfirmedPageAnimation() throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        let second = try bitmapImage(width: 200, height: 100)
+        let third = try bitmapImage(width: 100, height: 200)
+        canvas.nextImage = second
+        canvas.nextItemID = 3
+        canvas.syncNeighbors(generation: 1)
+        canvas.pagingAnimationDuration = 1
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: -300, height: 0), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+        canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 0.2)
+        canvas.resetForSelection(2, image: second, itemID: 3)
+        canvas.previousImage = second
+        canvas.previousItemID = 2
+        canvas.nextImage = third
+        canvas.nextItemID = 4
+        canvas.syncNeighbors(generation: 2)
+
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0.3)
+        canvas.routePreciseScroll(delta: CGSize(width: -50, height: 0), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.31)
+        XCTAssertTrue(canvas.isInteractivelyPaging, "A new gesture should take over while the prior page settles")
+        XCTAssertTrue(canvas.presentedPagingImage === third)
+    }
+
+    func testIncomingNeighborCanBecomeAvailableDuringGesture() throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        canvas.nextItemID = 3
+        canvas.syncNeighbors(generation: 1)
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: -40, height: 0), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+        XCTAssertFalse(canvas.isInteractivelyPaging)
+        canvas.nextImage = try bitmapImage(width: 200, height: 100)
+        canvas.syncNeighbors(generation: 1)
+        canvas.routePreciseScroll(delta: CGSize(width: -30, height: 0), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.02)
+        XCTAssertTrue(canvas.isInteractivelyPaging)
+    }
+
+    func testCommitKeepsSpacingWhenNeighborHasDifferentAspectRatio() throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        canvas.nextImage = try bitmapImage(width: 100, height: 300)
+        canvas.nextItemID = 3
+        canvas.syncNeighbors(generation: 1)
+        canvas.pagingAnimationDuration = 0
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: -300, height: 0), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+        let separation = canvas.presentedPagingFrame.midX - canvas.presentedImageFrame.midX
+        canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 0.2)
+        XCTAssertEqual(canvas.presentedPagingFrame.midX - canvas.presentedImageFrame.midX,
+                       separation, accuracy: 0.5)
+        XCTAssertLessThan(canvas.presentedImageFrame.maxX, canvas.bounds.minX)
+    }
+
+    func testDisabledPagingDoesNotPageHorizontally() throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        canvas.nextImage = try bitmapImage(width: 200, height: 100)
+        canvas.nextItemID = 3
+        canvas.interactivePagingEnabled = false
+        let restFrame = canvas.presentedImageFrame
+
+        canvas.routePreciseScroll(delta: .zero, phase: .began, momentumPhase: [], timestamp: 0)
+        canvas.routePreciseScroll(delta: CGSize(width: -300, height: 2), phase: .changed,
+                                  momentumPhase: [], timestamp: 0.01)
+        canvas.routePreciseScroll(delta: .zero, phase: .ended, momentumPhase: [], timestamp: 0.02)
+
+        XCTAssertFalse(canvas.isInteractivelyPaging)
+        XCTAssertFalse(canvas.isAwaitingPage)
+        XCTAssertEqual(canvas.presentedImageFrame.midX, restFrame.midX, accuracy: 0.5)
     }
 }

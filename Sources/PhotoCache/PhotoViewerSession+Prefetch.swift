@@ -14,7 +14,9 @@ extension PhotoViewerSession {
     /// can warm while the current original is still loading.
     func scheduleThumbnailNeighbors() {
         guard !closed else { return }
-        let locations = [-1, 1].compactMap { metadata.location(for: desired.ordinal + $0) }
+        let retainedSections = metadata.retainedSections(around: desired)
+        let locations = [-1, 1, -2, 2].compactMap { metadata.location(for: desired.ordinal + $0) }
+            .filter { retainedSections.contains($0.sectionIndex) }
         let wantedSections = Set(locations.map(\.sectionIndex))
         for section in wantedSections where metadata.pages[section] == nil || (allowNetwork && metadata.pages[section]?.verified == false) {
             ensurePage(section, visible: false)
@@ -37,9 +39,11 @@ extension PhotoViewerSession {
                   page.slots.indices.contains(location.pageOffset),
                   let descriptor = page.slot(at: location.pageOffset)?.item?.additional?.thumbnail else { continue }
             wantedIdentities.insert(Self.viewerThumbnailIdentity(descriptor))
-            let network = allowNetwork && page.verified &&
-                (thumbnailSize != .xl || images.enhancementsReleasedGeneration == generation)
-            for request in neighborThumbnailRequests(for: descriptor) {
+            let immediate = abs(location.ordinal - desired.ordinal) == 1
+            let requests = immediate ? neighborThumbnailRequests(for: descriptor) : [configuredThumbnailRequest()]
+            for request in requests {
+                let network = allowNetwork && page.verified &&
+                    (request.size != .xl || images.enhancementsReleasedGeneration == generation)
                 let key = Self.thumbnailKey(descriptor, size: request.size)
                 wantedKeys.insert(key)
                 if let job = images.thumbnailPrefetchJobs[key], network && !job.allowNetwork {
@@ -57,6 +61,9 @@ extension PhotoViewerSession {
         }
         for identity in images.thumbnailDataByIdentity.keys where !wantedIdentities.contains(identity) {
             images.thumbnailDataByIdentity.removeValue(forKey: identity)
+        }
+        for identity in images.largePreviewDataByIdentity.keys where !wantedIdentities.contains(identity) {
+            images.largePreviewDataByIdentity.removeValue(forKey: identity)
         }
     }
 
@@ -100,10 +107,14 @@ extension PhotoViewerSession {
     func receiveThumbnailPrefetch(_ data: Data, identity: String,
                                          tier: ViewerImageWork.ThumbnailTier,
                                          key: String, id: UUID) {
-        guard tier == .configured,
-              images.thumbnailPrefetchJobs[key]?.id == id,
-              images.thumbnailDataByIdentity[identity] != data else { return }
-        images.thumbnailDataByIdentity[identity] = data
+        guard images.thumbnailPrefetchJobs[key]?.id == id else { return }
+        if tier == .configured {
+            guard images.thumbnailDataByIdentity[identity] != data else { return }
+            images.thumbnailDataByIdentity[identity] = data
+        } else {
+            guard images.largePreviewDataByIdentity[identity] != data else { return }
+            images.largePreviewDataByIdentity[identity] = data
+        }
         publish()
     }
 
@@ -132,8 +143,7 @@ extension PhotoViewerSession {
 
     func neighborThumbnailRequests(for descriptor: ThumbnailInfo) -> [ViewerImageWork.ThumbnailRequest] {
         var requests = [configuredThumbnailRequest()]
-        if thumbnailSize != .xl, images.enhancementsReleasedGeneration == generation,
-           let expensive = expensiveThumbnailRequest(for: descriptor) {
+        if thumbnailSize != .xl, let expensive = expensiveThumbnailRequest(for: descriptor) {
             requests.append(expensive)
         }
         return requests

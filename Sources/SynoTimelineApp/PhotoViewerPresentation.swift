@@ -33,11 +33,15 @@ final class PhotoViewerPresentation: ObservableObject {
     private var decodeTask: Task<Void, Never>?
     private var thumbnailDecodeTask: Task<Void, Never>?
     private var neighborDecodeTasks: [String: Task<Void, Never>] = [:]
-    private var decodedThumbnails: [String: NSImage] = [:]
+    private var neighborPreviewTasks: [String: Task<Void, Never>] = [:]
+    @Published private var decodedNeighborPreviews: [String: NSImage] = [:]
+    private var neighborPreviewData: [String: Data] = [:]
+    @Published private(set) var decodedThumbnails: [String: NSImage] = [:]
     private var currentGeneration: UInt64?
     private var lastThumbnailData: Data?
     private var lastFullData: Data?
     private var hasDisplayedFullImage = false
+    private var adoptedNeighborPreview = false
 
     init(repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor = .personalLibrary,
          index: LibraryIndex, request: PhotoViewerOpenRequest,
@@ -74,6 +78,7 @@ final class PhotoViewerPresentation: ObservableObject {
         decodeTask?.cancel()
         thumbnailDecodeTask?.cancel()
         for task in neighborDecodeTasks.values { task.cancel() }
+        for task in neighborPreviewTasks.values { task.cancel() }
         let session = session
         Task { await session.close() }
     }
@@ -134,6 +139,16 @@ final class PhotoViewerPresentation: ObservableObject {
     }
 
     var decodedThumbnailIdentities: Set<String> { Set(decodedThumbnails.keys) }
+
+    var previousNeighborImage: NSImage? { neighborImage(state?.previousNeighbor) }
+    var nextNeighborImage: NSImage? { neighborImage(state?.nextNeighbor) }
+    var previousNeighborItemID: Int64? { state?.previousNeighbor?.itemID }
+    var nextNeighborItemID: Int64? { state?.nextNeighbor?.itemID }
+
+    private func neighborImage(_ neighbor: PhotoViewerNeighbor?) -> NSImage? {
+        guard let identity = neighbor?.thumbnailIdentity else { return nil }
+        return decodedNeighborPreviews[identity] ?? decodedThumbnails[identity]
+    }
 
     var canRetry: Bool {
         guard invalidationMessage == nil, let state else { return false }
@@ -255,6 +270,8 @@ final class PhotoViewerPresentation: ObservableObject {
     private func cancelNeighborDecodes() {
         for task in neighborDecodeTasks.values { task.cancel() }
         neighborDecodeTasks.removeAll()
+        for task in neighborPreviewTasks.values { task.cancel() }
+        neighborPreviewTasks.removeAll()
     }
 
     private func receive(_ next: PhotoViewerState) {
@@ -265,6 +282,7 @@ final class PhotoViewerPresentation: ObservableObject {
             lastThumbnailData = nil
             lastFullData = nil
             hasDisplayedFullImage = false
+            adoptedNeighborPreview = false
             decodeTask?.cancel()
             thumbnailDecodeTask?.cancel()
             decodeFailure = nil
@@ -274,13 +292,15 @@ final class PhotoViewerPresentation: ObservableObject {
                 if next.selection.itemID == originalItemID {
                     image = source.image
                 } else if let identity = next.thumbnailIdentity {
-                    image = decodedThumbnails[identity]
+                    image = decodedNeighborPreviews[identity] ?? decodedThumbnails[identity]
+                    adoptedNeighborPreview = decodedNeighborPreviews[identity] != nil
                 } else {
                     image = nil
                 }
                 zoom = 1
             }
-            canvasController.resetForSelection(next.selection.generation, image: image)
+            canvasController.resetForSelection(next.selection.generation, image: image,
+                                               itemID: next.selection.itemID)
         }
         state = next
         onInfoItemChanged?(next.item)
@@ -289,7 +309,8 @@ final class PhotoViewerPresentation: ObservableObject {
             decodeFull(data, selection: next.selection)
         }
         if let data = next.thumbnailData, lastThumbnailData != data,
-           !hasDisplayedFullImage, next.selection == state?.selection {
+           !hasDisplayedFullImage, next.selection == state?.selection,
+           !adoptedNeighborPreview || next.thumbnailIsLargePreview {
             lastThumbnailData = data
             decodeThumbnail(data, selection: next.selection)
         }
@@ -299,9 +320,21 @@ final class PhotoViewerPresentation: ObservableObject {
     private func prepareNeighborThumbnails(_ state: PhotoViewerState) {
         var wanted: Set<String> = []
         if let identity = state.thumbnailIdentity { wanted.insert(identity) }
-        for neighbor in [state.previousNeighbor, state.nextNeighbor].compactMap({ $0 }) {
+        let neighbors = [state.previousNeighbor, state.nextNeighbor].compactMap { $0 }
+            + state.thumbnailLookahead
+        for neighbor in neighbors {
             let identity = neighbor.thumbnailIdentity
             wanted.insert(identity)
+            if let data = neighbor.largePreviewData, neighborPreviewData[identity] != data {
+                neighborPreviewTasks[identity]?.cancel()
+                neighborPreviewData[identity] = data
+                neighborPreviewTasks[identity] = Task { [weak self] in
+                    let decoded = await DecodedImages.shared.image(from: data, maxPixel: 1600)
+                    guard !Task.isCancelled, let self else { return }
+                    self.neighborPreviewTasks[identity] = nil
+                    if let decoded { self.decodedNeighborPreviews[identity] = decoded }
+                }
+            }
             guard let data = neighbor.thumbnailData,
                   decodedThumbnails[identity] == nil,
                   neighborDecodeTasks[identity] == nil else { continue }
@@ -319,6 +352,14 @@ final class PhotoViewerPresentation: ObservableObject {
         }
         for identity in decodedThumbnails.keys where !wanted.contains(identity) {
             decodedThumbnails[identity] = nil
+        }
+        for (identity, task) in neighborPreviewTasks where !wanted.contains(identity) {
+            task.cancel()
+            neighborPreviewTasks[identity] = nil
+        }
+        for identity in neighborPreviewData.keys where !wanted.contains(identity) {
+            neighborPreviewData[identity] = nil
+            decodedNeighborPreviews[identity] = nil
         }
     }
 

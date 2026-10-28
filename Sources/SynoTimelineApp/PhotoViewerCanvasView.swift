@@ -10,8 +10,9 @@ import TimelineCore
 /// change, so no animation frame resamples it.
 ///
 /// At fit zoom a predominantly downward two-finger trackpad swipe interacts with the
-/// photo and can dismiss the viewer. Above fit zoom precise scrolling pans instead.
-/// Click-drag never dismisses.
+/// photo and can dismiss the viewer, while a predominantly horizontal swipe pages to
+/// the adjacent photo using three reusable image layers. Above fit zoom precise scrolling pans
+/// instead. Click-drag never dismisses or pages.
 final class PhotoViewerCanvasView: NSView {
     var onZoomChanged: ((CGFloat) -> Void)?
     var onPrevious: (() -> Void)?
@@ -21,12 +22,25 @@ final class PhotoViewerCanvasView: NSView {
     /// threshold. The canvas holds the dragged visual state until the shell calls
     /// `collapse(to:reduceMotion:completion:)`.
     var onInteractiveDismiss: (() -> Void)?
-    var toolbarInset: CGFloat = 0 { didSet { updateGeometry() } }
+    var toolbarInset: CGFloat = 0 {
+        didSet { if toolbarInset != oldValue { updateGeometry() } }
+    }
     var reduceMotion = false
-    /// Videos and Reduce Motion never offer the spatial interactive gesture.
+    /// Videos and Reduce Motion never offer the spatial interactive gestures.
     var interactiveDismissalEnabled = true
+    var interactivePagingEnabled = true
+    var previousImage: NSImage?
+    var nextImage: NSImage?
+    var previousItemID: Int64?
+    var nextItemID: Int64?
+    var pagingAnimationDuration: TimeInterval = 0.2
     var interpolation: NSImageInterpolation = .none {
         didSet { if interpolation != oldValue { applyInterpolation() } }
+    }
+    var pagingInterpolation: NSImageInterpolation = .high {
+        didSet {
+            if pagingInterpolation != oldValue { applyPagingInterpolation() }
+        }
     }
 
     private enum Phase: Equatable {
@@ -34,6 +48,10 @@ final class PhotoViewerCanvasView: NSView {
         case opening
         case interactiveDismissal
         case awaitingDismissal
+        case interactivePaging
+        case pagingCommit
+        case awaitingPage
+        case pagingReturning
         case returning
         case closing
     }
@@ -49,20 +67,40 @@ final class PhotoViewerCanvasView: NSView {
     }
 
     private let backdropLayer = CALayer()
-    private let imageLayer = CALayer()
+    private var imageLayer = CALayer()
+    private var previousLayer = CALayer()
+    private var nextLayer = CALayer()
+    private var previousLayerImage: NSImage?
+    private var nextLayerImage: NSImage?
+    private var neighborConfigurationGeneration: UInt64?
+    private var pagingLayer: CALayer { pageDirection == .previous ? previousLayer : nextLayer }
     private var image: NSImage?
     private var selectionGeneration: UInt64 = 0
     private var transform = PhotoViewportTransform(imageSize: CGSize(width: 1, height: 1), viewport: .zero)
+    private var pagingTransform = PhotoViewportTransform(imageSize: CGSize(width: 1, height: 1), viewport: .zero)
 
     private var phase: Phase = .resting
     private var dragLocation: CGPoint?
 
     private var scrollGestureActive = false
     private var scrollDirectionLocked = false
+    private var lockedPagingDirection: PhotoViewerPaging.Direction?
     private var scrollTranslation: CGSize = .zero
     private var scrollVelocitySample: (delta: CGSize, time: TimeInterval)?
     private var lastScrollVelocity: CGSize = .zero
     private var dismissTranslation: CGSize = .zero
+
+    private var pendingPagingImage: NSImage?
+    private var pendingPagingItemID: Int64?
+    private var pageDirection: PhotoViewerPaging.Direction?
+    private var pagingDistance: CGFloat = 0
+    private var pagingInitialOffset: CGFloat = 0
+    private var pagingRestFrame: CGRect = .zero
+    private var pagingViewport: CGRect = .zero
+    private var committedPageImage: NSImage?
+    private var committedPageGeneration: UInt64?
+    private var committedPageShownGeneration: UInt64?
+    private var pageSlideFinished = false
 
     private var openingSourceRect: CGRect?
     private var activeTransition: SpatialTransition?
@@ -106,6 +144,13 @@ final class PhotoViewerCanvasView: NSView {
             imageLayer.opacity = 1
             root.addSublayer(imageLayer)
         }
+        for neighbor in [previousLayer, nextLayer] where neighbor.superlayer == nil {
+            neighbor.contentsGravity = .resize
+            neighbor.magnificationFilter = .linear
+            neighbor.minificationFilter = .linear
+            neighbor.opacity = 0
+            root.addSublayer(neighbor)
+        }
     }
 
     private func updateBackingScale() {
@@ -113,6 +158,8 @@ final class PhotoViewerCanvasView: NSView {
         layer?.contentsScale = scale
         backdropLayer.contentsScale = scale
         imageLayer.contentsScale = scale
+        previousLayer.contentsScale = scale
+        nextLayer.contentsScale = scale
     }
 
     // MARK: - View lifecycle
@@ -170,6 +217,18 @@ final class PhotoViewerCanvasView: NSView {
     func setImage(_ next: NSImage?, selectionGeneration: UInt64,
                   openingSourceRectInWindow: CGRect?) {
         guard phase != .closing else { return }
+        if committedPageShownGeneration == selectionGeneration, next == nil {
+            return
+        }
+        if isPagingPhase {
+            if selectionGeneration != self.selectionGeneration { return }
+            if committedPageGeneration != nil {
+                if let next { committedPageImage = next }
+            } else if let next, image !== next {
+                image = next
+            }
+            return
+        }
         let selectionChanged = self.selectionGeneration != selectionGeneration
         if selectionChanged {
             self.selectionGeneration = selectionGeneration
@@ -187,6 +246,7 @@ final class PhotoViewerCanvasView: NSView {
             imageLayer.opacity = 1
             imageLayer.frame = transform.imageFrame
             CATransaction.commit()
+            clearNeighborLayers()
             if !hasOpened { openingSourceRect = openingSourceRectInWindow }
             if next != nil { beginOpeningIfPossible() }
             return
@@ -208,6 +268,8 @@ final class PhotoViewerCanvasView: NSView {
                let target = convertWindowContentRect(rect) {
                 retargetActiveTransition(to: target)
             }
+        case .interactivePaging, .pagingCommit, .awaitingPage, .pagingReturning:
+            break
         }
         if !hasOpened { beginOpeningIfPossible() }
     }
@@ -226,9 +288,48 @@ final class PhotoViewerCanvasView: NSView {
         snapLayerToRest()
     }
 
-    func resetForSelection(_ generation: UInt64, image next: NSImage?) {
-        guard generation != selectionGeneration else { return }
+    func installPresentedImage(_ next: NSImage?, generation: UInt64) {
+        guard phase != .closing else { return }
         selectionGeneration = generation
+        committedPageShownGeneration = nil
+        image = next
+        transform.configure(imageSize: next?.size ?? CGSize(width: 1, height: 1),
+                            viewport: viewportRect())
+        transform.reset()
+        cancelTransition()
+        phase = .resting
+        dismissTranslation = .zero
+        resetScrollGesture()
+        dragLocation = nil
+        let contents = next.flatMap(Self.cgImage)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        imageLayer.contents = contents
+        imageLayer.frame = next == nil ? .zero : transform.imageFrame
+        imageLayer.opacity = 1
+        backdropLayer.opacity = 1
+        CATransaction.commit()
+        clearNeighborLayers()
+        hasOpened = true
+    }
+
+    func resetForSelection(_ generation: UInt64, image next: NSImage?, itemID: Int64?) {
+        guard generation != selectionGeneration else { return }
+        if (phase == .pagingCommit || phase == .awaitingPage),
+           let itemID, itemID == pendingPagingItemID {
+            selectionGeneration = generation
+            committedPageGeneration = generation
+            committedPageImage = next ?? pendingPagingImage
+            if phase == .awaitingPage || pageSlideFinished {
+                finishPagingCommit()
+            }
+            return
+        }
+        if isPagingPhase {
+            cancelPaging()
+        }
+        selectionGeneration = generation
+        committedPageShownGeneration = nil
         cancelTransition()
         phase = .resting
         dismissTranslation = .zero
@@ -255,6 +356,7 @@ final class PhotoViewerCanvasView: NSView {
             backdropLayer.opacity = 1
             CATransaction.commit()
         }
+        clearNeighborLayers()
         onZoomChanged?(1)
     }
 
@@ -264,6 +366,18 @@ final class PhotoViewerCanvasView: NSView {
     /// interactively dragged state without a jump.
     func collapse(to rectInWindow: CGRect?, reduceMotion: Bool, completion: @escaping () -> Void) {
         guard phase != .closing else { return }
+        if phase == .interactivePaging || phase == .pagingReturning {
+            cancelPaging()
+        } else if phase == .pagingCommit || phase == .awaitingPage {
+            if committedPageGeneration != nil {
+                finishPagingCommit()
+            } else {
+                cancelPaging()
+            }
+        }
+        if pendingPagingImage == nil {
+            clearNeighborLayers()
+        }
         let from = currentPresentedFrame()
         let destination = reduceMotion ? nil : rectInWindow.flatMap(convertWindowContentRect)
         phase = .closing
@@ -321,7 +435,7 @@ final class PhotoViewerCanvasView: NSView {
     override func scrollWheel(with event: NSEvent) {
         guard event.hasPreciseScrollingDeltas else {
             guard phase == .resting || phase == .opening else { return }
-            finishOpeningForInteraction()
+                finishOpeningForInteraction()
             // Preserve ordinary mouse-wheel zoom.
             let anchor = convert(event.locationInWindow, from: nil)
             let factor = exp(-event.scrollingDeltaY * 0.08)
@@ -345,68 +459,88 @@ final class PhotoViewerCanvasView: NSView {
     /// synthesizing scroll events.
     func routePreciseScroll(delta: CGSize, phase: NSEvent.Phase,
                             momentumPhase: NSEvent.Phase, timestamp: TimeInterval) {
+        if phase == .began || phase == .mayBegin {
+            interruptPagingAnimationIfPossible()
+        }
         guard self.phase == .resting || self.phase == .opening
-            || self.phase == .interactiveDismissal else { return }
+            || self.phase == .interactiveDismissal
+            || self.phase == .interactivePaging else { return }
         guard transform.zoom <= PhotoViewerCanvasView.fitZoomTolerance else {
-            // Above fit zoom, precise scrolling always pans and never dismisses.
+            // Above fit zoom, precise scrolling always pans and never dismisses or pages.
             resetScrollGesture()
             transform.translate(by: delta)
             snapLayerToRest()
             return
         }
-        guard interactiveDismissalEnabled, !reduceMotion else {
-            // Reduce Motion and videos keep the ordinary constrained scroll behavior.
+        guard (interactiveDismissalEnabled || interactivePagingEnabled), !reduceMotion else {
             transform.translate(by: delta)
             snapLayerToRest()
             return
         }
-        handleDismissalScroll(delta: delta, phase: phase, momentumPhase: momentumPhase,
-                              timestamp: timestamp)
+        handleGestureScroll(delta: delta, phase: phase, momentumPhase: momentumPhase,
+                            timestamp: timestamp)
     }
 
-    private func handleDismissalScroll(delta: CGSize, phase: NSEvent.Phase,
-                                       momentumPhase: NSEvent.Phase, timestamp: TimeInterval) {
+    private func handleGestureScroll(delta: CGSize, phase: NSEvent.Phase,
+                                     momentumPhase: NSEvent.Phase, timestamp: TimeInterval) {
         if phase == .began || phase == .mayBegin {
-            scrollGestureActive = true
-            scrollDirectionLocked = false
-            scrollTranslation = .zero
-            scrollVelocitySample = nil
-            lastScrollVelocity = .zero
+            beginGestureTracking()
         }
         guard scrollGestureActive else { return }
 
         if phase.isEmpty, !momentumPhase.isEmpty {
-            // Momentum after release: the gesture decision was already made.
             return
         }
 
         recordScrollVelocity(delta: delta, timestamp: timestamp)
         scrollTranslation.width += delta.width
         scrollTranslation.height += delta.height
-        applyScrollProgress()
+        applyGestureProgress()
 
         if phase == .ended || phase == .cancelled {
             finishScrollGesture(cancelled: phase == .cancelled, timestamp: timestamp)
         }
     }
 
-    private func applyScrollProgress() {
+    private func beginGestureTracking() {
+        scrollGestureActive = true
+        scrollDirectionLocked = false
+        lockedPagingDirection = nil
+        scrollTranslation = .zero
+        scrollVelocitySample = nil
+        lastScrollVelocity = .zero
+    }
+
+    private func applyGestureProgress() {
         if !scrollDirectionLocked {
             switch PhotoViewerDismissal.scrollIntent(translation: scrollTranslation) {
             case .dismiss:
                 scrollDirectionLocked = true
+                guard interactiveDismissalEnabled else { return }
                 phase = .interactiveDismissal
             case .scroll:
-                // Horizontal or upward: stay at rest for the rest of this gesture.
                 scrollDirectionLocked = true
-                return
+                if interactivePagingEnabled {
+                    lockedPagingDirection = PhotoViewerPaging.direction(translation: scrollTranslation)
+                }
             case .undecided:
                 return
             }
         }
-        guard phase == .interactiveDismissal else { return }
-        dismissTranslation = scrollTranslation
-        applyDraggedFrame()
+        if phase == .resting, let direction = lockedPagingDirection,
+           neighborConfigurationGeneration == selectionGeneration,
+           let image = pagingImage(for: direction), let itemID = pagingItemID(for: direction) {
+            beginPaging(direction: direction, image: image, itemID: itemID)
+        }
+        switch phase {
+        case .interactiveDismissal:
+            dismissTranslation = scrollTranslation
+            applyDraggedFrame()
+        case .interactivePaging:
+            applyPagingFrame()
+        default:
+            break
+        }
     }
 
     private func finishScrollGesture(cancelled: Bool, timestamp: TimeInterval) {
@@ -415,23 +549,319 @@ final class PhotoViewerCanvasView: NSView {
         let idle = timestamp - (scrollVelocitySample?.time ?? timestamp)
         let velocity = idle > 0.1 ? .zero : lastScrollVelocity
         resetScrollGesture()
-        guard phase == .interactiveDismissal else { return }
-        if !cancelled,
-           PhotoViewerDismissal.shouldDismiss(translation: translation, velocity: velocity,
-                                               viewport: viewportRect()) {
-            phase = .awaitingDismissal
-            let dismiss = onInteractiveDismiss
-            DispatchQueue.main.async { dismiss?() }
-        } else {
-            animateReturnToFit()
+        switch phase {
+        case .interactiveDismissal:
+            if !cancelled,
+               PhotoViewerDismissal.shouldDismiss(translation: translation, velocity: velocity,
+                                                   viewport: viewportRect()) {
+                phase = .awaitingDismissal
+                let dismiss = onInteractiveDismiss
+                DispatchQueue.main.async { dismiss?() }
+            } else {
+                animateReturnToFit()
+            }
+        case .interactivePaging:
+            guard let direction = pageDirection else {
+                cancelPaging()
+                return
+            }
+            if !cancelled,
+               PhotoViewerPaging.shouldCommit(direction: direction,
+                                              translation: PhotoViewerPaging.scaledHorizontal(translation),
+                                              velocity: PhotoViewerPaging.scaledHorizontal(velocity),
+                                              distance: pagingDistance) {
+                commitPage(direction)
+            } else {
+                animatePageReturn()
+            }
+        default:
+            if phase == .resting, abs(pagingInitialOffset) > 0.5 {
+                pagingInitialOffset = 0
+                animateReturnToFit()
+            }
         }
+    }
+
+    /// Start a fresh gesture from the actual on-screen position of a settling photo.
+    /// A committed selection is promoted only once the session has confirmed it.
+    private func interruptPagingAnimationIfPossible() {
+        guard phase == .pagingReturning || (phase == .pagingCommit && committedPageGeneration != nil) else { return }
+        let isCommit = phase == .pagingCommit
+        let visibleFrame = (isCommit ? pagingLayer : imageLayer).presentation()?.frame
+            ?? (isCommit ? pagingLayer : imageLayer).frame
+        cancelTransition()
+        if isCommit { finishPagingCommit() } else { finishPagingReturn() }
+        pagingInitialOffset = visibleFrame.midX - transform.imageFrame.midX
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        imageLayer.frame = transform.imageFrame.offsetBy(dx: pagingInitialOffset, dy: 0)
+        CATransaction.commit()
+    }
+
+    private var isPagingPhase: Bool {
+        phase == .interactivePaging || phase == .pagingCommit
+            || phase == .awaitingPage || phase == .pagingReturning
+    }
+
+    private func pagingImage(for direction: PhotoViewerPaging.Direction) -> NSImage? {
+        direction == .next ? nextImage : previousImage
+    }
+
+    private func pagingItemID(for direction: PhotoViewerPaging.Direction) -> Int64? {
+        direction == .next ? nextItemID : previousItemID
+    }
+
+    private var pagingDistanceForLayout: CGFloat {
+        max(PhotoViewerPaging.pageDistance(viewport: viewportRect(),
+                                           neighborFrame: pagingTransform.imageFrame),
+            PhotoViewerPaging.exitDistance(currentFrame: transform.imageFrame,
+                                          viewport: viewportRect()))
+    }
+
+    private func pagingViewportChanged() -> Bool {
+        let current = viewportRect()
+        return abs(current.width - pagingViewport.width) > 0.5 ||
+            abs(current.height - pagingViewport.height) > 0.5
+    }
+
+    private func beginPaging(direction: PhotoViewerPaging.Direction,
+                             image: NSImage, itemID: Int64) {
+        syncNeighborLayers()
+        pendingPagingImage = image
+        pendingPagingItemID = itemID
+        pageDirection = direction
+        committedPageGeneration = nil
+        committedPageShownGeneration = nil
+        pageSlideFinished = false
+        transform.reset()
+        pagingTransform.configure(imageSize: image.size, viewport: viewportRect())
+        pagingViewport = viewportRect()
+        pagingDistance = pagingDistanceForLayout
+        let offset = direction == .next ? pagingDistance : -pagingDistance
+        pagingRestFrame = pagingTransform.imageFrame.offsetBy(dx: offset, dy: 0)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        pagingLayer.frame = pagingRestFrame
+        pagingLayer.opacity = 1
+        CATransaction.commit()
+        phase = .interactivePaging
+        applyPagingFrame()
+    }
+
+    private func applyPagingFrame() {
+        guard let direction = pageDirection else { return }
+        let metrics = PhotoViewerPaging.metrics(translation: PhotoViewerPaging.scaledHorizontal(scrollTranslation),
+                                                direction: direction,
+                                                distance: pagingDistance)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let offset = pagingInitialOffset + metrics.translation.width
+        imageLayer.frame = transform.imageFrame.offsetBy(dx: offset, dy: 0)
+        pagingLayer.frame = pagingRestFrame.offsetBy(dx: offset, dy: 0)
+        imageLayer.opacity = 1
+        pagingLayer.opacity = 1
+        backdropLayer.opacity = 1
+        CATransaction.commit()
+    }
+
+    private func commitPage(_ direction: PhotoViewerPaging.Direction) {
+        guard pendingPagingImage != nil, pendingPagingItemID != nil else {
+            cancelPaging()
+            return
+        }
+        phase = .pagingCommit
+        let currentTarget = transform.imageFrame.offsetBy(
+            dx: direction == .next ? -pagingDistance : pagingDistance, dy: 0)
+        let pagingTarget = pagingTransform.imageFrame
+        let navigate = direction == .next ? onNext : onPrevious
+        DispatchQueue.main.async { navigate?() }
+        startPagingAnimation(currentTarget: currentTarget, pagingTarget: pagingTarget,
+                             duration: pagingAnimationDuration, committing: true) { [weak self] in
+            guard let self, self.phase == .pagingCommit else { return }
+            self.pageSlideFinished = true
+            if self.committedPageGeneration != nil {
+                self.finishPagingCommit()
+            } else {
+                self.phase = .awaitingPage
+            }
+        }
+    }
+
+    private func animatePageReturn() {
+        phase = .pagingReturning
+        startPagingAnimation(currentTarget: transform.imageFrame, pagingTarget: pagingRestFrame,
+                             duration: min(pagingAnimationDuration, 0.24), committing: false) { [weak self] in
+            guard let self, self.phase == .pagingReturning else { return }
+            self.finishPagingReturn()
+        }
+    }
+
+    private func finishPagingCommit() {
+        guard let direction = pageDirection, let incoming = pendingPagingImage else { return }
+        let finalImage = committedPageImage ?? incoming
+        // Promote the layer that is already on screen. No contents or layer is removed
+        // from the visible photo during the handoff.
+        let outgoing = imageLayer
+        if direction == .next {
+            imageLayer = nextLayer
+            nextLayer = previousLayer
+            previousLayer = outgoing
+            nextLayerImage = previousLayerImage
+            previousLayerImage = nil
+        } else {
+            imageLayer = previousLayer
+            previousLayer = nextLayer
+            nextLayer = outgoing
+            previousLayerImage = nextLayerImage
+            nextLayerImage = nil
+        }
+        image = finalImage
+        transform.configure(imageSize: incoming.size, viewport: viewportRect())
+        transform.reset()
+        resetPagingState()
+        phase = .resting
+        committedPageShownGeneration = selectionGeneration
+        applyInterpolation()
+        applyPagingInterpolation()
+        if finalImage !== incoming {
+            updateImageContents()
+            transform.configure(imageSize: finalImage.size, viewport: viewportRect())
+            snapLayerToRest()
+        }
+        syncNeighborLayers()
+        onZoomChanged?(1)
+    }
+
+    private func finishPagingReturn() {
+        updateImageContents()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        imageLayer.frame = transform.imageFrame
+        imageLayer.opacity = 1
+        backdropLayer.opacity = 1
+        CATransaction.commit()
+        resetPagingState()
+        phase = .resting
+        syncNeighborLayers()
+    }
+
+    private func cancelPaging() {
+        imageLayer.removeAllAnimations()
+        pagingLayer.removeAllAnimations()
+        updateImageContents()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        imageLayer.frame = transform.imageFrame
+        imageLayer.opacity = 1
+        backdropLayer.opacity = 1
+        CATransaction.commit()
+        resetPagingState()
+        phase = .resting
+        syncNeighborLayers()
+    }
+
+    private func clearNeighborLayers() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for neighbor in [previousLayer, nextLayer] {
+            neighbor.removeAllAnimations()
+            neighbor.contents = nil
+            neighbor.frame = .zero
+            neighbor.opacity = 0
+        }
+        previousLayerImage = nil
+        nextLayerImage = nil
+        CATransaction.commit()
+    }
+
+    /// Update offscreen slots only for the selection represented by this canvas.
+    func syncNeighbors(generation: UInt64) {
+        neighborConfigurationGeneration = generation
+        syncNeighborLayers()
+    }
+
+    private func syncNeighborLayers() {
+        guard !isPagingPhase, neighborConfigurationGeneration == selectionGeneration else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        updateNeighbor(previousLayer, image: previousImage, cached: &previousLayerImage, previous: true)
+        updateNeighbor(nextLayer, image: nextImage, cached: &nextLayerImage, previous: false)
+        CATransaction.commit()
+    }
+
+    private func updateNeighbor(_ target: CALayer, image: NSImage?, cached: inout NSImage?, previous: Bool) {
+        if cached !== image {
+            target.contents = image.flatMap(Self.cgImage)
+            cached = image
+        }
+        guard let image else { target.opacity = 0; return }
+        let neighborTransform = PhotoViewportTransform(imageSize: image.size, viewport: viewportRect())
+        let frame = neighborTransform.imageFrame
+        let distance = max(PhotoViewerPaging.pageDistance(viewport: viewportRect(), neighborFrame: frame),
+                           PhotoViewerPaging.exitDistance(currentFrame: transform.imageFrame, viewport: viewportRect()))
+        target.frame = frame.offsetBy(dx: previous ? -distance : distance, dy: 0)
+        target.opacity = 1
+    }
+
+    private func resetPagingState() {
+        pendingPagingImage = nil
+        pendingPagingItemID = nil
+        pageDirection = nil
+        pagingDistance = 0
+        pagingInitialOffset = 0
+        pagingRestFrame = .zero
+        pagingViewport = .zero
+        committedPageGeneration = nil
+        committedPageImage = nil
+        pageSlideFinished = false
+        resetScrollGesture()
+    }
+
+    private func startPagingAnimation(currentTarget: CGRect, pagingTarget: CGRect,
+                                      duration: TimeInterval, committing: Bool,
+                                      completion: @escaping () -> Void) {
+        animationGeneration &+= 1
+        let generation = animationGeneration
+        let currentFrom = imageLayer.presentation()?.frame ?? imageLayer.frame
+        let pagingFrom = pagingLayer.presentation()?.frame ?? pagingLayer.frame
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if duration > 0 {
+            CATransaction.setCompletionBlock { [weak self] in
+                guard let self, self.animationGeneration == generation else { return }
+                completion()
+            }
+            let timing = committing
+                ? CAMediaTimingFunction(controlPoints: 0.2, 0.65, 0.45, 1)
+                : CAMediaTimingFunction(name: .easeOut)
+            addAnimation(keyPath: "position",
+                         from: NSValue(point: CGPoint(x: currentFrom.midX, y: currentFrom.midY)),
+                         to: NSValue(point: CGPoint(x: currentTarget.midX, y: currentTarget.midY)),
+                         duration: duration, timing: timing, to: imageLayer)
+            addAnimation(keyPath: "position",
+                         from: NSValue(point: CGPoint(x: pagingFrom.midX, y: pagingFrom.midY)),
+                         to: NSValue(point: CGPoint(x: pagingTarget.midX, y: pagingTarget.midY)),
+                         duration: duration, timing: timing, to: pagingLayer)
+        } else {
+            imageLayer.removeAllAnimations()
+            pagingLayer.removeAllAnimations()
+        }
+        imageLayer.frame = currentTarget
+        pagingLayer.frame = pagingTarget
+        if duration <= 0 {
+            CATransaction.commit()
+            completion()
+            return
+        }
+        CATransaction.commit()
     }
 
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
         case 49, 53: onClose?()
-        case 123: onPrevious?()
-        case 124: onNext?()
+        case 123, 124:
+            guard phase == .resting || phase == .opening else { return }
+            event.keyCode == 123 ? onPrevious?() : onNext?()
         default: super.keyDown(with: event)
         }
     }
@@ -468,8 +898,38 @@ final class PhotoViewerCanvasView: NSView {
         switch phase {
         case .resting:
             snapLayerToRest()
+            syncNeighborLayers()
         case .interactiveDismissal, .awaitingDismissal:
             applyDraggedFrame()
+        case .interactivePaging:
+            if let image = pendingPagingImage, let direction = pageDirection {
+                pagingTransform.configure(imageSize: image.size, viewport: viewportRect())
+                pagingViewport = viewportRect()
+                pagingDistance = pagingDistanceForLayout
+                let offset = direction == .next ? pagingDistance : -pagingDistance
+                pagingRestFrame = pagingTransform.imageFrame.offsetBy(dx: offset, dy: 0)
+                applyPagingFrame()
+            }
+        case .pagingCommit, .awaitingPage:
+            guard pagingViewportChanged() else { break }
+            pagingViewport = viewportRect()
+            cancelTransition()
+            pageSlideFinished = true
+            if committedPageGeneration != nil {
+                finishPagingCommit()
+            } else if let image = pendingPagingImage, let direction = pageDirection {
+                pagingTransform.configure(imageSize: image.size, viewport: viewportRect())
+                pagingLayer.frame = pagingTransform.imageFrame
+                pagingDistance = pagingDistanceForLayout
+                let offset = direction == .next ? -pagingDistance : pagingDistance
+                imageLayer.frame = transform.imageFrame.offsetBy(dx: offset, dy: 0)
+                phase = .awaitingPage
+            }
+        case .pagingReturning:
+            guard pagingViewportChanged() else { break }
+            pagingViewport = viewportRect()
+            cancelTransition()
+            finishPagingReturn()
         case .opening, .returning:
             retargetActiveTransition(to: transform.imageFrame)
         case .closing:
@@ -570,6 +1030,17 @@ final class PhotoViewerCanvasView: NSView {
         CATransaction.commit()
     }
 
+    private func applyPagingInterpolation() {
+        let filter: CALayerContentsFilter = pagingInterpolation == .none ? .nearest : .linear
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for neighbor in [previousLayer, nextLayer] {
+            neighbor.magnificationFilter = filter
+            neighbor.minificationFilter = filter
+        }
+        CATransaction.commit()
+    }
+
     private func snapLayerToRest() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -621,6 +1092,12 @@ final class PhotoViewerCanvasView: NSView {
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        CATransaction.setCompletionBlock { [weak self] in
+            guard let self, self.animationGeneration == generation else { return }
+            let completion = transition.completion
+            self.activeTransition = nil
+            completion?()
+        }
         if duration > 0 {
             addAnimation(keyPath: "position",
                          from: NSValue(point: CGPoint(x: frame.midX, y: frame.midY)),
@@ -644,12 +1121,6 @@ final class PhotoViewerCanvasView: NSView {
         imageLayer.frame = transition.targetFrame
         imageLayer.opacity = Float(transition.imageTo)
         backdropLayer.opacity = Float(transition.backdropTo)
-        CATransaction.setCompletionBlock { [weak self] in
-            guard let self, self.animationGeneration == generation else { return }
-            let completion = transition.completion
-            self.activeTransition = nil
-            completion?()
-        }
         CATransaction.commit()
     }
 
@@ -679,6 +1150,8 @@ final class PhotoViewerCanvasView: NSView {
         animationGeneration &+= 1
         imageLayer.removeAllAnimations()
         backdropLayer.removeAllAnimations()
+        previousLayer.removeAllAnimations()
+        nextLayer.removeAllAnimations()
         activeTransition = nil
     }
 
@@ -698,6 +1171,7 @@ final class PhotoViewerCanvasView: NSView {
     private func resetScrollGesture() {
         scrollGestureActive = false
         scrollDirectionLocked = false
+        lockedPagingDirection = nil
         scrollTranslation = .zero
         scrollVelocitySample = nil
         lastScrollVelocity = .zero
@@ -718,9 +1192,17 @@ final class PhotoViewerCanvasView: NSView {
     static let fitZoomTolerance: CGFloat = 1.01
     var isInteractivelyDismissing: Bool { phase == .interactiveDismissal }
     var isAwaitingInteractiveDismissal: Bool { phase == .awaitingDismissal }
+    var isInteractivelyPaging: Bool { phase == .interactivePaging }
+    var isAwaitingPage: Bool { phase == .pagingCommit || phase == .awaitingPage }
     var backdropOpacity: CGFloat { CGFloat(backdropLayer.opacity) }
     var presentedImageFrame: CGRect { imageLayer.frame }
+    var presentedPagingFrame: CGRect { pagingLayer.frame }
+    var presentedPagingImage: NSImage? { pendingPagingImage }
+    var hasPagingContents: Bool { pagingLayer.contents != nil && pagingLayer.opacity > 0 }
     var presentedImage: NSImage? { image }
     var hasImageContents: Bool { imageLayer.contents != nil }
     var currentZoom: CGFloat { transform.zoom }
+    var currentImageLayer: CALayer { imageLayer }
+    var previousImageLayer: CALayer { previousLayer }
+    var nextImageLayer: CALayer { nextLayer }
 }

@@ -314,6 +314,12 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
             } && originals.contains(2)
         }
         XCTAssertTrue(concurrent)
+        let neighborPreviewsReady = await waitUntil {
+            let state = await session.state()
+            return state.previousNeighbor?.largePreviewData == Data([1, 0x54]) &&
+                state.nextNeighbor?.largePreviewData == Data([3, 0x54])
+        }
+        XCTAssertTrue(neighborPreviewsReady)
         let state = await session.state()
         XCTAssertEqual(state.thumbnailData, Data([2, 0x54]))
         XCTAssertNil(state.fullImageData)
@@ -555,6 +561,30 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
                 state.nextNeighbor?.thumbnailData == Data([3, 0x54])
         }
         XCTAssertTrue(neighborsReady)
+        await session.close()
+    }
+
+    func testThumbnailLookaheadWarmsTwoItemsInEachDirection() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let items = try (1...5).map { try item($0) }
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: items], blockedFullImages: [3])
+        let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 5,
+            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 5)])])
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+            index: LibraryIndex(snapshot: snapshot),
+            seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 2, item: items[2],
+                                  page: items, pageVerified: true),
+            thumbnailSize: .m, allowNetwork: true)
+        _ = await session.state()
+        let ready = await waitUntil {
+            let state = await session.state()
+            return Set(state.thumbnailLookahead.compactMap { $0.thumbnailData == nil ? nil : $0.itemID }) == [1, 5]
+        }
+        XCTAssertTrue(ready)
+        let fullCalls = await transport.fullImageCalls
+        XCTAssertFalse(fullCalls.contains(1))
+        XCTAssertFalse(fullCalls.contains(5))
         await session.close()
     }
 

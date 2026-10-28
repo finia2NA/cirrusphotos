@@ -20,8 +20,17 @@ struct PhotoViewerView: View {
                               reduceMotion: reduceMotion,
                               interactiveDismissalEnabled: !reduceMotion
                                 && viewer.state?.item?.isVideo != true,
+                              interactivePagingEnabled: !reduceMotion
+                                && viewer.state?.item?.isVideo != true,
+                              previousImage: viewer.previousNeighborImage,
+                              nextImage: viewer.nextNeighborImage,
+                              previousItemID: viewer.previousNeighborItemID,
+                              nextItemID: viewer.nextNeighborItemID,
                               interpolation: pixelInterpolation.imageInterpolation(
                                 isFullResolution: viewer.isDisplayingFullResolution
+                              ),
+                              pagingInterpolation: pixelInterpolation.imageInterpolation(
+                                isFullResolution: false
                               ),
                               controller: viewer.canvasController,
                               onPrevious: viewer.navigatePrevious,

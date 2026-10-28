@@ -176,6 +176,8 @@ extension PhotoViewerSession {
             images.thumbnailFailures.removeValue(forKey: tier)
             if tier == .configured {
                 images.thumbnailDataByIdentity[job.identity] = data
+            } else {
+                images.largePreviewDataByIdentity[job.identity] = data
             }
             if images.bestThumbnailTier == nil || tier.rawValue >= images.bestThumbnailTier!.rawValue {
                 images.bestThumbnailTier = tier

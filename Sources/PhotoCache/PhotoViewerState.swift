@@ -45,12 +45,14 @@ public struct PhotoViewerNeighbor: Sendable, Equatable {
     public let itemID: Int64
     public let thumbnailIdentity: String
     public let thumbnailData: Data?
+    public let largePreviewData: Data?
 
     public init(itemID: Int64, thumbnailIdentity: String,
-                thumbnailData: Data?) {
+                thumbnailData: Data?, largePreviewData: Data? = nil) {
         self.itemID = itemID
         self.thumbnailIdentity = thumbnailIdentity
         self.thumbnailData = thumbnailData
+        self.largePreviewData = largePreviewData
     }
 }
 
@@ -69,6 +71,7 @@ public struct PhotoViewerState: Sendable {
     public let item: PhotoItem?
     public let metadataVerified: Bool
     public let thumbnailData: Data?
+    public let thumbnailIsLargePreview: Bool
     public let fullImageData: Data?
     public let videoResource: VideoPlaybackResource?
     public let metadataStatus: PhotoViewerResourceStatus
@@ -84,4 +87,5 @@ public struct PhotoViewerState: Sendable {
     public let thumbnailIdentity: String?
     public let previousNeighbor: PhotoViewerNeighbor?
     public let nextNeighbor: PhotoViewerNeighbor?
+    public let thumbnailLookahead: [PhotoViewerNeighbor]
 }

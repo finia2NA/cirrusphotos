@@ -6,26 +6,37 @@ final class PhotoViewerCanvasController {
     weak var view: PhotoViewerCanvasView?
     private var pendingGeneration: UInt64?
     private var pendingImage: NSImage?
+    private var pendingItemID: Int64?
     private var pendingFocus = false
+    private var lastGeneration: UInt64?
+    private var lastImage: NSImage?
+    private var hasAttachedView = false
 
     func attach(_ view: PhotoViewerCanvasView) {
         self.view = view
         if let pendingGeneration {
-            view.resetForSelection(pendingGeneration, image: pendingImage)
+            view.resetForSelection(pendingGeneration, image: pendingImage, itemID: pendingItemID)
             self.pendingGeneration = nil
             self.pendingImage = nil
+            self.pendingItemID = nil
+        } else if hasAttachedView, let lastGeneration {
+            view.installPresentedImage(lastImage, generation: lastGeneration)
         }
+        hasAttachedView = true
         if pendingFocus {
             pendingFocus = false
             view.requestKeyboardFocus()
         }
     }
 
-    func resetForSelection(_ generation: UInt64, image: NSImage?) {
-        if let view { view.resetForSelection(generation, image: image) }
+    func resetForSelection(_ generation: UInt64, image: NSImage?, itemID: Int64?) {
+        lastGeneration = generation
+        lastImage = image
+        if let view { view.resetForSelection(generation, image: image, itemID: itemID) }
         else {
             pendingGeneration = generation
             pendingImage = image
+            pendingItemID = itemID
         }
     }
 
@@ -48,7 +59,13 @@ struct PhotoViewerCanvas: NSViewRepresentable {
     let openingSourceRect: CGRect?
     let reduceMotion: Bool
     let interactiveDismissalEnabled: Bool
+    let interactivePagingEnabled: Bool
+    let previousImage: NSImage?
+    let nextImage: NSImage?
+    let previousItemID: Int64?
+    let nextItemID: Int64?
     let interpolation: NSImageInterpolation
+    let pagingInterpolation: NSImageInterpolation
     let controller: PhotoViewerCanvasController
     let onPrevious: () -> Void
     let onNext: () -> Void
@@ -58,16 +75,21 @@ struct PhotoViewerCanvas: NSViewRepresentable {
 
     func makeNSView(context: Context) -> PhotoViewerCanvasView {
         let view = PhotoViewerCanvasView()
-        view.onZoomChanged = onZoomChanged
-        view.onPrevious = onPrevious
-        view.onNext = onNext
-        view.onClose = onClose
-        view.onInteractiveDismiss = onInteractiveDismiss
+        configure(view)
         controller.attach(view)
         return view
     }
 
     func updateNSView(_ view: PhotoViewerCanvasView, context: Context) {
+        configure(view)
+        view.configureOpeningSource(openingSourceRect)
+        view.setImage(image, selectionGeneration: selectionGeneration,
+                      openingSourceRectInWindow: openingSourceRect)
+        view.syncNeighbors(generation: selectionGeneration)
+        view.setZoom(CGFloat(zoom))
+    }
+
+    private func configure(_ view: PhotoViewerCanvasView) {
         view.onZoomChanged = onZoomChanged
         view.onPrevious = onPrevious
         view.onNext = onNext
@@ -76,10 +98,12 @@ struct PhotoViewerCanvas: NSViewRepresentable {
         view.toolbarInset = toolbarInset
         view.reduceMotion = reduceMotion
         view.interactiveDismissalEnabled = interactiveDismissalEnabled
+        view.interactivePagingEnabled = interactivePagingEnabled
+        view.previousImage = previousImage
+        view.nextImage = nextImage
+        view.previousItemID = previousItemID
+        view.nextItemID = nextItemID
         view.interpolation = interpolation
-        view.configureOpeningSource(openingSourceRect)
-        view.setImage(image, selectionGeneration: selectionGeneration,
-                      openingSourceRectInWindow: openingSourceRect)
-        view.setZoom(CGFloat(zoom))
+        view.pagingInterpolation = pagingInterpolation
     }
 }

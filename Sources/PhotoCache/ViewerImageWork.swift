@@ -35,6 +35,7 @@ struct ViewerImageWork {
 
     var thumbnailData: Data?
     var thumbnailDataByIdentity: [String: Data] = [:]
+    var largePreviewDataByIdentity: [String: Data] = [:]
     var bestThumbnailTier: ThumbnailTier?
     var thumbnailFailures: [ThumbnailTier: String] = [:]
     var fullImageData: Data?
@@ -80,6 +81,7 @@ struct ViewerImageWork {
     mutating func cancelAll() {
         cancelCurrent()
         thumbnailDataByIdentity.removeAll()
+        largePreviewDataByIdentity.removeAll()
         for job in thumbnailPrefetchJobs.values { job.task.cancel() }
         thumbnailPrefetchJobs.removeAll()
         cancelFullJobsExcept(resource: nil)

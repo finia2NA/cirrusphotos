@@ -212,6 +212,7 @@ public actor PhotoViewerSession {
             item: currentItem,
             metadataVerified: metadataVerified,
             thumbnailData: images.thumbnailData,
+            thumbnailIsLargePreview: images.bestThumbnailTier == .largePreview,
             fullImageData: images.fullImageData,
             videoResource: currentItem?.videoPlaybackResource(preference: videoQuality),
             metadataStatus: metadataStatus,
@@ -226,7 +227,8 @@ public actor PhotoViewerSession {
             isClosed: closed,
             thumbnailIdentity: currentItem?.additional?.thumbnail.map(Self.viewerThumbnailIdentity),
             previousNeighbor: neighborState(at: desired.ordinal - 1),
-            nextNeighbor: neighborState(at: desired.ordinal + 1)
+            nextNeighbor: neighborState(at: desired.ordinal + 1),
+            thumbnailLookahead: [-2, 2].compactMap { neighborState(at: desired.ordinal + $0) }
         )
     }
 
@@ -238,7 +240,8 @@ public actor PhotoViewerSession {
         let identity = Self.viewerThumbnailIdentity(thumbnail)
         return PhotoViewerNeighbor(itemID: item.id,
                                    thumbnailIdentity: identity,
-                                   thumbnailData: images.thumbnailDataByIdentity[identity])
+                                   thumbnailData: images.thumbnailDataByIdentity[identity],
+                                   largePreviewData: images.largePreviewDataByIdentity[identity])
     }
 
     func publish() {
