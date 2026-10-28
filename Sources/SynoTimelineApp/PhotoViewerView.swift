@@ -2,6 +2,7 @@ import PhotoCache
 import SwiftUI
 
 struct PhotoViewerView: View {
+    @EnvironmentObject private var library: LibraryModel
     @ObservedObject var viewer: PhotoViewerPresentation
     let toolbarInset: CGFloat
     let reduceMotion: Bool
@@ -74,6 +75,13 @@ struct PhotoViewerView: View {
                                 DispatchQueue.main.async {
                                     if duration > 0 { withAnimation(.easeInOut(duration: duration)) { histogramOpacity = opacity } }
                                     else { histogramOpacity = opacity }
+                                }
+                              }, downloadMenu: {
+                                guard let state = viewer.state, state.metadataVerified, state.allowNetwork,
+                                      let item = state.item, item.hasDisplayableStillImage else { return nil }
+                                let repository = viewer.repository
+                                return photoDownloadMenu { kind, choose in
+                                    library.downloadViewerItem(item, repository: repository, kind: kind, choose: choose)
                                 }
                               }) { viewer.zoom = Double($0) }
                 .accessibilityLabel(viewer.filename)

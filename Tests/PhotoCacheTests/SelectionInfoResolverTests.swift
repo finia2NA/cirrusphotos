@@ -46,6 +46,26 @@ final class SelectionInfoResolverTests: XCTestCase {
         return results
     }
 
+    func testDownloadSelectionResolvesVerifiedPhotosAndRejectsChangedIdentity() async throws {
+        let root = temporaryTestRoot("DownloadSelection")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = InfoResolverMockTransport()
+        let section = TimelineSection(offset: 0, limit: 3, list: [day(2024, 4, 3, 3)])
+        await transport.setPage([makeItem(id: 1), makeItem(id: 2, type: "video"), makeItem(id: 3)], start: start(section))
+        let snapshot = TimelineSnapshot(sections: [section])
+        let repository = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
+        for await _ in await repository.timeline(collection: .personalLibrary) {}
+        let resolver = SelectionDownloadResolver(repository: repository)
+        let result = await resolver.resolve(collection: .personalLibrary, snapshot: snapshot,
+                                            selectedOrdinals: IndexSet(integersIn: 0...2),
+                                            knownItemIDsByOrdinal: [0: 1])
+        XCTAssertEqual(result?.map(\.id), [1, 3])
+        let changed = await resolver.resolve(collection: .personalLibrary, snapshot: snapshot,
+                                             selectedOrdinals: IndexSet(integer: 0),
+                                             knownItemIDsByOrdinal: [0: 999])
+        XCTAssertNil(changed)
+    }
+
     func testSelectionAcrossTwoSectionsPublishesExactSummary() async throws {
         let root = temporaryTestRoot("TwoSections")
         defer { try? FileManager.default.removeItem(at: root) }

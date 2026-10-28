@@ -406,6 +406,18 @@ final class LibraryModel: ObservableObject {
         updateViewerCommands()
     }
 
+    func downloadSelection(_ selection: BrowserCommandSnapshot, kind: PhotoDownloadKind, choose: Bool) {
+        guard let repository, let timeline = snapshots[selection.collection] else { return }
+        PhotoDownloadManager.shared.start(repository: repository, snapshot: timeline, selection: selection,
+                                          item: nil, kind: kind, choose: choose)
+    }
+
+    func downloadViewerItem(_ item: PhotoItem, repository: CachedPhotosRepository,
+                            kind: PhotoDownloadKind, choose: Bool) {
+        PhotoDownloadManager.shared.start(repository: repository, snapshot: nil, selection: nil,
+                                          item: item, kind: kind, choose: choose)
+    }
+
     var canRotate: Bool {
         if let activeViewer { return activeViewer.canRotate }
         return browserCommandsActive && !browserCommandSnapshot.selectedOrdinals.isEmpty &&

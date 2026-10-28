@@ -4,10 +4,22 @@ import SynologyAPI
 
 struct CacheSettingsView: View {
     @EnvironmentObject private var library: LibraryModel
+    @AppStorage("photoDownloadDirectory") private var downloadDirectory = ""
     @AppStorage("viewerHighlightThreshold") private var highlightThreshold = 100.0
 
     var body: some View {
         Form {
+            HStack {
+                Text("Download folder")
+                Spacer()
+                Text(downloadDirectory.isEmpty ? PhotoDownloadManager.directory.path : downloadDirectory).lineLimit(1).truncationMode(.middle)
+                Button("Choose…") {
+                    if let url = PhotoDownloadManager.shared.chooseDirectory() {
+                        UserDefaults.standard.set(url.path, forKey: "photoDownloadDirectory")
+                        downloadDirectory = url.path
+                    }
+                }
+            }
             Picker("Thumbnail rendition", selection: $library.thumbnailSize) {
                 Text("Small").tag(ThumbnailSize.sm)
                 Text("Medium").tag(ThumbnailSize.m)

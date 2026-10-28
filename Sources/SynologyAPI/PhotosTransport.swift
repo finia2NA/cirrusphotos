@@ -87,7 +87,23 @@ public struct TransferProgress: Sendable, Equatable {
     }
 }
 
+public enum PhotoDownloadKind: String, Sendable {
+    case original = "source"
+    case compressedJPEG = "optimized_jpeg"
+}
+
+public struct PhotoDownloadResponse: Sendable {
+    public let temporaryURL: URL
+    public let filename: String
+    public init(temporaryURL: URL, filename: String) {
+        self.temporaryURL = temporaryURL
+        self.filename = filename
+    }
+}
+
 public protocol PhotosTransport: Sendable {
+    func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind,
+                        progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse
     func login(credentials: SynologyCredentials) async throws
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult
@@ -125,6 +141,11 @@ public protocol PhotosTransport: Sendable {
 }
 
 public extension PhotosTransport {
+    func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind,
+                        progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
+        throw SynologyAPIError.unsupported("Photo downloads are unavailable.")
+    }
+
     func uploadConvertedThumbnails(
         unitID: Int64, files: ConvertedThumbnailFiles,
         progress: @escaping @Sendable (TransferProgress) -> Void

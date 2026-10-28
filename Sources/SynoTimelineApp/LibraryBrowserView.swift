@@ -244,6 +244,9 @@ struct LibraryBrowserView: View {
                                              reduceMotion: reduceMotion,
                                              contentTopInset: contentTopInset,
                                              onOpenPhoto: onOpenPhoto,
+                                             onDownload: { selection, kind, choose in
+                                                 library.downloadSelection(selection, kind: kind, choose: choose)
+                                             },
                                              onSelectionStateChanged: { state in
                                                  library.setSelectionState(state, for: collection)
                                                  infoPanel.updateBrowserContext(
@@ -310,6 +313,7 @@ final class FlippedDocumentView: NSView {
     override var acceptsFirstResponder: Bool { true }
     var interaction: ((InteractionPhase) -> Void)?
     var commandHandler: ((BrowserSelectionCommand) -> Void)?
+    var contextMenuHandler: ((CGPoint) -> NSMenu?)?
     weak var timelineScrollView: TimelineScrollView?
     weak var overlay: SelectionOverlayView?
     var selectionFrames: [CGRect] = [] { didSet { overlay?.selectionFrames = selectionFrames } }
@@ -330,6 +334,10 @@ final class FlippedDocumentView: NSView {
                            shift: event.modifierFlags.contains(.shift),
                            option: event.modifierFlags.contains(.option)))
     }
+    override func menu(for event: NSEvent) -> NSMenu? {
+        contextMenuHandler?(convert(event.locationInWindow, from: nil))
+    }
+
     override func mouseDragged(with event: NSEvent) {
         interaction?(.drag(convert(event.locationInWindow, from: nil)))
     }
@@ -631,6 +639,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let reduceMotion: Bool
     let contentTopInset: CGFloat
     let onOpenPhoto: (PhotoViewerOpenRequest) -> Void
+    let onDownload: (BrowserCommandSnapshot, PhotoDownloadKind, Bool) -> Void
     let onSelectionStateChanged: (BrowserSelectionState) -> Void
     let onCommandStateChanged: (BrowserCommandSnapshot, ((BrowserSelectionCommand) -> Void)?) -> Void
     let onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void
@@ -656,6 +665,9 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         document.timelineScrollView = scroll
         context.coordinator.scroll = scroll
         context.coordinator.document = document
+        document.contextMenuHandler = { [weak coordinator = context.coordinator] point in
+            coordinator?.contextMenu(at: point)
+        }
         document.commandHandler = { [weak coordinator = context.coordinator] command in
             coordinator?.perform(command)
         }
@@ -713,6 +725,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var colorScheme: ColorScheme = .light
         private var onRetry: (() -> Void)?
         private var onOpenPhoto: ((PhotoViewerOpenRequest) -> Void)?
+        private var onDownload: ((BrowserCommandSnapshot, PhotoDownloadKind, Bool) -> Void)?
         private var onSelectionStateChanged: ((BrowserSelectionState) -> Void)?
         private var onCommandStateChanged: ((BrowserCommandSnapshot, ((BrowserSelectionCommand) -> Void)?) -> Void)?
         private var onRestorationAnchorChanged: ((PhotoTimelineRestorationAnchor) -> Void)?
@@ -752,6 +765,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             onVisibleDay = input.onVisibleDay
             onRetry = input.onRetry
             onOpenPhoto = input.onOpenPhoto
+            onDownload = input.onDownload
             onSelectionStateChanged = input.onSelectionStateChanged
             onCommandStateChanged = input.onCommandStateChanged
             onRestorationAnchorChanged = input.onRestorationAnchorChanged
@@ -1220,6 +1234,21 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             self.pendingReveal = nil
             selectAfterRevealItemID = nil
             pendingReveal.completion(nil)
+        }
+
+        func contextMenu(at point: CGPoint) -> NSMenu? {
+            guard let ordinal = geometry?.ordinal(at: point),
+                  let item = loadedItem(ordinal), item.photo.hasDisplayableStillImage else { return nil }
+            if !selection.contains(ordinal) { selection.replace(with: ordinal); publishSelection() }
+            var known: [Int: Int64] = [:]
+            for selected in selection.indexes {
+                if let item = loadedItem(selected) { known[selected] = item.photo.id }
+            }
+            let snapshot = BrowserCommandSnapshot(owner: commandOwner, active: true, canOpen: false,
+                canToggleFavorite: false, collection: collection, indexFingerprint: index?.fingerprint,
+                selectionGeneration: selectionState.generation, selectedOrdinals: selection.indexes,
+                knownItemIDsByOrdinal: known)
+            return photoDownloadMenu { [weak self] kind, choose in self?.onDownload?(snapshot, kind, choose) }
         }
 
         func publishCommandState(active: Bool) {

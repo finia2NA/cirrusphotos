@@ -848,6 +848,10 @@ A bounded read-only probe on 2026-10-02 confirmed that Cirrus advertises `SYNO.F
 
 Keep authentication out of persistent identity and logs. Use unit ID plus cache revision and endpoint version for the full-image cache key. Treat non-image/error responses as failures; never label an enlarged thumbnail as full resolution. The initial viewer preview continues to use the already displayed thumbnail while the full-image resource is fetched and decoded.
 
+### Explicit downloads
+
+The web-app capture `docs/captures/downloads.har` shows a separate form-encoded POST to `SYNO.Foto.Download` v2, method `download`, with `force_download=true`, `item_id` as a JSON array of item IDs, and `download_type` as the JSON string `"source"` or `"optimized_jpeg"`. A single item returned an attachment named for the original or a server-generated compressed filename. Two items returned a server-generated `download.zip` for both modes; the archive responses did not advertise a content length in this capture. The capture does not establish the maximum number of IDs, compressed-mode fallback response, or error response behavior. Preserve the returned filename and reject error payloads rather than assuming that compressed mode always produces a JPEG.
+
 ## Photo locations and map data
 
 Read-only probes against `cirrus` on 2026-10-06 established the location data path used by the map implementation ([completed Map plan](https://github.com/finia2NA/syno/issues/46)). The Synology mobile map has no desktop web equivalent, so these shapes were discovered directly rather than from a HAR.

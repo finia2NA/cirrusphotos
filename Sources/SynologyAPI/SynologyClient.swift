@@ -19,6 +19,18 @@ private final class UploadTransferDelegate: NSObject, URLSessionTaskDelegate, @u
     }
 }
 
+private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    let progress: @Sendable (TransferProgress) -> Void
+    init(progress: @escaping @Sendable (TransferProgress) -> Void) { self.progress = progress }
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        progress(TransferProgress(completedBytes: totalBytesWritten, totalBytes: totalBytesExpectedToWrite))
+    }
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {}
+}
+
 public actor SynologyClient: PhotosTransport {
     public static let defaultBaseURL = URL(string: "https://nas.example.com:5001")!
 
@@ -79,6 +91,50 @@ public actor SynologyClient: PhotosTransport {
             let remainder = Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 30)
             try await Task.sleep(for: .seconds(31 - remainder))
         }
+    }
+
+    public func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind,
+                               progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        guard !itemIDs.isEmpty else { throw SynologyAPIError.invalidResponse }
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+        components.path = "/webapi/entry.cgi"
+        guard let url = components.url else { throw SynologyAPIError.invalidResponse }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 120
+        request.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
+        if let synoToken { request.setValue(synoToken, forHTTPHeaderField: "X-SYNO-TOKEN") }
+        request.httpBody = formBody(["api": "SYNO.Foto.Download", "version": "2", "method": "download",
+                                    "force_download": "true", "item_id": "[\(itemIDs.map(String.init).joined(separator: ","))]",
+                                    "download_type": "\"\(kind.rawValue)\"", "_sid": sid])
+        let (temporary, response) = try await session.download(for: request, delegate: DownloadProgressDelegate(progress: progress))
+        guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
+        guard http.statusCode == 200 else { throw SynologyAPIError.http(http.statusCode) }
+        let contentType = http.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
+        guard !contentType.contains("json"), !contentType.contains("text/html"),
+              http.value(forHTTPHeaderField: "Content-Disposition")?.lowercased().contains("attachment") == true,
+              let suggested = response.suggestedFilename else { throw SynologyAPIError.invalidResponse }
+        let filename = URL(fileURLWithPath: suggested).lastPathComponent
+        guard !filename.isEmpty, filename != ".", filename != ".." else { throw SynologyAPIError.invalidResponse }
+        let file = try FileHandle(forReadingFrom: temporary)
+        let prefix = try file.read(upToCount: 32) ?? Data()
+        try file.close()
+        guard !prefix.isEmpty else { throw SynologyAPIError.invalidResponse }
+        if itemIDs.count > 1 {
+            guard prefix.starts(with: [0x50, 0x4b, 0x03, 0x04]) || prefix.starts(with: [0x50, 0x4b, 0x05, 0x06]),
+                  try PhotoDownloadValidation.hasCompleteZIPTrailer(at: temporary) else { throw SynologyAPIError.invalidResponse }
+        } else if let text = String(data: prefix, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  text.hasPrefix("{") || text.lowercased().hasPrefix("<!doctype html") {
+            throw SynologyAPIError.invalidResponse
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent(filename)
+        do { try FileManager.default.moveItem(at: temporary, to: destination) }
+        catch { try? FileManager.default.removeItem(at: directory); throw error }
+        return PhotoDownloadResponse(temporaryURL: destination, filename: filename)
     }
 
     public func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {

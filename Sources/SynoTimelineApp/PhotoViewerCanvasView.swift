@@ -14,6 +14,8 @@ import TimelineCore
 /// the adjacent photo using three reusable image layers. Above fit zoom precise scrolling pans
 /// instead. Click-drag never dismisses or pages.
 final class PhotoViewerCanvasView: NSView {
+    var downloadMenu: (() -> NSMenu?)?
+    override func menu(for event: NSEvent) -> NSMenu? { downloadMenu?() }
     var onZoomChanged: ((CGFloat) -> Void)?
     var onPrevious: (() -> Void)?
     var onNext: (() -> Void)?

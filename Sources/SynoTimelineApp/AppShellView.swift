@@ -96,6 +96,7 @@ struct AppShellView: View {
         } detail: {
             detail
         }
+        .background(DownloadCloseGuard().frame(width: 0, height: 0))
         .toolbar(removing: .title)
         .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         .toolbar { applicationToolbar }
@@ -600,6 +601,7 @@ struct AppShellView: View {
             ToolbarSpacer(.flexible, placement: .primaryAction)
         }
 
+        ToolbarItem(placement: .primaryAction) { DownloadsToolbarControl() }
         ToolbarItem(placement: .primaryAction) {
             ConnectionToolbarItem()
         }
