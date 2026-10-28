@@ -114,9 +114,12 @@ public struct MapClusterGroup: Sendable, Equatable {
 /// `maxAnnotations`. Longitude wrap (an antimeridian-spanning region) is not handled;
 /// the library does not currently require it.
 public enum MapClusterBuilder {
+    /// Limit expensive MapKit annotations while keeping dense areas accessible as clusters.
+    public static let defaultMaxAnnotations = 64
+
     public static func groups(records: [MapPhotoRecord],
                               in region: MapRegion,
-                              maxAnnotations: Int = 256,
+                              maxAnnotations: Int = defaultMaxAnnotations,
                               minimumCellSpan: MapCellSpan? = nil) -> [MapClusterGroup] {
         guard region.latitudeDelta > 0, region.longitudeDelta > 0,
               region.latitudeDelta.isFinite, region.longitudeDelta.isFinite,
@@ -127,10 +130,14 @@ public enum MapClusterBuilder {
         let minLongitude = region.center.longitude - region.longitudeDelta / 2 - region.longitudeDelta * 0.1
         let maxLongitude = region.center.longitude + region.longitudeDelta / 2 + region.longitudeDelta * 0.1
 
-        let candidates = records.filter {
-            $0.coordinate.isValid &&
-                $0.coordinate.latitude >= minLatitude && $0.coordinate.latitude <= maxLatitude &&
-                $0.coordinate.longitude >= minLongitude && $0.coordinate.longitude <= maxLongitude
+        var candidates: [MapPhotoRecord] = []
+        for (index, record) in records.enumerated() {
+            if index.isMultiple(of: 256), Task.isCancelled { return [] }
+            if record.coordinate.isValid &&
+                record.coordinate.latitude >= minLatitude && record.coordinate.latitude <= maxLatitude &&
+                record.coordinate.longitude >= minLongitude && record.coordinate.longitude <= maxLongitude {
+                candidates.append(record)
+            }
         }
         guard !candidates.isEmpty else { return [] }
 
@@ -149,6 +156,7 @@ public enum MapClusterBuilder {
         var latitudeCell = max(region.latitudeDelta / 512, minimumLatitudeCell)
         var longitudeCell = max(region.longitudeDelta / 512, minimumLongitudeCell)
         while true {
+            guard !Task.isCancelled else { return [] }
             let groups = cluster(ordered: ordered, minLatitude: minLatitude,
                                  minLongitude: minLongitude,
                                  latitudeCell: latitudeCell, longitudeCell: longitudeCell)
@@ -176,7 +184,8 @@ public enum MapClusterBuilder {
                                 longitudeCell: Double) -> [MapClusterGroup] {
         var membersByCluster: [[MapPhotoRecord]] = []
         var clusterIndicesByCell: [CellKey: [Int]] = [:]
-        for record in ordered {
+        for (recordIndex, record) in ordered.enumerated() {
+            if recordIndex.isMultiple(of: 256), Task.isCancelled { return [] }
             let row = Int(floor((record.coordinate.latitude - minLatitude) / latitudeCell))
             let column = Int(floor((record.coordinate.longitude - minLongitude) / longitudeCell))
             var bestIndex: Int?

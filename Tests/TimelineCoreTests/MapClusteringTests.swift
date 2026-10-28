@@ -123,6 +123,26 @@ final class MapClusteringTests: XCTestCase {
         XCTAssertEqual(groups.flatMap(\.memberIDs).count, records.count)
     }
 
+    func testDenseZoomUsesCoarserGroupsWithinDefaultLimitWithoutLosingPhotos() {
+        let fineRegion = MapRegion(center: PhotoCoordinate(latitude: 40, longitude: 10),
+                                   latitudeDelta: 0.01, longitudeDelta: 0.01)
+        var records: [MapPhotoRecord] = []
+        for index in 0..<1_600 {
+            let latitude = 39.995 + Double(index / 40) * 0.00025
+            let longitude = 9.995 + Double(index % 40) * 0.00025
+            records.append(record(Int64(index), lat: latitude, lon: longitude, time: Int64(index)))
+        }
+        let moreDetailed = MapClusterBuilder.groups(records: records, in: fineRegion,
+                                                    maxAnnotations: 512)
+        let groups = MapClusterBuilder.groups(records: records, in: fineRegion)
+        XCTAssertGreaterThan(moreDetailed.count, MapClusterBuilder.defaultMaxAnnotations)
+        XCTAssertLessThanOrEqual(groups.count, MapClusterBuilder.defaultMaxAnnotations)
+        XCTAssertLessThan(groups.count, moreDetailed.count)
+        XCTAssertTrue(groups.contains { $0.count > 1 })
+        XCTAssertEqual(groups.reduce(0) { $0 + $1.count }, records.count)
+        XCTAssertEqual(Set(groups.flatMap(\.memberIDs)), Set(records.map(\.id)))
+    }
+
     func testAnnotationCapOfOneIncludesOppositeMarginEdges() {
         let records = [
             record(1, lat: -5.9, lon: -5.9, time: 2),

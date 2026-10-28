@@ -188,10 +188,15 @@ final class MapBrowserModel: ObservableObject {
         reclusterTask = Task { [weak self] in
             if delay > .zero { try? await Task.sleep(for: delay) }
             guard !Task.isCancelled else { return }
-            let computed = await Task.detached(priority: .userInitiated) {
-                MapClusterBuilder.groups(records: snapshot, in: region, maxAnnotations: 256,
+            let worker = Task.detached(priority: .userInitiated) {
+                MapClusterBuilder.groups(records: snapshot, in: region,
                                          minimumCellSpan: minimumCellSpan)
-            }.value
+            }
+            let computed = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
             guard !Task.isCancelled else { return }
             self?.groups = computed
         }

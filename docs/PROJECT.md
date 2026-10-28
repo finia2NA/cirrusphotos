@@ -27,7 +27,7 @@ The native split-view sidebar contains Library, Favorites, Map, and Albums desti
 
 ### Map
 
-Map shows geotagged Personal Library photos as thumbnail pins and counted clusters. Opening a pin or cluster creates a session-only filtered collection and reuses the shared browser. Cached canonical item details are shown in their exact ID slots before network validation. The camera remains useful across metadata invalidation; stale cached pins remain visible and are identified as unverified when validation fails.
+Map shows geotagged Personal Library photos as thumbnail pins and counted clusters. Dense areas group more coarsely to limit the map to 64 annotations; each cluster retains its photos. Opening a pin or cluster creates a session-only filtered collection and reuses the shared browser. Cached canonical item details are shown in their exact ID slots before network validation. The camera remains useful across metadata invalidation; stale cached pins remain visible and are identified as unverified when validation fails.
 
 Location labels and antimeridian-specific clustering are not implemented.
 
