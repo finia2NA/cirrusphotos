@@ -5,10 +5,17 @@ import XCTest
 
 private actor FallbackThumbnailTransport: PhotosTransport {
     private(set) var requestedSizes: [ThumbnailSize] = []
+    var failuresRemaining = 0
+
+    func failNextRequest() { failuresRemaining = 1 }
 
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                    etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         requestedSizes.append(size)
+        if failuresRemaining > 0 {
+            failuresRemaining -= 1
+            throw TestFailure("Thumbnail request failed")
+        }
         return ThumbnailResponse(data: Data("network-\(size.rawValue)".utf8),
                                  etag: size.rawValue, lastModified: nil)
     }
@@ -88,6 +95,37 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
         let requestedSizes = await transport.requestedSizes
         XCTAssertEqual(values.map(\.size), [.sm])
         XCTAssertTrue(requestedSizes.isEmpty)
+    }
+
+    func testFailedExactRequestPreservesFallbackAndCanBeRetried() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = FallbackThumbnailTransport()
+        await transport.failNextRequest()
+        let repository = try repository(root: root, transport: transport)
+        let descriptor = try descriptor()
+        let namespace = CacheKey.namespace(server: server, account: credentials.username)
+        let small = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: .sm)
+        try await repository.store.put(small.key, kind: .thumbnail, data: Data("cached-sm".utf8),
+                                       validatedRun: "older-run", thumbnail: small)
+
+        var firstValues: [ThumbnailRenditionValue] = []
+        var failed = false
+        for await event in await repository.thumbnailWithFallback(descriptor, size: .m, allowNetwork: true) {
+            switch event {
+            case .value(let value, _): firstValues.append(value)
+            case .failure: failed = true
+            }
+        }
+        XCTAssertTrue(failed)
+        XCTAssertEqual(firstValues.map(\.size), [.sm])
+
+        var retriedValues: [ThumbnailRenditionValue] = []
+        for await event in await repository.thumbnailWithFallback(descriptor, size: .m, allowNetwork: true) {
+            if case .value(let value, _) = event { retriedValues.append(value) }
+        }
+        XCTAssertEqual(retriedValues.map(\.size), [.sm, .m])
+        let requests = await transport.requestedSizes
+        XCTAssertEqual(requests, [.m, .m])
     }
 
     func testManualCachingDoesNotTreatFallbackAsRequestedRendition() async throws {

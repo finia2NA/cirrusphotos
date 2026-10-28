@@ -11,6 +11,7 @@ struct ThumbnailCell: View {
     let repository: CachedPhotosRepository?
     let size: ThumbnailSize
     let allowNetwork: Bool
+    let failures: ThumbnailFailureRegistry
     var fillsFrame = false
     var isSelected = false
     var onSelect: (() -> Void)? = nil
@@ -19,6 +20,7 @@ struct ThumbnailCell: View {
     @State private var image: NSImage?
     @State private var displayedRendition: String?
     @State private var failed = false
+    @State private var retryID = UUID()
 
     private var descriptor: ThumbnailInfo? { item.additional?.thumbnail }
     private var familyIdentity: String {
@@ -27,7 +29,7 @@ struct ThumbnailCell: View {
     private var renditionIdentity: String {
         "\(familyIdentity):\(size.rawValue)"
     }
-    private var taskIdentity: String { "\(renditionIdentity):\(allowNetwork)" }
+    private var taskIdentity: String { "\(renditionIdentity):\(allowNetwork):\(retryID)" }
 
     var body: some View {
         ZStack {
@@ -50,6 +52,15 @@ struct ThumbnailCell: View {
                                            onCommand: onCommand ?? { _ in },
                                            onActivate: onActivate)
             }
+            if failed, allowNetwork, descriptor?.isReady(size) == true, repository != nil {
+                ThumbnailRetryButton {
+                    failures.clear(renditionIdentity)
+                    retryID = UUID()
+                }
+                    .frame(width: 28, height: 28)
+                    .padding(4)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }
         }
         .task(id: taskIdentity) { await load() }
     }
@@ -62,9 +73,10 @@ struct ThumbnailCell: View {
         guard let descriptor, let repository else {
             failed = true; return
         }
-        failed = false
+        let priorFailure = failures.contains(renditionIdentity)
+        failed = priorFailure
         for await event in await repository.thumbnailWithFallback(descriptor, size: size,
-                                                                  allowNetwork: allowNetwork) {
+                                                                  allowNetwork: allowNetwork && !priorFailure) {
             guard !Task.isCancelled else { return }
             switch event {
             case .value(let value, _):
@@ -73,12 +85,64 @@ struct ThumbnailCell: View {
                     image = decoded
                 } else if !Task.isCancelled { failed = true }
             case .failure:
-                if image == nil { failed = true }
+                failed = true
+                failures.record(renditionIdentity)
             }
         }
     }
 
 }
+
+/// Retains recent failed requests when virtualized rows are recycled. Bounded
+/// storage avoids retaining an entry for every item in a large offline library.
+@MainActor
+final class ThumbnailFailureRegistry {
+    private var entries: Set<String> = []
+    private var order: [String] = []
+    private let limit = 1_024
+
+    func contains(_ key: String) -> Bool { entries.contains(key) }
+    func record(_ key: String) {
+        guard entries.insert(key).inserted else { return }
+        order.append(key)
+        if order.count > limit { entries.remove(order.removeFirst()) }
+    }
+    func clear(_ key: String) {
+        guard entries.remove(key) != nil else { return }
+        order.removeAll { $0 == key }
+    }
+}
+
+/// The row hosting view passes ordinary pointer events through to the document's
+/// selection handler, but allows this explicit control to receive its own clicks.
+struct ThumbnailRetryButton: NSViewRepresentable {
+    let action: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> ThumbnailRetryControl {
+        let button = ThumbnailRetryControl()
+        button.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
+        button.bezelStyle = .roundRect
+        button.isBordered = true
+        button.toolTip = "Retry thumbnail"
+        button.setAccessibilityLabel("Retry thumbnail")
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.retry)
+        return button
+    }
+
+    func updateNSView(_ button: ThumbnailRetryControl, context: Context) {
+        context.coordinator.action = action
+    }
+
+    final class Coordinator: NSObject {
+        var action: (() -> Void)?
+        @objc func retry() { action?() }
+    }
+}
+
+final class ThumbnailRetryControl: NSButton {}
 
 /// Badges belong to the stable grid slot rather than the thumbnail's animated, clipped frame.
 struct ThumbnailBadgeOverlay: View {

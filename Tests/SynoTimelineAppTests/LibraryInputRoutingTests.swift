@@ -241,6 +241,39 @@ final class LibraryInputRoutingTests: XCTestCase {
     }
 
     @MainActor
+    func testThumbnailRetryControlReceivesClicksInsidePassThroughRow() throws {
+        var retries = 0
+        let row = PassThroughHostingView(rootView: AnyView(
+            ThumbnailRetryButton { retries += 1 }.frame(width: 28, height: 28)
+        ))
+        row.frame = CGRect(x: 0, y: 0, width: 80, height: 80)
+        let window = NSWindow(contentRect: row.frame, styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.contentView = row
+        defer { window.orderOut(nil) }
+        row.layoutSubtreeIfNeeded()
+        let hit = try XCTUnwrap(row.hitTest(CGPoint(x: 40, y: 40)))
+        var view: NSView? = hit
+        while view != nil, !(view is ThumbnailRetryControl) { view = view?.superview }
+        let retry = try XCTUnwrap(view as? ThumbnailRetryControl)
+        retry.performClick(nil)
+        XCTAssertEqual(retries, 1)
+        XCTAssertNil(row.hitTest(CGPoint(x: 2, y: 2)))
+    }
+
+    @MainActor
+    func testThumbnailFailuresSurviveRowReuseAndExplicitRetryClearsThem() {
+        let failures = ThumbnailFailureRegistry()
+        failures.record("item:medium")
+        XCTAssertTrue(failures.contains("item:medium"))
+        failures.clear("item:medium")
+        XCTAssertFalse(failures.contains("item:medium"))
+        for index in 0..<1_025 { failures.record("item:\(index)") }
+        XCTAssertFalse(failures.contains("item:0"))
+        XCTAssertTrue(failures.contains("item:1024"))
+    }
+
+    @MainActor
     func testThumbnailAccessibilityPressSelectsAndOpenIsSeparateAction() {
         let view = ThumbnailActivationSurface.ActivationView()
         let anchor = PhotoViewerSourceAnchor()

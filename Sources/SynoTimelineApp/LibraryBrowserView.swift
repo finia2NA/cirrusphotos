@@ -388,7 +388,15 @@ final class SelectionOverlayView: NSView {
 }
 
 final class PassThroughHostingView<Content: View>: NSHostingView<Content> {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        var candidate: NSView? = hit
+        while let view = candidate, view !== self {
+            if view is ThumbnailRetryControl { return hit }
+            candidate = view.superview
+        }
+        return nil
+    }
 }
 
 final class PassThroughSourceView: NSView {
@@ -535,6 +543,7 @@ private struct HostedRow: View {
     let row: LibraryViewportGeometry.Row
     let repository: CachedPhotosRepository
     let size: ThumbnailSize
+    let failures: ThumbnailFailureRegistry
     let pages: [Int: LibraryPage]
     let onSelect: (Int) -> Void
     let onCommand: (BrowserSelectionCommand) -> Void
@@ -552,7 +561,7 @@ private struct HostedRow: View {
                         aspectRatio: item.photo.displayAspectRatio,
                         cropsToSquare: presentation.cropsToSquare)
                     ThumbnailCell(item: item.photo, repository: repository,
-                                  size: size, allowNetwork: item.verified,
+                                  size: size, allowNetwork: item.verified, failures: failures,
                                   fillsFrame: presentation.fillsFrame,
                                   isSelected: selection.indexes.contains(item.ordinal),
                                   onSelect: { onSelect(item.ordinal) },
@@ -702,6 +711,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         }
         private let selectionObservation = BrowserSelectionObservation()
         private let presentation = BrowserThumbnailPresentation(cropsToSquare: false)
+        private let thumbnailFailures = ThumbnailFailureRegistry()
         private var presentationRequest = 0
         private var reduceMotion = false
         private let commandOwner = UUID()
@@ -1039,7 +1049,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     addHost("r:\(position):\(rowIndex)",
                             frame: CGRect(x: 0, y: rowY, width: geometry.width, height: row.layout.height),
                             content: AnyView(HostedRow(row: row, repository: repository,
-                                                       size: thumbnailSize, pages: pages,
+                                                       size: thumbnailSize, failures: thumbnailFailures, pages: pages,
                                                        onSelect: { [weak self] in self?.selectFromAccessibility($0) },
                                                        onCommand: { [weak self] in self?.perform($0) },
                                                        onOpenPhoto: { [weak self] ordinal, request in
