@@ -39,7 +39,7 @@ struct MetadataEngineState {
     var forcedMembershipJobs: Set<String> = []
     var pageJobSourceRevisions: [String: Int64] = [:]
     var pageJobEpochs: [String: UInt64] = [:]
-    var personalPageObservers: [UUID: PersonalPageObserver] = [:]
+    var collectionPageObservers: [UUID: CollectionPageObserver] = [:]
     var pendingPagePromotions: [String] = []
     var albumListJob: SharedJob<[AlbumSummary]>?
     var albumListLatest: [AlbumSummary]?
@@ -50,6 +50,7 @@ struct MetadataEngineState {
     var locationRevision: UInt64 = 0
     var mapFilterInvalidationObservers: [UUID: AsyncStream<PhotoCollectionDescriptor>.Continuation] = [:]
     var mapFilters: [UUID: MapFilterState] = [:]
+    var sessionFilterCatalogs: [PhotoCollectionDescriptor: LibraryFilterCatalog] = [:]
     var libraryFilters: [UUID: LibraryFilterCollectionState] = [:]
 
     var hasDemand: Bool {

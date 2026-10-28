@@ -1,7 +1,7 @@
 import Foundation
 import SynologyAPI
 
-public struct LibraryFilterCatalog: Equatable, Sendable {
+public struct LibraryFilterCatalog: Codable, Equatable, Sendable {
     public var cameras: [String] = []
     public var lenses: [String] = []
     public var extensions: [String] = []
@@ -44,6 +44,7 @@ public struct LibraryFilterReference: Hashable, Sendable {
     public let sourceSectionIndex: Int
     public let sourcePageOffset: Int
     public let itemID: Int64
+    public var sourceVerified: Bool = true
 }
 
 public struct LibraryFilterRegistration: Sendable {
@@ -53,6 +54,7 @@ public struct LibraryFilterRegistration: Sendable {
     public let filter: LibraryFilter
     public let revision: UInt64
     public let sourceFingerprint: String
+    public var sourceCollection: PhotoCollectionDescriptor = .personalLibrary
 }
 
 public struct LibraryFilterControllerEvent: Sendable {
@@ -83,9 +85,13 @@ public actor LibraryFilterController {
     private static let cacheReadBatchSize = 16
     private let repository: CachedPhotosRepository
     private let sourceFingerprint: String
+    private let sourceCollection: PhotoCollectionDescriptor
     private let sourceSnapshot: TimelineSnapshot
     private var recordsBySection: [Int: [LibraryFilterRecord]] = [:]
     private var cachedCatalog: LibraryFilterCatalog?
+    private var persistedCatalog = LibraryFilterCatalog()
+    private var catalogAdmission: MetadataStoreAdmission?
+    private var catalogWriteTask: Task<Void, Never>?
     private var cachedRegistration: LibraryFilterRegistration?
     private var states: [LibraryFilterSectionState]
     private var activeFilter: LibraryFilter?
@@ -94,8 +100,9 @@ public actor LibraryFilterController {
     private var observers: [UUID: AsyncStream<LibraryFilterControllerEvent>.Continuation] = [:]
     private var cacheDiscoveryTask: Task<Void, Never>?
     private var cacheDiscoveryComplete = false
-    private var pageObservation: PersonalPageObservation?
+    private var pageObservation: CollectionPageObservation?
     private var pageObservationTask: Task<Void, Never>?
+    private var invalidationTask: Task<Void, Never>?
     private var stopped = false
     private var scheduler: Task<Void, Never>?
     private var pending: [QueuedRead] = []
@@ -104,14 +111,15 @@ public actor LibraryFilterController {
     private var failureMessages: [Int: String] = [:]
     private var failureCachePolicies: [Int: Bool] = [:]
 
-    public init(repository: CachedPhotosRepository, snapshot: TimelineSnapshot) {
+    public init(repository: CachedPhotosRepository, snapshot: TimelineSnapshot, sourceCollection: PhotoCollectionDescriptor = .personalLibrary) {
         self.repository = repository
+        self.sourceCollection = sourceCollection
         sourceSnapshot = snapshot
         sourceFingerprint = LibraryIndex(snapshot: snapshot).fingerprint
         states = Array(repeating: .unseen, count: snapshot.sections.count)
     }
 
-    deinit { cacheDiscoveryTask?.cancel(); scheduler?.cancel(); pageObservationTask?.cancel() }
+    deinit { cacheDiscoveryTask?.cancel(); scheduler?.cancel(); pageObservationTask?.cancel(); invalidationTask?.cancel(); catalogWriteTask?.cancel() }
 
     public func observe() -> AsyncStream<LibraryFilterControllerEvent> {
         let id = UUID()
@@ -133,6 +141,7 @@ public actor LibraryFilterController {
         if cacheDiscoveryTask == nil {
             cacheDiscoveryComplete = false
             cacheDiscoveryTask = Task {
+                await self.loadCachedCatalog()
                 await self.observePagesIfNeeded()
                 await self.discoverCachedPages()
             }
@@ -206,16 +215,23 @@ public actor LibraryFilterController {
     }
 
     public func shutdown() async {
+        let finalCatalog = cacheDiscoveryComplete ? makeCatalog() : nil
+        let admission = catalogAdmission
         stopped = true
         cacheDiscoveryTask?.cancel()
         pageObservationTask?.cancel()
-        if let pageObservation { await repository.removePersonalPageObserver(pageObservation.id) }
+        invalidationTask?.cancel()
+        catalogWriteTask?.cancel()
+        if let pageObservation { await repository.removeCollectionPageObserver(pageObservation.id) }
         pageObservation = nil
         scheduler?.cancel()
         pending.removeAll()
         activeIndices.removeAll()
         observers.values.forEach { $0.finish() }
         observers.removeAll()
+        if let finalCatalog, let admission {
+            try? await repository.storeFilterOptionCatalog(finalCatalog, for: sourceCollection, originalAdmission: admission)
+        }
     }
 
     private func discoverCachedPages() async {
@@ -235,25 +251,61 @@ public actor LibraryFilterController {
         }
         guard !stopped, !Task.isCancelled else { return }
         cacheDiscoveryComplete = true
+        cachedCatalog = nil
+        persistedCatalog = makeCatalog()
+        await persistCatalog()
+        guard !stopped, !Task.isCancelled else { return }
         cacheDiscoveryTask = nil
         publish()
     }
 
     private func observePagesIfNeeded() async {
         guard pageObservation == nil, !stopped else { return }
-        let observation = await repository.observePersonalPages(sections: Set(sourceSnapshot.sections))
+        let observation = await repository.observeCollectionPages(collection: sourceCollection, sections: Set(sourceSnapshot.sections))
         guard !stopped, !Task.isCancelled else {
-            await repository.removePersonalPageObserver(observation.id)
+            await repository.removeCollectionPageObserver(observation.id)
             return
         }
         pageObservation = observation
+        let invalidations = await repository.observeMetadataChanges(collection: sourceCollection)
+        guard !stopped, !Task.isCancelled else { return }
+        invalidationTask = Task { [weak self, repository] in
+            for await _ in invalidations.changes {
+                guard !Task.isCancelled else { break }
+                if let change = await repository.takeMetadataChanges(invalidations.id) {
+                    await self?.invalidateSource(change)
+                }
+            }
+        }
         pageObservationTask = Task { [weak self, repository] in
             for await _ in observation.changes {
                 guard !Task.isCancelled else { break }
-                let sections = await repository.takePersonalPageChanges(observation.id)
+                let sections = await repository.takeCollectionPageChanges(observation.id)
                 await self?.receiveCachedPages(sections)
             }
         }
+    }
+
+    private func invalidateSource(_ change: MetadataCollectionInvalidation) {
+        var invalidated: [Int] = []
+        for index in states.indices {
+            guard let raw = sourceSnapshot.sections[index].list.first,
+                  let day = try? CaptureDay(year: raw.year, month: raw.month, day: raw.day),
+                  change.days == nil || change.days!.contains(day),
+                  states[index] == .verified else { continue }
+            states[index] = .provisional
+            recordsBySection[index] = recordsBySection[index]?.map { record in
+                var reference = record.reference
+                reference.sourceVerified = false
+                return LibraryFilterRecord(reference: reference, time: record.time, values: record.values)
+            }
+            invalidated.append(index)
+        }
+        guard !invalidated.isEmpty else { return }
+        revision &+= 1
+        cachedRegistration = nil
+        publish()
+        if activeFilter != nil { enqueue(invalidated, useCachedPages: true, limit: 8) }
     }
 
     private func receiveCachedPages(_ sections: Set<TimelineSection>) async {
@@ -333,7 +385,7 @@ public actor LibraryFilterController {
                 tasks.addTask { [repository] in
                     var emissions: [(items: [PhotoItem?], verified: Bool)] = []
                     var failure: String?
-                    for await event in await repository.page(section, collection: .personalLibrary,
+                    for await event in await repository.page(section, collection: self.sourceCollection,
                                                               useCachedPages: useCachedPages,
                                                               allowNetwork: allowNetwork,
                                                               priority: .prefetch) {
@@ -366,7 +418,7 @@ public actor LibraryFilterController {
         if !verified && states[sectionIndex] == .verified { return false }
         let records = items.enumerated().compactMap { offset, optional -> LibraryFilterRecord? in
             guard let item = optional else { return nil }
-            return LibraryFilterRecord(reference: .init(sourceSectionIndex: sectionIndex, sourcePageOffset: offset, itemID: item.id),
+            return LibraryFilterRecord(reference: .init(sourceSectionIndex: sectionIndex, sourcePageOffset: offset, itemID: item.id, sourceVerified: verified),
                                        time: item.time, values: LibraryFilterValues(item))
         }
         let nextState: LibraryFilterSectionState = verified ? .verified : .provisional
@@ -380,6 +432,7 @@ public actor LibraryFilterController {
             failureCachePolicies.removeValue(forKey: sectionIndex)
         }
         revision &+= 1
+        if cacheDiscoveryComplete { scheduleCatalogWrite() }
         return true
     }
 
@@ -401,15 +454,23 @@ public actor LibraryFilterController {
         let built = DayGroupedTimelineBuilder.build(entries: entries)
         let refs = built.itemIDsBySection.map { $0.compactMap { referencesByID[$0] } }
         let registration = LibraryFilterRegistration(descriptor: descriptor, snapshot: built.snapshot,
-                                         referencesBySection: refs, filter: filter, revision: revision, sourceFingerprint: sourceFingerprint)
+                                         referencesBySection: refs, filter: filter, revision: revision, sourceFingerprint: sourceFingerprint, sourceCollection: sourceCollection)
         cachedRegistration = registration
         return registration
     }
 
     private func makeCatalog() -> LibraryFilterCatalog {
         if let cachedCatalog { return cachedCatalog }
+        let complete = cacheDiscoveryComplete && states.indices.allSatisfy { index in
+            states[index] != .unseen && recordsBySection[index]?.count == sourceSnapshot.sections[index].limit
+        }
         var cameraByKey: [String: String] = [:], lensByKey: [String: String] = [:]
         var extensions = Set<String>()
+        if !complete {
+            for value in persistedCatalog.cameras { cameraByKey[LibraryFilterParsing.lookupKey(value)] = value }
+            for value in persistedCatalog.lenses { lensByKey[LibraryFilterParsing.lookupKey(value)] = value }
+            extensions.formUnion(persistedCatalog.extensions)
+        }
         for record in orderedRecords() {
             let values = record.values
             if let camera = values.camera {
@@ -428,6 +489,38 @@ public actor LibraryFilterController {
         return result
     }
 
+    private func loadCachedCatalog() async {
+        do {
+            let (catalog, admission) = try await repository.loadFilterOptionCatalog(for: sourceCollection)
+            guard !stopped, !Task.isCancelled else { return }
+            catalogAdmission = admission
+            if let catalog {
+                persistedCatalog = catalog
+                cachedCatalog = nil
+                publish()
+            }
+        } catch { /* Discovery remains usable if this optional cache cannot be read. */ }
+    }
+
+    private func scheduleCatalogWrite() {
+        catalogWriteTask?.cancel()
+        catalogWriteTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            await self?.persistCatalog()
+        }
+    }
+
+    private func persistCatalog() async {
+        guard !stopped, !Task.isCancelled, let admission = catalogAdmission else { return }
+        let catalog = makeCatalog()
+        do {
+            try await repository.storeFilterOptionCatalog(catalog, for: sourceCollection, originalAdmission: admission)
+            guard !stopped, !Task.isCancelled else { return }
+            persistedCatalog = catalog
+        } catch { /* A reset or unavailable cache must not block filtering. */ }
+    }
+
     private func makeProgress(registration: LibraryFilterRegistration?) -> TimelineSectionLoadProgress {
         let verified = states.filter { $0 == .verified }.count
         let provisional = states.filter { $0 == .provisional }.count
@@ -439,7 +532,7 @@ public actor LibraryFilterController {
                      remaining: states.filter { $0 != .verified }.count,
                      isDiscoveringCachedPages: discovering,
                      hasInitialUnverifiedSection: states.contains { $0 == .unseen || $0 == .provisional },
-                     currentSectionLabel: scheduler == nil ? nil : "Loading Personal Library sections",
+                     currentSectionLabel: scheduler == nil ? nil : "Loading collection sections",
                      matchCount: registration?.referencesBySection.reduce(0) { $0 + $1.count },
                      state: scheduler == nil ? (verified == states.count ? .finished : .idle) : .running,
                      failures: failureMessages.sorted { $0.key < $1.key }.map {

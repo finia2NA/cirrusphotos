@@ -16,7 +16,10 @@ extension CachedPhotosRepository {
             throw SynologyAPIError.unsupported("An invalid library filter registration was supplied.")
         }
         guard !metadata.resetInProgress else { throw MetadataAdmissionError.resetInProgress }
-        if let source = metadata.latestTimelines[.personalLibrary], LibraryIndex(snapshot: source).fingerprint != registration.sourceFingerprint {
+        if registration.sourceCollection.isMapFilter && metadata.latestTimelines[registration.sourceCollection] == nil {
+            throw SynologyAPIError.unsupported("The source collection is no longer available.")
+        }
+        if let source = metadata.latestTimelines[registration.sourceCollection], LibraryIndex(snapshot: source).fingerprint != registration.sourceFingerprint {
             throw SynologyAPIError.unsupported("The source collection changed before this filter was registered.")
         }
         var mapping: [TimelineSection: [LibraryFilterReference]] = [:]
@@ -51,25 +54,28 @@ extension CachedPhotosRepository {
                     func current() -> Bool {
                         guard !Task.isCancelled, metadata.admissionEpoch == state.metadataEpoch,
                               metadata.libraryFilters[id]?.registrationID == state.registrationID else { return false }
-                        if let source = metadata.latestTimelines[.personalLibrary], LibraryIndex(snapshot: source).fingerprint != state.registration.sourceFingerprint { return false }
+                        let source = metadata.latestTimelines[state.registration.sourceCollection]
+                        if state.registration.sourceCollection.isMapFilter, source == nil { return false }
+                        if let source, LibraryIndex(snapshot: source).fingerprint != state.registration.sourceFingerprint { return false }
                         return true
                     }
                     func snapshot(_ details: [Int64: PhotoItemSlot]) -> PhotoPageSnapshot {
-                        let slots = ids.map { id -> PhotoItemSlot in
+                        let slots = references.map { reference -> PhotoItemSlot in
+                            let id = reference.itemID
                             guard let detail = details[id], let item = detail.item,
                                   state.registration.filter.matches(item), (try? CaptureDay(time: item.time)) == address.day else {
                                 return PhotoItemSlot(itemID: id, item: nil, verified: false)
                             }
-                            return detail
+                            return PhotoItemSlot(itemID: id, item: item, verified: detail.verified && reference.sourceVerified)
                         }
-                        return PhotoPageSnapshot(address: address, membershipRevision: state.registration.revision, membershipVerified: true, slots: slots)
+                        return PhotoPageSnapshot(address: address, membershipRevision: state.registration.revision, membershipVerified: references.allSatisfy(\.sourceVerified), slots: slots)
                     }
                     let cached = snapshot(try await store.metadataDetails(metadataNamespace, ids: ids, currentRun: runID))
                     guard current() else { continuation.finish(); return }
                     if cached.slots.contains(where: { $0.item != nil }) {
                         continuation.yield(.value(applyingFavoriteOverrides(cached), verified: cached.verified))
                     }
-                    guard allowNetwork && !cached.verified else { continuation.finish(); return }
+                    guard allowNetwork && !cached.verified && references.allSatisfy(\.sourceVerified) else { continuation.finish(); return }
                     try await connect()
                     try await reconcileMetadataSource()
                     guard current() else { continuation.finish(); return }

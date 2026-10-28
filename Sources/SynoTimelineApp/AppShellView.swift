@@ -29,13 +29,25 @@ struct AppShellView: View {
 
     /// The collection currently browsed in the detail area, or nil for the Albums
     /// overview and the unfiltered map.
-    private var selectedCollection: PhotoCollectionDescriptor? {
+    private var sourceCollection: PhotoCollectionDescriptor? {
         switch selectedDestination {
-        case .personalLibrary: libraryFilter.activeCollection ?? .personalLibrary
+        case .personalLibrary: .personalLibrary
         case .favorites: .favorites
         case .albums: openedAlbumID.map { .album($0) }
         case .map: openedMapFilter
         }
+    }
+
+    private var selectedCollection: PhotoCollectionDescriptor? {
+        libraryFilter.activeCollection(for: sourceCollection) ?? sourceCollection
+    }
+
+    private var sourceSnapshotRevision: Int {
+        sourceCollection.map { model.snapshotRevision(for: $0) } ?? 0
+    }
+
+    private var sourceTimelineVerified: Bool {
+        sourceCollection.map { model.timelineVerified(for: $0) } ?? false
     }
 
     private var isAlbumBrowser: Bool {
@@ -43,11 +55,11 @@ struct AppShellView: View {
     }
 
     private var isMapFilterBrowser: Bool {
-        selectedCollection?.isMapFilter == true
+        sourceCollection?.isMapFilter == true
     }
 
     private var mapFilterCount: Int {
-        guard isMapFilterBrowser, let collection = selectedCollection else { return 0 }
+        guard isMapFilterBrowser, let collection = sourceCollection else { return 0 }
         return model.snapshot(for: collection)?.sections.reduce(0) { $0 + $1.limit } ?? 0
     }
 
@@ -92,7 +104,7 @@ struct AppShellView: View {
         }
         .onAppear {
             updateBackHandler()
-            libraryFilter.configure(library: model)
+            libraryFilter.configure(library: model, source: sourceCollection)
             timelineSectionLoad.configure(library: model, filter: libraryFilter)
             updateTimelineSectionLoadSource()
         }
@@ -104,6 +116,16 @@ struct AppShellView: View {
         }
         .onChange(of: openedMapFilter) { _, _ in
             updateBackHandler(); updateTimelineSectionLoadSource()
+        }
+        .onChange(of: sourceCollection) { _, _ in
+            libraryFilter.configure(library: model, source: sourceCollection)
+            updateTimelineSectionLoadSource()
+        }
+        .onChange(of: sourceSnapshotRevision) { _, _ in
+            libraryFilter.configure(library: model, source: sourceCollection)
+        }
+        .onChange(of: sourceTimelineVerified) { _, _ in
+            libraryFilter.configure(library: model, source: sourceCollection)
         }
         .onChange(of: selectedCollection) { _, _ in updateTimelineSectionLoadSource() }
         .onDisappear {
@@ -117,12 +139,6 @@ struct AppShellView: View {
         .onChange(of: timelineVerified) { _, verified in
             viewer?.updateAllowNetwork(verified)
             updateTimelineSectionLoadSource()
-        }
-        .onChange(of: model.timelineVerified) { _, verified in
-            // A cached timeline can become verified without changing its section
-            // descriptors or snapshot revision. Filtering depends on that verified
-            // transition to create its controller and begin observing item pages.
-            if verified { libraryFilter.configure(library: model) }
         }
         .onChange(of: model.retryRevision) { _, _ in
             viewer?.retry()
@@ -151,9 +167,6 @@ struct AppShellView: View {
         .onChange(of: snapshotRevision) { _, _ in
             updateInfoPanelContext()
             updateTimelineSectionLoadSource()
-        }
-        .onChange(of: model.snapshotRevision) { _, _ in
-            libraryFilter.configure(library: model)
         }
         .onChange(of: model.albums) { _, albums in
             validateOpenedAlbum(in: albums)
@@ -216,13 +229,13 @@ struct AppShellView: View {
             ZStack(alignment: .topLeading) {
                 if let collection = selectedCollection {
                     LibraryBrowserView(collection: collection,
-                                       restorationAnchor: collection.usesPersonalLibrarySource
+                                       restorationAnchor: collection.isSessionDerived
                                            ? nil : navigationRestoration.timelineAnchor(for: collection),
                                        bridge: browserBridge,
                                        contentTopInset: topInset,
                                        onOpenPhoto: openPhoto,
                                        onRestorationAnchorChanged: { anchor in
-                                           guard !collection.usesPersonalLibrarySource else { return }
+                                           guard !collection.isSessionDerived else { return }
                                            navigationRestoration.setTimelineAnchor(anchor, for: collection)
                                        })
                         .id(collection)
@@ -538,7 +551,7 @@ struct AppShellView: View {
             }
             if isAlbumBrowser {
                 ToolbarItem(placement: .principal) {
-                    Text(model.albumName(for: collection) ?? "Album")
+                    Text(sourceCollection.flatMap { model.albumName(for: $0) } ?? "Album")
                         .font(.headline)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -552,7 +565,7 @@ struct AppShellView: View {
                         .lineLimit(1)
                 }
                 .sharedBackgroundVisibility(.hidden)
-            } else if libraryFilter.isActive && selectedDestination == .personalLibrary {
+            } else if libraryFilter.isActive {
                 ToolbarItem(placement: .principal) {
                     Text(libraryFilter.statusText).font(.headline).lineLimit(1)
                 }
@@ -567,10 +580,8 @@ struct AppShellView: View {
             }
             ToolbarSpacer(.flexible, placement: .primaryAction)
             ToolbarItemGroup(placement: .primaryAction) {
-                if selectedDestination == .personalLibrary {
-                    LibraryFilterToolbarControl()
-                        .frame(height: ToolbarMetrics.controlHeight)
-                }
+                LibraryFilterToolbarControl()
+                    .frame(height: ToolbarMetrics.controlHeight)
                 BrowserRotationControls(model: model)
                     .frame(height: ToolbarMetrics.controlHeight)
                 BrowserFavoriteControl(model: model, collection: collection)

@@ -80,6 +80,32 @@ final class LibraryFilterModelTests: XCTestCase {
         XCTAssertEqual(library.snapshotRevision(for: collection), revision)
     }
 
+    func testSwitchingSourcesClearsFilterAndWaitsForSourceMetadata() async throws {
+        let root = temporaryTestRoot("LibraryFilterSourceSwitch")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let section = TimelineSection(offset: 0, limit: 1,
+            list: [TimelineDay(year: 2024, month: 4, day: 20, itemCount: 1)])
+        let photo = try filterItem(id: 1, filename: "photo.JPG", type: "photo", time: 1_713_571_200)
+        let repository = try CachedPhotosRepository(
+            credentials: .init(username: "filter-switch", password: "unused"), cacheRoot: root,
+            transport: FilterModelTransport(snapshot: .init(sections: [section]), pages: [0: [photo]], delay: .zero))
+        let library = LibraryModel(repository: repository)
+        await library.load()
+        let filter = LibraryFilterModel()
+        filter.configure(library: library, source: .personalLibrary)
+        filter.draft.mediaKinds = [.photo]
+        filter.apply()
+        let applied = await waitUntil { filter.activeCollection != nil }
+        XCTAssertTrue(applied)
+        filter.configure(library: library, source: .album(77))
+        XCTAssertNil(filter.activeCollection)
+        XCTAssertFalse(filter.isReady)
+        XCTAssertNil(filter.activeCollection(for: .personalLibrary))
+        filter.configure(library: library, source: .personalLibrary)
+        XCTAssertTrue(filter.isReady)
+        XCTAssertFalse(filter.isActive)
+    }
+
     private func filterItem(id: Int64, filename: String, type: String, time: Int64) throws -> PhotoItem {
         try JSONDecoder().decode(PhotoItem.self, from: Data("""
         {"id":\(id),"filename":"\(filename)","time":\(time),"type":"\(type)",

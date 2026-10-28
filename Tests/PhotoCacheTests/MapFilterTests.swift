@@ -62,6 +62,40 @@ final class MapFilterTests: XCTestCase, @unchecked Sendable {
         let stats = await transport.stats()
         XCTAssertTrue(stats.lookups.isEmpty); XCTAssertEqual(stats.pages, 0)
     }
+    func testMetadataFilterUsesMapMembership() async throws {
+        let root = temporaryTestRoot("map-metadata-filter"); defer { try? FileManager.default.removeItem(at: root) }
+        let photos = try [item(1, camera: "A"), item(2, camera: "B")]
+        let repository = try repository(root: root, transport: CanonicalFilterTransport(photos))
+        let map = try await register(repository, items: photos, current: true)
+        let controller = LibraryFilterController(repository: repository, snapshot: map.snapshot, sourceCollection: map.descriptor)
+        await controller.indexCachedPages()
+        let filtered = await controller.apply(LibraryFilter(cameras: ["B"]))
+        XCTAssertEqual(filtered.referencesBySection.flatMap { $0 }.map(\.itemID), [2])
+        try await repository.registerLibraryFilter(filtered)
+        await repository.unregisterMapFilter(map.descriptor)
+        var events = 0
+        for await event in await repository.page(filtered.snapshot.sections[0], collection: filtered.descriptor, allowNetwork: false) {
+            if case .value = event { events += 1 }
+        }
+        XCTAssertEqual(events, 0, "A closed map must not authorize its derived filter")
+        await controller.shutdown()
+    }
+
+    func testMapFilterOptionsAreCachedForSessionAndRemovedOnClose() async throws {
+        let root = temporaryTestRoot("map-options-cache"); defer { try? FileManager.default.removeItem(at: root) }
+        let photos = try [item(1, camera: "Map Camera")]
+        let repository = try repository(root: root, transport: CanonicalFilterTransport(photos))
+        let map = try await register(repository, items: photos, current: true)
+        let controller = LibraryFilterController(repository: repository, snapshot: map.snapshot, sourceCollection: map.descriptor)
+        await controller.indexCachedPages()
+        let saved = try await repository.loadFilterOptionCatalog(for: map.descriptor).0
+        XCTAssertEqual(saved?.cameras, ["Map Camera"])
+        await controller.shutdown()
+        await repository.unregisterMapFilter(map.descriptor)
+        let removed = try await repository.loadFilterOptionCatalog(for: map.descriptor).0
+        XCTAssertNil(removed)
+    }
+
     func testPinUsesOneIDLookupRegardlessOfLargeDayCatalog() async throws {
         let root = temporaryTestRoot("map-pin-lookup"); defer { try? FileManager.default.removeItem(at: root) }
         let photo = try item(999)

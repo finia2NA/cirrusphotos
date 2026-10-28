@@ -75,7 +75,6 @@ final class TimelineSectionLoadModel: ObservableObject {
         targetTitle = "Personal Library, Favorites, and All Albums"
         staleTimelineMessage = nil
         progress = .init()
-        filter?.configure(library: library)
         return true
     }
 

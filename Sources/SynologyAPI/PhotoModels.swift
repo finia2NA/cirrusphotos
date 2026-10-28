@@ -574,9 +574,9 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
     /// A Personal Space album, identified by its Synology album id.
     case album(Int64)
     /// A session-only timeline filtered to an explicit item set (a map pin or
-    /// cluster). Never persisted; pages are filtered from Personal Library pages.
+    /// cluster). Never persisted; pages use canonical item details.
     case mapFilter(UUID)
-    /// A session-only client-side filtered Personal Library collection.
+    /// A session-only client-side metadata-filtered collection.
     case libraryFilter(UUID)
 
     /// Stable cache/restoration identity. Personal Library and Favorites keep their
@@ -609,7 +609,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
     }
 
     public var isLibraryFilter: Bool { libraryFilterID != nil }
-    public var usesPersonalLibrarySource: Bool { isMapFilter || isLibraryFilter }
+    public var isSessionDerived: Bool { isMapFilter || isLibraryFilter }
 
     public var favoriteOnly: Bool { self == .favorites }
     public var supportsInitialTimeline: Bool { self == .personalLibrary }

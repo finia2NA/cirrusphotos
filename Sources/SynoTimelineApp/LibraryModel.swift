@@ -22,6 +22,7 @@ final class LibraryModel: ObservableObject {
         case favoriteMutationRefresh
     }
 
+    private var filterAuthorities: [PhotoCollectionDescriptor: [[Bool]]] = [:]
     private var filterMemberships: [PhotoCollectionDescriptor: [[Int64]]] = [:]
     @Published private var snapshots: [PhotoCollectionDescriptor: TimelineSnapshot] = [:]
     @Published private var snapshotRevisions: [PhotoCollectionDescriptor: Int] = [:]
@@ -233,10 +234,13 @@ final class LibraryModel: ObservableObject {
     // MARK: - Session Collections
 
     /// Publishes a session-only collection snapshot (a map filter) without fetching.
+    func filterAuthority(for collection: PhotoCollectionDescriptor) -> [[Bool]]? { filterAuthorities[collection] }
+
     func filterMembership(for collection: PhotoCollectionDescriptor) -> [[Int64]]? { filterMemberships[collection] }
 
     func registerSessionCollection(_ collection: PhotoCollectionDescriptor, snapshot: TimelineSnapshot,
-                                   filterMembership: [[Int64]]? = nil) {
+                                   filterMembership: [[Int64]]? = nil, filterAuthority: [[Bool]]? = nil) {
+        filterAuthorities[collection] = filterAuthority
         filterMemberships[collection] = filterMembership
         snapshots[collection] = snapshot
         snapshotRevisions[collection, default: 0] += 1
@@ -246,6 +250,7 @@ final class LibraryModel: ObservableObject {
     /// Removes a session-only collection after the repository state is unregistered.
     func unregisterSessionCollection(_ collection: PhotoCollectionDescriptor) {
         snapshots.removeValue(forKey: collection)
+        filterAuthorities.removeValue(forKey: collection)
         filterMemberships.removeValue(forKey: collection)
         snapshotRevisions.removeValue(forKey: collection)
         viewerSnapshotRevisions.removeValue(forKey: collection)
@@ -746,6 +751,7 @@ final class LibraryModel: ObservableObject {
         collectionFetchTasks.removeAll()
         let affected = Set(snapshots.keys).union(PhotoCollectionDescriptor.allCases)
         snapshots.removeAll()
+        filterAuthorities.removeAll()
         filterMemberships.removeAll()
         for collection in affected {
             snapshotRevisions[collection, default: 0] += 1

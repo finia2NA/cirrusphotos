@@ -100,7 +100,7 @@ public actor SynologyClient: PhotosTransport {
 
     public func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
         guard let sid else { throw SynologyAPIError.api(119) }
-        guard !request.collection.usesPersonalLibrarySource else { throw SynologyAPIError.invalidResponse }
+        guard !request.collection.isSessionDerived else { throw SynologyAPIError.invalidResponse }
         var parameters = ["api": "SYNO.Foto.Browse.Item", "version": "7", "method": "list",
                           "offset": String(request.offset), "limit": String(request.limit),
                           "start_time": String(request.oldestDay.startTime), "end_time": String(request.newestDay.endTime),

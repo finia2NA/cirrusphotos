@@ -264,7 +264,7 @@ extension CachedPhotosRepository {
             }
             guard let page = result else { throw CollectionCatalogError.invalidCoverage }
             guard await metadataTokenIsCurrent(token) else { throw MetadataAdmissionError.superseded }
-            if collection == .personalLibrary { publishPersonalPage(key: key) }
+            publishCollectionPage(key: key)
             return page
         }
         metadata.pageJobs[key] = SharedJob(id: id, task: task, subscribers: [subscriber])

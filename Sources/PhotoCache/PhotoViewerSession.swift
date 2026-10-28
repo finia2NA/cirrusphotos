@@ -179,7 +179,8 @@ public actor PhotoViewerSession {
             }
         }
         metadataChangeTask = Task { [weak self, collection] in
-            let observation = await repository.observeMetadataChanges(collection: collection.usesPersonalLibrarySource ? .personalLibrary : collection)
+            let source = await repository.metadataObservationSource(for: collection)
+            let observation = await repository.observeMetadataChanges(collection: source)
             for await _ in observation.changes {
                 guard !Task.isCancelled else { return }
                 if let change = await repository.takeMetadataChanges(observation.id) { await self?.invalidateMetadataPages(change) }

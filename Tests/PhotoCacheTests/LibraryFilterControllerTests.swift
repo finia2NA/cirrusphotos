@@ -72,6 +72,172 @@ final class LibraryFilterControllerTests: XCTestCase {
         XCTAssertEqual(calls, 0)
     }
 
+    func testOptionCatalogPersistsAndPartialDiscoveryKeepsCachedChoices() async throws {
+        let root = temporaryTestRoot("FilterOptionsPersist")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceSections = sections(2)
+        let snapshot = TimelineSnapshot(sections: sourceSections)
+        let transport = ScannerTransport(snapshot: snapshot, pages: [:])
+        let first = try repository(transport: transport, root: root)
+        try await seedMetadataPage([item(1, day: 1_713_571_200, camera: "First Camera")],
+                                   section: sourceSections[0], repository: first)
+        let warm = LibraryFilterController(repository: first, snapshot: snapshot)
+        await warm.indexCachedPages()
+        await warm.shutdown()
+
+        let reopened = try repository(transport: transport, root: root)
+        try await seedMetadataPage([item(2, day: 1_713_484_800, camera: "Second Camera")],
+                                   section: sourceSections[1], repository: reopened)
+        let controller = LibraryFilterController(repository: reopened, snapshot: snapshot)
+        await controller.indexCachedPages()
+        let event = await controller.currentEvent()
+        XCTAssertEqual(Set(event.catalog.cameras), ["First Camera", "Second Camera"])
+        let saved = try await reopened.loadFilterOptionCatalog(for: .personalLibrary).0
+        XCTAssertEqual(Set(saved?.cameras ?? []), ["First Camera", "Second Camera"])
+        await controller.shutdown()
+    }
+
+    func testStoredOptionsAppearWhileCachedPageDiscoveryIsRunning() async throws {
+        let root = temporaryTestRoot("FilterOptionsEarly")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let snapshot = TimelineSnapshot(sections: sections(15))
+        let repository = try repository(transport: ScannerTransport(snapshot: snapshot, pages: [:]), root: root)
+        var stored = LibraryFilterCatalog(); stored.cameras = ["Saved Camera"]
+        let admission = try await repository.loadFilterOptionCatalog(for: .favorites).1
+        try await repository.storeFilterOptionCatalog(stored, for: .favorites, originalAdmission: admission)
+        let controller = LibraryFilterController(repository: repository, snapshot: snapshot, sourceCollection: .favorites)
+        let events = await controller.observe()
+        let box = FilterEventBox()
+        let observer = Task {
+            for await event in events { await box.record(event) }
+        }
+        await controller.indexCachedPages()
+        let found = await waitUntil { await box.sawCameraWhileDiscovering("Saved Camera") }
+        XCTAssertTrue(found)
+        observer.cancel()
+        await controller.shutdown()
+    }
+
+    func testIncompleteDiscoveryRetainsStoredOptionsAndResetDiscardsThem() async throws {
+        let root = temporaryTestRoot("FilterOptionsSparse")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let snapshot = TimelineSnapshot(sections: sections(2))
+        let repository = try repository(transport: ScannerTransport(snapshot: snapshot, pages: [:]), root: root)
+        var stored = LibraryFilterCatalog()
+        stored.cameras = ["Older Camera"]
+        stored.lenses = ["Old Lens"]
+        let admission = try await repository.loadFilterOptionCatalog(for: .personalLibrary).1
+        try await repository.storeFilterOptionCatalog(stored, for: .personalLibrary, originalAdmission: admission)
+        let controller = LibraryFilterController(repository: repository, snapshot: snapshot)
+        await controller.indexCachedPages()
+        let event = await controller.currentEvent()
+        XCTAssertEqual(event.catalog.cameras, ["Older Camera"])
+        XCTAssertEqual(event.catalog.lenses, ["Old Lens"])
+        let other = try await repository.loadFilterOptionCatalog(for: .favorites).0
+        XCTAssertNil(other)
+        try await repository.clearMetadataCache()
+        let afterReset = try await repository.loadFilterOptionCatalog(for: .personalLibrary).0
+        XCTAssertNil(afterReset)
+        do {
+            try await repository.storeFilterOptionCatalog(stored, for: .personalLibrary, originalAdmission: admission)
+            XCTFail("A pre-reset discovery must not restore deleted options")
+        } catch MetadataAdmissionError.superseded { }
+        await controller.shutdown()
+    }
+
+    func testLaterPageUpdatesArePersisted() async throws {
+        let root = temporaryTestRoot("FilterOptionsLater")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let snapshot = TimelineSnapshot(sections: sections(2))
+        let repository = try repository(transport: ScannerTransport(snapshot: snapshot, pages: [:]), root: root)
+        let controller = LibraryFilterController(repository: repository, snapshot: snapshot)
+        await controller.indexCachedPages()
+        await controller.ingest(sectionIndex: 0, items: [try item(1, day: 1_713_571_200, camera: "Later Camera")], verified: true)
+        let saved = await waitUntil(attempts: 1000) {
+            (try? await repository.loadFilterOptionCatalog(for: .personalLibrary).0?.cameras) == ["Later Camera"]
+        }
+        XCTAssertTrue(saved)
+        await controller.shutdown()
+    }
+
+    func testCompleteDiscoveryReplacesObsoleteCachedOptions() async throws {
+        let root = temporaryTestRoot("FilterOptionsComplete")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let section = sections(1)[0]
+        let snapshot = TimelineSnapshot(sections: [section])
+        let repository = try repository(transport: ScannerTransport(snapshot: snapshot, pages: [:]), root: root)
+        try await seedMetadataPage([item(1, day: 1_713_571_200, camera: "Current Camera")], section: section, repository: repository)
+        var stored = LibraryFilterCatalog(); stored.cameras = ["Old Camera"]
+        let admission = try await repository.loadFilterOptionCatalog(for: .personalLibrary).1
+        try await repository.storeFilterOptionCatalog(stored, for: .personalLibrary, originalAdmission: admission)
+        let controller = LibraryFilterController(repository: repository, snapshot: snapshot)
+        await controller.indexCachedPages()
+        let event = await controller.currentEvent()
+        XCTAssertEqual(event.catalog.cameras, ["Current Camera"])
+        let saved = try await repository.loadFilterOptionCatalog(for: .personalLibrary).0
+        XCTAssertEqual(saved?.cameras, ["Current Camera"])
+        await controller.shutdown()
+    }
+
+    func testCollectionFiltersUseOnlyTheirSourceMembership() async throws {
+        let root = temporaryTestRoot("FilterCollectionSources")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let section = sections(1)[0]
+        let snapshot = TimelineSnapshot(sections: [section])
+        let transport = ScannerTransport(snapshot: snapshot, pages: [:])
+        let repository = try repository(transport: transport, root: root)
+        let sources: [PhotoCollectionDescriptor] = [.personalLibrary, .favorites, .album(42)]
+        for (offset, source) in sources.enumerated() {
+            try await seedMetadataPage([item(Int64(offset + 1), day: 1_713_571_200, camera: "Shared")],
+                                       section: section, repository: repository, collection: source)
+        }
+        for (offset, source) in sources.enumerated() {
+            let controller = LibraryFilterController(repository: repository, snapshot: snapshot, sourceCollection: source)
+            await controller.indexCachedPages()
+            let registration = await controller.apply(LibraryFilter(cameras: ["Shared"]))
+            XCTAssertEqual(registration.referencesBySection.flatMap { $0 }.map(\.itemID), [Int64(offset + 1)])
+            XCTAssertEqual(registration.sourceCollection, source)
+            await controller.shutdown()
+        }
+    }
+
+    func testPageNotificationsAreScopedByCollection() async throws {
+        let root = temporaryTestRoot("FilterCollectionHints")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let section = sections(1)[0]
+        let snapshot = TimelineSnapshot(sections: [section])
+        let repository = try repository(transport: ScannerTransport(snapshot: snapshot, pages: [:]), root: root)
+        let personal = await repository.observeCollectionPages(collection: .personalLibrary, sections: [section])
+        let album = await repository.observeCollectionPages(collection: .album(42), sections: [section])
+        let namespace = await repository.namespace
+        let key = try XCTUnwrap(CacheKey.page(namespace: namespace, section: section, collection: .album(42)))
+        await repository.publishCollectionPage(key: key)
+        let personalChanges = await repository.takeCollectionPageChanges(personal.id)
+        let albumChanges = await repository.takeCollectionPageChanges(album.id)
+        XCTAssertTrue(personalChanges.isEmpty)
+        XCTAssertEqual(albumChanges, [section])
+        await repository.removeCollectionPageObserver(personal.id)
+        await repository.removeCollectionPageObserver(album.id)
+    }
+
+    func testSourceInvalidationWithdrawsMembershipAuthority() async throws {
+        let root = temporaryTestRoot("FilterSourceInvalidation")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let snapshot = TimelineSnapshot(sections: sections(1))
+        let transport = ScannerTransport(snapshot: snapshot, pages: [:], persistentFailures: [0])
+        let repository = try repository(transport: transport, root: root)
+        let controller = LibraryFilterController(repository: repository, snapshot: snapshot, sourceCollection: .favorites)
+        await controller.indexCachedPages()
+        await controller.ingest(sectionIndex: 0, items: [try item(1, day: 1_713_571_200, camera: "A")], verified: true)
+        _ = await controller.apply(LibraryFilter(cameras: ["A"]))
+        await repository.publishMetadataInvalidation(collection: .favorites)
+        let withdrawn = await waitUntil {
+            await controller.currentEvent().registration?.referencesBySection.first?.first?.sourceVerified == false
+        }
+        XCTAssertTrue(withdrawn)
+        await controller.shutdown()
+    }
+
     func testCacheDiscoveryIgnoresPageOutsideCurrentTimeline() async throws {
         let root = temporaryTestRoot("FilterObsoleteCache")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -122,9 +288,9 @@ final class LibraryFilterControllerTests: XCTestCase {
             pages[index] = [try item(Int64(index + 1), day: 1_713_571_200 - Int64(index * 86_400), camera: "Other")]
         }
         let transport = ScannerTransport(snapshot: snapshot, pages: pages, delay: .milliseconds(10))
-        let controller = LibraryFilterController(
-            repository: try repository(transport: transport, root: root), snapshot: snapshot
-        )
+        let sourceRepository = try repository(transport: transport, root: root)
+        for await _ in await sourceRepository.timeline() {}
+        let controller = LibraryFilterController(repository: sourceRepository, snapshot: snapshot)
         let anchor = try item(11, day: 1_713_571_200 - 10 * 86_400, camera: "Anchor")
         await controller.ingest(sectionIndex: 10, items: [anchor], verified: true)
         _ = await controller.apply(LibraryFilter(cameras: ["Anchor"]))
@@ -261,6 +427,7 @@ private actor FilterEventBox {
     var verified: Int { events.last?.progress.verified ?? 0 }
     func record(_ event: LibraryFilterControllerEvent) { events.append(event) }
     func sawCamera(_ value: String) -> Bool { events.contains { $0.catalog.cameras.contains(value) } }
+    func sawCameraWhileDiscovering(_ value: String) -> Bool { events.contains { $0.progress.isDiscoveringCachedPages && $0.catalog.cameras.contains(value) } }
     func latestCatalog() -> [String] { events.last?.catalog.cameras ?? [] }
 }
 

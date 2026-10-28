@@ -227,6 +227,7 @@ struct LibraryBrowserView: View {
                     HStack(spacing: 0) {
                         LibraryBrowserScrollView(snapshot: snapshot,
                                              filterMembership: library.filterMembership(for: collection),
+                                             filterAuthority: library.filterAuthority(for: collection),
                                              collection: collection,
                                              revision: library.snapshotRevision(for: collection),
                                              retryRevision: library.retryRevision,
@@ -612,6 +613,7 @@ private struct HostedPlaceholder: View {
 struct LibraryBrowserScrollView: NSViewRepresentable {
     let snapshot: TimelineSnapshot
     let filterMembership: [[Int64]]?
+    let filterAuthority: [[Bool]]?
     let collection: PhotoCollectionDescriptor
     let revision: Int
     let retryRevision: Int
@@ -803,7 +805,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                                                    cropsThumbnailsToSquare: input.cropsThumbnailsToSquare)
                 snapPresentation(input.cropsThumbnailsToSquare)
                 if preserveFilter, let oldMembership = filterMembership, let newMembership = input.filterMembership {
-                    pages = FilterPageRebaser.rebase(pages: pages, membership: newMembership)
+                    pages = FilterPageRebaser.rebase(pages: pages, membership: newMembership, sourceAuthority: input.filterAuthority)
                     geometry?.reconcile(pages: pages)
                     selectionState.rebaseFilter(to: newIndex.fingerprint, oldMembership: oldMembership,
                                                 newMembership: newMembership)
@@ -825,7 +827,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     previousIndex: oldIndex, visibleAnchor: previous, timelineVerified: input.allowNetwork) {
                     scrollTo(target)
                 }
-                startEvents(rebasingTo: newIndex, filterMembership: preserveFilter ? input.filterMembership : nil)
+                startEvents(rebasingTo: newIndex, filterMembership: preserveFilter ? input.filterMembership : nil,
+                            filterAuthority: preserveFilter ? input.filterAuthority : nil)
             } else {
                 if allowNetwork != input.allowNetwork {
                     allowNetwork = input.allowNetwork
@@ -956,11 +959,11 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             hostRevisions.removeAll()
         }
 
-        private func startEvents(rebasingTo index: LibraryIndex? = nil, filterMembership: [[Int64]]? = nil) {
+        private func startEvents(rebasingTo index: LibraryIndex? = nil, filterMembership: [[Int64]]? = nil, filterAuthority: [[Bool]]? = nil) {
             guard let window else { return }
             eventTask = Task { [weak self] in
                 guard !Task.isCancelled else { return }
-                if let index { await window.rebase(to: index, filterMembership: filterMembership) }
+                if let index { await window.rebase(to: index, filterMembership: filterMembership, filterAuthority: filterAuthority) }
                 guard !Task.isCancelled else { return }
                 if let self, self.window === window {
                     self.rebasing = false

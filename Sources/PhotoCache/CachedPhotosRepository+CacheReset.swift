@@ -99,8 +99,8 @@ extension CachedPhotosRepository {
         metadata.reconciliation?.cancel()
         metadata.locationPublicationTask?.cancel()
         metadata.clearSourceWork()
-        for observer in metadata.personalPageObservers.values { observer.continuation.finish() }
-        metadata.personalPageObservers.removeAll()
+        for observer in metadata.collectionPageObservers.values { observer.continuation.finish() }
+        metadata.collectionPageObservers.removeAll()
         for job in metadata.timelineJobs.values { job.task.cancel() }
         for job in metadata.pageJobs.values { job.task.cancel() }
         metadata.albumListJob?.task.cancel()
@@ -125,6 +125,7 @@ extension CachedPhotosRepository {
         metadata.locationRevision &+= 1
         metadata.mapFilters.removeAll()
         metadata.libraryFilters.removeAll()
+        metadata.sessionFilterCatalogs.removeAll()
         // Mutation epochs and favorite overrides remain monotonic/live. Already
         // submitted NAS writes are not duplicated or canceled by a local reset.
     }

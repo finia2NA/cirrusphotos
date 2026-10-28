@@ -14,6 +14,13 @@ struct MetadataCollectionObserver {
 }
 
 extension CachedPhotosRepository {
+    func metadataObservationSource(for collection: PhotoCollectionDescriptor) -> PhotoCollectionDescriptor {
+        if let id = collection.libraryFilterID, let state = metadata.libraryFilters[id] {
+            return state.registration.sourceCollection.isMapFilter ? .personalLibrary : state.registration.sourceCollection
+        }
+        return collection.isMapFilter ? .personalLibrary : collection
+    }
+
     func observeMetadataChanges(collection: PhotoCollectionDescriptor) -> MetadataCollectionObservation {
         let id = UUID()
         let stream = AsyncStream<Void>(bufferingPolicy: .bufferingNewest(1)) { continuation in
@@ -38,11 +45,12 @@ extension CachedPhotosRepository {
             metadata.collectionObservers[id] = observer
             observer.continuation.yield(())
         }
-        if collection == nil || collection == .personalLibrary {
-            for section in metadata.latestTimelines[.personalLibrary]?.sections ?? [] {
+        let sources = Set(metadata.collectionPageObservers.values.map(\.collection))
+        for source in sources where collection == nil || collection == source || (source.isMapFilter && collection == .personalLibrary) {
+            for section in metadata.latestTimelines[source]?.sections ?? [] {
                 if let raw = section.list.first, let day = try? CaptureDay(year: raw.year, month: raw.month, day: raw.day),
-                   days == nil || days!.contains(day), let key = CacheKey.page(namespace: namespace, section: section) {
-                    publishPersonalPage(key: key)
+                   days == nil || days!.contains(day), let key = CacheKey.page(namespace: namespace, section: section, collection: source) {
+                    publishCollectionPage(key: key)
                 }
             }
         }

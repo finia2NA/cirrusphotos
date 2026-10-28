@@ -7,16 +7,16 @@ struct LibraryFilterToolbarControl: View {
 
     var body: some View {
         Button { filter.draft = filter.committed; filter.isPresented.toggle() } label: {
-            Label("Filter Library",
+            Label("Filter Photos",
                   systemImage: filter.isActive
                     ? "line.3.horizontal.decrease.circle.fill"
                     : "line.3.horizontal.decrease.circle")
         }
         .disabled(!filter.isReady)
         .popover(isPresented: $filter.isPresented) { LibraryFilterView().environmentObject(filter) }
-        .accessibilityLabel("Filter Library")
+        .accessibilityLabel("Filter Photos")
         .accessibilityValue(filter.isActive ? "\(filter.activeCount) active filters" : "No active filters")
-        .help(filter.isReady ? "Filter Library" : "Filter Library (metadata loading)")
+        .help(filter.isReady ? "Filter Photos" : "Filter Photos (metadata loading)")
     }
 }
 
@@ -26,7 +26,7 @@ struct LibraryFilterView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Filter Library").font(.headline)
+                Text("Filter Photos").font(.headline)
                 HStack {
                     mediaToggle("Photo", .photo)
                     mediaToggle("Video", .video)
@@ -45,7 +45,13 @@ struct LibraryFilterView: View {
                     Text("\(key): \(filter.validationErrors[key] ?? "")")
                         .font(.caption).foregroundStyle(.red)
                 }
-                Text(filter.coverageText).font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    if filter.progress.isDiscoveringCachedPages {
+                        ProgressView().controlSize(.small)
+                            .accessibilityLabel("Searching cached filter options")
+                    }
+                    Text(filter.coverageText).font(.caption).foregroundStyle(.secondary)
+                }
                 HStack {
                     Button("Clear") { filter.clear(); filter.isPresented = false }
                     Spacer()

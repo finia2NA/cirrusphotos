@@ -34,10 +34,16 @@ extension CachedPhotosRepository {
                 let dirtyDays = try await store.storeMetadataDetails(items, namespace: metadataNamespace, currentRun: runID, admission: admission)
                 guard epoch == metadata.admissionEpoch, !metadata.resetInProgress, !Task.isCancelled else { throw MetadataAdmissionError.superseded }
                 if !dirtyDays.isEmpty { publishMetadataInvalidation(days: dirtyDays) }
-                if let references = try? await store.metadataPersonalReferences(metadataNamespace, ids: chunk) {
-                    guard epoch == metadata.admissionEpoch, !metadata.resetInProgress else { throw MetadataAdmissionError.superseded }
-                    for section in references { if let key = CacheKey.page(namespace: namespace, section: section) { publishPersonalPage(key: key) } }
+                let sources = Set(metadata.collectionPageObservers.values.map(\.collection)).filter { !$0.isSessionDerived }
+                for source in sources {
+                    if let references = try? await store.metadataCollectionReferences(metadataNamespace, collection: source, ids: chunk) {
+                        guard epoch == metadata.admissionEpoch, !metadata.resetInProgress else { throw MetadataAdmissionError.superseded }
+                        for section in references {
+                            if let key = CacheKey.page(namespace: namespace, section: section, collection: source) { publishCollectionPage(key: key) }
+                        }
+                    }
                 }
+                publishDerivedPageChanges(ids: Set(chunk))
                 publishLocationItemChanges(items)
                 return Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
             }

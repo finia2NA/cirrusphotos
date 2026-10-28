@@ -22,7 +22,7 @@ public struct LibraryPage: Sendable {
 
 /// Reconstructs derived pages from exact membership while retaining available item details.
 public enum FilterPageRebaser {
-    public static func rebase(pages: [Int: LibraryPage], membership: [[Int64]]) -> [Int: LibraryPage] {
+    public static func rebase(pages: [Int: LibraryPage], membership: [[Int64]], sourceAuthority: [[Bool]]? = nil) -> [Int: LibraryPage] {
         var known: [Int64: PhotoItemSlot] = [:]
         for page in pages.values {
             for slot in page.slots where slot.item != nil { known[slot.itemID] = slot }
@@ -30,11 +30,15 @@ public enum FilterPageRebaser {
         var result: [Int: LibraryPage] = [:]
         for (section, ids) in membership.enumerated() {
             guard ids.contains(where: { known[$0] != nil }) else { continue }
-            let slots = ids.map { known[$0] ?? PhotoItemSlot(itemID: $0, item: nil, verified: false) }
+            let slots = ids.enumerated().map { offset, id in
+                let existing = known[id]
+                let authoritative = sourceAuthority.map { $0.indices.contains(section) && $0[section].indices.contains(offset) && $0[section][offset] } ?? true
+                return PhotoItemSlot(itemID: id, item: existing?.item, verified: existing?.verified == true && authoritative)
+            }
             let unchanged = pages.values.contains { $0.slots.map(\.itemID) == ids && $0.verified }
             result[section] = LibraryPage(sectionIndex: section, slots: slots,
                                           verified: unchanged && slots.allSatisfy { $0.item != nil && $0.verified },
-                                          membershipVerified: true)
+                                          membershipVerified: sourceAuthority.map { $0.indices.contains(section) && $0[section].count == ids.count && $0[section].allSatisfy { $0 } } ?? true)
         }
         return result
     }
@@ -181,7 +185,7 @@ public actor LibraryPageWindow {
     }
 
     /// Numeric section positions may move while stable day slots remain reusable.
-    public func rebase(to index: LibraryIndex, filterMembership: [[Int64]]? = nil) {
+    public func rebase(to index: LibraryIndex, filterMembership: [[Int64]]? = nil, filterAuthority: [[Bool]]? = nil) {
         guard fingerprint != index.fingerprint || filterMembership != nil else { return }
         for request in requests.values { request.task.cancel() }
         requests.removeAll(); completed.removeAll(); failedSections.removeAll()
@@ -191,7 +195,7 @@ public actor LibraryPageWindow {
         }
         var rebased: [Int: LibraryPage] = [:]
         if let filterMembership {
-            rebased = FilterPageRebaser.rebase(pages: pages, membership: filterMembership)
+            rebased = FilterPageRebaser.rebase(pages: pages, membership: filterMembership, sourceAuthority: filterAuthority)
         } else {
         for (position, page) in pages {
             guard sectionDescriptors.indices.contains(position),

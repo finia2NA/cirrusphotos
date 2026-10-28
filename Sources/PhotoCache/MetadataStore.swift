@@ -45,7 +45,7 @@ public struct MetadataStoreAdmission: Sendable {
 /// The normalized format is initialized explicitly when the engine enrolls it.
 extension DiskCache {
     static let metadataFormatVersion = 1
-    private static let normalizedTables = ["metadata_inventory_staging", "album_summaries", "page_items", "day_pages", "collection_days", "collection_state", "item_details", "item_index", "metadata_state"]
+    private static let normalizedTables = ["filter_option_catalogs", "metadata_inventory_staging", "album_summaries", "page_items", "day_pages", "collection_days", "collection_state", "item_details", "item_index", "metadata_state"]
 
     public func initializeMetadataStore() throws {
         try metadataTransaction {
@@ -95,6 +95,9 @@ extension DiskCache {
             CREATE TABLE IF NOT EXISTS album_summaries (
               namespace TEXT PRIMARY KEY,payload BLOB NOT NULL,validated_run TEXT,revision INTEGER NOT NULL,
               cost INTEGER NOT NULL,accessed REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS filter_option_catalogs (
+              namespace TEXT NOT NULL, collection TEXT NOT NULL, payload BLOB NOT NULL,
+              PRIMARY KEY(namespace,collection));
             CREATE TABLE IF NOT EXISTS metadata_inventory_staging (
               job TEXT NOT NULL, namespace TEXT NOT NULL, item_id INTEGER NOT NULL,
               capture_time INTEGER NOT NULL, projection BLOB NOT NULL,
@@ -133,6 +136,28 @@ extension DiskCache {
         guard generation == admission.generation, metadataGeneration == admission.metadataGeneration,
               state.revision == admission.revision, state.resetEpoch == admission.resetEpoch else {
             throw MetadataAdmissionError.superseded
+        }
+    }
+
+    func filterOptionCatalog(_ key: CollectionKey) throws -> LibraryFilterCatalog? {
+        let statement = try prepare("SELECT payload FROM filter_option_catalogs WHERE namespace=? AND collection=?")
+        defer { sqlite3_finalize(statement) }
+        bind(key.namespace.key, at: 1, in: statement)
+        bind(key.collection.rawValue, at: 2, in: statement)
+        guard sqlite3_step(statement) == SQLITE_ROW, let payload = metadataBlob(statement, 0) else { return nil }
+        return try? JSONDecoder().decode(LibraryFilterCatalog.self, from: payload)
+    }
+
+    func storeFilterOptionCatalog(_ catalog: LibraryFilterCatalog, key: CollectionKey,
+                                  admission: MetadataStoreAdmission) throws {
+        try metadataTransaction {
+            try admit(admission, namespace: key.namespace)
+            let data = try JSONEncoder().encode(catalog)
+            let statement = try prepare("INSERT OR REPLACE INTO filter_option_catalogs VALUES (?,?,?)")
+            bind(key.namespace.key, at: 1, in: statement)
+            bind(key.collection.rawValue, at: 2, in: statement)
+            metadataBind(data, at: 3, in: statement)
+            try metadataStep(statement)
         }
     }
 
@@ -408,7 +433,7 @@ extension DiskCache {
             return dirtyDays
         }
     }
-    public func metadataPersonalReferences(_ namespace: MetadataNamespace, ids: [Int64]) throws -> [TimelineSection] {
+    public func metadataCollectionReferences(_ namespace: MetadataNamespace, collection: PhotoCollectionDescriptor, ids: [Int64]) throws -> [TimelineSection] {
         guard ids.count <= 100 else { throw CollectionCatalogError.exceedsLimit }
         guard !ids.isEmpty else { return [] }
         let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
@@ -416,11 +441,12 @@ extension DiskCache {
         SELECT DISTINCT d.day,d.page_offset,d.actual_count,d.day_count
         FROM page_items p JOIN day_pages d ON d.namespace=p.namespace AND d.collection=p.collection AND d.day=p.day
           AND d.page_offset=p.page_offset AND d.capacity=p.capacity AND d.sort_order=p.sort_order
-        WHERE p.namespace=? AND p.collection='personal' AND p.item_id IN (\(placeholders))
+        WHERE p.namespace=? AND p.collection=? AND p.item_id IN (\(placeholders))
         """)
         defer { sqlite3_finalize(statement) }
         bind(namespace.key, at: 1, in: statement)
-        for (offset, id) in ids.enumerated() { sqlite3_bind_int64(statement, Int32(offset + 2), id) }
+        bind(collection.rawValue, at: 2, in: statement)
+        for (offset, id) in ids.enumerated() { sqlite3_bind_int64(statement, Int32(offset + 3), id) }
         var sections: [TimelineSection] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             guard let raw = columnString(statement, 0) else { throw CacheError.storage }

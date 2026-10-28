@@ -75,6 +75,7 @@ extension CachedPhotosRepository {
         guard let filterID = descriptor.mapFilterID,
               metadata.mapFilters.removeValue(forKey: filterID) != nil else { return }
         metadata.latestTimelines.removeValue(forKey: descriptor)
+        metadata.sessionFilterCatalogs.removeValue(forKey: descriptor)
         metadata.mutationEpochs.removeValue(forKey: descriptor)
         cancelIdleLogin()
     }

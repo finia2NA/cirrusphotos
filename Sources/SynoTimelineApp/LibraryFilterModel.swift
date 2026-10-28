@@ -27,6 +27,7 @@ final class LibraryFilterModel: ObservableObject {
     private var controller: LibraryFilterController?
     private var observer: Task<Void, Never>?
     private var fingerprint: String?
+    private(set) var sourceCollection: PhotoCollectionDescriptor?
     private var metadataRevision: UInt64?
     private var lastEdgeDemand: EdgeDemandKey?
     private var installedRegistration: LibraryFilterRegistration?
@@ -48,18 +49,39 @@ final class LibraryFilterModel: ObservableObject {
         return "\(matches) Matches · \(progress.processed)/\(progress.total) Sections"
     }
 
-    func configure(library: LibraryModel) {
+    func activeCollection(for source: PhotoCollectionDescriptor?) -> PhotoCollectionDescriptor? {
+        source == sourceCollection ? activeCollection : nil
+    }
+
+    func configure(library: LibraryModel, source: PhotoCollectionDescriptor? = .personalLibrary) {
         self.library = library
-        guard let snapshot = library.snapshot, library.timelineVerified, let repository = library.repository else { return }
+        let changedSource = sourceCollection != source
+        let resetMetadata = metadataRevision != nil && metadataRevision != library.metadataInvalidationRevision
+        if changedSource || resetMetadata {
+            let previousController = controller
+            observer?.cancel(); observer = nil
+            clear()
+            controller = nil
+            sourceCollection = source
+            catalog = LibraryFilterCatalog()
+            progress = TimelineSectionLoadProgress(total: 0, processed: 0, verified: 0, provisional: 0,
+                                                   failed: 0, remaining: 0, currentSectionLabel: nil,
+                                                   matchCount: nil, state: .idle, failures: [])
+            fingerprint = nil
+            metadataRevision = nil
+            Task { await previousController?.shutdown() }
+        }
+        guard let source, let snapshot = library.snapshot(for: source),
+              library.timelineVerified(for: source), let repository = library.repository else { return }
         let next = LibraryIndex(snapshot: snapshot).fingerprint
         guard fingerprint != next || metadataRevision != library.metadataInvalidationRevision else { return }
         let previousController = controller
         observer?.cancel()
-        Task { await previousController?.shutdown() }
         clear()
+        Task { await previousController?.shutdown() }
         fingerprint = next
         metadataRevision = library.metadataInvalidationRevision
-        let controller = LibraryFilterController(repository: repository, snapshot: snapshot)
+        let controller = LibraryFilterController(repository: repository, snapshot: snapshot, sourceCollection: source)
         self.controller = controller
         observer = Task { [weak self] in
             for await event in await controller.observe() {
@@ -74,7 +96,7 @@ final class LibraryFilterModel: ObservableObject {
         validationErrors = validateFields()
         guard validationErrors.isEmpty else { return }
         guard let controller else {
-            validationErrors["Library"] = "Library metadata is still loading."
+            validationErrors["Collection"] = "Collection metadata is still loading."
             return
         }
         var filter = draft
@@ -141,7 +163,11 @@ final class LibraryFilterModel: ObservableObject {
             await install(registration)
             if needsInitialBatch && !event.progress.isDiscoveringCachedPages {
                 needsInitialBatch = false
-                if registration.snapshot.sections.isEmpty { await controller?.loadInitialBatch() }
+                if registration.snapshot.sections.isEmpty {
+                    await controller?.loadInitialBatch()
+                } else {
+                    await controller?.demandVisibleResultSections([0], direction: .older, userScrollGeneration: 0)
+                }
             }
         }
     }
@@ -179,7 +205,8 @@ final class LibraryFilterModel: ObservableObject {
             }
             activeCollection = registration.descriptor
             library.registerSessionCollection(registration.descriptor, snapshot: registration.snapshot,
-                                              filterMembership: registration.referencesBySection.map { $0.map(\.itemID) })
+                                              filterMembership: registration.referencesBySection.map { $0.map(\.itemID) },
+                                              filterAuthority: registration.referencesBySection.map { $0.map(\.sourceVerified) })
             installedRegistration = registration
         } catch {
             validationErrors["scan"] = error.localizedDescription

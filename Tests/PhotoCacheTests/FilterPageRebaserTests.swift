@@ -32,6 +32,16 @@ final class FilterPageRebaserTests: XCTestCase {
         XCTAssertFalse(page.slots[1].verified)
     }
 
+    func testUnchangedIDsLoseAuthorityWhenSourceMembershipIsInvalidated() throws {
+        let old = LibraryPage(sectionIndex: 0, items: [try item(1), try item(2)], verified: true)
+        let pages = FilterPageRebaser.rebase(pages: [0: old], membership: [[1, 2]], sourceAuthority: [[false, false]])
+        let page = try XCTUnwrap(pages[0])
+        XCTAssertEqual(page.items.map(\.id), [1, 2])
+        XCTAssertFalse(page.verified)
+        XCTAssertFalse(page.membershipVerified)
+        XCTAssertTrue(page.slots.allSatisfy { !$0.verified })
+    }
+
     func testUnchangedPageMovesAndRemainsVerified() throws {
         let old = LibraryPage(sectionIndex: 0, items: [try item(1), try item(2)], verified: true)
         let pages = FilterPageRebaser.rebase(pages: [0: old], membership: [[99], [1, 2]])

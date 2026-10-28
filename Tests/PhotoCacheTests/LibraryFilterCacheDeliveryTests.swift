@@ -66,6 +66,28 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         XCTAssertGreaterThan(finalCount, 0)
     }
 
+    func testUnverifiedSourceMembershipKeepsDerivedSlotsUnverified() async throws {
+        let root = temporaryTestRoot("FilterSourceAuthority")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AuditBlockedTransport(snapshot: .init(sections: [section]), items: [try photo()])
+        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw"), cacheRoot: root, transport: transport)
+        let run = await repository.runID
+        try await seedMetadataPage([photo()], section: section, repository: repository, collection: .favorites, validatedRun: run)
+        let descriptor = PhotoCollectionDescriptor.libraryFilter(UUID())
+        try await repository.registerLibraryFilter(.init(descriptor: descriptor, snapshot: .init(sections: [section]),
+            referencesBySection: [[.init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: 1, sourceVerified: false)]],
+            filter: .init(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: .init(sections: [section])).fingerprint,
+            sourceCollection: .favorites))
+        var pages: [PhotoPageSnapshot] = []
+        for await event in await repository.page(section, collection: descriptor, allowNetwork: false) {
+            if case .value(let page, _) = event { pages.append(page) }
+        }
+        let page = try XCTUnwrap(pages.first)
+        XCTAssertEqual(page.slots.first?.item?.id, 1)
+        XCTAssertFalse(page.membershipVerified)
+        XCTAssertEqual(page.slots.first?.verified, false)
+    }
+
     func testExplicitReconciliationDiscoversDirectlySeededPages() async throws {
         let root = temporaryTestRoot("AuditLateCache")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -107,7 +129,7 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         XCTAssertTrue(updated)
         await controller.shutdown()
         await observation.value
-        let observers = await repository.personalPageObserverCountForTests()
+        let observers = await repository.collectionPageObserverCountForTests()
         XCTAssertEqual(observers, 0)
     }
 
@@ -213,14 +235,14 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         }
         let transport = AuditBlockedTransport(snapshot: .init(sections: sections), items: [])
         let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw", otpSecret: "unused"), cacheRoot: root, transport: transport)
-        let observation = await repository.observePersonalPages(sections: Set(sections))
-        await repository.publishPersonalPagesForTests(sections)
-        let pending = await repository.takePersonalPageChanges(observation.id)
+        let observation = await repository.observeCollectionPages(collection: .personalLibrary, sections: Set(sections))
+        await repository.publishCollectionPagesForTests(sections)
+        let pending = await repository.takeCollectionPageChanges(observation.id)
         XCTAssertEqual(pending, Set(sections))
-        let drained = await repository.takePersonalPageChanges(observation.id)
+        let drained = await repository.takeCollectionPageChanges(observation.id)
         XCTAssertTrue(drained.isEmpty)
         try await repository.clearMetadataCache()
-        let observers = await repository.personalPageObserverCountForTests()
+        let observers = await repository.collectionPageObserverCountForTests()
         XCTAssertEqual(observers, 0)
     }
 }
@@ -233,13 +255,13 @@ private actor AuditFilterEvents {
 }
 
 private extension CachedPhotosRepository {
-    func personalPageObserverCountForTests() -> Int { metadata.personalPageObservers.count }
+    func collectionPageObserverCountForTests() -> Int { metadata.collectionPageObservers.count }
     func replacePersonalTimelineForTests(_ snapshot: TimelineSnapshot) {
         metadata.latestTimelines[.personalLibrary] = snapshot
     }
-    func publishPersonalPagesForTests(_ sections: [TimelineSection]) {
+    func publishCollectionPagesForTests(_ sections: [TimelineSection]) {
         for section in sections {
-            if let key = CacheKey.page(namespace: namespace, section: section) { publishPersonalPage(key: key) }
+            if let key = CacheKey.page(namespace: namespace, section: section) { publishCollectionPage(key: key) }
         }
     }
 }
