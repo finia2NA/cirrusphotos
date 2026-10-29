@@ -28,6 +28,8 @@ To remove build artifacts so the next `make` or `make debug` performs a clean bu
 make clean
 ```
 
+Run `make cloc` for line counts by language and directory (up to two directory levels). It counts Git-tracked files and excludes submodules. Install the dependency with `brew install cloc` if needed.
+
 Open `Package.swift` in Xcode to build and run there instead. Run model tests with `swift test`. Building requires the macOS 27 SDK.
 
 The app reads `USER`, `PW`, and `OTP` from the ignored `.env`. On a warm launch it displays cached timeline, page, and thumbnail data while signing in and validating demanded resources. A cold launch shows Synology's initial timeline while fetching the full index. The toolbar status shows login progress, connection, or failure, with a Retry action when recovery is needed. Library data remains fixed after validation during that app run.
