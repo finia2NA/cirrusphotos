@@ -280,6 +280,28 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         XCTAssertEqual(dismisses, 0)
     }
 
+    func testFileDragStartsAtFitZoomAndZoomedDragStillPans() throws {
+        let (fit, fitWindow) = makeCanvas()
+        defer { fitWindow.orderOut(nil) }
+        var starts = 0
+        fit.startFileDrag = { _, _ in starts += 1; return true }
+        let point = CGPoint(x: 400, y: 300)
+        fit.mouseDown(with: try mouseEvent(.leftMouseDown, at: point, in: fitWindow))
+        fit.mouseDragged(with: try mouseEvent(.leftMouseDragged, at: CGPoint(x: 403, y: 300), in: fitWindow))
+        XCTAssertEqual(starts, 0)
+        fit.mouseDragged(with: try mouseEvent(.leftMouseDragged, at: CGPoint(x: 420, y: 300), in: fitWindow))
+        XCTAssertEqual(starts, 1)
+
+        let (zoomed, zoomWindow) = makeCanvas(zoom: 2)
+        defer { zoomWindow.orderOut(nil) }
+        zoomed.startFileDrag = { _, _ in starts += 1; return true }
+        let before = zoomed.presentedImageFrame
+        zoomed.mouseDown(with: try mouseEvent(.leftMouseDown, at: point, in: zoomWindow))
+        zoomed.mouseDragged(with: try mouseEvent(.leftMouseDragged, at: CGPoint(x: 450, y: 300), in: zoomWindow))
+        XCTAssertEqual(starts, 1)
+        XCTAssertNotEqual(zoomed.presentedImageFrame, before)
+    }
+
     func testClickDragDoesNotDismissAtFitZoom() throws {
         let (canvas, window) = makeCanvas()
         defer { window.orderOut(nil) }

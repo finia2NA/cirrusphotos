@@ -412,6 +412,17 @@ final class LibraryModel: ObservableObject {
                                           item: nil, kind: kind, choose: choose)
     }
 
+    func editSelection(_ selection: BrowserCommandSnapshot, application: URL) {
+        guard let repository, let timeline = snapshots[selection.collection] else { return }
+        PhotoDownloadManager.shared.edit(repository: repository, snapshot: timeline, selection: selection,
+                                        item: nil, applicationURL: application)
+    }
+
+    func editViewerItem(_ item: PhotoItem, repository: CachedPhotosRepository, application: URL) {
+        PhotoDownloadManager.shared.edit(repository: repository, snapshot: nil, selection: nil,
+                                        item: item, applicationURL: application)
+    }
+
     func downloadViewerItem(_ item: PhotoItem, repository: CachedPhotosRepository,
                             kind: PhotoDownloadKind, choose: Bool) {
         PhotoDownloadManager.shared.start(repository: repository, snapshot: nil, selection: nil,

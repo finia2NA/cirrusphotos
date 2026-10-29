@@ -3,6 +3,7 @@ import Darwin
 import PhotoCache
 import SwiftUI
 import SynologyAPI
+import UniformTypeIdentifiers
 
 struct PhotoDownloadJob: Identifiable {
     let id: UUID
@@ -19,6 +20,17 @@ final class PhotoDownloadManager: ObservableObject {
     @Published var isPresented = false
     var hasActiveJobs: Bool { jobs.contains { $0.active } }
     private var tasks: [UUID: Task<Void, Never>] = [:]
+    private let editDirectoryProvider: @Sendable () throws -> URL
+    private let editorOpener: @MainActor (URL, URL) async throws -> Void
+
+    init(editDirectoryProvider: @escaping @Sendable () throws -> URL = { try PhotoDownloadManager.editDirectory() },
+         editorOpener: @escaping @MainActor (URL, URL) async throws -> Void = { file, application in
+             _ = try await NSWorkspace.shared.open([file], withApplicationAt: application,
+                                                   configuration: NSWorkspace.OpenConfiguration())
+         }) {
+        self.editDirectoryProvider = editDirectoryProvider
+        self.editorOpener = editorOpener
+    }
 
     static var directory: URL {
         if let path = UserDefaults.standard.string(forKey: "photoDownloadDirectory"), !path.isEmpty {
@@ -62,9 +74,15 @@ final class PhotoDownloadManager: ObservableObject {
                 try Task.checkCancellation()
                 guard !items.isEmpty else { throw DownloadFailure.message("No photos are selected.") }
                 update(id) { $0.name = Self.jobName(items); $0.status = "Downloading…" }
-                let result = try await repository.downloadPhotos(itemIDs: items.map(\.id), kind: kind) { [weak self] progress in
-                    Task { @MainActor [weak self] in
-                        self?.update(id) { if $0.active { $0.progress = progress.fractionCompleted } }
+                let cached = try await (items.count == 1 && kind == .original
+                    ? repository.cachedOriginalForDownload(items[0]) : nil)
+                let result: PhotoDownloadResponse
+                if let cached { result = cached }
+                else {
+                    result = try await repository.downloadPhotos(itemIDs: items.map(\.id), kind: kind) { [weak self] progress in
+                        Task { @MainActor [weak self] in
+                            self?.update(id) { if $0.active { $0.progress = progress.fractionCompleted } }
+                        }
                     }
                 }
                 defer { try? FileManager.default.removeItem(at: result.temporaryURL.deletingLastPathComponent()) }
@@ -81,6 +99,167 @@ final class PhotoDownloadManager: ObservableObject {
                 update(id) { $0.status = error is CancellationError ? "Cancelled" : error.localizedDescription; $0.active = false }
             }
             tasks[id] = nil
+        }
+    }
+
+    func edit(repository: CachedPhotosRepository, snapshot: TimelineSnapshot?, selection: BrowserCommandSnapshot?,
+              item: PhotoItem?, applicationURL: URL) {
+        let id = UUID()
+        jobs.insert(PhotoDownloadJob(id: id, name: item?.filename ?? "Preparing photo…", progress: nil,
+                                     status: "Preparing…", active: true), at: 0)
+        isPresented = true
+        tasks[id] = Task { [weak self] in
+            guard let self else { return }
+            var saved: URL?
+            do {
+                let photo: PhotoItem
+                if let item { photo = item }
+                else if let selection, let snapshot {
+                    guard let items = await SelectionDownloadResolver(repository: repository).resolve(
+                        collection: selection.collection, snapshot: snapshot,
+                        selectedOrdinals: selection.selectedOrdinals,
+                        knownItemIDsByOrdinal: selection.knownItemIDsByOrdinal,
+                        expectedTimelineFingerprint: selection.indexFingerprint), items.count == 1,
+                        let resolved = items.first else {
+                        throw DownloadFailure.message("The photo could not be verified.")
+                    }
+                    photo = resolved
+                } else { throw DownloadFailure.message("No photo is selected.") }
+                try Task.checkCancellation()
+                update(id) { $0.name = photo.filename ?? "Photo"; $0.status = "Downloading…" }
+                let cached = try await repository.cachedOriginalForDownload(photo, includeLivePhoto: true)
+                let response: PhotoDownloadResponse
+                if let cached { response = cached }
+                else if photo.mediaKind == .livePhoto {
+                    guard let still = try await repository.livePhotoStillForEditing(photo, progress: { [weak self] progress in
+                        Task { @MainActor [weak self] in
+                            self?.update(id) { if $0.active { $0.progress = progress.fractionCompleted } }
+                        }
+                    }) else { throw DownloadFailure.message("The Live Photo still is unavailable.") }
+                    response = still
+                }
+                else {
+                    response = try await repository.downloadPhotos(itemIDs: [photo.id], kind: .original) { [weak self] progress in
+                        Task { @MainActor [weak self] in
+                            self?.update(id) { if $0.active { $0.progress = progress.fractionCompleted } }
+                        }
+                    }
+                }
+                defer { try? FileManager.default.removeItem(at: response.temporaryURL.deletingLastPathComponent()) }
+                try Task.checkCancellation()
+                update(id) { $0.status = "Saving…" }
+                let directoryProvider = editDirectoryProvider
+                let saveTask = Task.detached(priority: .utility) {
+                    let directory = try directoryProvider()
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    return try Self.save(response.temporaryURL, filename: response.filename, directory: directory)
+                }
+                let file = try await withTaskCancellationHandler {
+                    try await saveTask.value
+                } onCancel: { saveTask.cancel() }
+                saved = file
+                try Task.checkCancellation()
+                update(id) { $0.status = "Opening…" }
+                try await editorOpener(file, applicationURL)
+                update(id) { $0.progress = 1; $0.status = "Saved to \(file.path)"; $0.active = false }
+            } catch {
+                let description = error is CancellationError ? "Cancelled" : error.localizedDescription
+                update(id) {
+                    $0.status = saved.map { "\(description) — file saved to \($0.path)" } ?? description
+                    $0.active = false
+                }
+            }
+            tasks[id] = nil
+        }
+    }
+
+    nonisolated static func editDirectory() throws -> URL {
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            throw DownloadFailure.message("The Documents folder is unavailable.")
+        }
+        return documents.appendingPathComponent("SynoTimeline Edits", isDirectory: true)
+    }
+
+    func fulfillPromise(_ payload: PhotoDragPayload, destination: URL, completion: @escaping (Error?) -> Void) {
+        let id = UUID()
+        jobs.insert(PhotoDownloadJob(id: id, name: payload.item?.filename ?? "Preparing download…",
+                                     progress: nil, status: "Preparing…", active: true), at: 0)
+        tasks[id] = Task { [weak self] in
+            guard let self else { completion(CancellationError()); return }
+            do {
+                let items: [PhotoItem]
+                if let item = payload.item { items = [item] }
+                else if let selection = payload.selection, let snapshot = payload.snapshot {
+                    guard let resolved = await SelectionDownloadResolver(repository: payload.repository).resolve(
+                        collection: selection.collection, snapshot: snapshot,
+                        selectedOrdinals: selection.selectedOrdinals,
+                        knownItemIDsByOrdinal: selection.knownItemIDsByOrdinal,
+                        expectedTimelineFingerprint: selection.indexFingerprint), !resolved.isEmpty else {
+                        throw DownloadFailure.message("The selected photos could not be verified.")
+                    }
+                    items = resolved
+                } else { throw DownloadFailure.message("No photo is selected.") }
+                try Task.checkCancellation()
+                update(id) { $0.name = Self.jobName(items); $0.status = "Downloading…" }
+                let progress: @Sendable (TransferProgress) -> Void = { [weak self] value in
+                    Task { @MainActor [weak self] in
+                        self?.update(id) { if $0.active { $0.progress = value.fractionCompleted } }
+                    }
+                }
+                let response: PhotoDownloadResponse
+                if payload.count == 1, let cached = try await payload.repository.cachedOriginalForDownload(items[0], includeLivePhoto: true) {
+                    response = cached
+                } else if payload.count == 1, items[0].mediaKind == .livePhoto {
+                    guard let still = try await payload.repository.livePhotoStillForEditing(items[0], progress: progress) else {
+                        throw DownloadFailure.message("The Live Photo still is unavailable.")
+                    }
+                    response = still
+                } else {
+                    response = try await payload.repository.downloadPhotos(itemIDs: items.map(\.id), kind: .original, progress: progress)
+                }
+                defer { try? FileManager.default.removeItem(at: response.temporaryURL.deletingLastPathComponent()) }
+                try Task.checkCancellation()
+                update(id) { $0.status = "Saving…" }
+                let writeTask = Task.detached(priority: .utility) {
+                    try Self.writePromise(response.temporaryURL, destination: destination,
+                                          makeArchive: payload.count > 1 && items.count == 1 &&
+                                            response.temporaryURL.pathExtension.lowercased() != "zip")
+                }
+                try await withTaskCancellationHandler {
+                    try await writeTask.value
+                } onCancel: { writeTask.cancel() }
+                update(id) { $0.progress = 1; $0.status = "Saved to \(destination.path)"; $0.active = false }
+                completion(nil)
+            } catch {
+                update(id) { $0.status = error is CancellationError ? "Cancelled" : error.localizedDescription; $0.active = false }
+                completion(error)
+            }
+            tasks[id] = nil
+        }
+    }
+
+    nonisolated static func writePromise(_ source: URL, destination: URL, makeArchive: Bool) throws {
+        let fm = FileManager.default
+        let directory = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask,
+                                   appropriateFor: destination, create: true)
+        defer { try? fm.removeItem(at: directory) }
+        let staged = directory.appendingPathComponent("payload")
+        try Task.checkCancellation()
+        if makeArchive {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+            task.arguments = ["-c", "-k", "--keepParent", source.path, staged.path]
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+            try task.run()
+            task.waitUntilExit()
+            guard task.terminationStatus == 0 else { throw DownloadFailure.message("Could not create the ZIP archive.") }
+        } else { try fm.copyItem(at: source, to: staged) }
+        try Task.checkCancellation()
+        // The file-promise receiver coordinates this write while waiting for our
+        // completion. Coordinating again here would wait on the receiver itself.
+        if renamex_np(staged.path, destination.path, UInt32(RENAME_EXCL)) != 0 {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
     }
 
@@ -138,7 +317,9 @@ private enum DownloadFailure: LocalizedError {
 struct DownloadsToolbarControl: View {
     @ObservedObject private var downloads = PhotoDownloadManager.shared
     var body: some View {
-        Button { downloads.isPresented.toggle() } label: { Image(systemName: "arrow.down.circle") }
+        Button { downloads.isPresented.toggle() } label: {
+            Image(systemName: downloads.hasActiveJobs ? "arrow.down.circle.fill" : "arrow.down.circle")
+        }
             .help("Downloads")
             .accessibilityLabel("Downloads")
             .popover(isPresented: $downloads.isPresented) {
@@ -181,6 +362,48 @@ func photoDownloadMenu(_ action: @escaping (PhotoDownloadKind, Bool) -> Void) ->
         menu.addItem(PhotoDownloadMenuItem(title: title) { action(kind, choose) })
     }
     return menu
+}
+
+@MainActor
+func makeEditorMenu(applications: [URL], onChoose: @escaping (URL) -> Void,
+                    onOther: @escaping () -> Void) -> NSMenu {
+    let submenu = NSMenu(title: "Edit With")
+    for application in applications {
+        let name = FileManager.default.displayName(atPath: application.path)
+        let title = name.hasSuffix(".app") ? String(name.dropLast(4)) : name
+        let item = PhotoDownloadMenuItem(title: title) { onChoose(application) }
+        let icon = (NSWorkspace.shared.icon(forFile: application.path).copy() as? NSImage)
+        icon?.size = NSSize(width: 16, height: 16)
+        icon?.isTemplate = false
+        item.image = icon
+        item.preferredImageVisibility = .visible
+        submenu.addItem(item)
+    }
+    if !applications.isEmpty { submenu.addItem(.separator()) }
+    submenu.addItem(PhotoDownloadMenuItem(title: "Other…", handler: onOther))
+    return submenu
+}
+
+@MainActor
+func addEditMenu(to menu: NSMenu, filename: String?, onChoose: @escaping (URL) -> Void) {
+    let fileExtension = filename.map { URL(fileURLWithPath: $0).pathExtension } ?? ""
+    let applications = UTType(filenameExtension: fileExtension).map {
+        NSWorkspace.shared.urlsForApplications(toOpen: $0)
+    } ?? []
+    let submenu = makeEditorMenu(applications: applications, onChoose: onChoose) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+        panel.prompt = "Choose"
+        if panel.runModal() == .OK, let application = panel.url { onChoose(application) }
+    }
+    menu.addItem(.separator())
+    let parent = NSMenuItem(title: "Edit With", action: nil, keyEquivalent: "")
+    parent.submenu = submenu
+    menu.addItem(parent)
 }
 
 @MainActor

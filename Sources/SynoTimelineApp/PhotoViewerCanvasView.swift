@@ -14,6 +14,7 @@ import TimelineCore
 /// the adjacent photo using three reusable image layers. Above fit zoom precise scrolling pans
 /// instead. Click-drag never dismisses or pages.
 final class PhotoViewerCanvasView: NSView {
+    var startFileDrag: ((NSView, NSEvent) -> Bool)?
     var downloadMenu: (() -> NSMenu?)?
     override func menu(for event: NSEvent) -> NSMenu? { downloadMenu?() }
     var onZoomChanged: ((CGFloat) -> Void)?
@@ -106,6 +107,7 @@ final class PhotoViewerCanvasView: NSView {
 
     private var phase: Phase = .resting
     private var dragLocation: CGPoint?
+    private var fileDragOrigin: CGPoint?
 
     private var scrollGestureActive = false
     private var scrollDirectionLocked = false
@@ -629,7 +631,8 @@ final class PhotoViewerCanvasView: NSView {
             snapLayerToRest()
             return
         }
-        dragLocation = convert(event.locationInWindow, from: nil)
+        dragLocation = point
+        fileDragOrigin = imageLayer.frame.contains(point) ? point : nil
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -637,6 +640,13 @@ final class PhotoViewerCanvasView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         if let origin = motionPressOrigin, hypot(point.x - origin.x, point.y - origin.y) > 4 {
             stopLivePhotoMotion()
+        }
+        if transform.zoom <= Self.fitZoomTolerance, let origin = fileDragOrigin,
+           hypot(point.x - origin.x, point.y - origin.y) >= 5,
+           startFileDrag?(self, event) == true {
+            fileDragOrigin = nil
+            dragLocation = nil
+            return
         }
         if let previous = dragLocation {
             transform.translate(by: CGSize(width: point.x - previous.x, height: point.y - previous.y))
@@ -654,6 +664,7 @@ final class PhotoViewerCanvasView: NSView {
             stopLivePhotoMotion()
         }
         dragLocation = nil
+        fileDragOrigin = nil
     }
 
     override func magnify(with event: NSEvent) {

@@ -79,6 +79,7 @@ struct PhotoViewerCanvas: NSViewRepresentable {
     let onInteractiveDismiss: () -> Void
     var onBackdropOpacityChanged: ((CGFloat, TimeInterval) -> Void)? = nil
     var downloadMenu: (() -> NSMenu?)? = nil
+    var startFileDrag: ((NSView, NSEvent) -> Bool)? = nil
     let onZoomChanged: (CGFloat) -> Void
 
     func makeNSView(context: Context) -> PhotoViewerCanvasView {
@@ -102,6 +103,7 @@ struct PhotoViewerCanvas: NSViewRepresentable {
 
     private func configure(_ view: PhotoViewerCanvasView) {
         view.downloadMenu = downloadMenu
+        view.startFileDrag = startFileDrag
         view.onZoomChanged = onZoomChanged
         view.onPrevious = onPrevious
         view.onNext = onNext

@@ -30,8 +30,8 @@ final class LibraryInputRoutingTests: XCTestCase {
 
     @MainActor
     private func mouseEvent(_ type: NSEvent.EventType, at point: CGPoint, in window: NSWindow,
-                            clickCount: Int = 1) throws -> NSEvent {
-        try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+                            clickCount: Int = 1, modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: modifiers, timestamp: 0,
                                         windowNumber: window.windowNumber, context: nil, eventNumber: 1,
                                         clickCount: clickCount, pressure: 1))
     }
@@ -56,6 +56,71 @@ final class LibraryInputRoutingTests: XCTestCase {
         document.keyDown(with: try event(keyCode: 123, modifiers: .option))
         document.keyDown(with: try event(keyCode: 49, modifiers: .control))
         XCTAssertEqual(received, ["left", "shift-down", "open", "select-all"])
+    }
+
+    @MainActor
+    func testFileDragTakesPointerGestureAfterThreshold() throws {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 320, height: 240),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        let document = FlippedDocumentView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        window.contentView = document
+        defer { window.orderOut(nil) }
+        var starts = 0
+        var phases: [String] = []
+        document.fileDragHitTest = { _ in true }
+        document.fileDragHandler = { _, _ in starts += 1; return true }
+        document.interaction = { phase in
+            switch phase { case .down: phases.append("down"); case .drag: phases.append("drag"); case .up: phases.append("up") }
+        }
+        document.mouseDown(with: try mouseEvent(.leftMouseDown, at: CGPoint(x: 100, y: 100), in: window))
+        document.mouseDragged(with: try mouseEvent(.leftMouseDragged, at: CGPoint(x: 120, y: 100), in: window))
+        XCTAssertEqual(starts, 1)
+        XCTAssertEqual(phases, ["down"])
+    }
+
+    @MainActor
+    func testPhotoDragNeverFallsBackToMarqueeWithModifiersOrFailedStart() throws {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 320, height: 240),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        let document = FlippedDocumentView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        window.contentView = document
+        defer { window.orderOut(nil) }
+        var starts = 0, cancellations = 0
+        var phases: [String] = []
+        document.fileDragHitTest = { _ in true }
+        document.fileDragHandler = { _, _ in starts += 1; return false }
+        document.cancelFileDrag = { cancellations += 1 }
+        document.interaction = { phase in
+            switch phase { case .down: phases.append("down"); case .drag: phases.append("drag"); case .up: phases.append("up") }
+        }
+        document.mouseDown(with: try mouseEvent(.leftMouseDown, at: CGPoint(x: 100, y: 100), in: window, modifiers: .shift))
+        document.mouseDragged(with: try mouseEvent(.leftMouseDragged, at: CGPoint(x: 103, y: 100), in: window, modifiers: .shift))
+        document.mouseDragged(with: try mouseEvent(.leftMouseDragged, at: CGPoint(x: 120, y: 100), in: window, modifiers: .shift))
+        document.mouseUp(with: try mouseEvent(.leftMouseUp, at: CGPoint(x: 120, y: 100), in: window, modifiers: .shift))
+        XCTAssertEqual(starts, 1)
+        XCTAssertEqual(cancellations, 1)
+        XCTAssertEqual(phases, ["down"])
+    }
+
+    @MainActor
+    func testEmptySpaceDragStillRoutesToMarquee() throws {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 320, height: 240),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        let document = FlippedDocumentView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        window.contentView = document
+        defer { window.orderOut(nil) }
+        var starts = 0
+        var phases: [String] = []
+        document.fileDragHitTest = { _ in false }
+        document.fileDragHandler = { _, _ in starts += 1; return true }
+        document.interaction = { phase in
+            switch phase { case .down: phases.append("down"); case .drag: phases.append("drag"); case .up: phases.append("up") }
+        }
+        document.mouseDown(with: try mouseEvent(.leftMouseDown, at: CGPoint(x: 100, y: 100), in: window, modifiers: .shift))
+        document.mouseDragged(with: try mouseEvent(.leftMouseDragged, at: CGPoint(x: 120, y: 100), in: window, modifiers: .shift))
+        document.mouseUp(with: try mouseEvent(.leftMouseUp, at: CGPoint(x: 120, y: 100), in: window, modifiers: .shift))
+        XCTAssertEqual(starts, 0)
+        XCTAssertEqual(phases, ["down", "drag", "up"])
     }
 
     @MainActor

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import XCTest
 @testable import SynologyAPI
 
@@ -25,6 +26,43 @@ final class PhotoDownloadTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: result.temporaryURL.deletingLastPathComponent()) }
         XCTAssertEqual(result.filename, "fallback.heic")
         XCTAssertEqual(try Data(contentsOf: result.temporaryURL), Data("original".utf8))
+    }
+
+    func testLiveOriginalAndExplicitDownloadBytesMatchWhenEnabled() async throws {
+        guard ProcessInfo.processInfo.environment["RUN_LIVE_SYNOLOGY_TEST"] == "1" else {
+            throw XCTSkip("Live download verification is opt-in.")
+        }
+        let client = SynologyClient()
+        try await client.login(credentials: CredentialStore.load())
+        let items = try await client.items(ids: [284351])
+        let item = try XCTUnwrap(items.first)
+        let resource = try XCTUnwrap(item.fullImageResource)
+        let original = try await client.fullImage(resource, etag: nil, lastModified: nil)
+        let originalData = try XCTUnwrap(original.data)
+        let download = try await client.downloadPhotos(itemIDs: [item.id], kind: .original, progress: { _ in })
+        defer { try? FileManager.default.removeItem(at: download.temporaryURL.deletingLastPathComponent()) }
+        let downloadData = try Data(contentsOf: download.temporaryURL)
+        XCTAssertEqual(SHA256.hash(data: originalData), SHA256.hash(data: downloadData))
+        XCTAssertEqual(download.filename, item.filename)
+    }
+
+    func testLivePhotoDownloadComparisonWhenEnabled() async throws {
+        guard ProcessInfo.processInfo.environment["RUN_LIVE_SYNOLOGY_TEST"] == "1" else {
+            throw XCTSkip("Live download verification is opt-in.")
+        }
+        let client = SynologyClient()
+        try await client.login(credentials: CredentialStore.load())
+        let items = try await client.items(ids: [129468])
+        let item = try XCTUnwrap(items.first)
+        let resource = try XCTUnwrap(item.fullImageResource)
+        let response = try await client.fullImage(resource, etag: nil, lastModified: nil)
+        let original = try XCTUnwrap(response.data)
+        let downloaded = try await client.downloadPhotos(itemIDs: [item.id], kind: .original, progress: { _ in })
+        defer { try? FileManager.default.removeItem(at: downloaded.temporaryURL.deletingLastPathComponent()) }
+        let bytes = try Data(contentsOf: downloaded.temporaryURL)
+        XCTAssertNotEqual(SHA256.hash(data: original), SHA256.hash(data: bytes))
+        XCTAssertTrue(bytes.starts(with: [0x50, 0x4b]))
+        XCTAssertEqual(downloaded.temporaryURL.pathExtension.lowercased(), "zip")
     }
 
     func testCapturedDownloadCasesAgainstCirrusWhenEnabled() async throws {

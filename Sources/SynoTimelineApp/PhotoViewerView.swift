@@ -1,3 +1,4 @@
+import AppKit
 import PhotoCache
 import SwiftUI
 
@@ -80,9 +81,24 @@ struct PhotoViewerView: View {
                                 guard let state = viewer.state, state.metadataVerified, state.allowNetwork,
                                       let item = state.item, item.hasDisplayableStillImage else { return nil }
                                 let repository = viewer.repository
-                                return photoDownloadMenu { kind, choose in
+                                let menu = photoDownloadMenu { kind, choose in
                                     library.downloadViewerItem(item, repository: repository, kind: kind, choose: choose)
                                 }
+                                addEditMenu(to: menu, filename: item.filename) { application in
+                                    library.editViewerItem(item, repository: repository, application: application)
+                                }
+                                return menu
+                              }, startFileDrag: { view, event in
+                                guard let state = viewer.state, state.metadataVerified, state.allowNetwork,
+                                      let item = state.item, item.hasDisplayableStillImage,
+                                      let filename = item.filename, !filename.isEmpty else { return false }
+                                let name = URL(fileURLWithPath: filename).lastPathComponent
+                                let payload = PhotoDragPayload(repository: viewer.repository, item: item,
+                                                               selection: nil, snapshot: nil, count: 1, filename: name)
+                                let preview = state.thumbnailData.flatMap { NSImage(data: $0) } ?? viewer.source.image ?? viewer.image
+                                return PhotoFileDragSource.begin(payload: payload, previews: [preview].compactMap { $0 },
+                                                                 cropsToSquare: cropsThumbnailsToSquare,
+                                                                 from: view, event: event)
                               }) { viewer.zoom = Double($0) }
                 .accessibilityLabel(viewer.filename)
 

@@ -247,6 +247,9 @@ struct LibraryBrowserView: View {
                                              onDownload: { selection, kind, choose in
                                                  library.downloadSelection(selection, kind: kind, choose: choose)
                                              },
+                                             onEdit: { selection, application in
+                                                 library.editSelection(selection, application: application)
+                                             },
                                              onSelectionStateChanged: { state in
                                                  library.setSelectionState(state, for: collection)
                                                  infoPanel.updateBrowserContext(
@@ -314,11 +317,16 @@ final class FlippedDocumentView: NSView {
     var interaction: ((InteractionPhase) -> Void)?
     var commandHandler: ((BrowserSelectionCommand) -> Void)?
     var contextMenuHandler: ((CGPoint) -> NSMenu?)?
+    var fileDragHandler: ((CGPoint, NSEvent) -> Bool)?
+    var fileDragHitTest: ((CGPoint) -> Bool)?
+    var cancelFileDrag: (() -> Void)?
     weak var timelineScrollView: TimelineScrollView?
     weak var overlay: SelectionOverlayView?
     var selectionFrames: [CGRect] = [] { didSet { overlay?.selectionFrames = selectionFrames } }
     var marquee: CGRect? { didSet { overlay?.marquee = marquee } }
     private var downPoint: CGPoint?
+    private var beginsOnItem = false
+    private var suppressPointerUp = false
 
     enum InteractionPhase {
         case down(CGPoint, clickCount: Int, shift: Bool, option: Bool)
@@ -330,6 +338,8 @@ final class FlippedDocumentView: NSView {
         window?.makeFirstResponder(self)
         let point = convert(event.locationInWindow, from: nil)
         downPoint = point
+        beginsOnItem = event.clickCount == 1 && (fileDragHitTest?(point) ?? false)
+        suppressPointerUp = false
         interaction?(.down(point, clickCount: event.clickCount,
                            shift: event.modifierFlags.contains(.shift),
                            option: event.modifierFlags.contains(.option)))
@@ -339,11 +349,23 @@ final class FlippedDocumentView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        interaction?(.drag(convert(event.locationInWindow, from: nil)))
+        let point = convert(event.locationInWindow, from: nil)
+        if beginsOnItem, let origin = downPoint {
+            guard hypot(point.x - origin.x, point.y - origin.y) >= 5 else { return }
+            let started = fileDragHandler?(origin, event) ?? false
+            if !started { cancelFileDrag?() }
+            downPoint = nil
+            beginsOnItem = false
+            suppressPointerUp = true
+            return
+        }
+        if !suppressPointerUp { interaction?(.drag(point)) }
     }
     override func mouseUp(with event: NSEvent) {
-        interaction?(.up(convert(event.locationInWindow, from: nil)))
+        if !suppressPointerUp { interaction?(.up(convert(event.locationInWindow, from: nil))) }
         downPoint = nil
+        beginsOnItem = false
+        suppressPointerUp = false
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -640,6 +662,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let contentTopInset: CGFloat
     let onOpenPhoto: (PhotoViewerOpenRequest) -> Void
     let onDownload: (BrowserCommandSnapshot, PhotoDownloadKind, Bool) -> Void
+    let onEdit: (BrowserCommandSnapshot, URL) -> Void
     let onSelectionStateChanged: (BrowserSelectionState) -> Void
     let onCommandStateChanged: (BrowserCommandSnapshot, ((BrowserSelectionCommand) -> Void)?) -> Void
     let onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void
@@ -665,6 +688,15 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         document.timelineScrollView = scroll
         context.coordinator.scroll = scroll
         context.coordinator.document = document
+        document.fileDragHitTest = { [weak coordinator = context.coordinator] point in
+            coordinator?.isFileDragOrigin(at: point) ?? false
+        }
+        document.cancelFileDrag = { [weak coordinator = context.coordinator] in
+            coordinator?.cancelFileDragGesture()
+        }
+        document.fileDragHandler = { [weak coordinator = context.coordinator] point, event in
+            coordinator?.beginFileDrag(at: point, event: event) ?? false
+        }
         document.contextMenuHandler = { [weak coordinator = context.coordinator] point in
             coordinator?.contextMenu(at: point)
         }
@@ -700,6 +732,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         fileprivate weak var document: FlippedDocumentView?
         var observer: NSObjectProtocol?
         private var index: LibraryIndex?
+        private var timelineSnapshot: TimelineSnapshot?
         private var geometry: LibraryViewportGeometry?
         private var window: LibraryPageWindow?
         private var pages: [Int: LibraryPage] = [:]
@@ -726,6 +759,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var onRetry: (() -> Void)?
         private var onOpenPhoto: ((PhotoViewerOpenRequest) -> Void)?
         private var onDownload: ((BrowserCommandSnapshot, PhotoDownloadKind, Bool) -> Void)?
+        private var onEdit: ((BrowserCommandSnapshot, URL) -> Void)?
         private var onSelectionStateChanged: ((BrowserSelectionState) -> Void)?
         private var onCommandStateChanged: ((BrowserCommandSnapshot, ((BrowserSelectionCommand) -> Void)?) -> Void)?
         private var onRestorationAnchorChanged: ((PhotoTimelineRestorationAnchor) -> Void)?
@@ -762,10 +796,12 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             guard let scroll else { return }
             let reusesWindow = collection == input.collection && repository === input.repository && window != nil
             collection = input.collection
+            timelineSnapshot = input.snapshot
             onVisibleDay = input.onVisibleDay
             onRetry = input.onRetry
             onOpenPhoto = input.onOpenPhoto
             onDownload = input.onDownload
+            onEdit = input.onEdit
             onSelectionStateChanged = input.onSelectionStateChanged
             onCommandStateChanged = input.onCommandStateChanged
             onRestorationAnchorChanged = input.onRestorationAnchorChanged
@@ -1236,6 +1272,51 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             pendingReveal.completion(nil)
         }
 
+        func isFileDragOrigin(at point: CGPoint) -> Bool {
+            guard let ordinal = geometry?.ordinal(at: point) else { return false }
+            return loadedItem(ordinal) != nil
+        }
+
+        func cancelFileDragGesture() { cancelPointerInteraction() }
+
+        func beginFileDrag(at point: CGPoint, event: NSEvent) -> Bool {
+            guard let ordinal = geometry?.ordinal(at: point), let clicked = loadedItem(ordinal),
+                  clicked.photo.hasDisplayableStillImage, let document, let repository,
+                  let timelineSnapshot, let index else { return false }
+            if !selection.contains(ordinal) { selection.replace(with: ordinal); publishSelection() }
+            let selected = selection.indexes
+            let count = selected.count
+            guard count > 0 else { return false }
+            var known: [Int: Int64] = [:]
+            var previews: [NSImage] = []
+            if let image = findViewerSourceAnchor(for: clicked.photo.id, in: document)?.image { previews.append(image) }
+            for (section, page) in pages {
+                for (offset, slot) in page.slots.enumerated() {
+                    guard let selectedOrdinal = index.ordinal(sectionIndex: section, pageOffset: offset),
+                          selected.contains(selectedOrdinal), let item = slot.item else { continue }
+                    known[selectedOrdinal] = item.id
+                    if previews.count < 20, selectedOrdinal != ordinal,
+                       let image = findViewerSourceAnchor(for: item.id, in: document)?.image { previews.append(image) }
+                }
+            }
+            known[ordinal] = clicked.photo.id
+            let command = BrowserCommandSnapshot(owner: commandOwner, active: true, canOpen: count == 1,
+                canToggleFavorite: false, collection: collection, indexFingerprint: index.fingerprint,
+                selectionGeneration: selectionState.generation, selectedOrdinals: selected,
+                knownItemIDsByOrdinal: known)
+            let filename: String
+            if count == 1 {
+                let name = clicked.photo.filename.flatMap { $0.isEmpty ? nil : $0 } ?? "Photo-\(clicked.photo.id)"
+                filename = URL(fileURLWithPath: name).lastPathComponent
+            } else { filename = "Photos.zip" }
+            let payload = PhotoDragPayload(repository: repository, item: nil, selection: command,
+                                           snapshot: timelineSnapshot, count: count, filename: filename)
+            cancelPointerInteraction()
+            return PhotoFileDragSource.begin(payload: payload, previews: previews,
+                                             cropsToSquare: geometry?.cropsThumbnailsToSquare ?? false,
+                                             from: document, event: event)
+        }
+
         func contextMenu(at point: CGPoint) -> NSMenu? {
             guard let ordinal = geometry?.ordinal(at: point),
                   let item = loadedItem(ordinal), item.photo.hasDisplayableStillImage else { return nil }
@@ -1248,7 +1329,15 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 canToggleFavorite: false, collection: collection, indexFingerprint: index?.fingerprint,
                 selectionGeneration: selectionState.generation, selectedOrdinals: selection.indexes,
                 knownItemIDsByOrdinal: known)
-            return photoDownloadMenu { [weak self] kind, choose in self?.onDownload?(snapshot, kind, choose) }
+            let menu = photoDownloadMenu { [weak self] kind, choose in self?.onDownload?(snapshot, kind, choose) }
+            let editSnapshot = BrowserCommandSnapshot(owner: commandOwner, active: true, canOpen: true,
+                canToggleFavorite: false, collection: collection, indexFingerprint: index?.fingerprint,
+                selectionGeneration: selectionState.generation, selectedOrdinals: IndexSet(integer: ordinal),
+                knownItemIDsByOrdinal: [ordinal: item.photo.id])
+            addEditMenu(to: menu, filename: item.photo.filename) { [weak self] application in
+                self?.onEdit?(editSnapshot, application)
+            }
+            return menu
         }
 
         func publishCommandState(active: Bool) {
