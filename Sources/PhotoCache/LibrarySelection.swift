@@ -43,6 +43,12 @@ public struct LibrarySelection: Equatable, Sendable {
         endExtension()
     }
 
+    public mutating func toggle(_ ordinal: Int) {
+        if indexes.contains(ordinal) { indexes.remove(ordinal) }
+        else { indexes.insert(ordinal) }
+        endExtension()
+    }
+
     /// Adds the inclusive reading-order range from the selected item nearest to
     /// `ordinal`. If there is no existing selection, the target becomes selected.
     public mutating func addRangeFromClosestSelection(to ordinal: Int) {

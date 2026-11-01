@@ -78,6 +78,18 @@ final class LibrarySelectionTests: XCTestCase {
         XCTAssertTrue(selection.indexes.isEmpty)
     }
 
+    func testSingleToggleSelectsAndDeselectsWithoutChangingOtherItems() {
+        var selection = LibrarySelection(); selection.bind(to: "a")
+        selection.replace(with: IndexSet([1, 2]))
+        selection.toggle(2)
+        XCTAssertEqual(selection.indexes, IndexSet(integer: 1))
+        selection.toggle(3)
+        XCTAssertEqual(selection.indexes, IndexSet([1, 3]))
+        selection.toggle(1)
+        selection.toggle(3)
+        XCTAssertTrue(selection.indexes.isEmpty)
+    }
+
     func testRangeClickUsesClosestSelectionAndKeepsExistingItems() {
         var selection = LibrarySelection(); selection.bind(to: "a")
         selection.replace(with: IndexSet([2, 10, 20]))

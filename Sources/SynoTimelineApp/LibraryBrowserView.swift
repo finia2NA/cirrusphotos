@@ -1541,7 +1541,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                         if pointerShift && pointerOption {
                             selection.addRangeFromClosestSelection(to: ordinal)
                         } else if pointerShift {
-                            selection.add(ordinal)
+                            selection.toggle(ordinal)
                         } else {
                             selection.replace(with: ordinal)
                         }
