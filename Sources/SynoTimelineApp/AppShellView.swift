@@ -258,6 +258,7 @@ struct AppShellView: View {
                                        restorationAnchor: collection.isSessionDerived
                                            ? nil : navigationRestoration.timelineAnchor(for: collection),
                                        bridge: browserBridge,
+                                       pinnedAlbumIDs: albumPresentation.pinnedIDs,
                                        contentTopInset: topInset,
                                        onOpenPhoto: openPhoto,
                                        onRestorationAnchorChanged: { anchor in
@@ -286,6 +287,7 @@ struct AppShellView: View {
 
                 if let viewer {
                     PhotoViewerView(viewer: viewer,
+                                    pinnedAlbumIDs: albumPresentation.pinnedIDs,
                                     toolbarInset: topInset,
                                     reduceMotion: reduceMotion,
                                     pixelInterpolation: model.pixelInterpolation,

@@ -104,7 +104,7 @@ struct AlbumMembershipTarget: NSViewRepresentable {
             defer { active = false }
             guard valid(sender), let model, let namespace = model.repository?.namespace,
                   let entry = SelectionDragRegistry.take(value(sender), namespace: namespace) else { return false }
-            return model.addDroppedSelection(entry.selection, sourceAlbumID: entry.sourceAlbumID, to: albumID)
+            return model.addCapturedSelection(entry.selection, sourceAlbumID: entry.sourceAlbumID, to: albumID)
         }
         override func draw(_ dirtyRect: NSRect) {
             guard active else { return }

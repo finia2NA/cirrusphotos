@@ -1,10 +1,12 @@
 import AppKit
 import PhotoCache
 import SwiftUI
+import TimelineCore
 
 struct PhotoViewerView: View {
     @EnvironmentObject private var library: LibraryModel
     @ObservedObject var viewer: PhotoViewerPresentation
+    var pinnedAlbumIDs: [Int64] = []
     let toolbarInset: CGFloat
     let reduceMotion: Bool
     let pixelInterpolation: PixelInterpolationPreference
@@ -86,6 +88,18 @@ struct PhotoViewerView: View {
                                 }
                                 addEditMenu(to: menu, filename: item.filename) { application in
                                     library.editViewerItem(item, repository: repository, application: application)
+                                }
+                                if let timeline = library.snapshot(for: viewer.collection),
+                                   LibraryIndex(snapshot: timeline).fingerprint == viewer.index.fingerprint,
+                                   let authority = library.selectionAuthority(for: viewer.collection) {
+                                    let ordinal = state.desiredLocation.ordinal
+                                    let captured = BrowserCommandSnapshot(owner: UUID(), active: true, canOpen: false,
+                                        canToggleFavorite: false, collection: viewer.collection,
+                                        indexFingerprint: viewer.index.fingerprint, selectionGeneration: nil,
+                                        selectedOrdinals: IndexSet(integer: ordinal), knownItemIDsByOrdinal: [ordinal: item.id],
+                                        timeline: timeline, authority: authority,
+                                        sourceAlbumID: library.sourceAlbumID(for: viewer.collection))
+                                    library.addAlbumMembershipMenu(to: menu, captured: captured, pinnedIDs: pinnedAlbumIDs)
                                 }
                                 return menu
                               }, startFileDrag: { view, event in

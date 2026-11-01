@@ -652,15 +652,23 @@ final class LibraryModel: ObservableObject {
     }
 
     var canRemoveAlbumSelection: Bool {
-        canManageAlbumSelection && browserCommandSnapshot.sourceAlbumID != nil
+        canManageAlbumSelection && isNormalAlbum(browserCommandSnapshot.sourceAlbumID)
     }
 
     func beginAlbumOperation(_ kind: AlbumOperation.Kind) {
-        let captured = browserCommandSnapshot
-        guard canManageAlbumSelection, let timeline = captured.timeline,
+        guard canManageAlbumSelection else { return }
+        beginAlbumOperation(kind, captured: browserCommandSnapshot)
+    }
+
+    func isNormalAlbum(_ id: Int64?) -> Bool {
+        isKnownNormalAlbum(id, in: albums)
+    }
+
+    func beginAlbumOperation(_ kind: AlbumOperation.Kind, captured: BrowserCommandSnapshot) {
+        guard albumOperation == nil, let timeline = captured.timeline,
               let fingerprint = captured.indexFingerprint, let authority = captured.authority,
               let repository else { return }
-        if kind == .remove && captured.sourceAlbumID == nil { return }
+        if kind == .remove && !isNormalAlbum(captured.sourceAlbumID) { return }
         let selection = PhotoSelectionSnapshot(collection: captured.collection, timeline: timeline,
             timelineFingerprint: fingerprint, selectedOrdinals: captured.selectedOrdinals,
             knownItemIDsByOrdinal: captured.knownItemIDsByOrdinal, authority: authority)
@@ -690,11 +698,11 @@ final class LibraryModel: ObservableObject {
         }
     }
 
-    /// Starts an accepted drop with its captured source, independent of browser focus.
+    /// Adds a captured selection independently of browser focus.
     @discardableResult
-    func addDroppedSelection(_ selection: PhotoSelectionSnapshot, sourceAlbumID: Int64?, to albumID: Int64) -> Bool {
+    func addCapturedSelection(_ selection: PhotoSelectionSnapshot, sourceAlbumID: Int64?, to albumID: Int64) -> Bool {
         guard albumOperation == nil, let repository, selection.authority != nil,
-              !selection.selectedOrdinals.isEmpty, albums.contains(where: { $0.id == albumID }) else { return false }
+              !selection.selectedOrdinals.isEmpty else { return false }
         let operation = AlbumOperation(kind: .add, sourceAlbumID: sourceAlbumID)
         albumOperation = operation
         albumOperationTask = Task { [weak self] in

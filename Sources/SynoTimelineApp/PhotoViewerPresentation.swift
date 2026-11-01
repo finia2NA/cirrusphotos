@@ -24,9 +24,9 @@ final class PhotoViewerPresentation: ObservableObject {
     let canvasController = PhotoViewerCanvasController()
     var onInfoItemChanged: ((PhotoItem?) -> Void)?
     private let initialItem: PhotoItem
-    private let index: LibraryIndex
+    let index: LibraryIndex
     let repository: CachedPhotosRepository
-    private let collection: PhotoCollectionDescriptor
+    let collection: PhotoCollectionDescriptor
     private let videoQuality: VideoQualityPreference
 
     private var stateTask: Task<Void, Never>?

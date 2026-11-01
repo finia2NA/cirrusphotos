@@ -186,6 +186,7 @@ struct LibraryBrowserView: View {
     let collection: PhotoCollectionDescriptor
     var restorationAnchor: PhotoTimelineRestorationAnchor?
     let bridge: LibraryBrowserBridge
+    var pinnedAlbumIDs: [Int64] = []
     var contentTopInset: CGFloat = 0
     var onOpenPhoto: (PhotoViewerOpenRequest) -> Void = { _ in }
     var onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void = { _ in }
@@ -291,6 +292,9 @@ struct LibraryBrowserView: View {
                                              reduceMotion: reduceMotion,
                                              contentTopInset: contentTopInset,
                                              onOpenPhoto: onOpenPhoto,
+                                             onAlbumMenu: { menu, selection in
+                                                 library.addAlbumMembershipMenu(to: menu, captured: selection, pinnedIDs: pinnedAlbumIDs)
+                                             },
                                              onDownload: { selection, kind, choose in
                                                  library.downloadSelection(selection, kind: kind, choose: choose)
                                              },
@@ -712,6 +716,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let reduceMotion: Bool
     let contentTopInset: CGFloat
     let onOpenPhoto: (PhotoViewerOpenRequest) -> Void
+    let onAlbumMenu: (NSMenu, BrowserCommandSnapshot) -> Void
     let onDownload: (BrowserCommandSnapshot, PhotoDownloadKind, Bool) -> Void
     let onEdit: (BrowserCommandSnapshot, URL) -> Void
     let onSelectionStateChanged: (BrowserSelectionState) -> Void
@@ -814,6 +819,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var colorScheme: ColorScheme = .light
         private var onRetry: (() -> Void)?
         private var onOpenPhoto: ((PhotoViewerOpenRequest) -> Void)?
+        private var onAlbumMenu: ((NSMenu, BrowserCommandSnapshot) -> Void)?
         private var onDownload: ((BrowserCommandSnapshot, PhotoDownloadKind, Bool) -> Void)?
         private var onEdit: ((BrowserCommandSnapshot, URL) -> Void)?
         private var onSelectionStateChanged: ((BrowserSelectionState) -> Void)?
@@ -858,6 +864,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             onVisibleDay = input.onVisibleDay
             onRetry = input.onRetry
             onOpenPhoto = input.onOpenPhoto
+            onAlbumMenu = input.onAlbumMenu
             onDownload = input.onDownload
             onEdit = input.onEdit
             onSelectionStateChanged = input.onSelectionStateChanged
@@ -1413,6 +1420,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             addEditMenu(to: menu, filename: item.photo.filename) { [weak self] application in
                 self?.onEdit?(editSnapshot, application)
             }
+            onAlbumMenu?(menu, snapshot)
             return menu
         }
 
