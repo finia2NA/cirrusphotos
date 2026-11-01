@@ -89,6 +89,10 @@ private actor AlbumFakeTransport: PhotosTransport {
         if mutationFails { throw TestFailure("Incomplete album change") }
     }
 
+    func removeItems(_ itemIDs: [Int64], fromAlbum id: Int64) async throws {
+        try await addItems(itemIDs, toAlbum: id)
+    }
+
     func readAlbumCatalogBatch(albumID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry] {
         if catalogFailure { throw TestFailure("Offline") }
         if offset == 0 { albumTimelineCalls.append(albumID) }
@@ -245,6 +249,29 @@ final class AlbumBrowserTests: XCTestCase {
         let result = await SelectionItemResolver(repository: repository).resolveWithReceipt(snapshot)
         let resolved = try XCTUnwrap(result)
         try await repository.addItems(resolved, toAlbum: 55)
+        let writes = await transport.mutationWrites
+        XCTAssertEqual(writes, 1)
+    }
+
+    func testAlbumWriteAcceptsSelectionFromDestinationAlbum() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let day = Int64(1711929600)
+        let source = AlbumSummary(id: 54, name: "Source", itemCount: 1)
+        let target = AlbumSummary(id: 55, name: "Target", itemCount: 1)
+        await transport.configure(albumList: [source, target],
+            albumEntriesByID: [54: [.init(id: 1, time: day)]], pageItems: [try item(1)])
+        await transport.configureMutation(entries: [.init(id: 1, time: day)], list: [source, target])
+        let repository = try makeRepository(root: root, transport: transport)
+        let timeline = try await repository.verifiedTimelineSnapshot(collection: .album(54))
+        let captured = await repository.selectionAuthority(collection: .album(54), snapshot: timeline)
+        let authority = try XCTUnwrap(captured)
+        let snapshot = PhotoSelectionSnapshot(collection: .album(54), timeline: timeline,
+            timelineFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
+            selectedOrdinals: IndexSet(integer: 0), knownItemIDsByOrdinal: [0: 1], authority: authority)
+        let result = await SelectionItemResolver(repository: repository).resolveWithReceipt(snapshot)
+        let resolved = try XCTUnwrap(result)
+        try await repository.removeItems(resolved, fromAlbum: 54)
         let writes = await transport.mutationWrites
         XCTAssertEqual(writes, 1)
     }
