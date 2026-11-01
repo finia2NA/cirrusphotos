@@ -122,55 +122,48 @@ final class AlbumPromiseWriter: NSObject, @preconcurrency NSPasteboardWriting {
     }
 }
 
-/// Monitors the gesture over the SwiftUI control without replacing its click handling.
-struct AlbumDragGesture: NSViewRepresentable {
+/// SwiftUI owns hit testing and gesture recognition so clipped or covered cards cannot start a drag.
+struct AlbumDragGesture: ViewModifier {
     let albumID: Int64
     let name: String
     let repository: CachedPhotosRepository?
     let preview: NSImage?
-    func makeNSView(context: Context) -> MonitorView { MonitorView() }
-    func updateNSView(_ view: MonitorView, context: Context) {
-        view.albumID = albumID; view.name = name; view.repository = repository; view.preview = preview
-    }
-    static func dismantleNSView(_ view: MonitorView, coordinator: ()) { view.stop() }
+    @StateObject private var source = AlbumDragViewReference()
+    @State private var started = false
 
-    @MainActor final class MonitorView: NSView {
-        var albumID: Int64 = 0
-        var name = ""
-        var repository: CachedPhotosRepository?
-        var preview: NSImage?
-        private var monitor: Any?
-        private var down: NSPoint?
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            stop()
-            guard window != nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
-                guard let self, event.window === self.window else { return event }
-                let point = self.convert(event.locationInWindow, from: nil)
-                switch event.type {
-                case .leftMouseDown:
-                    self.down = self.bounds.contains(point) ? event.locationInWindow : nil
-                case .leftMouseUp: self.down = nil
-                case .leftMouseDragged:
-                    guard let down = self.down, hypot(event.locationInWindow.x - down.x, event.locationInWindow.y - down.y) >= 4,
-                          let repository = self.repository else { break }
-                    self.down = nil
-                    let safe = self.name.components(separatedBy: CharacterSet(charactersIn: "/:\\").union(.controlCharacters)).joined(separator: "-")
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    let filename = (safe.isEmpty || safe == "." || safe == ".." ? "Album" : safe) + ".zip"
-                    let payload = PhotoDragPayload(repository: repository, source: .album(self.albumID), count: 1,
-                                                   filename: filename, forcesArchive: true)
-                    if PhotoFileDragSource.begin(payload: payload, previews: [self.preview].compactMap { $0 },
-                                                 cropsToSquare: true, from: self, event: event, albumID: self.albumID) { return nil }
-                default: break
-                }
-                return event
-            }
-        }
-        func stop() { if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }; down = nil }
+    func body(content: Content) -> some View {
+        content
+            .background(AlbumDragSourceView(reference: source))
+            .simultaneousGesture(DragGesture(minimumDistance: 4).onChanged { _ in
+                guard !started, let view = source.view, let repository,
+                      let event = NSApp.currentEvent, event.type == .leftMouseDragged,
+                      event.window === view.window else { return }
+                let safe = name.components(separatedBy: CharacterSet(charactersIn: "/:\\").union(.controlCharacters))
+                    .joined(separator: "-").trimmingCharacters(in: .whitespacesAndNewlines)
+                let filename = (safe.isEmpty || safe == "." || safe == ".." ? "Album" : safe) + ".zip"
+                let payload = PhotoDragPayload(repository: repository, source: .album(albumID), count: 1,
+                                               filename: filename, forcesArchive: true)
+                started = PhotoFileDragSource.begin(payload: payload, previews: [preview].compactMap { $0 },
+                                                     cropsToSquare: true, from: view, event: event, albumID: albumID,
+                                                     onEnd: { started = false })
+            }.onEnded { _ in started = false })
     }
+}
+
+@MainActor
+private final class AlbumDragViewReference: ObservableObject {
+    weak var view: NSView?
+}
+
+private struct AlbumDragSourceView: NSViewRepresentable {
+    let reference: AlbumDragViewReference
+    func makeNSView(context: Context) -> NSView {
+        let view = AlbumDragAnchorView()
+        reference.view = view
+        return view
+    }
+    func updateNSView(_ view: NSView, context: Context) { reference.view = view }
+    static func dismantleNSView(_ view: NSView, coordinator: ()) { }
 }
 
 /// A narrow insertion target leaves the middle of each row free for future membership drops.
@@ -213,4 +206,10 @@ struct AlbumInsertionTarget: NSViewRepresentable {
         }
         override func mouseDown(with event: NSEvent) { nextResponder?.mouseDown(with: event) }
     }
+}
+
+/// The anchor only supplies a coordinate space for AppKit's drag session.
+@MainActor
+final class AlbumDragAnchorView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

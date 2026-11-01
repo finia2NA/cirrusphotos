@@ -44,12 +44,15 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
     private let id = UUID()
     private var localNonce: UUID?
     private var selectionNonce: UUID?
+    private var onEnd: (() -> Void)?
 
     static func begin(payload: PhotoDragPayload, previews: [NSImage], cropsToSquare: Bool,
                       from view: NSView, event: NSEvent, albumID: Int64? = nil,
-                      localSelection: SelectionDragRegistry.Entry? = nil, promisesFile: Bool = true) -> Bool {
+                      localSelection: SelectionDragRegistry.Entry? = nil, promisesFile: Bool = true,
+                      onEnd: (() -> Void)? = nil) -> Bool {
         guard payload.count > 0, !payload.filename.isEmpty else { return false }
         let source = PhotoFileDragSource()
+        source.onEnd = onEnd
         let fileType: UTType = payload.forcesArchive || payload.count > 1 ? .zip :
             (UTType(filenameExtension: URL(fileURLWithPath: payload.filename).pathExtension) ?? .data)
         let delegate = PhotoPromiseDelegate(payload: payload)
@@ -85,6 +88,7 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
         if let localNonce { AlbumDragRegistry.remove(localNonce) }
         if let selectionNonce { SelectionDragRegistry.remove(selectionNonce) }
         Self.active[id] = nil
+        onEnd?()
     }
 
     static func sourceRect(for size: NSSize, cropsToSquare: Bool) -> NSRect {

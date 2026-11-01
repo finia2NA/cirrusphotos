@@ -52,7 +52,7 @@ private struct AlbumSidebarRow: View {
                 .frame(width: 24, height: 24)
             Text(album?.name ?? "Unavailable Album").lineLimit(1)
         }
-        .background(AlbumDragGesture(albumID: id, name: album?.name ?? "Album",
+        .modifier(AlbumDragGesture(albumID: id, name: album?.name ?? "Album",
                                      repository: repository, preview: dragPreview))
         .background(AlbumMembershipTarget(albumID: id, model: model))
         .contextMenu {
