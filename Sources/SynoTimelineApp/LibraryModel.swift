@@ -163,6 +163,11 @@ final class LibraryModel: ObservableObject {
         return albums.first(where: { $0.id == albumID })?.name
     }
 
+    func album(for collection: PhotoCollectionDescriptor) -> AlbumSummary? {
+        guard let id = sourceAlbumID(for: collection) else { return nil }
+        return albums.first { $0.id == id }
+    }
+
     /// Starts loading the Personal Space album list on first demand.
     func ensureAlbumsLoaded() {
         albumListRequested = true

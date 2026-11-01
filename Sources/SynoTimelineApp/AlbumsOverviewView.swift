@@ -93,6 +93,7 @@ struct AlbumDownloadCommands: View {
 struct AlbumCoverView: View {
     let thumbnail: ThumbnailInfo?
     let repository: CachedPhotosRepository?
+    var cornerRadius: CGFloat = 8
     @State private var image: NSImage?
 
     private var identity: String {
@@ -115,8 +116,8 @@ struct AlbumCoverView: View {
                     }
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            .contentShape(RoundedRectangle(cornerRadius: cornerRadius))
             .task(id: identity) { await load() }
     }
 

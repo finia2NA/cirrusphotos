@@ -14,6 +14,27 @@ final class LibraryViewportGeometryTests: XCTestCase {
             """.utf8))
     }
 
+    func testHeaderOffsetsPhotoGeometryAndPreservesAnchor() throws {
+        let index = LibraryIndex(snapshot: TimelineSnapshot(sections: [section(day: 3, limit: 3, count: 3)]))
+        let page = LibraryPage(sectionIndex: 0, items: try (1...3).map { try item(Int64($0)) }, verified: true)
+        var geometry = LibraryViewportGeometry(index: index, width: 600, itemsPerRow: 3, contentOrigin: 180)
+        geometry.reconcile(pages: [0: page])
+        XCTAssertEqual(geometry.y(forDay: "2024-04-03"), 180)
+        XCTAssertNil(geometry.anchor(at: 100))
+        XCTAssertNil(geometry.ordinal(at: CGPoint(x: 20, y: 100)))
+        XCTAssertTrue(geometry.ordinals(intersecting: CGRect(x: 0, y: 0, width: 600, height: 180)).isEmpty)
+        XCTAssertNil(geometry.firstOrdinal(inVerticalRange: 0...179))
+        let frame = try XCTUnwrap(geometry.frame(forItem: 1))
+        XCTAssertEqual(frame.minY, 218, accuracy: 0.001)
+        XCTAssertEqual(geometry.ordinal(at: CGPoint(x: frame.midX, y: frame.midY)), 0)
+        XCTAssertEqual(geometry.slotFrame(for: 0), frame)
+        let anchor = try XCTUnwrap(geometry.anchor(at: frame.minY + 5))
+        XCTAssertTrue(geometry.setLayout(width: 600, itemsPerRow: 3, contentOrigin: 240, pages: [0: page]))
+        XCTAssertEqual(try XCTUnwrap(geometry.y(for: anchor)), frame.minY + 65, accuracy: 0.001)
+        XCTAssertEqual(geometry.y(forDay: "2024-04-03"), 240)
+        XCTAssertEqual(geometry.firstOrdinal(inVerticalRange: 278...500), 0)
+    }
+
     func testFixedColumnsAndUnloadedHeightAreExact() {
         let index = LibraryIndex(snapshot: TimelineSnapshot(sections: [section(day: 3, limit: 21, count: 21)]))
         let three = LibraryViewportGeometry(index: index, width: 620, itemsPerRow: 3)

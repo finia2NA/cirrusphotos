@@ -47,6 +47,7 @@ public struct LibraryViewportGeometry {
 
     public private(set) var slices: [Slice] = []
     public private(set) var totalHeight = 0.0
+    public private(set) var contentOrigin: Double
     public private(set) var width: Double
     public private(set) var itemsPerRow: Int
     /// When true, each loaded item's materialized interaction/image frame is the full
@@ -73,8 +74,9 @@ public struct LibraryViewportGeometry {
     private let gap = FixedPhotoGrid.gap
 
     public init(index: LibraryIndex, width: Double, itemsPerRow: Int = 6,
-                cropsThumbnailsToSquare: Bool = false) {
+                cropsThumbnailsToSquare: Bool = false, contentOrigin: Double = 0) {
         self.index = index
+        self.contentOrigin = max(0, contentOrigin)
         self.width = max(1, width)
         self.itemsPerRow = FixedPhotoGrid.columns(itemsPerRow)
         self.cropsThumbnailsToSquare = cropsThumbnailsToSquare
@@ -89,13 +91,15 @@ public struct LibraryViewportGeometry {
     @discardableResult
     public mutating func setLayout(width newWidth: Double, itemsPerRow newCount: Int,
                                    cropsThumbnailsToSquare newCrops: Bool? = nil,
+                                   contentOrigin newOrigin: Double? = nil,
                                    pages: [Int: LibraryPage]) -> Bool {
         guard newWidth.isFinite, newWidth > 0 else { return false }
         let count = FixedPhotoGrid.columns(newCount)
         let crops = newCrops ?? cropsThumbnailsToSquare
-        guard abs(width - newWidth) > 0.5 || itemsPerRow != count || crops != cropsThumbnailsToSquare
+        let origin = max(0, newOrigin ?? contentOrigin)
+        guard abs(width - newWidth) > 0.5 || itemsPerRow != count || crops != cropsThumbnailsToSquare || abs(contentOrigin - origin) > 0.5
         else { return false }
-        width = newWidth; itemsPerRow = count; cropsThumbnailsToSquare = crops; self.pages = pages
+        width = newWidth; itemsPerRow = count; cropsThumbnailsToSquare = crops; contentOrigin = origin; self.pages = pages
         recalculate()
         return true
     }
@@ -134,7 +138,7 @@ public struct LibraryViewportGeometry {
     }
 
     public func anchor(at y: Double) -> Anchor? {
-        guard !slices.isEmpty else { return nil }
+        guard !slices.isEmpty, y >= contentOrigin else { return nil }
         let position = slice(at: y), entry = slices[position]
         let row = materializedRows[position]?.last(where: { entry.y + $0.y <= y })
         let origin = entry.y + (row?.y ?? 0)
@@ -259,7 +263,7 @@ public struct LibraryViewportGeometry {
     private mutating func recalculate() {
         materializedRows.removeAll(); itemFrames.removeAll(); itemSlotFrames.removeAll()
         dayOrigins.removeAll(); dayLayouts.removeAll(keepingCapacity: true)
-        var y = 0.0
+        var y = contentOrigin
         for dayID in index.dayIDs {
             dayOrigins[dayID] = y
             let count = index.dayCount(dayID)

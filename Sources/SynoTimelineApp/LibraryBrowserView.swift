@@ -209,7 +209,14 @@ struct LibraryBrowserView: View {
         )
     }
 
-    private var isAlbum: Bool { collection.albumID != nil }
+    private var isAlbum: Bool { library.sourceAlbumID(for: collection) != nil }
+    private var albumHeader: BrowserHeaderConfiguration? {
+        guard isAlbum else { return nil }
+        let model = AlbumHeaderModel(album: library.album(for: collection))
+        return BrowserHeaderConfiguration(identity: AnyHashable(model), height: AlbumHeaderModel.height) { repository, width in
+            AnyView(AlbumHeaderView(model: model, repository: repository, width: width))
+        }
+    }
     private var emptyTitle: String {
         if isAlbum { return library.albumName(for: collection) ?? "Album" }
         return collection == .favorites ? "No favorites" : "No photos"
@@ -229,13 +236,41 @@ struct LibraryBrowserView: View {
         return collection == .favorites ? "Opening favorites…" : "Opening library…"
     }
 
+    private var emptyState: some View {
+        Group {
+            if library.snapshot(for: collection) == nil {
+                if let error = library.error(for: collection) {
+                    ContentUnavailableView {
+                        Label("Album unavailable", systemImage: "photo.badge.exclamationmark")
+                    } description: { Text(error) }
+                    actions: {
+                        Button("Try Again") { Task { await library.reload() } }.disabled(library.isLoading)
+                    }
+                } else { ProgressView(loadingText) }
+            } else {
+                ContentUnavailableView {
+                    Label(collection.isLibraryFilter ? (libraryFilter.progress.remaining == 0 ? "No matches in library" : "No matches in loaded sections") : emptyTitle,
+                          systemImage: emptySymbol)
+                } description: { Text(collection.isLibraryFilter ? libraryFilter.coverageText : emptyDescription) }
+                actions: {
+                    if collection.isLibraryFilter && libraryFilter.progress.hasInitialUnverifiedSection {
+                        Button("Load More Results") { libraryFilter.loadInitialBatch() }
+                    }
+                }
+            }
+        }
+    }
+
     var body: some View {
         Group {
-            if let snapshot = library.snapshot(for: collection), !snapshot.timeline.days.isEmpty,
-               let repository = library.repository {
+            if let repository = library.repository,
+               (albumHeader != nil || !(library.snapshot(for: collection)?.timeline.days.isEmpty ?? true)) {
+                let snapshot = library.snapshot(for: collection) ?? TimelineSnapshot(sections: [])
                 VStack(spacing: 0) {
                     HStack(spacing: 0) {
                         LibraryBrowserScrollView(snapshot: snapshot,
+                                             header: albumHeader,
+                                             emptyContent: snapshot.timeline.days.isEmpty ? AnyView(emptyState) : nil,
                                              authority: library.selectionAuthority(for: collection),
                                              sourceAlbumID: library.sourceAlbumID(for: collection),
                                              filterMembership: library.filterMembership(for: collection),
@@ -283,24 +318,18 @@ struct LibraryBrowserView: View {
                                              onRetry: { Task { await library.reload() } }) { day in
                         if snapshot.timeline.days.contains(where: { $0.id == day }) { selectedDay = day }
                     }
-                        TimelineNavigator(timeline: snapshot.timeline, selected: selection,
-                                          alwaysVisible: library.alwaysShowsTimeline)
-                            .frame(width: 72)
-                            .padding(.top, contentTopInset + 16)
-                            .padding(.bottom, 16)
-                            .padding(.trailing, 6)
+                        if !snapshot.timeline.days.isEmpty {
+                            TimelineNavigator(timeline: snapshot.timeline, selected: selection,
+                                              alwaysVisible: library.alwaysShowsTimeline)
+                                .frame(width: 72)
+                                .padding(.top, contentTopInset + 16)
+                                .padding(.bottom, 16)
+                                .padding(.trailing, 6)
+                        }
                     }
                 }
             } else if library.snapshot(for: collection)?.timeline.days.isEmpty == true {
-                ContentUnavailableView {
-                    Label(collection.isLibraryFilter ? (libraryFilter.progress.remaining == 0 ? "No matches in library" : "No matches in loaded sections") : emptyTitle,
-                          systemImage: emptySymbol)
-                } description: { Text(collection.isLibraryFilter ? libraryFilter.coverageText : emptyDescription) }
-                actions: {
-                    if collection.isLibraryFilter && libraryFilter.progress.hasInitialUnverifiedSection {
-                        Button("Load More Results") { libraryFilter.loadInitialBatch() }
-                    }
-                }
+                emptyState
             } else if let error = library.error(for: collection), library.snapshot(for: collection) == nil {
                 ContentUnavailableView {
                     Label(isAlbum ? "Album unavailable" : "Library unavailable",
@@ -652,8 +681,16 @@ private struct HostedPlaceholder: View {
     }
 }
 
+struct BrowserHeaderConfiguration {
+    let identity: AnyHashable
+    let height: (CGFloat) -> CGFloat
+    let content: (CachedPhotosRepository, CGFloat) -> AnyView
+}
+
 struct LibraryBrowserScrollView: NSViewRepresentable {
     let snapshot: TimelineSnapshot
+    let header: BrowserHeaderConfiguration?
+    let emptyContent: AnyView?
     let authority: PhotoSelectionAuthority?
     let sourceAlbumID: Int64?
     let filterMembership: [[Int64]]?
@@ -750,6 +787,9 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var selectionAuthority: PhotoSelectionAuthority?
         private var sourceAlbumID: Int64?
         private var geometry: LibraryViewportGeometry?
+        private var header: BrowserHeaderConfiguration?
+        private var emptyContent: AnyView?
+        private var emptyRevision = 0
         private var window: LibraryPageWindow?
         private var pages: [Int: LibraryPage] = [:]
         private var errors: [Int: String] = [:]
@@ -851,6 +891,11 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             colorScheme = input.colorScheme
             reduceMotion = input.reduceMotion
             let width = availableWidth(in: scroll)
+            if header?.identity != input.header?.identity { viewRevision += 1 }
+            header = input.header
+            emptyContent = input.emptyContent
+            if emptyContent != nil { emptyRevision += 1 }
+            let headerHeight = header.map { Double($0.height(width)) } ?? 0
             let rebuilding = revision != input.revision
             if rebuilding {
                 let oldIndex = index
@@ -870,7 +915,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 index = newIndex
                 geometry = LibraryViewportGeometry(index: newIndex, width: width,
                                                    itemsPerRow: input.itemsPerRow,
-                                                   cropsThumbnailsToSquare: input.cropsThumbnailsToSquare)
+                                                   cropsThumbnailsToSquare: input.cropsThumbnailsToSquare,
+                                                   contentOrigin: headerHeight)
                 snapPresentation(input.cropsThumbnailsToSquare)
                 if preserveFilter, let oldMembership = filterMembership, let newMembership = input.filterMembership {
                     pages = FilterPageRebaser.rebase(pages: pages, membership: newMembership, sourceAuthority: input.filterAuthority)
@@ -911,11 +957,11 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     let widthChanged = abs(current.width - width) > 0.5
                     let columnsChanged = current.itemsPerRow != input.itemsPerRow
                     let presentationChanged = current.cropsThumbnailsToSquare != input.cropsThumbnailsToSquare
-                    if widthChanged || columnsChanged || presentationChanged {
-                        let anchor = current.anchor(at: visibleTop(in: scroll))
+                    if widthChanged || columnsChanged || presentationChanged || abs(current.contentOrigin - headerHeight) > 0.5 {
+                        let preserved = visiblePhotoAnchor(current, in: scroll)
                         geometry?.setLayout(width: width, itemsPerRow: input.itemsPerRow,
                                             cropsThumbnailsToSquare: input.cropsThumbnailsToSquare,
-                                            pages: pages)
+                                            contentOrigin: headerHeight, pages: pages)
                         selection.endExtension()
                         cancelPointerInteraction()
                         pendingOpen = nil
@@ -930,7 +976,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                             applySquarePresentation(input.cropsThumbnailsToSquare)
                         }
                         updateDocumentHeight()
-                        if let anchor, let target = geometry?.y(for: anchor) { scrollTo(target) }
+                        if let preserved, let target = geometry?.y(for: preserved.anchor) { scrollTo(target - preserved.distance) }
                     }
                 }
             }
@@ -1100,20 +1146,19 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             if let current = geometry {
                 let width = availableWidth(in: scroll)
                 if abs(current.width - width) > 0.5 {
-                    let anchor = current.anchor(at: visibleTop(in: scroll))
+                    let preserved = visiblePhotoAnchor(current, in: scroll)
                     geometry?.setLayout(width: width, itemsPerRow: current.itemsPerRow,
                                         cropsThumbnailsToSquare: current.cropsThumbnailsToSquare,
-                                        pages: pages)
+                                        contentOrigin: header.map { Double($0.height(width)) } ?? 0, pages: pages)
                     selection.endExtension()
                     cancelPointerInteraction()
                     pendingOpen = nil
                     viewRevision += 1
                     updateDocumentHeight()
-                    if let anchor, let target = geometry?.y(for: anchor) { scrollTo(target) }
+                    if let preserved, let target = geometry?.y(for: preserved.anchor) { scrollTo(target - preserved.distance) }
                 }
             }
-            guard let geometry, let index,
-                  let repository, !geometry.slices.isEmpty else { return }
+            guard let geometry, let index, let repository else { return }
             let visible = scroll.contentView.bounds
             let y = visibleTop(in: scroll)
             let height = visibleHeight(in: scroll)
@@ -1123,6 +1168,16 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             let overscan = min(240, height * 0.35)
             let range = geometry.sliceRange(y: max(0, y - overscan), height: height + 2 * overscan)
             var wanted: Set<String> = []
+            if let header {
+                addHost("album-header", frame: CGRect(x: 0, y: 0, width: geometry.width, height: geometry.contentOrigin),
+                        content: header.content(repository, geometry.width),
+                        revision: (viewRevision, 0), wanted: &wanted, document: document)
+            }
+            if let emptyContent, geometry.slices.isEmpty {
+                addHost("empty", frame: CGRect(x: 0, y: geometry.contentOrigin, width: geometry.width,
+                    height: max(240, visibleHeight(in: scroll) - geometry.contentOrigin)),
+                    content: emptyContent, revision: (viewRevision, emptyRevision), wanted: &wanted, document: document)
+            }
             let visibleSections = geometry.sectionIndices(y: max(0, y - overscan),
                                                           height: height + 2 * overscan)
             for position in range {
@@ -1179,7 +1234,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 hosts.removeValue(forKey: key)?.removeFromSuperview()
                 hostRevisions.removeValue(forKey: key)
             }
-            if !suppressFeedback {
+            if !suppressFeedback, !geometry.slices.isEmpty {
                 let day = geometry.slices[geometry.slice(at: y)].source.dayID
                 if day != lastVisibleDay {
                     lastVisibleDay = day
@@ -1421,6 +1476,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             guard let scroll, let geometry else { return }
             switch phase {
             case .down(let point, let clickCount, let shift, let option):
+                guard point.y >= geometry.contentOrigin else { return }
                 (scroll as? TimelineScrollView)?.focusTimeline()
                 pointer.begin(at: point); pointerShift = shift; pointerOption = option
                 marqueeSelection = BrowserMarqueeSelection(baseline: selection.indexes, toggles: shift)
@@ -1636,10 +1692,18 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             }
         }
 
+        private func visiblePhotoAnchor(_ geometry: LibraryViewportGeometry, in scroll: NSScrollView)
+            -> (anchor: LibraryViewportGeometry.Anchor, distance: Double)? {
+            let top = visibleTop(in: scroll)
+            let position = max(top, geometry.contentOrigin + 38)
+            guard position < top + visibleHeight(in: scroll), let anchor = geometry.anchor(at: position) else { return nil }
+            return (anchor, position - top)
+        }
+
         private func updateDocumentHeight() {
             guard let scroll, let document, let geometry else { return }
             let frame = CGRect(x: 0, y: 0, width: CGFloat(availableWidth(in: scroll)),
-                               height: max(CGFloat(geometry.totalHeight), scroll.contentSize.height))
+                               height: max(CGFloat(geometry.totalHeight) + (emptyContent == nil ? 0 : 240), scroll.contentSize.height))
             if document.frame != frame { document.frame = frame }
             document.overlay?.frame = document.bounds
         }

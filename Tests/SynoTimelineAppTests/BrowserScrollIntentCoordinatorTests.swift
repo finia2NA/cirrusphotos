@@ -34,6 +34,21 @@ final class BrowserScrollIntentCoordinatorTests: XCTestCase {
         return geometry
     }
 
+    func testHeaderOffsetAppliesToRestorationJumpAndReveal() throws {
+        let index = index()
+        var geometry = LibraryViewportGeometry(index: index, width: 500, contentOrigin: 190)
+        geometry.reconcile(pages: [0: try page(verified: true)])
+        let frame = try XCTUnwrap(geometry.frame(forItem: 42))
+        var state = BrowserScrollIntentCoordinator()
+        state.captureRestoration(saved())
+        let restored = state.rebuild(index: index, geometry: geometry, previousIndex: nil,
+                                     visibleAnchor: nil, timelineVerified: true)
+        XCTAssertEqual(try XCTUnwrap(restored), frame.minY + 17, accuracy: 0.001)
+        XCTAssertEqual(state.jump(id: UUID(), dayID: "2024-04-03", index: index, geometry: geometry), 190)
+        let request = BrowserRevealRequest(itemID: 42, dayID: "2024-04-03", sectionOffsetHint: nil)
+        XCTAssertEqual(try XCTUnwrap(state.reveal(request, index: index, geometry: geometry)), frame.minY, accuracy: 0.001)
+    }
+
     func testExplicitNavigationSupersedesRestorationAndRepeatedJumpDoesNotReplay() {
         let index = index()
         var state = BrowserScrollIntentCoordinator()
