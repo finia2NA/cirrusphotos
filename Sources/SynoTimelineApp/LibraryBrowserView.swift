@@ -1408,7 +1408,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
 
         func contextMenu(at point: CGPoint) -> NSMenu? {
             guard let ordinal = geometry?.ordinal(at: point),
-                  let item = loadedItem(ordinal), item.photo.hasDisplayableStillImage else { return nil }
+                  let item = loadedItem(ordinal) else { return nil }
             if !selection.contains(ordinal) { selection.replace(with: ordinal); publishSelection() }
             var known: [Int: Int64] = [:]
             for selected in selection.indexes {
@@ -1418,16 +1418,20 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 canToggleFavorite: false, collection: collection, indexFingerprint: index?.fingerprint,
                 selectionGeneration: selectionState.generation, selectedOrdinals: selection.indexes,
                 knownItemIDsByOrdinal: known, timeline: timelineSnapshot, authority: selectionAuthority, sourceAlbumID: sourceAlbumID)
-            let menu = photoDownloadMenu { [weak self] kind, choose in self?.onDownload?(snapshot, kind, choose) }
-            let editSnapshot = BrowserCommandSnapshot(owner: commandOwner, active: true, canOpen: true,
-                canToggleFavorite: false, collection: collection, indexFingerprint: index?.fingerprint,
-                selectionGeneration: selectionState.generation, selectedOrdinals: IndexSet(integer: ordinal),
-                knownItemIDsByOrdinal: [ordinal: item.photo.id], timeline: timelineSnapshot, authority: selectionAuthority, sourceAlbumID: sourceAlbumID)
-            addEditMenu(to: menu, filename: item.photo.filename) { [weak self] application in
-                self?.onEdit?(editSnapshot, application)
+            let menu = item.photo.hasDisplayableStillImage
+                ? photoDownloadMenu { [weak self] kind, choose in self?.onDownload?(snapshot, kind, choose) }
+                : NSMenu()
+            if item.photo.hasDisplayableStillImage {
+                let editSnapshot = BrowserCommandSnapshot(owner: commandOwner, active: true, canOpen: true,
+                    canToggleFavorite: false, collection: collection, indexFingerprint: index?.fingerprint,
+                    selectionGeneration: selectionState.generation, selectedOrdinals: IndexSet(integer: ordinal),
+                    knownItemIDsByOrdinal: [ordinal: item.photo.id], timeline: timelineSnapshot, authority: selectionAuthority, sourceAlbumID: sourceAlbumID)
+                addEditMenu(to: menu, filename: item.photo.filename) { [weak self] application in
+                    self?.onEdit?(editSnapshot, application)
+                }
             }
             onAlbumMenu?(menu, snapshot)
-            return menu
+            return menu.items.isEmpty ? nil : menu
         }
 
         func publishCommandState(active: Bool) {

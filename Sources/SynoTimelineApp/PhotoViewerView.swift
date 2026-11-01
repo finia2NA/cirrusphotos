@@ -81,13 +81,15 @@ struct PhotoViewerView: View {
                                 }
                               }, downloadMenu: {
                                 guard let state = viewer.state, state.metadataVerified, state.allowNetwork,
-                                      let item = state.item, item.hasDisplayableStillImage else { return nil }
+                                      let item = state.item else { return nil }
                                 let repository = viewer.repository
-                                let menu = photoDownloadMenu { kind, choose in
+                                let menu = item.hasDisplayableStillImage ? photoDownloadMenu { kind, choose in
                                     library.downloadViewerItem(item, repository: repository, kind: kind, choose: choose)
-                                }
-                                addEditMenu(to: menu, filename: item.filename) { application in
-                                    library.editViewerItem(item, repository: repository, application: application)
+                                } : NSMenu()
+                                if item.hasDisplayableStillImage {
+                                    addEditMenu(to: menu, filename: item.filename) { application in
+                                        library.editViewerItem(item, repository: repository, application: application)
+                                    }
                                 }
                                 if let timeline = library.snapshot(for: viewer.collection),
                                    LibraryIndex(snapshot: timeline).fingerprint == viewer.index.fingerprint,
@@ -101,7 +103,7 @@ struct PhotoViewerView: View {
                                         sourceAlbumID: library.sourceAlbumID(for: viewer.collection))
                                     library.addAlbumMembershipMenu(to: menu, captured: captured, pinnedIDs: pinnedAlbumIDs)
                                 }
-                                return menu
+                                return menu.items.isEmpty ? nil : menu
                               }, startFileDrag: { view, event in
                                 guard let state = viewer.state, state.metadataVerified, state.allowNetwork,
                                       let item = state.item, item.hasDisplayableStillImage,

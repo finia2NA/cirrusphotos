@@ -28,7 +28,7 @@ extension LibraryModel {
     func addAlbumMembershipMenu(to menu: NSMenu, captured: BrowserCommandSnapshot, pinnedIDs: [Int64]) {
         guard let repository, let selection = captured.captureSelection(timeline: captured.timeline),
               selection.authority != nil, !selection.selectedOrdinals.isEmpty else { return }
-        menu.addItem(.separator())
+        if !menu.items.isEmpty { menu.addItem(.separator()) }
         let parent = NSMenuItem(title: "Add to Album", action: nil, keyEquivalent: "")
         let submenu = NSMenu(title: "Add to Album")
         let loading = NSMenuItem(title: "Loading…", action: nil, keyEquivalent: "")
