@@ -16,6 +16,9 @@ extension CachedPhotosRepository {
             throw SynologyAPIError.unsupported("An invalid library filter registration was supplied.")
         }
         guard !metadata.resetInProgress else { throw MetadataAdmissionError.resetInProgress }
+        if metadata.albumMutationInProgress, let id = registration.sourceCollection.albumID, id == metadata.albumMutationID {
+            throw SynologyAPIError.unsupported("The album is changing. Try the filter again after it refreshes.")
+        }
         if registration.sourceCollection.isMapFilter && metadata.latestTimelines[registration.sourceCollection] == nil {
             throw SynologyAPIError.unsupported("The source collection is no longer available.")
         }

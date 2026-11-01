@@ -218,6 +218,44 @@ public actor SynologyClient: PhotosTransport {
         return collected
     }
 
+    public func album(id: Int64) async throws -> AlbumSummary {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        let response: APIEnvelope<AlbumListData> = try await post(
+            path: "/webapi/entry.cgi/SYNO.Foto.Browse.Album",
+            parameters: ["api": "SYNO.Foto.Browse.Album", "version": "4", "method": "get",
+                         "id": Self.idArray([id]), "additional": "[\"sharing_info\",\"flex_section\",\"provider_count\",\"thumbnail\"]", "_sid": sid], authenticated: true)
+        guard response.success, let list = response.data?.list, list.count == 1, list[0].id == id else {
+            throw SynologyAPIError.api(response.error?.code ?? -1)
+        }
+        return list[0]
+    }
+
+    public func createAlbum(name: String, itemIDs: [Int64]) async throws -> AlbumSummary {
+        let encodedName = String(decoding: try JSONEncoder().encode(name), as: UTF8.self)
+        let data = try await albumMutation(method: "create", parameters: ["name": encodedName, "item": Self.idArray(itemIDs)], requireData: true)
+        guard let album = data?.album else { throw SynologyAPIError.invalidResponse }
+        return album
+    }
+
+    public func addItems(_ itemIDs: [Int64], toAlbum id: Int64) async throws {
+        _ = try await albumMutation(method: "add_item", parameters: ["id": String(id), "item": Self.idArray(itemIDs)], requireData: true)
+    }
+
+    public func removeItems(_ itemIDs: [Int64], fromAlbum id: Int64) async throws {
+        _ = try await albumMutation(method: "delete_item", parameters: ["id": String(id), "item": Self.idArray(itemIDs)], requireData: false)
+    }
+
+    private func albumMutation(method: String, parameters: [String: String], requireData: Bool) async throws -> AlbumMutationData? {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        var form = parameters
+        form.merge(["api": "SYNO.Foto.Browse.NormalAlbum", "version": "1", "method": method, "_sid": sid]) { _, new in new }
+        let response: APIEnvelope<AlbumMutationData> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Browse.NormalAlbum", parameters: form, authenticated: true)
+        guard response.success else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+        if requireData && response.data?.errorList == nil { throw SynologyAPIError.invalidResponse }
+        if let errors = response.data?.errorList, !errors.isEmpty { throw SynologyAPIError.unsupported("The album change was incomplete. Refresh and try again.") }
+        return response.data
+    }
+
     public func readPersonalInventoryBatch(offset: Int, limit: Int) async throws -> [PhotoItem] {
         guard let sid else { throw SynologyAPIError.api(119) }
         let response: APIEnvelope<ItemData> = try await post(

@@ -16,6 +16,15 @@ private actor AlbumFakeTransport: PhotosTransport {
     var itemRequests: [(TimelineSection, PhotoCollectionDescriptor)] = []
     var favoriteWrites: [(Int64, Bool)] = []
     var favoriteFailure = false
+    var mutationFails = false
+    var replacementEntries: [DayTimelineEntry] = []
+    var replacementList: [AlbumSummary] = []
+    var pauseMutation = false
+    var mutationStarted = false
+    var mutationContinuation: CheckedContinuation<Void, Never>?
+    var pauseCatalog = false
+    var catalogStarted = false
+    var catalogContinuation: CheckedContinuation<Void, Never>?
 
     func configure(albumList: [AlbumSummary] = [],
                    albumEntriesByID: [Int64: [DayTimelineEntry]] = [:],
@@ -44,9 +53,39 @@ private actor AlbumFakeTransport: PhotosTransport {
         return albumList
     }
 
+    func configureMutation(entries: [DayTimelineEntry], list: [AlbumSummary], fails: Bool = false) {
+        replacementEntries = entries; replacementList = list; mutationFails = fails
+    }
+
+    func pauseNextCatalog() { pauseCatalog = true }
+    func releaseCatalog() { catalogContinuation?.resume(); catalogContinuation = nil }
+    func pauseNextMutation() { pauseMutation = true }
+    func releaseMutation() { mutationContinuation?.resume(); mutationContinuation = nil }
+
+    func album(id: Int64) async throws -> AlbumSummary {
+        guard let album = albumList.first(where: { $0.id == id }) else { throw TestFailure("Missing album") }
+        return album
+    }
+
+    func addItems(_ itemIDs: [Int64], toAlbum id: Int64) async throws {
+        albumEntriesByID[id] = replacementEntries
+        albumList = replacementList
+        if pauseMutation {
+            mutationStarted = true
+            await withCheckedContinuation { mutationContinuation = $0 }
+            pauseMutation = false
+        }
+        if mutationFails { throw TestFailure("Incomplete album change") }
+    }
+
     func readAlbumCatalogBatch(albumID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry] {
         if offset == 0 { albumTimelineCalls.append(albumID) }
-        return Array((albumEntriesByID[albumID] ?? []).dropFirst(offset).prefix(limit))
+        let result = Array((albumEntriesByID[albumID] ?? []).dropFirst(offset).prefix(limit))
+        if pauseCatalog {
+            pauseCatalog = false; catalogStarted = true
+            await withCheckedContinuation { catalogContinuation = $0 }
+        }
+        return result
     }
 
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
@@ -224,4 +263,99 @@ final class AlbumBrowserTests: XCTestCase {
         let writes = await transport.favoriteWrites
         XCTAssertEqual(writes.map(\.0), [photo.id])
     }
+    func testMembershipMutationRefreshesSameCountAndPreservesLibrary() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let day = Int64(1_704_067_200)
+        let old = AlbumSummary(id: 54, name: "Trip", itemCount: 1, thumbnail: thumbnail(1))
+        let updated = AlbumSummary(id: 54, name: "Trip", itemCount: 1, thumbnail: thumbnail(2))
+        await transport.configure(albumList: [old], albumEntriesByID: [54: [.init(id: 1, time: day)]])
+        await transport.configureMutation(entries: [.init(id: 2, time: day)], list: [updated])
+        let repository = try makeRepository(root: root, transport: transport)
+        let descriptor = section(1)
+        try await seedMetadataPage([try item(1)], section: descriptor, repository: repository, collection: .personalLibrary)
+        for await _ in await repository.albums() { }
+        var albumSection: TimelineSection?
+        var albumSnapshot: TimelineSnapshot?
+        for await event in await repository.timeline(collection: .album(54)) {
+            if case .value(let snapshot, true) = event { albumSection = snapshot.sections.first; albumSnapshot = snapshot }
+        }
+        let snapshot = try XCTUnwrap(albumSnapshot)
+        let filter = PhotoCollectionDescriptor.libraryFilter(UUID())
+        try await repository.registerLibraryFilter(.init(descriptor: filter, snapshot: snapshot,
+            referencesBySection: [[.init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: 1)]],
+            filter: LibraryFilter(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
+            sourceCollection: .album(54)))
+        try await repository.addItems([2], toAlbum: 54)
+        var filterFailed = false
+        for await event in await repository.page(try XCTUnwrap(albumSection), collection: filter) {
+            if case .failure = event { filterFailed = true }
+        }
+        XCTAssertTrue(filterFailed)
+        let summaries = try await repository.store.metadataAlbumSummaries(repository.metadataNamespace)
+        XCTAssertEqual(summaries?.albums.first?.thumbnail?.unitID, 2)
+        let address = try DayPageAddress(section: XCTUnwrap(albumSection), collection: .album(54))
+        let albumPage = try await repository.store.metadataPage(address, namespace: repository.metadataNamespace, currentRun: repository.runID)
+        XCTAssertEqual(albumPage?.slots.map(\.itemID), [2])
+        let personalAddress = try DayPageAddress(section: descriptor, collection: .personalLibrary)
+        let personal = try await repository.store.metadataPage(personalAddress, namespace: repository.metadataNamespace, currentRun: repository.runID)
+        XCTAssertEqual(personal?.slots.map(\.itemID), [1])
+    }
+
+    func testAmbiguousFailureStillRefreshesMembership() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let day = Int64(1_704_067_200)
+        let old = AlbumSummary(id: 54, name: "Trip", itemCount: 1)
+        let updated = AlbumSummary(id: 54, name: "Trip", itemCount: 1, thumbnail: thumbnail(2))
+        await transport.configure(albumList: [old], albumEntriesByID: [54: [.init(id: 1, time: day)]])
+        await transport.configureMutation(entries: [.init(id: 2, time: day)], list: [updated], fails: true)
+        let repository = try makeRepository(root: root, transport: transport)
+        do { try await repository.addItems([2], toAlbum: 54); XCTFail("Expected failure") } catch { }
+        let summaries = try await repository.store.metadataAlbumSummaries(repository.metadataNamespace)
+        XCTAssertEqual(summaries?.albums.first?.thumbnail?.unitID, 2)
+        let calls = await transport.albumTimelineCalls
+        XCTAssertEqual(calls, [54])
+    }
+
+    func testCancelledMutationReconcilesWithoutClaimingSuccess() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let day = Int64(1_704_067_200)
+        let old = AlbumSummary(id: 54, name: "Trip", itemCount: 1)
+        let updated = AlbumSummary(id: 54, name: "Trip", itemCount: 1, thumbnail: thumbnail(2))
+        await transport.configure(albumList: [old], albumEntriesByID: [54: [.init(id: 1, time: day)]])
+        await transport.configureMutation(entries: [.init(id: 2, time: day)], list: [updated])
+        await transport.pauseNextMutation()
+        let repository = try makeRepository(root: root, transport: transport)
+        let mutation = Task { try await repository.addItems([2], toAlbum: 54) }
+        while !(await transport.mutationStarted) { await Task.yield() }
+        mutation.cancel()
+        await transport.releaseMutation()
+        do { try await mutation.value; XCTFail("Expected cancellation") } catch { }
+        let summaries = try await repository.store.metadataAlbumSummaries(repository.metadataNamespace)
+        XCTAssertEqual(summaries?.albums.first?.thumbnail?.unitID, 2)
+    }
+
+    func testAdmittedOldCatalogCannotOverwriteMutation() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let day = Int64(1_704_067_200)
+        let album = AlbumSummary(id: 54, name: "Trip", itemCount: 1)
+        await transport.configure(albumList: [album], albumEntriesByID: [54: [.init(id: 1, time: day)]])
+        await transport.configureMutation(entries: [.init(id: 2, time: day)], list: [album])
+        await transport.pauseNextCatalog()
+        let repository = try makeRepository(root: root, transport: transport)
+        let oldRead = Task { for await _ in await repository.timeline(collection: .album(54)) { } }
+        while !(await transport.catalogStarted) { await Task.yield() }
+        try await repository.addItems([2], toAlbum: 54)
+        await transport.releaseCatalog()
+        await oldRead.value
+        let catalog = try await repository.store.metadataCatalog(CollectionKey(namespace: repository.metadataNamespace, collection: .album(54)))
+        let snapshot = try CollectionDayPager.snapshot(catalog: XCTUnwrap(catalog).catalog)
+        let address = try DayPageAddress(section: XCTUnwrap(snapshot.sections.first), collection: .album(54))
+        let page = try await repository.store.metadataPage(address, namespace: repository.metadataNamespace, currentRun: repository.runID)
+        XCTAssertEqual(page?.slots.map(\.itemID), [2])
+    }
+
 }

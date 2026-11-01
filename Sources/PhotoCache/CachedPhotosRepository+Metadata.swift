@@ -32,13 +32,16 @@ extension CachedPhotosRepository {
                 catch { continuation.yield(.failure(error.localizedDescription)); continuation.finish(); return }
                 let validation = runID
                 let epoch = metadata.admissionEpoch
+                let mutationEpoch = metadata.mutationEpochs[collection, default: 0]
                 let cached = try? await store.metadataCatalog(CollectionKey(namespace: metadataNamespace, collection: collection))
-                guard !Task.isCancelled, epoch == metadata.admissionEpoch, !metadata.resetInProgress else { continuation.finish(); return }
+                guard !Task.isCancelled, epoch == metadata.admissionEpoch, mutationEpoch == metadata.mutationEpochs[collection, default: 0], !metadata.resetInProgress else { continuation.finish(); return }
                 let snapshot = cached.flatMap { try? CollectionDayPager.snapshot(catalog: $0.catalog) }
+                let mutationInProgress = metadata.albumMutationWriting && collection.albumID != nil && collection.albumID == metadata.albumMutationID
                 if let snapshot {
                     metadata.latestTimelines[collection] = snapshot
-                    continuation.yield(.value(snapshot, verified: cached?.validatedRun == validation))
+                    continuation.yield(.value(snapshot, verified: !mutationInProgress && cached?.validatedRun == validation))
                 }
+                if mutationInProgress { continuation.finish(); return }
                 if cached?.validatedRun == validation, snapshot != nil { continuation.finish(); return }
                 var phase = "Initial timeline"
                 do {
@@ -87,9 +90,19 @@ extension CachedPhotosRepository {
                     defer { finishExpectedMetadataDemand(address) }
                     guard let key = CacheKey.page(namespace: namespace, section: section, collection: collection) else { throw CollectionCatalogError.invalidAddress }
                     let epoch = metadata.admissionEpoch
+                    let mutationEpoch = metadata.mutationEpochs[collection, default: 0]
                     let cached = useCachedPages ? try await store.metadataPage(address, namespace: metadataNamespace, currentRun: runID) : nil
-                    guard !Task.isCancelled, epoch == metadata.admissionEpoch, !metadata.resetInProgress else { continuation.finish(); return }
-                    if let cached { continuation.yield(.value(applyingFavoriteOverrides(cached), verified: cached.verified)) }
+                    guard !Task.isCancelled, epoch == metadata.admissionEpoch, mutationEpoch == metadata.mutationEpochs[collection, default: 0], !metadata.resetInProgress else { continuation.finish(); return }
+                    let mutationInProgress = metadata.albumMutationWriting && collection.albumID != nil && collection.albumID == metadata.albumMutationID
+                    if let cached {
+                        let visible: PhotoPageSnapshot
+                        if mutationInProgress {
+                            visible = PhotoPageSnapshot(address: cached.address, membershipRevision: cached.membershipRevision,
+                                membershipVerified: false, slots: cached.slots.map { PhotoItemSlot(itemID: $0.itemID, item: $0.item, verified: false) })
+                        } else { visible = cached }
+                        continuation.yield(.value(applyingFavoriteOverrides(visible), verified: visible.verified))
+                    }
+                    guard !mutationInProgress else { continuation.finish(); return }
                     guard allowNetwork && cached?.verified != true else { continuation.finish(); return }
                     let task = registerPage(section, collection: collection, key: key, subscriber: subscriber, priority: priority, forceMembership: !useCachedPages)
                     let current = try await task.value

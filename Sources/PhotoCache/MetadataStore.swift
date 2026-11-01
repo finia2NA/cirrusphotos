@@ -181,6 +181,16 @@ extension DiskCache {
         }
     }
 
+    public func invalidateMetadataAlbumSummaries(_ namespace: MetadataNamespace, admission: MetadataStoreAdmission) throws {
+        try metadataTransaction {
+            guard generation == admission.generation, metadataGeneration == admission.metadataGeneration else { throw MetadataAdmissionError.superseded }
+            let statement = try prepare("UPDATE album_summaries SET validated_run=NULL WHERE namespace=?")
+            bind(namespace.key, at: 1, in: statement)
+            try metadataStep(statement)
+            try advanceMetadataLocalRevision(namespace)
+        }
+    }
+
     public func metadataCatalog(_ key: CollectionKey) throws -> StoredCollectionCatalog? {
         let statement = try prepare("SELECT catalog,presentation_revision,validated_run FROM collection_state WHERE namespace=? AND collection=?")
         defer { sqlite3_finalize(statement) }

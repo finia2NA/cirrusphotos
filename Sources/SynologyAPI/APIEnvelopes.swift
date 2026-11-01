@@ -18,6 +18,17 @@ struct LoginData: Decodable {
 
 struct TimelineData: Decodable { let section: [TimelineSection] }
 struct ItemData: Decodable { let list: [PhotoItem] }
+struct AlbumMutationData: Decodable {
+    let album: AlbumSummary?
+    let errorList: [DiscardedJSON]?
+    enum CodingKeys: String, CodingKey { case album; case errorList = "error_list" }
+}
+
+// Error entries are intentionally opaque: their shapes are not established.
+struct DiscardedJSON: Decodable {
+    init(from decoder: Decoder) throws { _ = try decoder.singleValueContainer() }
+}
+
 struct AlbumListData: Decodable { let list: [AlbumSummary] }
 struct EmptyData: Decodable {}
 

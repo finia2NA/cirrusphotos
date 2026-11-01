@@ -11,9 +11,12 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
     public let sortBy: String?
     public let sortDirection: String?
     public let thumbnail: ThumbnailInfo?
+    public let type: String?
+    public let ownerUserID: Int64?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, additional
+        case id, name, additional, type
+        case ownerUserID = "owner_user_id"
         case itemCount = "item_count"
         case createTime = "create_time"
         case startTime = "start_time"
@@ -29,7 +32,7 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
     public init(id: Int64, name: String, itemCount: Int,
                 createTime: Int64? = nil, startTime: Int64? = nil, endTime: Int64? = nil,
                 sortBy: String? = nil, sortDirection: String? = nil,
-                thumbnail: ThumbnailInfo? = nil) {
+                thumbnail: ThumbnailInfo? = nil, type: String? = nil, ownerUserID: Int64? = nil) {
         self.id = id
         self.name = name
         self.itemCount = itemCount
@@ -39,11 +42,15 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
         self.sortBy = sortBy
         self.sortDirection = sortDirection
         self.thumbnail = thumbnail
+        self.type = type
+        self.ownerUserID = ownerUserID
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(Int64.self, forKey: .id)
+        type = try container.decodeIfPresent(String.self, forKey: .type)
+        ownerUserID = try container.decodeIfPresent(Int64.self, forKey: .ownerUserID)
         name = try container.decode(String.self, forKey: .name)
         itemCount = try container.decodeIfPresent(Int.self, forKey: .itemCount) ?? 0
         createTime = try container.decodeIfPresent(Int64.self, forKey: .createTime)
@@ -57,6 +64,8 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(type, forKey: .type)
+        try container.encodeIfPresent(ownerUserID, forKey: .ownerUserID)
         try container.encode(name, forKey: .name)
         try container.encode(itemCount, forKey: .itemCount)
         try container.encodeIfPresent(createTime, forKey: .createTime)

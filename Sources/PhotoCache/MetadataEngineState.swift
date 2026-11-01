@@ -41,6 +41,10 @@ struct MetadataEngineState {
     var pageJobEpochs: [String: UInt64] = [:]
     var collectionPageObservers: [UUID: CollectionPageObserver] = [:]
     var pendingPagePromotions: [String] = []
+    var albumMutationInProgress = false
+    var albumMutationWriting = false
+    var albumMutationID: Int64?
+    var albumListEpoch: UInt64 = 0
     var albumListJob: SharedJob<[AlbumSummary]>?
     var albumListLatest: [AlbumSummary]?
     var locationIndexWork: SharedJob<[PhotoLocationRecord]>?

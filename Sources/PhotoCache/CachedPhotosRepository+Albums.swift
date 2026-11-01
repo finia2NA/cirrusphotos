@@ -13,12 +13,13 @@ extension CachedPhotosRepository {
                 let validation = albumListValidationRun()
                 let epoch = metadata.admissionEpoch
                 let cached = try? await store.metadataAlbumSummaries(metadataNamespace)
-                guard !Task.isCancelled, epoch == metadata.admissionEpoch, !metadata.resetInProgress else { continuation.finish(); return }
+                guard !Task.isCancelled, epoch == metadata.admissionEpoch, validation == albumListValidationRun(), !metadata.resetInProgress else { continuation.finish(); return }
                 let list = cached?.albums
                 if let list {
                     metadata.albumListLatest = list
-                    continuation.yield(.value(list, verified: cached?.validatedRun == validation))
+                    continuation.yield(.value(list, verified: !metadata.albumMutationWriting && cached?.validatedRun == validation))
                 }
+                if metadata.albumMutationWriting { continuation.finish(); return }
                 if cached?.validatedRun == validation, list != nil { continuation.finish(); return }
                 do {
                     let requestedValidation = albumListValidationRun()
@@ -78,5 +79,5 @@ extension CachedPhotosRepository {
         }
     }
 
-    func albumListValidationRun() -> String { "\(runID):\(metadata.admissionEpoch):albums" }
+    func albumListValidationRun() -> String { "\(runID):\(metadata.admissionEpoch):albums:\(metadata.albumListEpoch)" }
 }
