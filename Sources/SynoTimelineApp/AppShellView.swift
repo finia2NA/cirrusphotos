@@ -91,7 +91,7 @@ struct AppShellView: View {
                         .tag(SidebarSelection.destination(.map))
                 }
                 AlbumSidebarSection(presentation: albumPresentation, albums: model.albums,
-                                    repository: model.repository)
+                                    repository: model.repository, showOverviewForDrag: showAlbumsOverviewForDrag)
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 320)
@@ -314,6 +314,14 @@ struct AppShellView: View {
         if !albumPresentation.pinnedIDs.isEmpty { model.ensureAlbumsLoaded() }
         validateOpenedAlbum(in: model.albums)
         synchronizeAlbumSelection()
+    }
+
+    private func showAlbumsOverviewForDrag() {
+        guard sourceCollection != nil else { return }
+        // Bypass the normal restore-last-album behavior for this temporary drag route.
+        openedAlbumID = nil
+        navigationRestoration.setOpenedAlbum(nil)
+        finishSelection(.destination(.albums))
     }
 
     private func select(_ selection: SidebarSelection) {

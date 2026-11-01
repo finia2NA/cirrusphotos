@@ -166,6 +166,58 @@ private struct AlbumDragSourceView: NSViewRepresentable {
     static func dismantleNSView(_ view: NSView, coordinator: ()) { }
 }
 
+/// Opens the overview after a local photo selection hovers over Albums.
+struct AlbumOverviewSpringTarget: NSViewRepresentable {
+    let namespace: String?
+    let open: () -> Void
+    func makeNSView(context: Context) -> TargetView { TargetView() }
+    func updateNSView(_ view: TargetView, context: Context) { view.namespace = namespace; view.open = open }
+    static func dismantleNSView(_ view: TargetView, coordinator: ()) { view.cancel() }
+
+    @MainActor final class TargetView: NSView {
+        var namespace: String?
+        var open: (() -> Void)?
+        private var pending: DispatchWorkItem?
+        private var generation = 0
+        var hoverDelay: TimeInterval = 0.7
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            registerForDraggedTypes([SelectionDragRegistry.type])
+        }
+        required init?(coder: NSCoder) { fatalError() }
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+            beginHover(sender.draggingPasteboard.string(forType: SelectionDragRegistry.type)) ? .copy : []
+        }
+        @discardableResult
+        func beginHover(_ value: String?) -> Bool {
+            cancel()
+            guard let namespace, let value,
+                  SelectionDragRegistry.lookup(value, namespace: namespace) != nil else { return false }
+            let expected = generation
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.generation == expected, self.namespace == namespace,
+                      SelectionDragRegistry.lookup(value, namespace: namespace) != nil else { return }
+                self.pending = nil
+                self.open?()
+            }
+            pending = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + hoverDelay, execute: work)
+            return true
+        }
+        override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+            guard let namespace, SelectionDragRegistry.lookup(
+                sender.draggingPasteboard.string(forType: SelectionDragRegistry.type), namespace: namespace
+            ) != nil else { cancel(); return [] }
+            return .copy
+        }
+        override func draggingExited(_ sender: NSDraggingInfo?) { cancel() }
+        override func draggingEnded(_ sender: NSDraggingInfo) { cancel() }
+        override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { cancel(); return false }
+        func cancel() { generation += 1; pending?.cancel(); pending = nil }
+        override func mouseDown(with event: NSEvent) { nextResponder?.mouseDown(with: event) }
+    }
+}
+
 /// A narrow insertion target leaves the middle of each row free for future membership drops.
 struct AlbumInsertionTarget: NSViewRepresentable {
     let before: Int64?

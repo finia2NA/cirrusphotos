@@ -6,11 +6,13 @@ struct AlbumSidebarSection: View {
     @ObservedObject var presentation: AlbumPresentationStore
     let albums: [AlbumSummary]
     let repository: CachedPhotosRepository?
+    let showOverviewForDrag: () -> Void
 
     var body: some View {
         Section("Albums") {
             Label("Albums", systemImage: "rectangle.stack")
                 .tag(SidebarSelection.destination(.albums))
+                .background(AlbumOverviewSpringTarget(namespace: repository?.namespace, open: showOverviewForDrag))
                 .overlay(alignment: .bottom) {
                     if presentation.pinnedIDs.isEmpty {
                         AlbumInsertionTarget(before: nil, namespace: repository?.namespace, presentation: presentation)
