@@ -16,6 +16,7 @@ struct AppShellView: View {
     @State private var viewer: PhotoViewerPresentation?
     @State private var selectedDestination: LibraryDestination
     @State private var openedAlbumID: Int64?
+    @State private var dragOverviewNonce: String?
     @State private var openedMapFilter: PhotoCollectionDescriptor?
     @State private var mapFilterOpenGeneration: UInt64 = 0
     @State private var chrome = WindowChromeMetrics()
@@ -278,6 +279,11 @@ struct AppShellView: View {
                         .ignoresSafeArea(.container, edges: .top)
                 }
 
+                if dragOverviewNonce != nil {
+                    AlbumsOverviewView(onOpenAlbum: { _ in }, presentation: albumPresentation, contentTopInset: topInset)
+                        .ignoresSafeArea(.container, edges: .top)
+                }
+
                 if let viewer {
                     PhotoViewerView(viewer: viewer,
                                     toolbarInset: topInset,
@@ -316,12 +322,14 @@ struct AppShellView: View {
         synchronizeAlbumSelection()
     }
 
-    private func showAlbumsOverviewForDrag() {
-        guard sourceCollection != nil else { return }
-        // Bypass the normal restore-last-album behavior for this temporary drag route.
-        openedAlbumID = nil
-        navigationRestoration.setOpenedAlbum(nil)
-        finishSelection(.destination(.albums))
+    private func showAlbumsOverviewForDrag(_ nonce: String) {
+        guard sourceCollection != nil, dragOverviewNonce != nonce,
+              let namespace = model.repository?.namespace else { return }
+        guard SelectionDragRegistry.observeEnd(nonce, namespace: namespace, action: {
+            if dragOverviewNonce == nonce { dragOverviewNonce = nil }
+        }) else { return }
+        dragOverviewNonce = nonce
+        model.ensureAlbumsLoaded()
     }
 
     private func select(_ selection: SidebarSelection) {

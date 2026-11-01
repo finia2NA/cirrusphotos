@@ -6,7 +6,7 @@ struct AlbumSidebarSection: View {
     @ObservedObject var presentation: AlbumPresentationStore
     let albums: [AlbumSummary]
     let repository: CachedPhotosRepository?
-    let showOverviewForDrag: () -> Void
+    let showOverviewForDrag: (String) -> Void
 
     var body: some View {
         Section("Albums") {

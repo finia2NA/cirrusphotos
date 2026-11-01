@@ -36,6 +36,7 @@ enum SelectionDragRegistry {
         let namespace: String
     }
     private static var entries: [UUID: Entry] = [:]
+    private static var endObservers: [UUID: [() -> Void]] = [:]
     static func register(_ entry: Entry) -> UUID {
         let nonce = UUID(); entries[nonce] = entry; return nonce
     }
@@ -49,7 +50,16 @@ enum SelectionDragRegistry {
         entries[nonce] = nil
         return entry
     }
-    static func remove(_ nonce: UUID) { entries[nonce] = nil }
+    static func observeEnd(_ value: String, namespace: String, action: @escaping () -> Void) -> Bool {
+        guard lookup(value, namespace: namespace) != nil, let nonce = UUID(uuidString: value) else { return false }
+        endObservers[nonce, default: []].append(action)
+        return true
+    }
+    static func remove(_ nonce: UUID) {
+        entries[nonce] = nil
+        let observers = endObservers.removeValue(forKey: nonce) ?? []
+        observers.forEach { $0() }
+    }
 }
 
 @MainActor
@@ -169,14 +179,14 @@ private struct AlbumDragSourceView: NSViewRepresentable {
 /// Opens the overview after a local photo selection hovers over Albums.
 struct AlbumOverviewSpringTarget: NSViewRepresentable {
     let namespace: String?
-    let open: () -> Void
+    let open: (String) -> Void
     func makeNSView(context: Context) -> TargetView { TargetView() }
     func updateNSView(_ view: TargetView, context: Context) { view.namespace = namespace; view.open = open }
     static func dismantleNSView(_ view: TargetView, coordinator: ()) { view.cancel() }
 
     @MainActor final class TargetView: NSView {
         var namespace: String?
-        var open: (() -> Void)?
+        var open: ((String) -> Void)?
         private var pending: DispatchWorkItem?
         private var generation = 0
         var hoverDelay: TimeInterval = 0.7
@@ -198,7 +208,7 @@ struct AlbumOverviewSpringTarget: NSViewRepresentable {
                 guard let self, self.generation == expected, self.namespace == namespace,
                       SelectionDragRegistry.lookup(value, namespace: namespace) != nil else { return }
                 self.pending = nil
-                self.open?()
+                self.open?(value)
             }
             pending = work
             DispatchQueue.main.asyncAfter(deadline: .now() + hoverDelay, execute: work)
