@@ -2,27 +2,45 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
-    public func createAlbum(name: String, itemIDs: [Int64]) async throws -> AlbumSummary {
+    func createAlbum(name: String, itemIDs: [Int64]) async throws -> AlbumSummary {
         try await performAlbumMutation(albumID: nil) {
             try await self.client.createAlbum(name: name, itemIDs: itemIDs)
         }
     }
 
-    public func addItems(_ itemIDs: [Int64], toAlbum id: Int64) async throws {
+    func addItems(_ itemIDs: [Int64], toAlbum id: Int64) async throws {
         guard !itemIDs.isEmpty else { return }
         try await performAlbumMutation(albumID: id) {
             try await self.client.addItems(itemIDs, toAlbum: id)
         }
     }
 
-    public func removeItems(_ itemIDs: [Int64], fromAlbum id: Int64) async throws {
+    func removeItems(_ itemIDs: [Int64], fromAlbum id: Int64) async throws {
         guard !itemIDs.isEmpty else { return }
         try await performAlbumMutation(albumID: id) {
             try await self.client.removeItems(itemIDs, fromAlbum: id)
         }
     }
 
-    private func performAlbumMutation<Value: Sendable>(albumID: Int64?, operation: @escaping @Sendable () async throws -> Value) async throws -> Value {
+    public func createAlbum(name: String, selection: ResolvedPhotoSelection) async throws -> AlbumSummary {
+        try await performAlbumMutation(albumID: nil, selection: selection) {
+            try await self.client.createAlbum(name: name, itemIDs: selection.items.map(\.id))
+        }
+    }
+
+    public func addItems(_ selection: ResolvedPhotoSelection, toAlbum id: Int64) async throws {
+        try await performAlbumMutation(albumID: id, selection: selection) {
+            try await self.client.addItems(selection.items.map(\.id), toAlbum: id)
+        }
+    }
+
+    public func removeItems(_ selection: ResolvedPhotoSelection, fromAlbum id: Int64) async throws {
+        try await performAlbumMutation(albumID: id, selection: selection) {
+            try await self.client.removeItems(selection.items.map(\.id), fromAlbum: id)
+        }
+    }
+
+    private func performAlbumMutation<Value: Sendable>(albumID: Int64?, selection: ResolvedPhotoSelection? = nil, operation: @escaping @Sendable () async throws -> Value) async throws -> Value {
         guard !metadata.albumMutationInProgress else {
             throw SynologyAPIError.unsupported("Another album change is in progress. Try again.")
         }
@@ -33,6 +51,12 @@ extension CachedPhotosRepository {
         try await initializeMetadataEngine()
         try await connect()
         try await reconcileMetadataSource()
+        if let selection {
+            guard !selection.items.isEmpty,
+                  await verifySelectionFence(selection.authority, proofs: selection.proofs) else {
+                throw SynologyAPIError.unsupported("The selected items could not be verified. Try again.")
+            }
+        }
         try await invalidateAlbumMutationState(albumID: albumID)
         var result: Result<Value, Error>
         do {

@@ -8,6 +8,10 @@ public struct SelectionItemResolver: Sendable {
     public init(repository: CachedPhotosRepository) { self.repository = repository }
 
     public func resolve(_ selection: PhotoSelectionSnapshot) async -> [PhotoItem]? {
+        await resolveWithReceipt(selection)?.items
+    }
+
+    public func resolveWithReceipt(_ selection: PhotoSelectionSnapshot) async -> ResolvedPhotoSelection? {
         defer { selection.retention?.release() }
         let collection = selection.collection
         let snapshot = selection.timeline
@@ -29,7 +33,7 @@ public struct SelectionItemResolver: Sendable {
         return result
     }
 
-    private func resolve(_ selection: PhotoSelectionSnapshot, authority: PhotoSelectionAuthority, index: LibraryIndex) async -> [PhotoItem]? {
+    private func resolve(_ selection: PhotoSelectionSnapshot, authority: PhotoSelectionAuthority, index: LibraryIndex) async -> ResolvedPhotoSelection? {
         let collection = selection.collection
         let selectedOrdinals = selection.selectedOrdinals
         let knownItemIDsByOrdinal = selection.knownItemIDsByOrdinal
@@ -124,6 +128,7 @@ public struct SelectionItemResolver: Sendable {
               let current = await repository.latestTimelineSnapshot(collection: collection),
               LibraryIndex(snapshot: current).fingerprint == index.fingerprint else { return nil }
         let items = selectedOrdinals.compactMap { resolvedByOrdinal[$0] }
-        return items.count == selectedOrdinals.count && !Task.isCancelled ? items : nil
+        guard items.count == selectedOrdinals.count && !Task.isCancelled else { return nil }
+        return ResolvedPhotoSelection(items: items, authority: authority, proofs: proofs)
     }
 }

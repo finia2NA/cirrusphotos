@@ -667,14 +667,14 @@ final class LibraryModel: ObservableObject {
         let operation = AlbumOperation(kind: kind, sourceAlbumID: captured.sourceAlbumID)
         albumOperation = operation
         albumOperationTask = Task { [weak self] in
-            let items = await SelectionItemResolver(repository: repository).resolve(selection)
+            let resolved = await SelectionItemResolver(repository: repository).resolveWithReceipt(selection)
             guard !Task.isCancelled, let self, self.albumOperation?.id == operation.id else { return }
-            guard let items, !items.isEmpty else {
+            guard let resolved, !resolved.items.isEmpty else {
                 self.albumOperation = nil
                 self.albumOperationError = "The selected items could not be verified. Try again."
                 return
             }
-            self.albumOperation?.itemIDs = items.map(\.id)
+            self.albumOperation?.selection = resolved
             if kind == .add {
                 do {
                     let albums = try await repository.addableAlbums()
@@ -697,7 +697,7 @@ final class LibraryModel: ObservableObject {
     }
 
     func submitAlbumOperation(name: String = "", albumID: Int64? = nil) {
-        guard var operation = albumOperation, !operation.loading, !operation.itemIDs.isEmpty,
+        guard var operation = albumOperation, !operation.loading, operation.selection != nil,
               let repository else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if operation.kind == .create && trimmed.isEmpty { return }
@@ -707,14 +707,15 @@ final class LibraryModel: ObservableObject {
         albumOperation = operation
         albumOperationTask = Task { [weak self] in
             do {
+                guard let selection = operation.selection else { return }
                 switch operation.kind {
-                case .create: _ = try await repository.createAlbum(name: trimmed, itemIDs: operation.itemIDs)
+                case .create: _ = try await repository.createAlbum(name: trimmed, selection: selection)
                 case .add:
                     guard let albumID else { return }
-                    try await repository.addItems(operation.itemIDs, toAlbum: albumID)
+                    try await repository.addItems(selection, toAlbum: albumID)
                 case .remove:
                     guard let source = operation.sourceAlbumID else { return }
-                    try await repository.removeItems(operation.itemIDs, fromAlbum: source)
+                    try await repository.removeItems(selection, fromAlbum: source)
                 }
                 guard let self, self.albumOperation?.id == operation.id else { return }
                 self.refreshAfterAlbumOperation(operation, destinationID: albumID)
@@ -968,7 +969,7 @@ struct AlbumOperation: Identifiable {
     let id = UUID()
     let kind: Kind
     let sourceAlbumID: Int64?
-    var itemIDs: [Int64] = []
+    var selection: ResolvedPhotoSelection?
     var albums: [AlbumSummary] = []
     var loading = true
     var writing = false

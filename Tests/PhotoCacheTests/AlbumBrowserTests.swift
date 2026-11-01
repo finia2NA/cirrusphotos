@@ -21,6 +21,7 @@ private actor AlbumFakeTransport: PhotosTransport {
     var favoriteWrites: [(Int64, Bool)] = []
     var favoriteFailure = false
     var mutationFails = false
+    var mutationWrites = 0
     var replacementEntries: [DayTimelineEntry] = []
     var replacementList: [AlbumSummary] = []
     var pauseMutation = false
@@ -77,6 +78,7 @@ private actor AlbumFakeTransport: PhotosTransport {
     }
 
     func addItems(_ itemIDs: [Int64], toAlbum id: Int64) async throws {
+        mutationWrites += 1
         albumEntriesByID[id] = replacementEntries
         albumList = replacementList
         if pauseMutation {
@@ -222,6 +224,56 @@ final class AlbumBrowserTests: XCTestCase {
         _ = try await mutation.value
         let result = await task.value
         XCTAssertNil(result)
+    }
+
+    func testAlbumWriteAcceptsUnchangedResolvedSelection() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let day = Int64(1711929600)
+        let source = AlbumSummary(id: 54, name: "Source", itemCount: 1)
+        let target = AlbumSummary(id: 55, name: "Target", itemCount: 1)
+        await transport.configure(albumList: [source, target],
+            albumEntriesByID: [54: [.init(id: 1, time: day)]], pageItems: [try item(1)])
+        await transport.configureMutation(entries: [.init(id: 1, time: day)], list: [source, target])
+        let repository = try makeRepository(root: root, transport: transport)
+        let timeline = try await repository.verifiedTimelineSnapshot(collection: .album(54))
+        let captured = await repository.selectionAuthority(collection: .album(54), snapshot: timeline)
+        let authority = try XCTUnwrap(captured)
+        let snapshot = PhotoSelectionSnapshot(collection: .album(54), timeline: timeline,
+            timelineFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
+            selectedOrdinals: IndexSet(integer: 0), knownItemIDsByOrdinal: [0: 1], authority: authority)
+        let result = await SelectionItemResolver(repository: repository).resolveWithReceipt(snapshot)
+        let resolved = try XCTUnwrap(result)
+        try await repository.addItems(resolved, toAlbum: 55)
+        let writes = await transport.mutationWrites
+        XCTAssertEqual(writes, 1)
+    }
+
+    func testAlbumWriteRejectsSelectionChangedWhileChooserIsOpen() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let day = Int64(1711929600)
+        let source = AlbumSummary(id: 54, name: "Source", itemCount: 1)
+        let target = AlbumSummary(id: 55, name: "Target", itemCount: 0)
+        await transport.configure(albumList: [source, target],
+            albumEntriesByID: [54: [.init(id: 1, time: day)]], pageItems: [try item(1)])
+        await transport.configureMutation(entries: [.init(id: 2, time: day)], list: [source, target])
+        let repository = try makeRepository(root: root, transport: transport)
+        let timeline = try await repository.verifiedTimelineSnapshot(collection: .album(54))
+        let captured = await repository.selectionAuthority(collection: .album(54), snapshot: timeline)
+        let authority = try XCTUnwrap(captured)
+        let snapshot = PhotoSelectionSnapshot(collection: .album(54), timeline: timeline,
+            timelineFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
+            selectedOrdinals: IndexSet(integer: 0), knownItemIDsByOrdinal: [0: 1], authority: authority)
+        let result = await SelectionItemResolver(repository: repository).resolveWithReceipt(snapshot)
+        let resolved = try XCTUnwrap(result)
+        try await repository.addItems([2], toAlbum: 54)
+        do {
+            try await repository.addItems(resolved, toAlbum: 55)
+            XCTFail("Stale selection must not be written")
+        } catch { }
+        let writes = await transport.mutationWrites
+        XCTAssertEqual(writes, 1)
     }
 
     func testWholeAlbumResolverRequiresOnlineVerification() async throws {

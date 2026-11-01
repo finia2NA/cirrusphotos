@@ -26,7 +26,7 @@ struct AlbumOperationView: View {
                         }.frame(height: 220)
                     }
                 case .remove:
-                    Text("Remove \(operation.itemIDs.count) selected items from this album?")
+                    Text("Remove \(operation.selection?.items.count ?? 0) selected items from this album?")
                 }
             }
             HStack {

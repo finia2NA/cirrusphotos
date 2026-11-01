@@ -23,6 +23,21 @@ public struct PhotoSelectionAuthority: Sendable, Equatable {
     func retain() -> SelectionSnapshotRetention { SelectionSnapshotRetention(retentions) }
 }
 
+/// A resolved selection and its repository-owned membership evidence.
+public struct ResolvedPhotoSelection: Sendable {
+    public let items: [PhotoItem]
+    let authority: PhotoSelectionAuthority
+    let proofs: [SelectionMembershipProof]
+    private let retention: SelectionSnapshotRetention
+
+    init(items: [PhotoItem], authority: PhotoSelectionAuthority, proofs: [SelectionMembershipProof]) {
+        self.items = items
+        self.authority = authority
+        self.proofs = proofs
+        self.retention = authority.retain()
+    }
+}
+
 struct SelectionMembershipProof: Sendable {
     let address: DayPageAddress
     let revision: UInt64
