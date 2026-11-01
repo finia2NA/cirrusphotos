@@ -12,7 +12,7 @@ Authentication uses `USER` and `PW` from `.env`; `OTP` is optional for accounts 
 
 ## Current product surface
 
-The native split-view sidebar contains Library, Favorites, Map, and Albums destinations. The app restores the last persistent destination and collection-specific photo/date scroll anchors. Session Map filters are not restored.
+The native split-view sidebar contains Library, Favorites, People, Map, and Albums destinations. The app restores the last persistent destination and collection-specific photo/date scroll anchors. Session Map filters are not restored.
 
 ### Library, Favorites, and albums
 
@@ -33,6 +33,10 @@ On the NAS, sharing an owned normal album adds access settings to that same albu
 - Album cards offer **Add to Sidebar** and **Delete Album…**. Pinned albums appear below Albums with a cover and name, open the same browser and saved position as their cards, and offer **Remove from Sidebar**, **Delete Album…**, and the same four album download commands. Deleting a normal owned album requires confirmation and does not delete its photos or videos. Pins persist per account and NAS, remain available offline, and are removed only when a verified complete album list no longer contains them. Back or Escape returns to the Albums overview.
 - The Library menu offers **New Album…** and **Add to Album…** for the current browser selection, including photos and videos. Photo and video context menus also offer **Add to Album**, including **New Album…** and eligible sidebar pins first, and **Remove from Album…** in normal albums. The viewer acts on its current item; the browser uses the right-click selection. The add chooser lists albums the server reports as addable. **Remove from Album…** is available in an opened album and its filtered results; it removes membership without deleting library items. Operations capture and verify their selection before writing, and remain visible during navigation. Album rename and Shared Space browsing are not implemented.
 - Personal Library, Favorites, opened Personal Space folders and albums, incoming albums, and Map pin or cluster results have a session-only metadata filter for media kind, camera, lens, literal file extension, megapixels, size, ISO, focal length, aperture, and shutter speed. Camera, lens, and extension options are cached per persistent collection and shown while background discovery runs, with a loading indicator. Previously known options remain available when cached page coverage is incomplete. Map result options are cached for the lifetime of that session collection. Applying a filter immediately shows matches from metadata already indexed. Background discovery adds other cached pages from the current validated timeline, including noncontiguous older pages, to results and option catalogs. Pages cached later by browsing or either warmer update the filter catalog and active results through the repository. Filtered browsers show available cached matches before network validation finishes and retain them when validation fails. Results expand cached-first in bounded batches when the user scrolls toward newer or older results. Empty results retain a **Load More Results** fallback because they have no scrollable source anchor. Filter criteria and coverage are cleared when changing the source collection and are not restored after relaunch. Map filtering applies only within the selected pin or cluster.
+
+### People
+
+People lists visible recognized people, including the server's expanded list, with face covers and item counts. Opening a person reuses the shared browser, viewer, selection and metadata filters. The index and opened timelines are cached-first and remain available when validation fails. Back or Escape returns to People. Person renaming and merging are not implemented.
 
 ### Map
 

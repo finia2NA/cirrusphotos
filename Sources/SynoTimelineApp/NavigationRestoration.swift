@@ -13,7 +13,7 @@ struct PhotoTimelineRestorationAnchor: Codable, Equatable {
 /// from the destination itself so the last opened album or location filter survives a
 /// switch away from it.
 enum LibraryDestination: String, Codable, Hashable, Sendable, CaseIterable {
-    case personalLibrary, favorites, albums, map
+    case personalLibrary, favorites, albums, map, people
 }
 
 enum SidebarSelection: Codable, Hashable {
@@ -31,6 +31,8 @@ struct RestorableAppNavigationState: Codable, Equatable {
     var version = currentVersion
     var sidebarSelection: SidebarSelection = .destination(.personalLibrary)
     var openedAlbum: PhotoCollectionDescriptor?
+    var openedPersonID: Int64?
+    var personNamespace: String?
     var showsFolders = false
     var folderPath: [Int64] = []
     var folderNamespace: String?
@@ -72,6 +74,12 @@ final class NavigationRestorationStore: ObservableObject {
         return state.folderPath
     }
     func setFolders(shown: Bool, path: [Int64]) { state.showsFolders = shown; state.folderPath = path; save() }
+
+    func preparePerson(namespace: String) -> Int64? {
+        if state.personNamespace != namespace { state.openedPersonID = nil; state.personNamespace = namespace; save() }
+        return state.openedPersonID
+    }
+    func setOpenedPerson(_ id: Int64?) { state.openedPersonID = id; save() }
 
     var openedAlbum: PhotoCollectionDescriptor? {
         state.openedAlbum

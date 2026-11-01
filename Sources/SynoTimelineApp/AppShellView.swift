@@ -15,6 +15,9 @@ struct AppShellView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var viewer: PhotoViewerPresentation?
     @State private var selectedDestination: LibraryDestination
+    @State private var openedPersonID: Int64?
+    @State private var people: [PersonSummary]?
+    @State private var peopleError: String?
     @State private var openedAlbum: PhotoCollectionDescriptor?
     @State private var showsFolders: Bool
     @State private var folderPath: [Int64]
@@ -47,6 +50,7 @@ struct AppShellView: View {
             if showsFolders { folderDirectoryRequest == (folderPath.last ?? 0) ? folderDirectory.map { .folder($0.folder.id) } : nil }
             else { .personalLibrary }
         case .favorites: .favorites
+        case .people: openedPersonID.map { .person($0) }
         case .albums: openedAlbum
         case .map: openedMapFilter
         }
@@ -97,6 +101,8 @@ struct AppShellView: View {
                 Section("Collections") {
                     Label("Favorites", systemImage: "heart")
                         .tag(SidebarSelection.destination(.favorites))
+                    Label("People", systemImage: "person.2")
+                        .tag(SidebarSelection.destination(.people))
                     Label("Map", systemImage: "map")
                         .tag(SidebarSelection.destination(.map))
                 }
@@ -127,6 +133,8 @@ struct AppShellView: View {
         }
         .onChange(of: showsFolders) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
         .onChange(of: folderPath) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
+        .task(id: PeopleLoadKey(namespace: model.presentationNamespace, active: selectedDestination == .people, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadPeople() }
+        .onChange(of: openedPersonID) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
         .task(id: FolderLoadKey(namespace: model.presentationNamespace, active: selectedDestination == .personalLibrary && showsFolders, id: folderPath.last ?? 0, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadFolder() }
         .onChange(of: openedAlbum) { _, _ in
             updateBackHandler(); updateTimelineSectionLoadSource()
@@ -284,6 +292,10 @@ struct AppShellView: View {
                         .id(collection)
                         .allowsHitTesting(viewer == nil)
                         .ignoresSafeArea(.container, edges: .top)
+                } else if selectedDestination == .people {
+                    peopleDetail(topInset: topInset)
+                        .allowsHitTesting(viewer == nil)
+                        .ignoresSafeArea(.container, edges: .top)
                 } else if selectedDestination == .map {
                     MapBrowserView(model: mapModel, contentTopInset: topInset,
                                    onOpenPhoto: { openMapGroup([$0]) },
@@ -330,6 +342,67 @@ struct AppShellView: View {
                     .allowsHitTesting(false)
             }
         }
+    }
+
+    private struct PeopleLoadKey: Hashable {
+        let namespace: String?
+        let active: Bool
+        let resetRevision: UInt64
+        let retryRevision: Int
+    }
+
+    private func loadPeople() async {
+        guard selectedDestination == .people, let repository = model.repository else { return }
+        let restored = navigationRestoration.preparePerson(namespace: repository.namespace)
+        openedPersonID = restored
+        if let restored { model.ensureCollectionLoaded(.person(restored)) }
+        people = nil; peopleError = nil
+        for await event in await repository.people() {
+            guard !Task.isCancelled else { return }
+            switch event {
+            case .value(let list, let verified):
+                people = list
+                if verified, let id = openedPersonID, !list.contains(where: { $0.id == id }) {
+                    openedPersonID = nil; navigationRestoration.setOpenedPerson(nil)
+                }
+            case .failure(let error): peopleError = error
+            }
+        }
+    }
+
+    private func closePerson() {
+        openedPersonID = nil
+        navigationRestoration.setOpenedPerson(nil)
+        updateBackHandler(); updateInfoPanelContext()
+    }
+
+    @ViewBuilder private func peopleDetail(topInset: CGFloat) -> some View {
+        if let people {
+            ScrollView {
+                if let peopleError { Text(peopleError).font(.caption).foregroundStyle(.secondary) }
+                if people.isEmpty { ContentUnavailableView("No People", systemImage: "person.2") }
+                else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140, maximum: 220), spacing: 20)], alignment: .leading, spacing: 20) {
+                        ForEach(people) { person in
+                            Button {
+                                openedPersonID = person.id
+                                navigationRestoration.setOpenedPerson(person.id)
+                                model.ensureCollectionLoaded(.person(person.id))
+                                updateBackHandler(); updateInfoPanelContext()
+                            } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    AlbumCoverView(thumbnail: person.thumbnail, repository: model.repository, placeholderSymbol: "person.crop.square")
+                                    Text(person.name.isEmpty ? "Unnamed" : person.name).font(.headline).lineLimit(1)
+                                    Text("\(person.itemCount) items").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }.buttonStyle(.plain)
+                        }
+                    }
+                }
+            }.contentMargins(.top, topInset + 24).contentMargins(.horizontal, 24)
+        } else if let peopleError {
+            ContentUnavailableView { Label("People unavailable", systemImage: "person.2") } description: { Text(peopleError) } actions: { Button("Try Again") { Task { await model.reload() } } }
+        } else { ProgressView("Loading people…") }
     }
 
     private struct FolderLoadKey: Hashable {
@@ -606,6 +679,8 @@ struct AppShellView: View {
             model.installBackHandler(closeViewer)
         } else if selectedDestination == .personalLibrary && showsFolders && !folderPath.isEmpty {
             model.installBackHandler(folderBack)
+        } else if selectedDestination == .people && openedPersonID != nil {
+            model.installBackHandler(closePerson)
         } else if isAlbumBrowser {
             model.installBackHandler(closeAlbum)
         } else if isMapFilterBrowser {
@@ -718,7 +793,13 @@ struct AppShellView: View {
             }
             ToolbarSpacer(.fixed, placement: .primaryAction)
         } else if let collection = selectedCollection {
-            if isAlbumBrowser {
+            if selectedDestination == .people && openedPersonID != nil {
+                ToolbarItem(placement: .navigation) {
+                    Button(action: closePerson) { Image(systemName: "chevron.left").frame(width: ToolbarMetrics.controlHeight, height: ToolbarMetrics.controlHeight).contentShape(.circle) }
+                        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle())
+                        .accessibilityLabel("Back to People").help("Back to People")
+                }.sharedBackgroundVisibility(.hidden)
+            } else if isAlbumBrowser {
                 ToolbarItem(placement: .navigation) {
                     Button(action: closeAlbum) {
                         Image(systemName: "chevron.left")
@@ -757,6 +838,9 @@ struct AppShellView: View {
             if selectedDestination == .personalLibrary && showsFolders {
                 ToolbarItem(placement: .principal) { Text(folderDirectory?.folder.displayName ?? "Folders").font(.headline).lineLimit(1) }
                 .sharedBackgroundVisibility(.hidden)
+            } else if selectedDestination == .people {
+                ToolbarItem(placement: .principal) { Text(people?.first(where: { $0.id == openedPersonID })?.name ?? "Person").font(.headline).lineLimit(1) }
+                    .sharedBackgroundVisibility(.hidden)
             } else if isAlbumBrowser {
                 ToolbarItem(placement: .principal) {
                     Text(sourceCollection.flatMap { model.albumName(for: $0) } ?? "Album")

@@ -200,6 +200,30 @@ public actor SynologyClient: PhotosTransport {
         return data.list.map { DayTimelineEntry(id: $0.id, time: $0.time) }
     }
 
+    public func people() async throws -> [PersonSummary] {
+        struct List: Decodable { let list: [PersonSummary] }
+        struct Count: Decodable { let count: Int }
+        guard let sid else { throw SynologyAPIError.api(119) }
+        func count() async throws -> Int {
+            let response: APIEnvelope<Count> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Browse.Person", parameters: ["api": "SYNO.Foto.Browse.Person", "version": "1", "method": "count", "show_more": "true", "show_hidden": "false", "_sid": sid], authenticated: true)
+            guard response.success, let value = response.data?.count, value >= 0, value <= 204_800 else { throw SynologyAPIError.invalidResponse }
+            return value
+        }
+        let expectedCount = try await count()
+        var result: [PersonSummary] = []; var seen: Set<Int64> = []
+        for page in 0..<2048 {
+            let response: APIEnvelope<List> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Browse.Person", parameters: ["api": "SYNO.Foto.Browse.Person", "version": "1", "method": "list", "offset": String(page * 100), "limit": "100", "additional": "[\"thumbnail\"]", "show_more": "true", "show_hidden": "false", "_sid": sid], authenticated: true)
+            guard response.success, let rows = response.data?.list, rows.count <= 100 else { throw SynologyAPIError.invalidResponse }
+            for row in rows { guard row.id > 0, row.itemCount >= 0, seen.insert(row.id).inserted else { throw SynologyAPIError.invalidResponse } }
+            result.append(contentsOf: rows)
+            if rows.count < 100 {
+                guard result.count == expectedCount, try await count() == expectedCount else { throw SynologyAPIError.invalidResponse }
+                return result
+            }
+        }
+        throw CollectionCatalogError.exceedsLimit
+    }
+
     public func folder(id: Int64) async throws -> FolderSummary {
         struct Result: Decodable { let folder: FolderSummary }
         guard let sid else { throw SynologyAPIError.api(119) }
@@ -232,6 +256,7 @@ public actor SynologyClient: PhotosTransport {
         if request.collection.favoriteOnly { parameters["favorite_only"] = "true" }
         if let albumID = request.collection.albumID { parameters["album_id"] = String(albumID) }
         if let folderID = request.collection.folderID { parameters["folder_id"] = String(folderID) }
+        if let personID = request.collection.personID { parameters["person_id"] = String(personID) }
         if request.order == .takenTimeDescending {
             parameters["sort_by"] = "\"takentime\""; parameters["sort_direction"] = "\"desc\""
         }
@@ -254,6 +279,7 @@ public actor SynologyClient: PhotosTransport {
             "timeline_group_unit": "\"day\"", "_sid": sid
         ]
         if collection.favoriteOnly { parameters["favorite_only"] = "true" }
+        if let personID = collection.personID { parameters["person_id"] = String(personID) }
         let response: APIEnvelope<TimelineData> = try await post(
             path: "/webapi/entry.cgi/SYNO.Foto.Browse.Timeline",
             parameters: parameters, authenticated: true
@@ -789,10 +815,10 @@ public actor SynologyClient: PhotosTransport {
         var parameters = [
             URLQueryItem(name: "id", value: String(descriptor.unitID)),
             URLQueryItem(name: "cache_key", value: "\"\(descriptor.cacheKey)\""),
-            URLQueryItem(name: "type", value: "\"unit\""),
-            URLQueryItem(name: "size", value: "\"\(size.rawValue)\""),
+            URLQueryItem(name: "type", value: "\"\(descriptor.kind ?? "unit")\""),
             URLQueryItem(name: "_sid", value: sid)
         ]
+        if descriptor.kind != "person" { parameters.append(URLQueryItem(name: "size", value: "\"\(size.rawValue)\"")) }
         if let albumID { parameters.append(URLQueryItem(name: "album_id", value: String(albumID))) }
         if let reference {
             parameters.append(URLQueryItem(name: "passphrase", value: String(decoding: try JSONEncoder().encode(reference), as: UTF8.self)))

@@ -165,3 +165,7 @@ Deleting an owned normal album uses a confirmed album ID array, fences in-flight
 ## Personal Space folders
 
 The Library folder mode resolves the root using Folder v2 get, enumerates immediate children with bounded Folder v2 list requests, and obtains direct items using folder-scoped Item v7 reads. Complete folder directories are stored per namespace and parent, emitted cached-first, coalesced and validated once per run; failed or interrupted reads retain the previous complete listing. Folder descriptors use the common persistent collection catalog and page engine, canonical item metadata, filters and viewer. Navigation keeps an account-scoped folder path and per-collection anchors. The UI shows child covers in a responsive grid in the shared photo browser’s scrolling header.
+
+## People
+
+The People sidebar destination fetches the expanded, non-hidden Person v1 index in bounded pages, checking counts and unique identities before publishing a complete listing. Repository-owned jobs coalesce requests, fence resets, and store account-scoped summaries cached-first with once-per-run validation. Person IDs identify persistent collection descriptors: Timeline v6 and Item v7 reads carry the same person ID through the common metadata engine and browser. The face cover uses the existing thumbnail pipeline with the captured person thumbnail type and a separate cache identity. Person mutations are not implemented.

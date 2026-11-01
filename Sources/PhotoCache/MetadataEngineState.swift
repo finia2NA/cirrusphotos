@@ -46,6 +46,7 @@ struct MetadataEngineState {
     var albumMutationID: Int64?
     var albumSharingObservers: [UUID: AsyncStream<Void>.Continuation] = [:]
     var albumListEpoch: UInt64 = 0
+    var peopleJob: SharedJob<[PersonSummary]>?
     var folderJobs: [Int64: SharedJob<FolderDirectory>] = [:]
     var albumListJob: SharedJob<[AlbumSummary]>?
     var albumListLatest: [AlbumSummary]?
@@ -65,7 +66,7 @@ struct MetadataEngineState {
     var hasDemand: Bool {
         reconciliation != nil || !detailJobs.isEmpty || !pendingPages.isEmpty || !activePages.isEmpty ||
             !directSubscribers.isEmpty || !initialSubscribers.isEmpty || !timelineJobs.isEmpty || !pageJobs.isEmpty ||
-            albumListJob != nil || !folderJobs.isEmpty || locationIndexWork != nil
+            albumListJob != nil || peopleJob != nil || !folderJobs.isEmpty || locationIndexWork != nil
     }
     mutating func clearSourceWork() {
         initialized = false; reconciled = false; sourceUnavailable = false; revision = 0

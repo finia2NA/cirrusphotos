@@ -441,17 +441,19 @@ public struct ThumbnailInfo: Codable, Sendable, Equatable, Hashable {
     public let sm: String?
     public let m: String?
     public let xl: String?
+    public let kind: String?
 
     enum CodingKeys: String, CodingKey {
-        case unitID = "unit_id", cacheKey = "cache_key", sm, m, xl
+        case unitID = "unit_id", cacheKey = "cache_key", sm, m, xl, kind
     }
 
-    public init(unitID: Int64, cacheKey: String, sm: String? = nil, m: String? = nil, xl: String? = nil) {
+    public init(unitID: Int64, cacheKey: String, sm: String? = nil, m: String? = nil, xl: String? = nil, kind: String? = nil) {
         self.unitID = unitID
         self.cacheKey = cacheKey
         self.sm = sm
         self.m = m
         self.xl = xl
+        self.kind = kind
     }
 
     public func isReady(_ size: ThumbnailSize) -> Bool {
@@ -576,6 +578,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
     /// An album shared by another user; both IDs are needed to avoid collisions.
     case incomingAlbum(ownerID: Int64, albumID: Int64)
     case folder(Int64)
+    case person(Int64)
     /// A session-only timeline filtered to an explicit item set (a map pin or
     /// cluster). Never persisted; pages use canonical item details.
     case mapFilter(UUID)
@@ -591,6 +594,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
         case .album(let id): "album:\(id)"
         case .incomingAlbum(let ownerID, let albumID): "incoming:\(ownerID):\(albumID)"
         case .folder(let id): "folder:\(id)"
+        case .person(let id): "person:\(id)"
         case .mapFilter(let id): "map:\(id.uuidString)"
         case .libraryFilter(let id): "filter:\(id.uuidString)"
         }
@@ -610,6 +614,8 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
         if case .folder(let id) = self { return id }
         return nil
     }
+
+    public var personID: Int64? { if case .person(let id) = self { return id }; return nil }
 
     public var usesItemCatalog: Bool { albumID != nil || incomingAlbumIdentity != nil || folderID != nil }
 
@@ -656,6 +662,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
             if rawValue.hasPrefix(folderPrefix), let id = Int64(rawValue.dropFirst(folderPrefix.count)) {
                 self = .folder(id); return
             }
+            if rawValue.hasPrefix("person:"), let id = Int64(rawValue.dropFirst(7)), id > 0 { self = .person(id); return }
             let mapPrefix = "map:"
             if rawValue.hasPrefix(mapPrefix),
                let id = UUID(uuidString: String(rawValue.dropFirst(mapPrefix.count))) {
