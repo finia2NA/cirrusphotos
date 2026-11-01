@@ -46,6 +46,7 @@ private struct AlbumSidebarRow: View {
     let repository: CachedPhotosRepository?
     @ObservedObject var presentation: AlbumPresentationStore
     @State private var dragPreview: NSImage?
+    @State private var confirmDelete = false
     var body: some View {
         HStack(spacing: 8) {
             AlbumCoverView(thumbnail: album?.thumbnail, repository: repository,
@@ -61,6 +62,15 @@ private struct AlbumSidebarRow: View {
             Button("Remove from Sidebar") { presentation.remove(id) }
             Divider()
             AlbumDownloadCommands(albumID: id, repository: repository)
+            if let album {
+                Divider()
+                Button("Delete Album…", role: .destructive) { confirmDelete = true }
+                    .disabled(model.deletingAlbumID != nil || model.albumOperation != nil || album.type != "normal")
+            }
         }
+        .alert("Delete Album?", isPresented: $confirmDelete) {
+            Button("Delete Album", role: .destructive) { model.deleteAlbum(id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Delete ‘\(album?.name ?? "Album")’? Its photos and videos will remain in your library.") }
     }
 }

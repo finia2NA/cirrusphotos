@@ -166,7 +166,7 @@ Therefore the nested reference is not an enabled-sharing flag. Use authoritative
 
 ## Role evidence and unofficial documentation
 
-The owner captures directly establish named-user `download` and `view` writes, public `view`, and explicit deletion of user/public grants. Existing other album responses also contain `public-download` privacy and named-user/group `upload` roles, but these are not captured role-change requests. Mapping the current UI's Provider label to `upload` is plausible and needs a focused capture if Provider is in scope.
+The owner captures directly establish named-user `download` and `view` writes, public `view` and `download`, and explicit deletion of user/public grants. A later capture confirms Public Download as an `update` of the public member with role `download`, followed by list readback with `privacy_type: public-download`. Existing album responses also contain named-user/group `upload` roles, but these are not captured role-change requests. Mapping the current UI's Provider label to `upload` is plausible and needs a focused capture if Provider is in scope.
 
 The unofficial album-list page corroborates stable album IDs, `owner_user_id`, `type`, `shared`, and `passphrase`. Its example is v1 and parts of its parameter prose describe shared folders, so use the observed v4 list and v1 mutations rather than copying its sorting contract. It does not document the write payloads above.
 
@@ -193,6 +193,8 @@ Only request additional captures when their feature enters scope:
 
 - **Incoming-album navigation in our app:** in a signed-in recipient's Photos session, navigate from the main sharing/album overview into an invitation. The current recipient capture establishes opening a known sharing reference, but contains no invitation enumeration request. This matters before deciding whether incoming albums need a separate sidebar destination.
 - **Recipient downloads:** trigger an actual photo download as an invited Downloader. The current capture establishes the capability and thumbnail reads, not the download request's addressing/context.
-- **Provider contribution or public downloading:** capture assignment plus the corresponding action if included in the first release. Existing readback values are insufficient to promise all write/upload behavior.
+- **Provider contribution:** capture assignment plus the corresponding action if included in the first release. Existing readback values are insufficient to promise all write/upload behavior.
 
 Shared-state removal can be checked as part of membership implementation if needed; the common endpoint is a reasonable bounded inference from ordinary removal plus captured shared-state addition. Guest-link browsing implementation would need to resolve sharing-session propagation. No exhaustive probing of failures, expiration timing, or re-enable behavior is required for the owner-first slice; handle uncertain outcomes conservatively.
+
+A separate album-deletion capture confirms `SYNO.Foto.Browse.Album` v1 `delete` with an array of album IDs and a data-less success response. The client deletes one owned normal album per confirmed action.

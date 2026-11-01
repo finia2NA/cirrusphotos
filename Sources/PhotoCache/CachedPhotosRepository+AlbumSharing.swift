@@ -7,7 +7,7 @@ public struct AlbumSharingSnapshot: Sendable {
 }
 
 public enum AlbumSharingAccessChange: Sendable, Equatable {
-    case unchanged, `private`, publicView
+    case unchanged, `private`, publicView, publicDownload
 }
 
 extension CachedPhotosRepository {
@@ -96,6 +96,8 @@ extension CachedPhotosRepository {
                     if current.shared && current.sharingInfo?.privacyType != "private" { updates.append(.init(action: "delete", member: .init(type: "public"))) }
                 case .publicView:
                     if !current.shared || current.sharingInfo?.privacyType != "public-view" { updates.append(.init(action: "update", role: "view", member: .init(type: "public"))) }
+                case .publicDownload:
+                    if !current.shared || current.sharingInfo?.privacyType != "public-download" { updates.append(.init(action: "update", role: "download", member: .init(type: "public"))) }
                 }
                 let reference: String
                 if current.shared {
@@ -106,7 +108,7 @@ extension CachedPhotosRepository {
                     activated = true
                     guard !reference.isEmpty else { throw SynologyAPIError.invalidResponse }
                 }
-                if !current.shared || !updates.isEmpty || password != .unchanged || expiration != nil {
+                if !updates.isEmpty || password != .unchanged || expiration != nil {
                     let expiry = expiration ?? (!current.shared && (current.sharingInfo?.expiration ?? 0) == 0 ? 0 : nil)
                     try await client.updateAlbumSharing(reference: reference, changes: updates, password: password, expiration: expiry)
                 }
@@ -124,6 +126,7 @@ extension CachedPhotosRepository {
                     case .unchanged: expectedAccess = snapshot.album.shared ? snapshot.album.sharingInfo?.privacyType : "private"
                     case .private: expectedAccess = "private"
                     case .publicView: expectedAccess = "public-view"
+                    case .publicDownload: expectedAccess = "public-download"
                     }
                     guard readback.sharingInfo?.privacyType == expectedAccess else { throw SynologyAPIError.unsupported("The server did not confirm access.") }
                     if let expiration, readback.sharingInfo?.expiration != expiration { throw SynologyAPIError.unsupported("The server did not confirm expiry.") }
@@ -150,7 +153,7 @@ extension CachedPhotosRepository {
         metadata.albumMutationWriting = false
         for observer in metadata.albumSharingObservers.values { observer.yield(()) }
         if operationError != nil {
-            let message = activated ? "Sharing was enabled, but the remaining changes could not be confirmed. Reload to check the current settings." : "Sharing may have changed. Reload to check the current settings."
+            let message = activated ? "Sharing was enabled, but the remaining changes could not be confirmed. Check the current settings." : "Sharing may have changed. Check the current settings."
             throw SynologyAPIError.unsupported(message)
         }
         guard let result else { throw SynologyAPIError.invalidResponse }

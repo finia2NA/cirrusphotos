@@ -84,6 +84,7 @@ private struct AlbumCardView: View {
     @ObservedObject var presentation: AlbumPresentationStore
     let onOpen: () -> Void
     @State private var dragPreview: NSImage?
+    @State private var confirmDelete = false
 
     var body: some View {
         Button(action: onOpen) {
@@ -102,7 +103,14 @@ private struct AlbumCardView: View {
             Button("Add to Sidebar") { presentation.add(album.id) }
             Divider()
             AlbumDownloadCommands(albumID: album.id, repository: repository)
+            Divider()
+            Button("Delete Album…", role: .destructive) { confirmDelete = true }
+                .disabled(model.deletingAlbumID != nil || model.albumOperation != nil || album.type != "normal")
         }
+        .alert("Delete Album?", isPresented: $confirmDelete) {
+            Button("Delete Album", role: .destructive) { model.deleteAlbum(album.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Delete ‘\(album.name)’? Its photos and videos will remain in your library.") }
         .accessibilityLabel("\(album.name), \(itemCountText)")
         .help(album.name)
     }

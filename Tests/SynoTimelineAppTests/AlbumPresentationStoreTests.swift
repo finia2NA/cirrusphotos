@@ -8,6 +8,26 @@ import XCTest
 
 @MainActor
 final class AlbumPresentationStoreTests: XCTestCase {
+    func testSharingPasswordCheckboxPreservesWriteOnlyPasswordIntent() {
+        var existing = SharingPasswordDraft(originallyRequired: true)
+        XCTAssertEqual(existing.change, .unchanged)
+        existing.required = false
+        XCTAssertEqual(existing.change, .clear)
+        existing.required = true
+        XCTAssertEqual(existing.change, .unchanged)
+        existing.value = "replacement"
+        XCTAssertEqual(existing.change, .set("replacement"))
+
+        var new = SharingPasswordDraft(originallyRequired: false)
+        XCTAssertEqual(new.change, .unchanged)
+        new.required = true
+        XCTAssertTrue(new.needsPassword)
+        new.value = "new password"
+        XCTAssertEqual(new.change, .set("new password"))
+        XCTAssertFalse(new.needsPassword)
+        new.required = false
+        XCTAssertEqual(new.change, .unchanged)
+    }
     func testSectionsSortAndPersistIndependentlyWithoutChangingPins() {
         let suite = "AlbumSections.\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!

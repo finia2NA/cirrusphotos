@@ -78,7 +78,7 @@ private actor AlbumFakeTransport: PhotosTransport {
         var privacy = old.sharingInfo?.privacyType ?? "private"
         for change in changes {
             if change.member.type == "public" {
-                privacy = change.action == "delete" ? "private" : "public-view"
+                privacy = change.action == "delete" ? "private" : (change.role == "download" ? "public-download" : "public-view")
                 continue
             }
             permissions.removeAll { $0.principalID == change.member.id && $0.type == "user" }
@@ -124,6 +124,13 @@ private actor AlbumFakeTransport: PhotosTransport {
     func album(id: Int64) async throws -> AlbumSummary {
         guard let album = albumList.first(where: { $0.id == id }) else { throw TestFailure("Missing album") }
         return album
+    }
+
+    func deleteAlbum(id: Int64) async throws {
+        mutationWrites += 1
+        if mutationFails { throw TestFailure("Album delete failed") }
+        albumList.removeAll { $0.id == id }
+        albumEntriesByID[id] = nil
     }
 
     func addItems(_ itemIDs: [Int64], toAlbum id: Int64) async throws {
@@ -229,6 +236,64 @@ final class AlbumBrowserTests: XCTestCase {
         do { _ = try await repository.saveAlbumSharing(snapshot: snapshot, changes: [change], disable: false); XCTFail("Stale snapshot was accepted") } catch {}
         let writes = await transport.sharingWrites
         XCTAssertEqual(writes, ["enable", "update"])
+    }
+
+    func testEnablingSharingWithoutOtherChangesDoesNotSendEmptyUpdate() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        await transport.configure(albumList: [.init(id: 54, name: "Album", itemCount: 0, type: "normal", ownerUserID: 11,
+                                                    sharingInfo: .init(privacyType: "private", expiration: 0, permission: []))])
+        await transport.configureSharingFailure(true)
+        let repository = try makeRepository(root: root, transport: transport)
+        let snapshot = try await repository.albumSharing(id: 54)
+        let result = try await repository.saveAlbumSharing(snapshot: snapshot, changes: [], disable: false)
+        XCTAssertTrue(result.shared)
+        let writes = await transport.sharingWrites
+        XCTAssertEqual(writes, ["enable"])
+    }
+
+    func testPublicDownloadUpdatesAccessAndPreservesNamedGrants() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let member = AlbumSharingPermission(photosUserID: 12, principalID: 1035, name: "Other", role: "view", type: "user")
+        let info = AlbumSharingInfo(privacyType: "public-view", expiration: 0, permission: [member], reference: "fixture-reference")
+        await transport.configure(albumList: [.init(id: 54, name: "Album", itemCount: 0, type: "normal", ownerUserID: 11, shared: true, sharingInfo: info)])
+        let repository = try makeRepository(root: root, transport: transport)
+        let snapshot = try await repository.albumSharing(id: 54)
+        let result = try await repository.saveAlbumSharing(snapshot: snapshot, changes: [], disable: false, access: .publicDownload)
+        XCTAssertEqual(result.sharingInfo?.privacyType, "public-download")
+        XCTAssertEqual(result.sharingInfo?.permission, [member])
+    }
+
+    func testAlbumDeletionRefreshesListAndRequiresOwnership() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        await transport.configure(albumList: [.init(id: 54, name: "Owned", itemCount: 0, type: "normal", ownerUserID: 11),
+                                              .init(id: 55, name: "Other", itemCount: 0, type: "normal", ownerUserID: 12)])
+        let repository = try makeRepository(root: root, transport: transport)
+        do { try await repository.deleteAlbum(id: 55); XCTFail("Non-owner deletion accepted") } catch {}
+        try await repository.deleteAlbum(id: 54)
+        var verified: [AlbumSummary]?
+        for await event in await repository.albums() { if case .value(let albums, true) = event { verified = albums } }
+        XCTAssertEqual(verified?.map(\.id), [55])
+        let writes = await transport.mutationWrites
+        XCTAssertEqual(writes, 1)
+    }
+
+    func testFailedAlbumDeletionRetainsVerifiedAlbumAndLibraryItems() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let photo = try item(1)
+        let album = AlbumSummary(id: 54, name: "Owned", itemCount: 1, type: "normal", ownerUserID: 11)
+        await transport.configure(albumList: [album], pageItems: [photo])
+        await transport.configureMutation(entries: [], list: [album], fails: true)
+        let repository = try makeRepository(root: root, transport: transport)
+        do { try await repository.deleteAlbum(id: 54); XCTFail("Expected deletion failure") } catch {}
+        var verified: [AlbumSummary]?
+        for await event in await repository.albums() { if case .value(let albums, true) = event { verified = albums } }
+        XCTAssertEqual(verified?.map(\.id), [54])
+        let items = try await transport.items(ids: [photo.id])
+        XCTAssertEqual(items.map(\.id), [photo.id])
     }
 
     func testSharingCancellationStillReconcilesDispatchedWrite() async throws {

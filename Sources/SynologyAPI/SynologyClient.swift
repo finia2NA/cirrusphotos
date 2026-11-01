@@ -336,6 +336,14 @@ public actor SynologyClient: PhotosTransport {
         return album
     }
 
+    public func deleteAlbum(id: Int64) async throws {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        let response: APIEnvelope<EmptyData> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Browse.Album",
+            parameters: ["api": "SYNO.Foto.Browse.Album", "version": "1", "method": "delete",
+                         "id": Self.idArray([id]), "_sid": sid], authenticated: true)
+        guard response.success else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+    }
+
     public func addItems(_ itemIDs: [Int64], toAlbum id: Int64) async throws {
         _ = try await albumMutation(method: "add_item", parameters: ["id": String(id), "item": Self.idArray(itemIDs)], requireData: true)
     }

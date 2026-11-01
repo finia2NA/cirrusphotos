@@ -26,6 +26,7 @@ final class LibraryModel: ObservableObject {
     private var sessionSources: [PhotoCollectionDescriptor: PhotoCollectionDescriptor] = [:]
     @Published var albumOperation: AlbumOperation?
     @Published var albumOperationError: String?
+    @Published private(set) var deletingAlbumID: Int64?
     private var albumOperationTask: Task<Void, Never>?
     private var filterAuthorities: [PhotoCollectionDescriptor: [[Bool]]] = [:]
     private var filterMemberships: [PhotoCollectionDescriptor: [[Int64]]] = [:]
@@ -667,6 +668,20 @@ final class LibraryModel: ObservableObject {
         operation.createsEmptyAlbum = true
         operation.loading = false
         albumOperation = operation
+    }
+
+    func deleteAlbum(_ id: Int64) {
+        guard deletingAlbumID == nil, albumOperation == nil, let repository else { return }
+        deletingAlbumID = id
+        Task { [weak self] in
+            do { try await repository.deleteAlbum(id: id) }
+            catch { self?.albumOperationError = error.localizedDescription }
+            guard let self else { return }
+            self.deletingAlbumID = nil
+            self.albumsTask?.cancel()
+            self.albumsTask = nil
+            self.ensureAlbumsLoaded()
+        }
     }
 
     func isNormalAlbum(_ id: Int64?) -> Bool {

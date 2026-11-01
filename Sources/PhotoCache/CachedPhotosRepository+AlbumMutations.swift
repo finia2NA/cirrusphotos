@@ -6,6 +6,17 @@ extension CachedPhotosRepository {
         try await createAlbum(name: name, itemIDs: [])
     }
 
+    public func deleteAlbum(id: Int64) async throws {
+        try await performAlbumMutation(albumID: id, deleting: true) { repository in
+            let user = try await repository.client.currentPhotosUserID()
+            let album = try await repository.client.album(id: id)
+            guard album.type == "normal", album.ownerUserID == user else {
+                throw SynologyAPIError.unsupported("Only the owner can delete a normal album.")
+            }
+            try await repository.client.deleteAlbum(id: id)
+        }
+    }
+
     func createAlbum(name: String, itemIDs: [Int64]) async throws -> AlbumSummary {
         try await performAlbumMutation(albumID: nil) { repository in
             try await repository.client.createAlbum(name: name, itemIDs: itemIDs)
@@ -77,7 +88,7 @@ extension CachedPhotosRepository {
         }
     }
 
-    private func performAlbumMutation<Value: Sendable>(albumID: Int64?, selection: ResolvedPhotoSelection? = nil, destinationAuthority: PhotoSelectionAuthority? = nil, destinationProofs: [SelectionMembershipProof] = [], operation: @escaping @Sendable (isolated CachedPhotosRepository) async throws -> Value) async throws -> Value {
+    private func performAlbumMutation<Value: Sendable>(albumID: Int64?, selection: ResolvedPhotoSelection? = nil, destinationAuthority: PhotoSelectionAuthority? = nil, destinationProofs: [SelectionMembershipProof] = [], deleting: Bool = false, operation: @escaping @Sendable (isolated CachedPhotosRepository) async throws -> Value) async throws -> Value {
         guard !metadata.albumMutationInProgress else {
             throw SynologyAPIError.unsupported("Another album change is in progress. Try again.")
         }
@@ -128,7 +139,7 @@ extension CachedPhotosRepository {
             if case .success = result { result = .failure(error) }
         }
         metadata.albumMutationWriting = false
-        let reconciliation = Task { try await self.reconcileAlbumMutation(albumID: albumID) }
+        let reconciliation = Task { try await self.reconcileAlbumMutation(albumID: albumID, deleting: deleting) }
         do { try await reconciliation.value }
         catch {
             if case .success = result { result = .failure(error) }
@@ -168,10 +179,10 @@ extension CachedPhotosRepository {
         try await store.invalidateMetadataAlbumSummaries(metadataNamespace, admission: admission)
     }
 
-    private func reconcileAlbumMutation(albumID: Int64?) async throws {
+    private func reconcileAlbumMutation(albumID: Int64?, deleting: Bool) async throws {
         try await invalidateAlbumMutationState(albumID: albumID)
         var refreshError: (any Error)?
-        if let albumID {
+        if let albumID, !deleting {
             let collection = PhotoCollectionDescriptor.album(albumID)
             do { _ = try await client.album(id: albumID) }
             catch { refreshError = error }
@@ -184,7 +195,12 @@ extension CachedPhotosRepository {
         var verified = false
         var failure: String?
         for await event in albums() {
-            if case .value(_, true) = event { verified = true }
+            if case .value(let albums, true) = event {
+                verified = true
+                if deleting, let albumID, albums.contains(where: { $0.id == albumID }) {
+                    refreshError = SynologyAPIError.unsupported("The server did not confirm album deletion.")
+                }
+            }
             if case .failure(let message) = event { failure = message }
         }
         if !verified, refreshError == nil {

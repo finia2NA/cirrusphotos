@@ -1,5 +1,6 @@
 # Local secrets and captured traffic
 .env
+.env.real
 *.har
 .cache*/
 
@@ -36,3 +37,4 @@ docs/captures/.map-diff-run.lock
 
 # Private mobile API capture evidence.
 docs/captures/android-photos-session-*/
+.env.test

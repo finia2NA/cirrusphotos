@@ -14,6 +14,7 @@ final class AlbumMutationTests: XCTestCase {
         XCTAssertEqual(created.id, 69)
         try await client.addItems([13, 14], toAlbum: 69)
         try await client.removeItems([11], fromAlbum: 69)
+        try await client.deleteAlbum(id: 69)
         let album = try await client.album(id: 69)
         XCTAssertEqual(album.itemCount, 2)
         XCTAssertEqual(album.type, "normal")
@@ -88,6 +89,11 @@ private final class AlbumMutationProtocol: URLProtocol, @unchecked Sendable {
             json = values["item"] == "[99]" ? #"{"success":true,"data":{"error_list":[{"anything":[1]}]}}"# : #"{"success":true,"data":{"error_list":[]}}"#
         case "delete_item":
             XCTAssertEqual(values["item"], "[11]")
+            json = #"{"success":true}"#
+        case "delete":
+            XCTAssertEqual(values["api"], "SYNO.Foto.Browse.Album")
+            XCTAssertEqual(values["version"], "1")
+            XCTAssertEqual(values["id"], "[69]")
             json = #"{"success":true}"#
         case "get":
             XCTAssertEqual(values["id"], "[69]")
