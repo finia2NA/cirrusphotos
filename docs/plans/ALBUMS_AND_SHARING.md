@@ -1,6 +1,6 @@
 # Albums and sharing implementation plan
 
-Status: approved issue breakdown, tracked in GitHub; implementation is pending. No application behavior described here is implemented by this plan. Updated 2026-11-01 from the user's representation requirements and explicit clarification that collapsed sections show one row of album cards. Each linked issue contains its own implementation context and acceptance criteria.
+Status: completed issue breakdown, retained as a historical plan. Current behavior is documented in the product and architecture sources below. Each linked issue contains its implementation context and acceptance criteria.
 
 Sources: [current product](../PROJECT.md), [current architecture](../ARCHITECTURE.md), and [captured NAS contract](../captures/ALBUM_SHARING_ANALYSIS_2026-11-01.md). The supplied Synology screenshot is a content reference for the opened-album header, not a visual specification. Its temporary screenshot path must not become an application dependency. Use native macOS controls, restrained typography and whitespace; follow the project's [UI pattern reference](https://www.thefountaininstitute.com/blog/signs-vibe-coded-ui), with no decorative status dots, extra panels, or explanatory marketing copy.
 
