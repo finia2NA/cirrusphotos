@@ -44,6 +44,7 @@ struct MetadataEngineState {
     var albumMutationInProgress = false
     var albumMutationWriting = false
     var albumMutationID: Int64?
+    var albumSharingObservers: [UUID: AsyncStream<Void>.Continuation] = [:]
     var albumListEpoch: UInt64 = 0
     var albumListJob: SharedJob<[AlbumSummary]>?
     var albumListLatest: [AlbumSummary]?

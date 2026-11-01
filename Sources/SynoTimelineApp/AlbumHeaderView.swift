@@ -42,6 +42,7 @@ struct AlbumHeaderView: View {
     let model: AlbumHeaderModel
     let repository: CachedPhotosRepository?
     let width: CGFloat
+    let onManageSharing: () -> Void
 
     var body: some View {
         let coverSize = min(144, max(0, width * 0.25))
@@ -57,6 +58,9 @@ struct AlbumHeaderView: View {
                 }
                 if let status = model.sharingStatus {
                     Text(status).font(.callout).foregroundStyle(.secondary)
+                }
+                if model.album != nil, repository != nil {
+                    Button(model.album?.shared == true ? "Manage Sharing…" : "Share…") { onManageSharing() }
                 }
                 if !model.recipients.isEmpty {
                     ScrollView(.horizontal) {

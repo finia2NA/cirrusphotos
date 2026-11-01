@@ -137,6 +137,7 @@ final class LibraryModel: ObservableObject {
     private var refreshTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
     private var albumsTask: Task<Void, Never>?
     private var metadataResetTask: Task<Void, Never>?
+    private var albumSharingObservationTask: Task<Void, Never>?
     private var mapFilterInvalidationTask: Task<Void, Never>?
     private var albumListRequested = false
     private var openedCollections: Set<PhotoCollectionDescriptor> = []
@@ -804,6 +805,17 @@ final class LibraryModel: ObservableObject {
             guard let repository else { return }
             presentationNamespace = repository.namespace
             try await repository.setConfiguredThumbnailSize(thumbnailSize)
+            if albumSharingObservationTask == nil {
+                albumSharingObservationTask = Task { [weak self] in
+                    for await _ in await repository.albumSharingChanges() {
+                        guard !Task.isCancelled, let self else { return }
+                        self.albumsTask?.cancel()
+                        self.albumsTask = nil
+                        self.albumsVerified = false
+                        if self.albumListRequested { self.startAlbumListFetchIfNeeded() }
+                    }
+                }
+            }
             if metadataResetTask == nil {
                 metadataResetTask = Task { [weak self] in
                     for await revision in await repository.metadataCacheResets() {

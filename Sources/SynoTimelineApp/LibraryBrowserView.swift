@@ -195,6 +195,7 @@ struct LibraryBrowserView: View {
     @EnvironmentObject private var libraryFilter: LibraryFilterModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var showingSharing = false
     @State private var selectedDay: String?
     @State private var jumpRequest: DayJumpRequest?
 
@@ -215,7 +216,7 @@ struct LibraryBrowserView: View {
         guard isAlbum else { return nil }
         let model = AlbumHeaderModel(album: library.album(for: collection))
         return BrowserHeaderConfiguration(identity: AnyHashable(model), height: AlbumHeaderModel.height) { repository, width in
-            AnyView(AlbumHeaderView(model: model, repository: repository, width: width))
+            AnyView(AlbumHeaderView(model: model, repository: repository, width: width, onManageSharing: { showingSharing = true }))
         }
     }
     private var emptyTitle: String {
@@ -345,6 +346,11 @@ struct LibraryBrowserView: View {
                 }
             } else {
                 ProgressView(loadingText)
+            }
+        }
+        .sheet(isPresented: $showingSharing) {
+            if let albumID = library.sourceAlbumID(for: collection), let repository = library.repository {
+                AlbumSharingSheet(albumID: albumID, repository: repository)
             }
         }
         .background(Color(nsColor: .textBackgroundColor))

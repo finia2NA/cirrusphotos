@@ -2,6 +2,14 @@ import XCTest
 @testable import SynologyAPI
 
 final class AlbumSharingTests: XCTestCase {
+    func testDisabledAlbumCanRetainNestedReference() throws {
+        let data = Data(#"{"id":7,"name":"Example","item_count":2,"type":"normal","shared":false,"passphrase":"","additional":{"sharing_info":{"privacy_type":"private","permission":[],"passphrase":"fixture-reference","sharing_link":""}}}"#.utf8)
+        let album = try JSONDecoder().decode(AlbumSummary.self, from: data)
+        XCTAssertFalse(album.shared)
+        XCTAssertEqual(album.sharingInfo?.permission, [])
+        XCTAssertEqual(album.sharingInfo?.reference, "fixture-reference")
+        XCTAssertEqual(album.sharingInfo?.sharingLink, "")
+    }
     func testSharingRoundTripKeepsIdentityAndUnknownValues() throws {
         let data = Data(#"{"id":7,"name":"Example","item_count":2,"type":"normal","owner_user_id":1,"shared":true,"additional":{"sharing_info":{"privacy_type":"future-mode","expiration":3,"is_expired":true,"enable_password":false,"permission":[{"db_id":11,"id":1036,"name":"Person","role":"future-role","type":"user"}]}}}"#.utf8)
         let album = try JSONDecoder().decode(AlbumSummary.self, from: data)

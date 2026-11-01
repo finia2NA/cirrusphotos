@@ -133,3 +133,31 @@ public struct AlbumSharingOwner: Codable, Hashable, Sendable {
     public let name: String
     public init(id: Int64, name: String) { self.id = id; self.name = name }
 }
+
+/// A DSM principal; its ID is not the Photos-internal user ID.
+public struct SharingPrincipal: Codable, Hashable, Identifiable, Sendable {
+    public let id: Int64
+    public let name: String
+    public let type: String
+    public init(id: Int64, name: String, type: String) { self.id = id; self.name = name; self.type = type }
+}
+
+public struct AlbumSharingReference: Decodable, Sendable {
+    public let passphrase: String
+    public let sharingLink: String
+    enum CodingKeys: String, CodingKey { case passphrase; case sharingLink = "sharing_link" }
+}
+
+public struct SharingPermissionChange: Codable, Hashable, Sendable {
+    public struct Member: Codable, Hashable, Sendable {
+        public let type: String
+        public let id: Int64
+        public init(type: String, id: Int64) { self.type = type; self.id = id }
+    }
+    public let action: String
+    public let role: String?
+    public let member: Member
+    public init(action: String, role: String? = nil, member: Member) {
+        self.action = action; self.role = role; self.member = member
+    }
+}

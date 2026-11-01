@@ -290,6 +290,40 @@ public actor SynologyClient: PhotosTransport {
         return list[0]
     }
 
+    public func currentPhotosUserID() async throws -> Int64 {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        struct CurrentUser: Decodable { let id: Int64 }
+        let response: APIEnvelope<CurrentUser> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.UserInfo", parameters: ["api": "SYNO.Foto.UserInfo", "version": "1", "method": "me", "_sid": sid], authenticated: true)
+        guard response.success, let user = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+        return user.id
+    }
+
+    public func sharingPrincipals() async throws -> [SharingPrincipal] {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        struct List: Decodable { let list: [SharingPrincipal] }
+        let response: APIEnvelope<List> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Sharing.Misc", parameters: ["api": "SYNO.Foto.Sharing.Misc", "version": "1", "method": "list_user_group", "team_space_sharable_list": "false", "_sid": sid], authenticated: true)
+        guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+        return data.list
+    }
+
+    public func setAlbumShared(id: Int64, enabled: Bool) async throws -> AlbumSharingReference {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        let response: APIEnvelope<AlbumSharingReference> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Sharing.Passphrase", parameters: ["api": "SYNO.Foto.Sharing.Passphrase", "version": "1", "method": "set_shared", "policy": "\"album\"", "album_id": String(id), "enabled": enabled ? "true" : "false", "_sid": sid], authenticated: true)
+        guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+        return data
+    }
+
+    public func updateAlbumSharing(reference: String, changes: [SharingPermissionChange], initial: Bool) async throws {
+        guard let sid, !reference.isEmpty else { throw SynologyAPIError.invalidResponse }
+        let encoder = JSONEncoder()
+        let encodedReference = String(decoding: try encoder.encode(reference), as: UTF8.self)
+        let encodedChanges = String(decoding: try encoder.encode(changes), as: UTF8.self)
+        var parameters = ["api": "SYNO.Foto.Sharing.Passphrase", "version": "1", "method": "update", "passphrase": encodedReference, "permission": encodedChanges, "_sid": sid]
+        if initial { parameters["expiration"] = "0" }
+        let response: APIEnvelope<EmptyData> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Sharing.Passphrase", parameters: parameters, authenticated: true)
+        guard response.success else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+    }
+
     public func createAlbum(name: String, itemIDs: [Int64]) async throws -> AlbumSummary {
         let encodedName = String(decoding: try JSONEncoder().encode(name), as: UTF8.self)
         let data = try await albumMutation(method: "create", parameters: ["name": encodedName, "item": Self.idArray(itemIDs)], requireData: true)
