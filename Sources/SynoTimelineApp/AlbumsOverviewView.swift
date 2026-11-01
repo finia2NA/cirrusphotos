@@ -46,6 +46,7 @@ struct AlbumsOverviewView: View {
 }
 
 private struct AlbumCardView: View {
+    @EnvironmentObject private var model: LibraryModel
     let album: AlbumSummary
     let repository: CachedPhotosRepository?
     @ObservedObject var presentation: AlbumPresentationStore
@@ -64,6 +65,7 @@ private struct AlbumCardView: View {
         }
         .buttonStyle(.plain)
         .background(AlbumDragGesture(albumID: album.id, name: album.name, repository: repository, preview: dragPreview))
+        .background(AlbumMembershipTarget(albumID: album.id, model: model))
         .contextMenu {
             Button("Add to Sidebar") { presentation.add(album.id) }
             Divider()

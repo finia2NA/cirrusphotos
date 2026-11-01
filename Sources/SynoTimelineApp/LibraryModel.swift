@@ -690,6 +690,43 @@ final class LibraryModel: ObservableObject {
         }
     }
 
+    /// Starts an accepted drop with its captured source, independent of browser focus.
+    @discardableResult
+    func addDroppedSelection(_ selection: PhotoSelectionSnapshot, sourceAlbumID: Int64?, to albumID: Int64) -> Bool {
+        guard albumOperation == nil, let repository, selection.authority != nil,
+              !selection.selectedOrdinals.isEmpty, albums.contains(where: { $0.id == albumID }) else { return false }
+        let operation = AlbumOperation(kind: .add, sourceAlbumID: sourceAlbumID)
+        albumOperation = operation
+        albumOperationTask = Task { [weak self] in
+            do {
+                let addable = try await repository.addableAlbums()
+                guard !Task.isCancelled, addable.contains(where: { $0.id == albumID }) else {
+                    throw SynologyAPIError.unsupported("This album is no longer available for adding items.")
+                }
+                guard let resolved = await SelectionItemResolver(repository: repository).resolveWithReceipt(selection),
+                      !resolved.items.isEmpty, !Task.isCancelled else {
+                    throw SynologyAPIError.unsupported("The selected items could not be verified. Try again.")
+                }
+                guard let self, self.albumOperation?.id == operation.id else { return }
+                if sourceAlbumID == albumID {
+                    self.albumOperation = nil
+                    return
+                }
+                self.albumOperation?.writing = true
+                try await repository.addMissingItems(resolved, toAlbum: albumID)
+                guard self.albumOperation?.id == operation.id else { return }
+                self.refreshAfterAlbumOperation(operation, destinationID: albumID)
+                self.albumOperation = nil
+            } catch {
+                guard let self, self.albumOperation?.id == operation.id else { return }
+                if self.albumOperation?.writing == true { self.refreshAfterAlbumOperation(operation, destinationID: albumID) }
+                self.albumOperation = nil
+                if !Task.isCancelled { self.albumOperationError = error.localizedDescription }
+            }
+        }
+        return true
+    }
+
     func cancelAlbumOperation() {
         albumOperationTask?.cancel()
         albumOperationTask = nil

@@ -1,4 +1,5 @@
 import Foundation
+import PhotoCache
 import SynologyAPI
 import XCTest
 @testable import SynoTimelineApp
@@ -44,6 +45,19 @@ final class AlbumPresentationStoreTests: XCTestCase {
         let restored = AlbumPresentationStore(defaults: defaults)
         restored.configure(namespace: "account")
         XCTAssertEqual(restored.pinnedIDs, [1, 2, 3])
+    }
+
+    func testSelectionNonceIsScopedAndConsumedOnce() {
+        let timeline = TimelineSnapshot(sections: [])
+        let selection = PhotoSelectionSnapshot(collection: .favorites, timeline: timeline,
+            timelineFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
+            selectedOrdinals: IndexSet(integer: 1), knownItemIDsByOrdinal: [1: 42])
+        let nonce = SelectionDragRegistry.register(.init(selection: selection, sourceAlbumID: nil, namespace: "a"))
+        XCTAssertNil(SelectionDragRegistry.take(nonce.uuidString, namespace: "b"))
+        XCTAssertNil(AlbumDragRegistry.album(nonce.uuidString, namespace: "a"))
+        XCTAssertEqual(SelectionDragRegistry.take(nonce.uuidString, namespace: "a")?.selection.knownItemIDsByOrdinal[1], 42)
+        XCTAssertNil(SelectionDragRegistry.take(nonce.uuidString, namespace: "a"))
+        SelectionDragRegistry.remove(nonce)
     }
 
     func testAlbumNonceIsScopedAndRemoved() {

@@ -43,9 +43,11 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
     private static var active: [UUID: PhotoFileDragSource] = [:]
     private let id = UUID()
     private var localNonce: UUID?
+    private var selectionNonce: UUID?
 
     static func begin(payload: PhotoDragPayload, previews: [NSImage], cropsToSquare: Bool,
-                      from view: NSView, event: NSEvent, albumID: Int64? = nil) -> Bool {
+                      from view: NSView, event: NSEvent, albumID: Int64? = nil,
+                      localSelection: SelectionDragRegistry.Entry? = nil, promisesFile: Bool = true) -> Bool {
         guard payload.count > 0, !payload.filename.isEmpty else { return false }
         let source = PhotoFileDragSource()
         let fileType: UTType = payload.forcesArchive || payload.count > 1 ? .zip :
@@ -58,6 +60,10 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
             let nonce = AlbumDragRegistry.register(albumID: albumID, namespace: payload.repository.namespace)
             source.localNonce = nonce
             writer = AlbumPromiseWriter(provider: provider, nonce: nonce)
+        } else if let localSelection {
+            let nonce = SelectionDragRegistry.register(localSelection)
+            source.selectionNonce = nonce
+            writer = SelectionPromiseWriter(provider: promisesFile ? provider : nil, nonce: nonce)
         } else { writer = provider }
         let item = NSDraggingItem(pasteboardWriter: writer)
         let image = dragPreview(images: Array(previews.prefix(20)), count: payload.count,
@@ -77,6 +83,7 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         if let localNonce { AlbumDragRegistry.remove(localNonce) }
+        if let selectionNonce { SelectionDragRegistry.remove(selectionNonce) }
         Self.active[id] = nil
     }
 

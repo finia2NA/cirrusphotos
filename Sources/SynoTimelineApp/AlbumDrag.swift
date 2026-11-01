@@ -1,6 +1,7 @@
 import AppKit
 import PhotoCache
 import SwiftUI
+import SynologyAPI
 
 /// Only the random handle crosses the pasteboard. Registry entries never leave this process.
 @MainActor
@@ -22,6 +23,86 @@ enum AlbumDragRegistry {
         guard let id = album(value, namespace: namespace) else { return false }
         presentation.insert(id, before: before)
         return true
+    }
+}
+
+/// Local selection handles are consumed once on acceptance; they never contain pasteboard data.
+@MainActor
+enum SelectionDragRegistry {
+    static let type = NSPasteboard.PasteboardType("com.synotimeline.local-selection")
+    struct Entry {
+        let selection: PhotoSelectionSnapshot
+        let sourceAlbumID: Int64?
+        let namespace: String
+    }
+    private static var entries: [UUID: Entry] = [:]
+    static func register(_ entry: Entry) -> UUID {
+        let nonce = UUID(); entries[nonce] = entry; return nonce
+    }
+    static func lookup(_ value: String?, namespace: String) -> Entry? {
+        guard let value, let nonce = UUID(uuidString: value), let entry = entries[nonce],
+              entry.namespace == namespace else { return nil }
+        return entry
+    }
+    static func take(_ value: String?, namespace: String) -> Entry? {
+        guard let entry = lookup(value, namespace: namespace), let value, let nonce = UUID(uuidString: value) else { return nil }
+        entries[nonce] = nil
+        return entry
+    }
+    static func remove(_ nonce: UUID) { entries[nonce] = nil }
+}
+
+@MainActor
+final class SelectionPromiseWriter: NSObject, @preconcurrency NSPasteboardWriting {
+    private let provider: NSFilePromiseProvider?
+    private let nonce: UUID
+    init(provider: NSFilePromiseProvider?, nonce: UUID) { self.provider = provider; self.nonce = nonce }
+    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+        (provider?.writableTypes(for: pasteboard) ?? []) + [SelectionDragRegistry.type]
+    }
+    func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        type == SelectionDragRegistry.type ? nonce.uuidString : provider?.pasteboardPropertyList(forType: type)
+    }
+    func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
+        type == SelectionDragRegistry.type ? [] : (provider?.writingOptions(forType: type, pasteboard: pasteboard) ?? [])
+    }
+}
+
+/// Accepts only in-process selection handles; never requests a promised file.
+struct AlbumMembershipTarget: NSViewRepresentable {
+    let albumID: Int64
+    @ObservedObject var model: LibraryModel
+    func makeNSView(context: Context) -> TargetView { TargetView() }
+    func updateNSView(_ view: TargetView, context: Context) { view.albumID = albumID; view.model = model }
+    @MainActor final class TargetView: NSView {
+        var albumID: Int64 = 0
+        weak var model: LibraryModel?
+        private var active = false { didSet { needsDisplay = true } }
+        override init(frame: NSRect) { super.init(frame: frame); registerForDraggedTypes([SelectionDragRegistry.type]) }
+        required init?(coder: NSCoder) { fatalError() }
+        private func value(_ sender: NSDraggingInfo) -> String? { sender.draggingPasteboard.string(forType: SelectionDragRegistry.type) }
+        private func valid(_ sender: NSDraggingInfo) -> Bool {
+            guard let model, let namespace = model.repository?.namespace, model.albumOperation == nil,
+                  model.albums.contains(where: { $0.id == albumID }) else { return false }
+            return SelectionDragRegistry.lookup(value(sender), namespace: namespace) != nil
+        }
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { active = valid(sender); return active ? .copy : [] }
+        override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
+        override func draggingExited(_ sender: NSDraggingInfo?) { active = false }
+        override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { valid(sender) }
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            defer { active = false }
+            guard valid(sender), let model, let namespace = model.repository?.namespace,
+                  let entry = SelectionDragRegistry.take(value(sender), namespace: namespace) else { return false }
+            return model.addDroppedSelection(entry.selection, sourceAlbumID: entry.sourceAlbumID, to: albumID)
+        }
+        override func draw(_ dirtyRect: NSRect) {
+            guard active else { return }
+            NSColor.controlAccentColor.setStroke()
+            let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 5, yRadius: 5)
+            path.lineWidth = 2; path.stroke()
+        }
+        override func mouseDown(with event: NSEvent) { nextResponder?.mouseDown(with: event) }
     }
 }
 

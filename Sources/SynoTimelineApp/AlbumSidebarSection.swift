@@ -38,6 +38,7 @@ struct AlbumSidebarSection: View {
 
 
 private struct AlbumSidebarRow: View {
+    @EnvironmentObject private var model: LibraryModel
     let id: Int64
     let album: AlbumSummary?
     let repository: CachedPhotosRepository?
@@ -53,6 +54,7 @@ private struct AlbumSidebarRow: View {
         }
         .background(AlbumDragGesture(albumID: id, name: album?.name ?? "Album",
                                      repository: repository, preview: dragPreview))
+        .background(AlbumMembershipTarget(albumID: id, model: model))
         .contextMenu {
             Button("Remove from Sidebar") { presentation.remove(id) }
             Divider()

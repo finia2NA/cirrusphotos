@@ -22,6 +22,7 @@ private actor AlbumFakeTransport: PhotosTransport {
     var favoriteFailure = false
     var mutationFails = false
     var mutationWrites = 0
+    var writtenIDs: [Int64] = []
     var replacementEntries: [DayTimelineEntry] = []
     var replacementList: [AlbumSummary] = []
     var pauseMutation = false
@@ -46,6 +47,7 @@ private actor AlbumFakeTransport: PhotosTransport {
     }
 
     func login(credentials: SynologyCredentials) async throws {}
+    func items(ids: [Int64]) async throws -> [PhotoItem] { ids.compactMap { id in pageItems.first { $0.id == id } } }
 
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
         collectionTimelineCalls.append((collection, initial))
@@ -79,6 +81,7 @@ private actor AlbumFakeTransport: PhotosTransport {
 
     func addItems(_ itemIDs: [Int64], toAlbum id: Int64) async throws {
         mutationWrites += 1
+        writtenIDs = itemIDs
         albumEntriesByID[id] = replacementEntries
         albumList = replacementList
         if pauseMutation {
@@ -114,7 +117,12 @@ private actor AlbumFakeTransport: PhotosTransport {
             await withCheckedContinuation { pageContinuation = $0 }
         }
         if let pageFailure { throw TestFailure(pageFailure) }
-        let items = pageItems.count > 250 ? Array(pageItems.dropFirst(request.offset).prefix(request.limit)) : pageItems
+        let available: [PhotoItem]
+        if let albumID = collection.albumID, let entries = albumEntriesByID[albumID] {
+            let ids = Set(entries.map(\.id))
+            available = pageItems.filter { ids.contains($0.id) }
+        } else { available = pageItems }
+        let items = available.count > 250 ? Array(available.dropFirst(request.offset).prefix(request.limit)) : available
         return try fixtureBatch(items, request: request, fields: fields)
     }
 
@@ -228,6 +236,109 @@ final class AlbumBrowserTests: XCTestCase {
         _ = try await mutation.value
         let result = await task.value
         XCTAssertNil(result)
+    }
+
+    func testDisplayedSelectionSourcesWriteOnlyDisplayedIDs() async throws {
+        for kind in 0..<8 {
+            let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+            let transport = AlbumFakeTransport()
+            let day = Int64(1711929600)
+            let photos = try (1...2).map { id in
+                try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":\(id),\"time\":1711929600,\"type\":\"photo\",\"additional\":{\"gps\":{\"latitude\":10,\"longitude\":20}}}".utf8))
+            }
+            let sourceAlbum = AlbumSummary(id: 54, name: "Source", itemCount: 2)
+            let target = AlbumSummary(id: 55, name: "Target", itemCount: 0)
+            let original = TimelineSnapshot(sections: [section(1, limit: 2, count: 2)])
+            await transport.configure(albumList: [sourceAlbum, target],
+                albumEntriesByID: [54: [.init(id: 1, time: day), .init(id: 2, time: day)], 55: []],
+                timelineSnapshot: original, pageItems: photos)
+            await transport.configureMutation(entries: [.init(id: 2, time: day)], list: [sourceAlbum, target])
+            let repository = try makeRepository(root: root, transport: transport)
+            let underlying: PhotoCollectionDescriptor
+            let timeline: TimelineSnapshot
+            if kind == 3 || kind == 7 {
+                try await repository.initializeMetadataEngine()
+                let namespace = await repository.metadataNamespace
+                _ = try await repository.store.storeMetadataDetails(photos, namespace: namespace, currentRun: repository.runID,
+                    admission: repository.store.metadataAdmission(namespace))
+                let records = try await repository.store.metadataCachedLocations(namespace)
+                let locations = await repository.acceptLocationRecords(records)
+                let map = try await repository.registerMapFilter(itemIDs: [1, 2], locationRevision: locations.revision)
+                underlying = map.descriptor; timeline = map.snapshot
+            } else {
+                underlying = [PhotoCollectionDescriptor.personalLibrary, .favorites, .album(54)][kind % 4]
+                timeline = try await repository.verifiedTimelineSnapshot(collection: underlying)
+            }
+            // Materialize the source page so filter references have authoritative slots.
+            for await _ in await repository.page(timeline.sections[0], collection: underlying) { }
+            let collection: PhotoCollectionDescriptor
+            let displayed: TimelineSnapshot
+            let authority: PhotoSelectionAuthority?
+            if kind >= 4 {
+                collection = .libraryFilter(UUID())
+                displayed = TimelineSnapshot(sections: [section(1)])
+                let registration = LibraryFilterRegistration(descriptor: collection, snapshot: displayed,
+                    referencesBySection: [[.init(sourceSectionIndex: 0, sourcePageOffset: 1, itemID: 2)]],
+                    filter: LibraryFilter(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
+                    sourceCollection: underlying)
+                authority = try await repository.registerLibraryFilter(registration)
+            } else {
+                collection = underlying; displayed = timeline
+                authority = await repository.selectionAuthority(collection: collection, snapshot: displayed)
+            }
+            let ordinal = kind >= 4 ? 0 : 1
+            let captured = PhotoSelectionSnapshot(collection: collection, timeline: displayed,
+                timelineFingerprint: LibraryIndex(snapshot: displayed).fingerprint,
+                selectedOrdinals: IndexSet(integer: ordinal), knownItemIDsByOrdinal: [ordinal: 2], authority: authority)
+            let receipt = await SelectionItemResolver(repository: repository).resolveWithReceipt(captured)
+            try await repository.addMissingItems(try XCTUnwrap(receipt, "source \(kind)"), toAlbum: 55)
+            let written = await transport.writtenIDs
+            XCTAssertEqual(written, [2], "source \(kind)")
+        }
+    }
+
+    func testUnloadedSelectedAlbumPageReachesMutation() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let day = Int64(1711929600)
+        let photos = try (1...251).map { try item($0) }
+        let source = AlbumSummary(id: 54, name: "Source", itemCount: 251)
+        let target = AlbumSummary(id: 55, name: "Target", itemCount: 0)
+        await transport.configure(albumList: [source, target],
+            albumEntriesByID: [54: photos.map { .init(id: $0.id, time: day) }, 55: []], pageItems: photos)
+        await transport.configureMutation(entries: [.init(id: 251, time: day)], list: [source, target])
+        let repository = try makeRepository(root: root, transport: transport)
+        let timeline = try await repository.verifiedTimelineSnapshot(collection: .album(54))
+        let authority = await repository.selectionAuthority(collection: .album(54), snapshot: timeline)
+        let snapshot = PhotoSelectionSnapshot(collection: .album(54), timeline: timeline,
+            timelineFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
+            selectedOrdinals: IndexSet(integer: 250), knownItemIDsByOrdinal: [:], authority: authority)
+        let receipt = await SelectionItemResolver(repository: repository).resolveWithReceipt(snapshot)
+        try await repository.addMissingItems(try XCTUnwrap(receipt), toAlbum: 55)
+        let written = await transport.writtenIDs
+        XCTAssertEqual(written, [251])
+    }
+
+    func testAddingMissingItemsSkipsExistingDestinationMembers() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let day = Int64(1711929600)
+        let source = AlbumSummary(id: 54, name: "Source", itemCount: 2)
+        let target = AlbumSummary(id: 55, name: "Target", itemCount: 1)
+        await transport.configure(albumList: [source, target],
+            albumEntriesByID: [54: [.init(id: 1, time: day), .init(id: 2, time: day)],
+                               55: [.init(id: 1, time: day)]], pageItems: [try item(1), try item(2)])
+        await transport.configureMutation(entries: [.init(id: 1, time: day), .init(id: 2, time: day)], list: [source, target])
+        let repository = try makeRepository(root: root, transport: transport)
+        let timeline = try await repository.verifiedTimelineSnapshot(collection: .album(54))
+        let authority = await repository.selectionAuthority(collection: .album(54), snapshot: timeline)
+        let snapshot = PhotoSelectionSnapshot(collection: .album(54), timeline: timeline,
+            timelineFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
+            selectedOrdinals: IndexSet(integersIn: 0..<2), knownItemIDsByOrdinal: [:], authority: authority)
+        let receipt = await SelectionItemResolver(repository: repository).resolveWithReceipt(snapshot)
+        try await repository.addMissingItems(try XCTUnwrap(receipt), toAlbum: 55)
+        let written = await transport.writtenIDs
+        XCTAssertEqual(written, [2])
     }
 
     func testAlbumWriteAcceptsUnchangedResolvedSelection() async throws {

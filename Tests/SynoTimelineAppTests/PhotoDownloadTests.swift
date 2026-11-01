@@ -242,6 +242,13 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         XCTAssertTrue(Set(provider.writableTypes(for: pasteboard)).isSubset(of: Set(types)))
         XCTAssertEqual(writer.pasteboardPropertyList(forType: AlbumDragRegistry.type) as? String, nonce.uuidString)
         XCTAssertEqual(AlbumDragRegistry.album(nonce.uuidString, namespace: repository.namespace), 7)
+        let selectionWriter = SelectionPromiseWriter(provider: provider, nonce: nonce)
+        let selectionTypes = selectionWriter.writableTypes(for: pasteboard)
+        XCTAssertTrue(selectionTypes.contains(SelectionDragRegistry.type))
+        XCTAssertFalse(selectionTypes.contains(AlbumDragRegistry.type))
+        XCTAssertTrue(Set(provider.writableTypes(for: pasteboard)).isSubset(of: Set(selectionTypes)))
+        XCTAssertEqual(SelectionPromiseWriter(provider: nil, nonce: nonce).writableTypes(for: pasteboard), [SelectionDragRegistry.type])
+
         let before = await transport.downloadedIDs
         XCTAssertTrue(before.isEmpty)
         let destination = root.appendingPathComponent("dropped.dng")

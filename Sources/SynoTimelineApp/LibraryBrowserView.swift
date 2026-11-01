@@ -1354,7 +1354,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
 
         func beginFileDrag(at point: CGPoint, event: NSEvent) -> Bool {
             guard let ordinal = geometry?.ordinal(at: point), let clicked = loadedItem(ordinal),
-                  clicked.photo.hasDisplayableStillImage, let document, let repository,
+                  let document, let repository,
                   let timelineSnapshot, let index else { return false }
             if !selection.contains(ordinal) { selection.replace(with: ordinal); publishSelection() }
             let selected = selection.indexes
@@ -1388,7 +1388,9 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             cancelPointerInteraction()
             return PhotoFileDragSource.begin(payload: payload, previews: previews,
                                              cropsToSquare: geometry?.cropsThumbnailsToSquare ?? false,
-                                             from: document, event: event)
+                                             from: document, event: event,
+                                             localSelection: .init(selection: captured, sourceAlbumID: sourceAlbumID, namespace: repository.namespace),
+                                             promisesFile: clicked.photo.hasDisplayableStillImage || count > 1)
         }
 
         func contextMenu(at point: CGPoint) -> NSMenu? {

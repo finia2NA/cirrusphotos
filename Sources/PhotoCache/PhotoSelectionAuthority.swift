@@ -86,6 +86,13 @@ extension CachedPhotosRepository {
         return valid && !Task.isCancelled && selectionAuthorityIsCurrent(authority)
     }
 
+    func verifySelectionFences(_ first: PhotoSelectionAuthority, proofs: [SelectionMembershipProof],
+                               _ second: PhotoSelectionAuthority, proofs otherProofs: [SelectionMembershipProof]) async -> Bool {
+        guard selectionAuthorityIsCurrent(first), selectionAuthorityIsCurrent(second), !Task.isCancelled else { return false }
+        let valid = (try? await store.verifySelectionMembership(proofs + otherProofs, namespace: metadataNamespace, currentRun: runID)) == true
+        return valid && !Task.isCancelled && selectionAuthorityIsCurrent(first) && selectionAuthorityIsCurrent(second)
+    }
+
     func selectionAuthorityMatches(_ authority: PhotoSelectionAuthority, collection: PhotoCollectionDescriptor, fingerprint: String) -> Bool {
         authority.collection == collection && authority.fingerprint == fingerprint && selectionAuthorityIsCurrent(authority)
     }

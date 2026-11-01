@@ -34,13 +34,46 @@ extension CachedPhotosRepository {
         }
     }
 
+    /// Compare against a verified destination before adding, including videos.
+    public func addMissingItems(_ selection: ResolvedPhotoSelection, toAlbum id: Int64) async throws {
+        let collection = PhotoCollectionDescriptor.album(id)
+        let timeline = try await verifiedTimelineSnapshot(collection: collection)
+        let index = LibraryIndex(snapshot: timeline)
+        guard let authority = selectionAuthority(collection: collection, snapshot: timeline) else {
+            throw SynologyAPIError.unsupported("The destination album could not be verified. Try again.")
+        }
+        var destination: ResolvedPhotoSelection?
+        if index.totalCount > 0 {
+            let snapshot = PhotoSelectionSnapshot(collection: collection, timeline: timeline,
+                timelineFingerprint: index.fingerprint, selectedOrdinals: IndexSet(integersIn: 0..<index.totalCount),
+                knownItemIDsByOrdinal: [:], authority: authority)
+            guard let resolved = await SelectionItemResolver(repository: self).resolveWithReceipt(snapshot) else {
+                throw SynologyAPIError.unsupported("The destination album could not be verified. Try again.")
+            }
+            destination = resolved
+        }
+        let existing = Set(destination?.items.map(\.id) ?? [])
+        let missing = selection.items.map(\.id).filter { !existing.contains($0) }
+        guard !missing.isEmpty else {
+            guard await verifySelectionFences(selection.authority, proofs: selection.proofs,
+                                              authority, proofs: destination?.proofs ?? []) else {
+                throw SynologyAPIError.unsupported("Album membership changed. Try again.")
+            }
+            return
+        }
+        try await performAlbumMutation(albumID: id, selection: selection,
+                                       destinationAuthority: authority, destinationProofs: destination?.proofs ?? []) { repository in
+            try await repository.client.addItems(missing, toAlbum: id)
+        }
+    }
+
     public func removeItems(_ selection: ResolvedPhotoSelection, fromAlbum id: Int64) async throws {
         try await performAlbumMutation(albumID: id, selection: selection) { repository in
             try await repository.client.removeItems(selection.items.map(\.id), fromAlbum: id)
         }
     }
 
-    private func performAlbumMutation<Value: Sendable>(albumID: Int64?, selection: ResolvedPhotoSelection? = nil, operation: @escaping @Sendable (isolated CachedPhotosRepository) async throws -> Value) async throws -> Value {
+    private func performAlbumMutation<Value: Sendable>(albumID: Int64?, selection: ResolvedPhotoSelection? = nil, destinationAuthority: PhotoSelectionAuthority? = nil, destinationProofs: [SelectionMembershipProof] = [], operation: @escaping @Sendable (isolated CachedPhotosRepository) async throws -> Value) async throws -> Value {
         guard !metadata.albumMutationInProgress else {
             throw SynologyAPIError.unsupported("Another album change is in progress. Try again.")
         }
@@ -62,6 +95,12 @@ extension CachedPhotosRepository {
             guard !selection.items.isEmpty,
                   await verifySelectionFence(selection.authority, proofs: selection.proofs) else {
                 throw SynologyAPIError.unsupported("The selected items could not be verified. Try again.")
+            }
+        }
+        if let destinationAuthority {
+            guard let selection, await verifySelectionFences(selection.authority, proofs: selection.proofs,
+                                                              destinationAuthority, proofs: destinationProofs) else {
+                throw SynologyAPIError.unsupported("Album membership changed. Try again.")
             }
         }
         try Task.checkCancellation()
