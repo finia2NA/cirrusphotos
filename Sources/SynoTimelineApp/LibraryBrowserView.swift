@@ -1327,8 +1327,9 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 let name = clicked.photo.filename.flatMap { $0.isEmpty ? nil : $0 } ?? "Photo-\(clicked.photo.id)"
                 filename = URL(fileURLWithPath: name).lastPathComponent
             } else { filename = "Photos.zip" }
-            let payload = PhotoDragPayload(repository: repository, item: nil, selection: command,
-                                           snapshot: timelineSnapshot, count: count, filename: filename)
+            guard let captured = command.captureSelection(timeline: timelineSnapshot) else { return false }
+            let payload = PhotoDragPayload(repository: repository, source: .selection(captured),
+                                           count: count, filename: filename)
             cancelPointerInteraction()
             return PhotoFileDragSource.begin(payload: payload, previews: previews,
                                              cropsToSquare: geometry?.cropsThumbnailsToSquare ?? false,

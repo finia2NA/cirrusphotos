@@ -19,6 +19,32 @@ final class PhotoDownloadDestinationTests: XCTestCase {
     }
 
     @MainActor
+    func testAlbumDownloadUsesVerifiedItemsAndReportsEmptyAlbum() async throws {
+        let root = temporaryTestRoot("AlbumDownload")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let previous = UserDefaults.standard.object(forKey: "photoDownloadDirectory")
+        UserDefaults.standard.set(root.path, forKey: "photoDownloadDirectory")
+        defer { UserDefaults.standard.set(previous, forKey: "photoDownloadDirectory") }
+        let transport = AlbumDownloadMockTransport()
+        let repository = try CachedPhotosRepository(credentials: .init(username: "test", password: "test"),
+                                                     budget: 100_000_000, cacheRoot: root.appendingPathComponent("cache"), transport: transport)
+        let manager = PhotoDownloadManager()
+        manager.start(repository: repository, source: .album(54), kind: .compressedJPEG, choose: false)
+        let completed = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
+        XCTAssertTrue(completed)
+        let ids = await transport.downloadedIDs
+        let kind = await transport.kind
+        XCTAssertEqual(ids, [1, 2])
+        XCTAssertEqual(kind, .compressedJPEG)
+        XCTAssertTrue(manager.jobs[0].status.contains("Saved to"))
+        manager.start(repository: repository, source: .album(55), kind: .original, choose: false)
+        let emptyCompleted = await waitUntil { manager.jobs.count == 2 && !manager.jobs[0].active }
+        XCTAssertTrue(emptyCompleted)
+        XCTAssertEqual(manager.jobs[0].status, "No eligible photos to download.")
+    }
+
+    @MainActor
     func testEditorMenuRoutesSelectedApplicationAndOther() {
         _ = NSApplication.shared
         let app = URL(fileURLWithPath: "/Applications/Example.app")
@@ -163,13 +189,13 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let resource = try XCTUnwrap(photo.fullImageResource)
         for await _ in await repository.fullImage(resource) {}
         let manager = PhotoDownloadManager()
-        manager.start(repository: repository, snapshot: nil, selection: nil, item: photo, kind: .original, choose: false)
+        manager.start(repository: repository, source: .item(photo), kind: .original, choose: false)
         let originalFinished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
         XCTAssertTrue(originalFinished)
         XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("a.dng")), Data("raw-image".utf8))
         let firstCalls = await transport.downloadedIDs
         XCTAssertTrue(firstCalls.isEmpty)
-        manager.start(repository: repository, snapshot: nil, selection: nil, item: photo, kind: .compressedJPEG, choose: false)
+        manager.start(repository: repository, source: .item(photo), kind: .compressedJPEG, choose: false)
         let compressedFinished = await waitUntil { manager.jobs.count == 2 && !manager.jobs[0].active }
         XCTAssertTrue(compressedFinished)
         let kind = await transport.kind
@@ -202,8 +228,7 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let repository = try CachedPhotosRepository(credentials: .init(username: "test", password: "test"),
                                                      budget: 100_000_000, cacheRoot: root.appendingPathComponent("cache"), transport: transport)
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.dng\",\"time\":1,\"type\":\"photo\"}".utf8))
-        let payload = PhotoDragPayload(repository: repository, item: photo, selection: nil,
-                                       snapshot: nil, count: 1, filename: "a.dng")
+        let payload = PhotoDragPayload(repository: repository, source: .item(photo), count: 1, filename: "a.dng")
         let delegate = PhotoPromiseDelegate(payload: payload)
         let provider = NSFilePromiseProvider(fileType: UTType.data.identifier, delegate: delegate)
         provider.userInfo = delegate
@@ -339,5 +364,33 @@ private actor EditingMockTransport: PhotosTransport {
         let file = directory.appendingPathComponent("a.dng")
         try Data("raw-image".utf8).write(to: file)
         return PhotoDownloadResponse(temporaryURL: file, filename: "a.dng")
+    }
+}
+
+private actor AlbumDownloadMockTransport: PhotosTransport {
+    var downloadedIDs: [Int64] = []
+    var kind: PhotoDownloadKind?
+    func readAlbumCatalogBatch(albumID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry] {
+        guard albumID == 54 else { return [] }
+        return Array([DayTimelineEntry(id: 1, time: 1711929602), DayTimelineEntry(id: 2, time: 1711929601),
+                      DayTimelineEntry(id: 3, time: 1711929600)].dropFirst(offset).prefix(limit))
+    }
+    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        let json = """
+        [{"id":1,"time":1711929602,"type":"photo"},
+         {"id":2,"time":1711929601,"type":"photo","live_type":"live"},
+         {"id":3,"time":1711929600,"type":"video"}]
+        """
+        let items = try JSONDecoder().decode([PhotoItem].self, from: Data(json.utf8))
+        return CollectionBatchResult(items: Array(items.dropFirst(request.offset).prefix(request.limit)), profile: fields)
+    }
+    func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind,
+                        progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
+        downloadedIDs = itemIDs; self.kind = kind
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("album.zip")
+        try Data("download".utf8).write(to: file)
+        return PhotoDownloadResponse(temporaryURL: file, filename: "album.zip")
     }
 }

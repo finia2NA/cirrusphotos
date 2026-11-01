@@ -425,9 +425,8 @@ final class LibraryModel: ObservableObject {
     }
 
     func downloadSelection(_ selection: BrowserCommandSnapshot, kind: PhotoDownloadKind, choose: Bool) {
-        guard let repository, let timeline = selection.timeline else { return }
-        PhotoDownloadManager.shared.start(repository: repository, snapshot: timeline, selection: selection,
-                                          item: nil, kind: kind, choose: choose)
+        guard let repository, let captured = selection.captureSelection(timeline: selection.timeline) else { return }
+        PhotoDownloadManager.shared.start(repository: repository, source: .selection(captured), kind: kind, choose: choose)
     }
 
     func editSelection(_ selection: BrowserCommandSnapshot, application: URL) {
@@ -443,8 +442,7 @@ final class LibraryModel: ObservableObject {
 
     func downloadViewerItem(_ item: PhotoItem, repository: CachedPhotosRepository,
                             kind: PhotoDownloadKind, choose: Bool) {
-        PhotoDownloadManager.shared.start(repository: repository, snapshot: nil, selection: nil,
-                                          item: item, kind: kind, choose: choose)
+        PhotoDownloadManager.shared.start(repository: repository, source: .item(item), kind: kind, choose: choose)
     }
 
     var canRotate: Bool {

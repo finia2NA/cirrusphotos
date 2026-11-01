@@ -60,12 +60,31 @@ private struct AlbumCardView: View {
             }
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            AlbumDownloadCommands(albumID: album.id, repository: repository)
+        }
         .accessibilityLabel("\(album.name), \(itemCountText)")
         .help(album.name)
     }
 
     private var itemCountText: String {
         album.itemCount == 1 ? "1 item" : "\(album.itemCount) items"
+    }
+}
+
+/// Shared by album surfaces without opening the album or changing selection.
+struct AlbumDownloadCommands: View {
+    let albumID: Int64
+    let repository: CachedPhotosRepository?
+
+    var body: some View {
+        ForEach(Array(photoDownloadActions.enumerated()), id: \.offset) { _, action in
+            Button(action.0) {
+                guard let repository else { return }
+                PhotoDownloadManager.shared.start(repository: repository, source: .album(albumID),
+                                                  kind: action.1, choose: action.2)
+            }.disabled(repository == nil)
+        }
     }
 }
 

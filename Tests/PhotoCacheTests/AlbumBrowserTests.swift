@@ -10,6 +10,10 @@ private actor AlbumFakeTransport: PhotosTransport {
     var timelineSnapshot = TimelineSnapshot(sections: [])
     var pageItems: [PhotoItem] = []
     var pageFailure: String?
+    var catalogFailure = false
+    var pausePage = false
+    var pageStarted = false
+    var pageContinuation: CheckedContinuation<Void, Never>?
     var albumListCalls = 0
     var albumTimelineCalls: [Int64] = []
     var collectionTimelineCalls: [(PhotoCollectionDescriptor, Bool)] = []
@@ -57,6 +61,11 @@ private actor AlbumFakeTransport: PhotosTransport {
         replacementEntries = entries; replacementList = list; mutationFails = fails
     }
 
+    func pauseNextPage() { pausePage = true }
+    func releasePage() { pageContinuation?.resume(); pageContinuation = nil }
+
+    func failCatalog() { catalogFailure = true }
+
     func pauseNextCatalog() { pauseCatalog = true }
     func releaseCatalog() { catalogContinuation?.resume(); catalogContinuation = nil }
     func pauseNextMutation() { pauseMutation = true }
@@ -79,6 +88,7 @@ private actor AlbumFakeTransport: PhotosTransport {
     }
 
     func readAlbumCatalogBatch(albumID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry] {
+        if catalogFailure { throw TestFailure("Offline") }
         if offset == 0 { albumTimelineCalls.append(albumID) }
         let result = Array((albumEntriesByID[albumID] ?? []).dropFirst(offset).prefix(limit))
         if pauseCatalog {
@@ -93,8 +103,13 @@ private actor AlbumFakeTransport: PhotosTransport {
         let collection = request.collection
 
         itemRequests.append((section, collection))
+        if pausePage {
+            pausePage = false; pageStarted = true
+            await withCheckedContinuation { pageContinuation = $0 }
+        }
         if let pageFailure { throw TestFailure(pageFailure) }
-        return try fixtureBatch(pageItems, request: request, fields: fields)
+        let items = pageItems.count > 250 ? Array(pageItems.dropFirst(request.offset).prefix(request.limit)) : pageItems
+        return try fixtureBatch(items, request: request, fields: fields)
     }
 
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
@@ -136,6 +151,91 @@ final class AlbumBrowserTests: XCTestCase {
 
     private func thumbnail(_ unit: Int64) -> ThumbnailInfo {
         ThumbnailInfo(unitID: unit, cacheKey: "\(unit)_rev", sm: "ready", m: "ready", xl: "ready")
+    }
+
+    func testWholeAlbumResolverReadsEveryPageAndSkipsVideos() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        var items = try (1...251).map { try item($0) }
+        items.append(try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":252,\"time\":1711929600,\"type\":\"video\"}".utf8)))
+        await transport.configure(pageItems: items)
+        let repository = try makeRepository(root: root, transport: transport)
+        let result = await AlbumSelectionResolver(repository: repository).resolve(albumID: 54)
+        XCTAssertEqual(result?.count, 251)
+        XCTAssertEqual(Set(result?.map(\.id) ?? []), Set((1...251).map(Int64.init)))
+        let timeline = try await repository.verifiedTimelineSnapshot(collection: .album(54))
+        XCTAssertEqual(timeline.sections.count, 2)
+    }
+
+    func testWholeAlbumResolverHandlesEmptyAndVideoOnlyAlbums() async throws {
+        for video in [false, true] {
+            let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+            let transport = AlbumFakeTransport()
+            let items = video ? [try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"time\":1711929600,\"type\":\"video\"}".utf8))] : []
+            await transport.configure(pageItems: items)
+            let repository = try makeRepository(root: root, transport: transport)
+            let result = await AlbumSelectionResolver(repository: repository).resolve(albumID: 54)
+            XCTAssertEqual(result?.count, 0)
+        }
+    }
+
+    func testWholeAlbumResolverIncludesSingletonLivePhoto() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let live = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"time\":1711929600,\"type\":\"photo\",\"live_type\":\"live\"}".utf8))
+        await transport.configure(pageItems: [live])
+        let repository = try makeRepository(root: root, transport: transport)
+        let result = await AlbumSelectionResolver(repository: repository).resolve(albumID: 54)
+        XCTAssertEqual(result?.map(\.id), [1])
+        XCTAssertEqual(result?.first?.mediaKind, .livePhoto)
+    }
+
+    func testWholeAlbumResolverCancellation() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        await transport.configure(pageItems: [try item(1)])
+        await transport.pauseNextCatalog()
+        let repository = try makeRepository(root: root, transport: transport)
+        let task = Task { await AlbumSelectionResolver(repository: repository).resolve(albumID: 54) }
+        while !(await transport.catalogStarted) { await Task.yield() }
+        task.cancel()
+        await transport.releaseCatalog()
+        let result = await task.value
+        XCTAssertNil(result)
+    }
+
+    func testWholeAlbumResolverRejectsMembershipMutationDuringResolution() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        await transport.configure(albumList: [AlbumSummary(id: 54, name: "Album", itemCount: 1)], pageItems: [try item(1)])
+        await transport.configureMutation(entries: [DayTimelineEntry(id: 2, time: 1711929600)],
+                                          list: [AlbumSummary(id: 54, name: "Album", itemCount: 1)])
+        await transport.pauseNextPage()
+        await transport.pauseNextMutation()
+        let repository = try makeRepository(root: root, transport: transport)
+        let task = Task { await AlbumSelectionResolver(repository: repository).resolve(albumID: 54) }
+        while !(await transport.pageStarted) { await Task.yield() }
+        let mutation = Task { try await repository.addItems([2], toAlbum: 54) }
+        while !(await transport.mutationStarted) { await Task.yield() }
+        await transport.releasePage()
+        await transport.releaseMutation()
+        _ = try await mutation.value
+        let result = await task.value
+        XCTAssertNil(result)
+    }
+
+    func testWholeAlbumResolverRequiresOnlineVerification() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        await transport.configure(pageItems: [try item(1)])
+        let first = try makeRepository(root: root, transport: transport)
+        let firstResult = await AlbumSelectionResolver(repository: first).resolve(albumID: 54)
+        XCTAssertEqual(firstResult?.count, 1)
+        let offline = AlbumFakeTransport()
+        await offline.failCatalog()
+        let second = try makeRepository(root: root, transport: offline)
+        let result = await AlbumSelectionResolver(repository: second).resolve(albumID: 54)
+        XCTAssertNil(result)
     }
 
     func testAlbumListIsPersistedAndRevalidatedOnce() async throws {

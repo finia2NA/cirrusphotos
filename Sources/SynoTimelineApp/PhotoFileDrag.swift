@@ -6,23 +6,10 @@ import UniformTypeIdentifiers
 
 struct PhotoDragPayload: Sendable {
     let repository: CachedPhotosRepository
-    let item: PhotoItem?
-    let selection: BrowserCommandSnapshot?
-    let snapshot: TimelineSnapshot?
+    let source: PhotoDownloadSource
     let count: Int
     let filename: String
-    let capturedSelection: PhotoSelectionSnapshot?
 
-    init(repository: CachedPhotosRepository, item: PhotoItem?, selection: BrowserCommandSnapshot?,
-         snapshot: TimelineSnapshot?, count: Int, filename: String) {
-        self.repository = repository
-        self.item = item
-        self.selection = selection
-        self.snapshot = snapshot
-        self.count = count
-        self.filename = filename
-        self.capturedSelection = selection?.captureSelection(timeline: snapshot)
-    }
 }
 
 private final class PromiseCompletion: @unchecked Sendable {

@@ -13,6 +13,30 @@ struct PhotoDownloadJob: Identifiable {
     var active: Bool
 }
 
+enum PhotoDownloadSource: Sendable {
+    case item(PhotoItem)
+    case selection(PhotoSelectionSnapshot)
+    case album(Int64)
+
+    func resolve(repository: CachedPhotosRepository) async throws -> [PhotoItem] {
+        let items: [PhotoItem]?
+        switch self {
+        case .item(let item): items = [item]
+        case .selection(let selection): items = await SelectionDownloadResolver(repository: repository).resolve(selection)
+        case .album(let id): items = await AlbumSelectionResolver(repository: repository).resolve(albumID: id)
+        }
+        try Task.checkCancellation()
+        guard let items else { throw DownloadFailure.message("The photos could not be verified.") }
+        guard !items.isEmpty else { throw DownloadFailure.message("No eligible photos to download.") }
+        return items
+    }
+
+    var initialName: String {
+        if case .item(let item) = self { return item.filename ?? "Photo" }
+        return "Preparing download…"
+    }
+}
+
 @MainActor
 final class PhotoDownloadManager: ObservableObject {
     static let shared = PhotoDownloadManager()
@@ -50,26 +74,16 @@ final class PhotoDownloadManager: ObservableObject {
         return panel.runModal() == .OK ? panel.url : nil
     }
 
-    func start(repository: CachedPhotosRepository, snapshot: TimelineSnapshot?, selection: BrowserCommandSnapshot?,
-               item: PhotoItem?, kind: PhotoDownloadKind, choose: Bool) {
-        let capturedSelection = selection?.captureSelection(timeline: snapshot)
+    func start(repository: CachedPhotosRepository, source: PhotoDownloadSource,
+               kind: PhotoDownloadKind, choose: Bool) {
         guard let directory = choose ? chooseDirectory() : Self.directory else { return }
         let id = UUID()
-        jobs.insert(PhotoDownloadJob(id: id, name: item?.filename ?? "Preparing download…", progress: nil,
+        jobs.insert(PhotoDownloadJob(id: id, name: source.initialName, progress: nil,
                                      status: "Preparing…", active: true), at: 0)
         tasks[id] = Task { [weak self] in
             guard let self else { return }
             do {
-                let items: [PhotoItem]
-                if let item { items = [item] }
-                else if let capturedSelection {
-                    guard let resolved = await SelectionDownloadResolver(repository: repository).resolve(capturedSelection), !resolved.isEmpty else {
-                        throw DownloadFailure.message("The selected photos could not be verified.")
-                    }
-                    items = resolved
-                } else { throw DownloadFailure.message("No photo is selected.") }
-                try Task.checkCancellation()
-                guard !items.isEmpty else { throw DownloadFailure.message("No photos are selected.") }
+                let items = try await source.resolve(repository: repository)
                 update(id) { $0.name = Self.jobName(items); $0.status = "Downloading…" }
                 let cached = try await (items.count == 1 && kind == .original
                     ? repository.cachedOriginalForDownload(items[0]) : nil)
@@ -176,20 +190,12 @@ final class PhotoDownloadManager: ObservableObject {
 
     func fulfillPromise(_ payload: PhotoDragPayload, destination: URL, completion: @escaping (Error?) -> Void) {
         let id = UUID()
-        jobs.insert(PhotoDownloadJob(id: id, name: payload.item?.filename ?? "Preparing download…",
+        jobs.insert(PhotoDownloadJob(id: id, name: payload.source.initialName,
                                      progress: nil, status: "Preparing…", active: true), at: 0)
         tasks[id] = Task { [weak self] in
             guard let self else { completion(CancellationError()); return }
             do {
-                let items: [PhotoItem]
-                if let item = payload.item { items = [item] }
-                else if let capturedSelection = payload.capturedSelection {
-                    guard let resolved = await SelectionDownloadResolver(repository: payload.repository).resolve(capturedSelection), !resolved.isEmpty else {
-                        throw DownloadFailure.message("The selected photos could not be verified.")
-                    }
-                    items = resolved
-                } else { throw DownloadFailure.message("No photo is selected.") }
-                try Task.checkCancellation()
+                let items = try await payload.source.resolve(repository: payload.repository)
                 update(id) { $0.name = Self.jobName(items); $0.status = "Downloading…" }
                 let progress: @Sendable (TransferProgress) -> Void = { [weak self] value in
                     Task { @MainActor [weak self] in
@@ -343,12 +349,14 @@ final class PhotoDownloadMenuItem: NSMenuItem {
     @objc private func invoke() { handler() }
 }
 
+let photoDownloadActions: [(String, PhotoDownloadKind, Bool)] = [
+    ("Download", .original, false), ("Download to…", .original, true),
+    ("Download Compressed JPEG", .compressedJPEG, false), ("Download Compressed JPEG to…", .compressedJPEG, true)
+]
+
 func photoDownloadMenu(_ action: @escaping (PhotoDownloadKind, Bool) -> Void) -> NSMenu {
     let menu = NSMenu()
-    for (title, kind, choose) in [("Download", PhotoDownloadKind.original, false),
-                                   ("Download to…", .original, true),
-                                   ("Download Compressed JPEG", .compressedJPEG, false),
-                                   ("Download Compressed JPEG to…", .compressedJPEG, true)] {
+    for (title, kind, choose) in photoDownloadActions {
         menu.addItem(PhotoDownloadMenuItem(title: title) { action(kind, choose) })
     }
     return menu
