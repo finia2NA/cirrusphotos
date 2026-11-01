@@ -130,6 +130,7 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var albums: [AlbumSummary] = []
     @Published private(set) var albumsVerified = false
     @Published private(set) var albumListError: String?
+    @Published private(set) var presentationNamespace: String?
     private(set) var repository: CachedPhotosRepository?
     private var started = false
     private var authenticationTask: Task<Void, Never>?
@@ -143,6 +144,7 @@ final class LibraryModel: ObservableObject {
 
     init(repository: CachedPhotosRepository? = nil) {
         self.repository = repository
+        self.presentationNamespace = repository?.namespace
     }
 
     var snapshot: TimelineSnapshot? { snapshot(for: .personalLibrary) }
@@ -754,6 +756,7 @@ final class LibraryModel: ObservableObject {
                     budget: CacheBudget.bytes(at: budgetFraction))
             }
             guard let repository else { return }
+            presentationNamespace = repository.namespace
             try await repository.setConfiguredThumbnailSize(thumbnailSize)
             if metadataResetTask == nil {
                 metadataResetTask = Task { [weak self] in
@@ -809,6 +812,8 @@ final class LibraryModel: ObservableObject {
     private func receiveAlbums(_ event: ResourceEvent<[AlbumSummary]>) {
         switch event {
         case .value(let list, let verified):
+            // Never expose a provisional replacement under the preceding list’s authority.
+            albumsVerified = false
             albums = list
             albumsVerified = verified
             if verified { albumListError = nil }
@@ -904,8 +909,8 @@ final class LibraryModel: ObservableObject {
         }
         timelineVerifications.removeAll()
         collectionErrors.removeAll()
-        albums = []
         albumsVerified = false
+        albums = []
         albumListError = nil
         browserSelectionStates.removeAll()
         pendingFavoriteConfirmation = nil

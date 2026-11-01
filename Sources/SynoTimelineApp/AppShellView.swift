@@ -10,6 +10,8 @@ struct AppShellView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismissWindow) private var dismissWindow
     @ObservedObject var navigationRestoration: NavigationRestorationStore
+    @ObservedObject var albumPresentation: AlbumPresentationStore
+    @State private var sidebarSelection: SidebarSelection
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var viewer: PhotoViewerPresentation?
     @State private var selectedDestination: LibraryDestination
@@ -21,8 +23,10 @@ struct AppShellView: View {
     @StateObject private var browserBridge = LibraryBrowserBridge()
     @StateObject private var mapModel = MapBrowserModel()
 
-    init(navigationRestoration: NavigationRestorationStore) {
+    init(navigationRestoration: NavigationRestorationStore, albumPresentation: AlbumPresentationStore) {
         self.navigationRestoration = navigationRestoration
+        self.albumPresentation = albumPresentation
+        _sidebarSelection = State(initialValue: navigationRestoration.sidebarSelection)
         _selectedDestination = State(initialValue: navigationRestoration.selectedDestination)
         _openedAlbumID = State(initialValue: navigationRestoration.openedAlbumID)
     }
@@ -77,19 +81,17 @@ struct AppShellView: View {
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            List(selection: Binding(get: { selectedDestination }, set: select)) {
+            List(selection: Binding(get: { sidebarSelection }, set: select)) {
                 Label("Library", systemImage: "photo.on.rectangle.angled")
-                    .tag(LibraryDestination.personalLibrary)
+                    .tag(SidebarSelection.destination(.personalLibrary))
                 Section("Collections") {
                     Label("Favorites", systemImage: "heart")
-                        .tag(LibraryDestination.favorites)
+                        .tag(SidebarSelection.destination(.favorites))
                     Label("Map", systemImage: "map")
-                        .tag(LibraryDestination.map)
+                        .tag(SidebarSelection.destination(.map))
                 }
-                Section("Albums") {
-                    Label("Albums", systemImage: "rectangle.stack")
-                        .tag(LibraryDestination.albums)
-                }
+                AlbumSidebarSection(presentation: albumPresentation, albums: model.albums,
+                                    repository: model.repository)
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 320)
@@ -104,6 +106,7 @@ struct AppShellView: View {
             model.navigateBack()
         }
         .onAppear {
+            configureAlbumPresentation()
             updateBackHandler()
             libraryFilter.configure(library: model, source: sourceCollection)
             timelineSectionLoad.configure(library: model, filter: libraryFilter)
@@ -133,7 +136,7 @@ struct AppShellView: View {
             dismissWindow(id: InfoPanelScene.id)
         }
         .task {
-            guard selectedDestination == .albums else { return }
+            guard selectedDestination == .albums || !albumPresentation.pinnedIDs.isEmpty else { return }
             model.ensureAlbumsLoaded()
             if let id = openedAlbumID { model.ensureCollectionLoaded(.album(id)) }
         }
@@ -173,6 +176,11 @@ struct AppShellView: View {
         .onChange(of: snapshotRevision) { _, _ in
             updateInfoPanelContext()
             updateTimelineSectionLoadSource()
+        }
+        .onChange(of: model.presentationNamespace) { _, _ in configureAlbumPresentation() }
+        .onChange(of: albumPresentation.pinnedIDs) { _, _ in
+            if !albumPresentation.pinnedIDs.isEmpty { model.ensureAlbumsLoaded() }
+            synchronizeAlbumSelection()
         }
         .onChange(of: model.albums) { _, albums in
             validateOpenedAlbum(in: albums)
@@ -265,7 +273,7 @@ struct AppShellView: View {
                         .allowsHitTesting(viewer == nil)
                         .ignoresSafeArea(.container, edges: .top)
                 } else {
-                    AlbumsOverviewView(onOpenAlbum: openAlbum, contentTopInset: topInset)
+                    AlbumsOverviewView(onOpenAlbum: openAlbum, presentation: albumPresentation, contentTopInset: topInset)
                         .allowsHitTesting(viewer == nil)
                         .ignoresSafeArea(.container, edges: .top)
                 }
@@ -300,8 +308,16 @@ struct AppShellView: View {
         }
     }
 
-    private func select(_ destination: LibraryDestination) {
-        guard destination != selectedDestination else { return }
+    private func configureAlbumPresentation() {
+        guard let namespace = model.presentationNamespace else { return }
+        albumPresentation.configure(namespace: namespace)
+        if !albumPresentation.pinnedIDs.isEmpty { model.ensureAlbumsLoaded() }
+        validateOpenedAlbum(in: model.albums)
+        synchronizeAlbumSelection()
+    }
+
+    private func select(_ selection: SidebarSelection) {
+        guard selection != sidebarSelection else { return }
         if let active = viewer {
             guard active.close() else { return }
             active.canvasController.collapse(to: nil, reduceMotion: reduceMotion) {
@@ -309,36 +325,69 @@ struct AppShellView: View {
                 lastViewerFollowSelection = nil
                 model.setActiveViewer(nil)
                 infoPanel.updateViewer(active: false, item: nil)
-                finishSelection(destination)
+                finishSelection(selection)
             }
             return
         }
-        finishSelection(destination)
+        finishSelection(selection)
     }
 
-    private func finishSelection(_ destination: LibraryDestination) {
-        navigationRestoration.select(destination)
-        selectedDestination = destination
-        if destination == .albums {
+    private func finishSelection(_ requested: SidebarSelection) {
+        // Returning to Albums from another destination restores its last open route.
+        let selection: SidebarSelection
+        if requested == .destination(.albums), selectedDestination != .albums,
+           let id = openedAlbumID, albumPresentation.pinnedIDs.contains(id) {
+            selection = .album(id)
+        } else {
+            selection = requested
+        }
+        let returningToAlbums = selectedDestination != .albums
+        sidebarSelection = selection
+        navigationRestoration.selectSidebar(selection)
+        selectedDestination = selection.destination
+        switch selection {
+        case .album(let id):
+            openedAlbumID = id
+            navigationRestoration.setOpenedAlbum(id)
             model.ensureAlbumsLoaded()
-            validateOpenedAlbum(in: model.albums)
-            if let openedAlbumID { model.ensureCollectionLoaded(.album(openedAlbumID)) }
+            model.ensureCollectionLoaded(.album(id))
+        case .destination(.albums):
+            if returningToAlbums, let id = openedAlbumID {
+                model.ensureCollectionLoaded(.album(id))
+            } else {
+                openedAlbumID = nil
+                navigationRestoration.setOpenedAlbum(nil)
+            }
+            model.ensureAlbumsLoaded()
+        case .destination:
+            break
         }
         updateInfoPanelContext()
     }
 
+    private func synchronizeAlbumSelection() {
+        guard selectedDestination == .albums else { return }
+        let selection: SidebarSelection = openedAlbumID.flatMap {
+            albumPresentation.pinnedIDs.contains($0) ? .album($0) : nil
+        } ?? .destination(.albums)
+        sidebarSelection = selection
+        navigationRestoration.selectSidebar(selection)
+    }
+
     private func validateOpenedAlbum(in albums: [AlbumSummary]) {
-        guard selectedDestination == .albums,
-              navigationRestoration.clearOpenedAlbumIfMissing(
-                in: albums, verified: model.albumsVerified
-              ) else { return }
+        albumPresentation.reconcile(albums, verified: model.albumsVerified)
+        guard navigationRestoration.clearOpenedAlbumIfMissing(
+            in: albums, verified: model.albumsVerified
+        ) else { return }
         openedAlbumID = nil
+        synchronizeAlbumSelection()
         updateInfoPanelContext()
     }
 
     private func openAlbum(_ album: AlbumSummary) {
         openedAlbumID = album.id
         navigationRestoration.setOpenedAlbum(album.id)
+        synchronizeAlbumSelection()
         model.ensureCollectionLoaded(.album(album.id))
         updateBackHandler()
         updateInfoPanelContext()
@@ -347,6 +396,7 @@ struct AppShellView: View {
     private func closeAlbum() {
         openedAlbumID = nil
         navigationRestoration.setOpenedAlbum(nil)
+        synchronizeAlbumSelection()
         updateBackHandler()
         updateInfoPanelContext()
     }

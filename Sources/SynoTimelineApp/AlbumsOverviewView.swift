@@ -6,6 +6,7 @@ import SynologyAPI
 /// Full-screen overview of every Personal Space album.
 struct AlbumsOverviewView: View {
     let onOpenAlbum: (AlbumSummary) -> Void
+    @ObservedObject var presentation: AlbumPresentationStore
     var contentTopInset: CGFloat = 0
     @EnvironmentObject private var model: LibraryModel
 
@@ -17,7 +18,7 @@ struct AlbumsOverviewView: View {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 20) {
                         ForEach(model.albums) { album in
-                            AlbumCardView(album: album, repository: model.repository) {
+                            AlbumCardView(album: album, repository: model.repository, presentation: presentation) {
                                 onOpenAlbum(album)
                             }
                         }
@@ -47,6 +48,7 @@ struct AlbumsOverviewView: View {
 private struct AlbumCardView: View {
     let album: AlbumSummary
     let repository: CachedPhotosRepository?
+    @ObservedObject var presentation: AlbumPresentationStore
     let onOpen: () -> Void
 
     var body: some View {
@@ -61,6 +63,8 @@ private struct AlbumCardView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            Button("Add to Sidebar") { presentation.add(album.id) }
+            Divider()
             AlbumDownloadCommands(albumID: album.id, repository: repository)
         }
         .accessibilityLabel("\(album.name), \(itemCountText)")
@@ -94,11 +98,13 @@ struct AlbumCoverView: View {
     let thumbnail: ThumbnailInfo?
     let repository: CachedPhotosRepository?
     var cornerRadius: CGFloat = 8
+    var placeholderFont: Font = .largeTitle
+    var maxPixel: Int = 512
     @State private var image: NSImage?
 
     private var identity: String {
         guard let thumbnail else { return "missing" }
-        return "\(thumbnail.unitID):\(thumbnail.cacheKey)"
+        return "\(repository?.namespace ?? "unavailable"):\(thumbnail.unitID):\(thumbnail.cacheKey):\(maxPixel)"
     }
 
     var body: some View {
@@ -111,7 +117,7 @@ struct AlbumCoverView: View {
                     ZStack {
                         Color.secondary.opacity(0.12)
                         Image(systemName: "rectangle.stack")
-                            .font(.largeTitle)
+                            .font(placeholderFont)
                             .foregroundStyle(.tertiary)
                     }
                 }
@@ -130,7 +136,7 @@ struct AlbumCoverView: View {
             guard !Task.isCancelled else { return }
             switch event {
             case .value(let value, _):
-                if let decoded = await DecodedImages.shared.image(from: value.data, maxPixel: 512) {
+                if let decoded = await DecodedImages.shared.image(from: value.data, maxPixel: maxPixel) {
                     guard !Task.isCancelled else { return }
                     image = decoded
                 }

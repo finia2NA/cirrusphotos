@@ -16,11 +16,20 @@ enum LibraryDestination: String, Codable, Hashable, Sendable, CaseIterable {
     case personalLibrary, favorites, albums, map
 }
 
+enum SidebarSelection: Codable, Hashable {
+    case destination(LibraryDestination)
+    case album(Int64)
+
+    var destination: LibraryDestination {
+        switch self { case .destination(let destination): destination; case .album: .albums }
+    }
+}
+
 struct RestorableAppNavigationState: Codable, Equatable {
-    static let currentVersion = 3
+    static let currentVersion = 4
 
     var version = currentVersion
-    var selectedDestination: LibraryDestination = .personalLibrary
+    var sidebarSelection: SidebarSelection = .destination(.personalLibrary)
     var openedAlbumID: Int64?
     /// Keyed by `PhotoCollectionDescriptor.rawValue`.
     var anchors: [String: PhotoTimelineRestorationAnchor] = [:]
@@ -48,15 +57,17 @@ final class NavigationRestorationStore: ObservableObject {
     }
 
     var selectedDestination: LibraryDestination {
-        state.selectedDestination
+        state.sidebarSelection.destination
     }
+
+    var sidebarSelection: SidebarSelection { state.sidebarSelection }
 
     var openedAlbumID: Int64? {
         state.openedAlbumID
     }
 
-    func select(_ destination: LibraryDestination) {
-        state.selectedDestination = destination
+    func selectSidebar(_ selection: SidebarSelection) {
+        state.sidebarSelection = selection
         save()
     }
 
@@ -71,7 +82,9 @@ final class NavigationRestorationStore: ObservableObject {
     func clearOpenedAlbumIfMissing(in albums: [AlbumSummary], verified: Bool) -> Bool {
         guard verified, let id = state.openedAlbumID,
               !albums.contains(where: { $0.id == id }) else { return false }
-        setOpenedAlbum(nil)
+        state.openedAlbumID = nil
+        if case .album = state.sidebarSelection { state.sidebarSelection = .destination(.albums) }
+        save()
         return true
     }
 

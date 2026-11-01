@@ -10,7 +10,7 @@ public actor CachedPhotosRepository {
     public let store: DiskCache
     let client: any PhotosTransport
     let credentials: SynologyCredentials
-    let namespace: String
+    public nonisolated let namespace: String
     let runID = UUID().uuidString
     let gate = NetworkGate()
     let fullImageGate = FullImageGate()

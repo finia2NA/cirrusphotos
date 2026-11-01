@@ -30,12 +30,14 @@ final class NavigationRestorationTests: XCTestCase {
         writer.setTimelineAnchor(personal, for: .personalLibrary)
         writer.setTimelineAnchor(favorites, for: .favorites)
         writer.setTimelineAnchor(album, for: .album(54))
-        writer.select(.albums)
+        writer.selectSidebar(.destination(.albums))
         writer.setOpenedAlbum(54)
+        writer.selectSidebar(.album(54))
 
         let reader = NavigationRestorationStore(defaults: defaults, key: key)
         XCTAssertEqual(reader.selectedDestination, .albums)
         XCTAssertEqual(reader.openedAlbumID, 54)
+        XCTAssertEqual(reader.sidebarSelection, .album(54))
         XCTAssertEqual(reader.timelineAnchor(for: .personalLibrary), personal)
         XCTAssertEqual(reader.timelineAnchor(for: .favorites), favorites)
         XCTAssertEqual(reader.timelineAnchor(for: .album(54)), album)
@@ -71,12 +73,14 @@ final class NavigationRestorationTests: XCTestCase {
         let key = "state"
         let store = NavigationRestorationStore(defaults: defaults, key: key)
         store.setOpenedAlbum(11)
+        store.selectSidebar(.album(11))
         let other = AlbumSummary(id: 12, name: "Other", itemCount: 1)
 
         XCTAssertFalse(store.clearOpenedAlbumIfMissing(in: [other], verified: false))
         XCTAssertEqual(store.openedAlbumID, 11)
         XCTAssertTrue(store.clearOpenedAlbumIfMissing(in: [other], verified: true))
         XCTAssertNil(store.openedAlbumID)
+        XCTAssertEqual(store.sidebarSelection, .destination(.albums))
         XCTAssertNil(NavigationRestorationStore(defaults: defaults, key: key).openedAlbumID)
     }
 
@@ -86,7 +90,7 @@ final class NavigationRestorationTests: XCTestCase {
         let key = "state"
         let store = NavigationRestorationStore(defaults: defaults, key: key)
 
-        store.select(.map)
+        store.selectSidebar(.destination(.map))
 
         let restored = NavigationRestorationStore(defaults: defaults, key: key)
         XCTAssertEqual(restored.selectedDestination, .map)
@@ -95,15 +99,15 @@ final class NavigationRestorationTests: XCTestCase {
     }
 
     func testOldVersionIsDiscardedCompletely() {
-        assertInvalidPayloadFallsBack(#"{"version":2,"selectedDestination":"favorites"}"#)
+        assertInvalidPayloadFallsBack(#"{"version":3,"selectedDestination":"favorites"}"#)
     }
 
     func testFutureVersionIsDiscardedCompletely() {
-        assertInvalidPayloadFallsBack(#"{"version":4,"selectedDestination":"favorites"}"#)
+        assertInvalidPayloadFallsBack(#"{"version":5,"sidebarSelection":"favorites"}"#)
     }
 
     func testCorruptPayloadIsDiscardedCompletely() {
-        assertInvalidPayloadFallsBack(#"{"version":3,"selectedDestination":}"#)
+        assertInvalidPayloadFallsBack(#"{"version":4,"sidebarSelection":}"#)
     }
 
     private func assertInvalidPayloadFallsBack(_ payload: String,

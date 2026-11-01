@@ -5,6 +5,7 @@ import SwiftUI
 struct SynoTimelineApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var model = LibraryModel()
+    @StateObject private var albumPresentation = AlbumPresentationStore()
     @StateObject private var navigationRestoration = NavigationRestorationStore()
     @StateObject private var infoPanel = InfoPanelModel()
     @StateObject private var libraryFilter = LibraryFilterModel()
@@ -12,7 +13,7 @@ struct SynoTimelineApp: App {
 
     var body: some Scene {
         WindowGroup("Cirrus Photos") {
-            AppShellView(navigationRestoration: navigationRestoration)
+            AppShellView(navigationRestoration: navigationRestoration, albumPresentation: albumPresentation)
                 .environmentObject(model)
                 .environmentObject(infoPanel)
                 .environmentObject(libraryFilter)
