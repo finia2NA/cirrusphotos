@@ -18,6 +18,8 @@ final class AlbumMutationTests: XCTestCase {
         XCTAssertEqual(album.itemCount, 2)
         XCTAssertEqual(album.type, "normal")
         XCTAssertEqual(album.ownerUserID, 1)
+        let addable = try await client.addableAlbums()
+        XCTAssertEqual(addable.map(\.id), [69])
     }
 
     func testNonemptyErrorListDoesNotClaimSuccess() async throws {
@@ -67,6 +69,16 @@ private final class AlbumMutationProtocol: URLProtocol, @unchecked Sendable {
             XCTAssertEqual(values["id"], "[69]")
             XCTAssertEqual(values["version"], "4")
             json = #"{"success":true,"data":{"list":[{"id":69,"name":"Trip","item_count":2,"type":"normal","owner_user_id":1}]}}"#
+        case "list":
+            XCTAssertEqual(values["api"], "SYNO.Foto.Browse.NormalAlbum")
+            XCTAssertEqual(values["version"], "2")
+            XCTAssertEqual(values["category"], "\"addable\"")
+            XCTAssertEqual(values["offset"], "0")
+            XCTAssertEqual(values["limit"], "100")
+            XCTAssertEqual(values["sort_by"], "\"album_name\"")
+            XCTAssertEqual(values["sort_direction"], "\"asc\"")
+            XCTAssertEqual(values["additional"], "[\"sharing_info\",\"thumbnail\"]")
+            json = #"{"success":true,"data":{"list":[{"id":69,"name":"Trip","item_count":2}]}}"#
         default: XCTFail("Unexpected method \(method)"); json = #"{"success":false}"#
         }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)

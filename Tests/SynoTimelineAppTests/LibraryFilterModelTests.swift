@@ -5,6 +5,16 @@ import SynologyAPI
 
 @MainActor
 final class LibraryFilterModelTests: XCTestCase {
+    func testFilteredAlbumRetainsItsSourceForRemoval() {
+        let library = LibraryModel()
+        let filter = PhotoCollectionDescriptor.libraryFilter(UUID())
+        library.registerSessionCollection(filter, snapshot: TimelineSnapshot(sections: []), source: .album(42))
+        XCTAssertEqual(library.sourceAlbumID(for: filter), 42)
+        XCTAssertNil(library.sourceAlbumID(for: .personalLibrary))
+        library.unregisterSessionCollection(filter)
+        XCTAssertNil(library.sourceAlbumID(for: filter))
+    }
+
     func testSelectionFollowsIDsWhenFilterMembershipChanges() {
         var state = BrowserSelectionState()
         state.bind(to: "old")

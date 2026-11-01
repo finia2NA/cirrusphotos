@@ -52,6 +52,7 @@ final class PhotoDownloadManager: ObservableObject {
 
     func start(repository: CachedPhotosRepository, snapshot: TimelineSnapshot?, selection: BrowserCommandSnapshot?,
                item: PhotoItem?, kind: PhotoDownloadKind, choose: Bool) {
+        let capturedSelection = selection?.captureSelection(timeline: snapshot)
         guard let directory = choose ? chooseDirectory() : Self.directory else { return }
         let id = UUID()
         jobs.insert(PhotoDownloadJob(id: id, name: item?.filename ?? "Preparing download…", progress: nil,
@@ -61,12 +62,8 @@ final class PhotoDownloadManager: ObservableObject {
             do {
                 let items: [PhotoItem]
                 if let item { items = [item] }
-                else if let selection, let snapshot {
-                    guard let resolved = await SelectionDownloadResolver(repository: repository).resolve(
-                        collection: selection.collection, snapshot: snapshot,
-                        selectedOrdinals: selection.selectedOrdinals,
-                        knownItemIDsByOrdinal: selection.knownItemIDsByOrdinal,
-                        expectedTimelineFingerprint: selection.indexFingerprint), !resolved.isEmpty else {
+                else if let capturedSelection {
+                    guard let resolved = await SelectionDownloadResolver(repository: repository).resolve(capturedSelection), !resolved.isEmpty else {
                         throw DownloadFailure.message("The selected photos could not be verified.")
                     }
                     items = resolved
@@ -104,6 +101,7 @@ final class PhotoDownloadManager: ObservableObject {
 
     func edit(repository: CachedPhotosRepository, snapshot: TimelineSnapshot?, selection: BrowserCommandSnapshot?,
               item: PhotoItem?, applicationURL: URL) {
+        let capturedSelection = selection?.captureSelection(timeline: snapshot)
         let id = UUID()
         jobs.insert(PhotoDownloadJob(id: id, name: item?.filename ?? "Preparing photo…", progress: nil,
                                      status: "Preparing…", active: true), at: 0)
@@ -114,12 +112,8 @@ final class PhotoDownloadManager: ObservableObject {
             do {
                 let photo: PhotoItem
                 if let item { photo = item }
-                else if let selection, let snapshot {
-                    guard let items = await SelectionDownloadResolver(repository: repository).resolve(
-                        collection: selection.collection, snapshot: snapshot,
-                        selectedOrdinals: selection.selectedOrdinals,
-                        knownItemIDsByOrdinal: selection.knownItemIDsByOrdinal,
-                        expectedTimelineFingerprint: selection.indexFingerprint), items.count == 1,
+                else if let capturedSelection {
+                    guard let items = await SelectionDownloadResolver(repository: repository).resolve(capturedSelection), items.count == 1,
                         let resolved = items.first else {
                         throw DownloadFailure.message("The photo could not be verified.")
                     }
@@ -189,12 +183,8 @@ final class PhotoDownloadManager: ObservableObject {
             do {
                 let items: [PhotoItem]
                 if let item = payload.item { items = [item] }
-                else if let selection = payload.selection, let snapshot = payload.snapshot {
-                    guard let resolved = await SelectionDownloadResolver(repository: payload.repository).resolve(
-                        collection: selection.collection, snapshot: snapshot,
-                        selectedOrdinals: selection.selectedOrdinals,
-                        knownItemIDsByOrdinal: selection.knownItemIDsByOrdinal,
-                        expectedTimelineFingerprint: selection.indexFingerprint), !resolved.isEmpty else {
+                else if let capturedSelection = payload.capturedSelection {
+                    guard let resolved = await SelectionDownloadResolver(repository: payload.repository).resolve(capturedSelection), !resolved.isEmpty else {
                         throw DownloadFailure.message("The selected photos could not be verified.")
                     }
                     items = resolved

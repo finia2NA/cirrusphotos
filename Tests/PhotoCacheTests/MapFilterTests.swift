@@ -142,4 +142,120 @@ final class MapFilterTests: XCTestCase, @unchecked Sendable {
         let reset = await pages(repository, registration: registration, allowNetwork: false)
         XCTAssertTrue(reset.isEmpty)
     }
+    func testSelectionLeaseSurvivesViewDismissalAndReleasesAfterResolution() async throws {
+        let root = temporaryTestRoot("map-selection-lease"); defer { try? FileManager.default.removeItem(at: root) }
+        let photo = try item(7)
+        let transport = CanonicalFilterTransport([photo])
+        let repository = try repository(root: root, transport: transport)
+        let map = try await register(repository, items: [photo])
+        let selection = PhotoSelectionSnapshot(collection: map.descriptor, timeline: map.snapshot,
+            timelineFingerprint: LibraryIndex(snapshot: map.snapshot).fingerprint,
+            selectedOrdinals: IndexSet(integer: 0), knownItemIDsByOrdinal: [:], authority: map.authority)
+        try await repository.store.evictMetadataDetails(namespace: repository.metadataNamespace, itemIDs: [7])
+        await transport.block()
+        let task = Task { await SelectionItemResolver(repository: repository).resolve(selection) }
+        let started = await waitUntil { await transport.stats().lookups.count == 1 }
+        XCTAssertTrue(started)
+        await repository.unregisterMapFilter(map.descriptor)
+        await transport.release()
+        let result = await task.value
+        XCTAssertEqual(result?.map(\.id), [7])
+        let current = await repository.latestTimelineSnapshot(collection: map.descriptor)
+        XCTAssertNil(current)
+    }
+
+    func testSelectionRejectsSameShapeFilterReplacementAndMapInvalidation() async throws {
+        let root = temporaryTestRoot("filter-selection-authority"); defer { try? FileManager.default.removeItem(at: root) }
+        let photos = try [item(1, camera: "A"), item(2, camera: "B")]
+        let repository = try repository(root: root, transport: CanonicalFilterTransport(photos))
+        let map = try await register(repository, items: photos, current: true)
+        let controller = LibraryFilterController(repository: repository, snapshot: map.snapshot, sourceCollection: map.descriptor)
+        await controller.indexCachedPages()
+        let first = await controller.apply(LibraryFilter(cameras: ["A"]))
+        let authority = try await repository.registerLibraryFilter(first)
+        let selection = PhotoSelectionSnapshot(collection: first.descriptor, timeline: first.snapshot,
+            timelineFingerprint: LibraryIndex(snapshot: first.snapshot).fingerprint,
+            selectedOrdinals: IndexSet(integer: 0), knownItemIDsByOrdinal: [:], authority: authority)
+        let original = await SelectionItemResolver(repository: repository).resolve(selection)
+        XCTAssertEqual(original?.map(\.id), [1])
+        // Replace the same descriptor with a different ID and identical geometry.
+        let other = await controller.apply(LibraryFilter(cameras: ["B"]))
+        XCTAssertEqual(LibraryIndex(snapshot: first.snapshot).fingerprint, LibraryIndex(snapshot: other.snapshot).fingerprint)
+        let replacement = LibraryFilterRegistration(descriptor: first.descriptor, snapshot: other.snapshot,
+            referencesBySection: other.referencesBySection, filter: other.filter, revision: other.revision,
+            sourceFingerprint: other.sourceFingerprint, sourceCollection: other.sourceCollection)
+        _ = try await repository.replaceLibraryFilterSnapshot(replacement)
+        let replaced = await SelectionItemResolver(repository: repository).resolve(selection)
+        XCTAssertNil(replaced)
+        let current = try await repository.replaceLibraryFilterSnapshot(first)
+        let next = PhotoSelectionSnapshot(collection: first.descriptor, timeline: first.snapshot,
+            timelineFingerprint: LibraryIndex(snapshot: first.snapshot).fingerprint,
+            selectedOrdinals: IndexSet(integer: 0), knownItemIDsByOrdinal: [:], authority: current)
+        _ = await repository.acceptLocationRecords([])
+        let invalid = await SelectionItemResolver(repository: repository).resolve(next)
+        XCTAssertNil(invalid)
+        await controller.shutdown()
+    }
+
+    func testCancelledSelectionReleasesDismissedMap() async throws {
+        let root = temporaryTestRoot("map-selection-cancel"); defer { try? FileManager.default.removeItem(at: root) }
+        let photo = try item(8)
+        let transport = CanonicalFilterTransport([photo])
+        let repository = try repository(root: root, transport: transport)
+        let map = try await register(repository, items: [photo])
+        try await repository.store.evictMetadataDetails(namespace: repository.metadataNamespace, itemIDs: [8])
+        let selection = PhotoSelectionSnapshot(collection: map.descriptor, timeline: map.snapshot,
+            timelineFingerprint: LibraryIndex(snapshot: map.snapshot).fingerprint,
+            selectedOrdinals: IndexSet(integer: 0), knownItemIDsByOrdinal: [:], authority: map.authority)
+        await transport.block()
+        let task = Task { await SelectionItemResolver(repository: repository).resolve(selection) }
+        let started = await waitUntil { await transport.stats().lookups.count == 1 }
+        XCTAssertTrue(started)
+        await repository.unregisterMapFilter(map.descriptor)
+        task.cancel()
+        await transport.release()
+        let result = await task.value
+        XCTAssertNil(result)
+        let current = await repository.latestTimelineSnapshot(collection: map.descriptor)
+        XCTAssertNil(current)
+    }
+
+    func testCapturedSelectionRetainsRegistrationBeforeResolverStarts() async throws {
+        let root = temporaryTestRoot("map-selection-acceptance"); defer { try? FileManager.default.removeItem(at: root) }
+        let photo = try item(9)
+        let repository = try repository(root: root, transport: CanonicalFilterTransport([photo]))
+        let map = try await register(repository, items: [photo], current: true)
+        let selection = PhotoSelectionSnapshot(collection: map.descriptor, timeline: map.snapshot,
+            timelineFingerprint: LibraryIndex(snapshot: map.snapshot).fingerprint,
+            selectedOrdinals: IndexSet(integer: 0), knownItemIDsByOrdinal: [:], authority: map.authority)
+        await repository.unregisterMapFilter(map.descriptor)
+        let result = await SelectionItemResolver(repository: repository).resolve(selection)
+        XCTAssertEqual(result?.map(\.id), [9])
+        let removed = await waitUntil { await repository.latestTimelineSnapshot(collection: map.descriptor) == nil }
+        XCTAssertTrue(removed)
+    }
+
+    func testFilteredMapSelectionRetainsBothRegistrationsAfterDismissal() async throws {
+        let root = temporaryTestRoot("filtered-map-selection"); defer { try? FileManager.default.removeItem(at: root) }
+        let photos = try [item(1, camera: "A"), item(2, camera: "B")]
+        let repository = try repository(root: root, transport: CanonicalFilterTransport(photos))
+        let map = try await register(repository, items: photos, current: true)
+        let controller = LibraryFilterController(repository: repository, snapshot: map.snapshot, sourceCollection: map.descriptor)
+        await controller.indexCachedPages()
+        let filter = await controller.apply(LibraryFilter(cameras: ["B"]))
+        let authority = try await repository.registerLibraryFilter(filter)
+        let selection = PhotoSelectionSnapshot(collection: filter.descriptor, timeline: filter.snapshot,
+            timelineFingerprint: LibraryIndex(snapshot: filter.snapshot).fingerprint,
+            selectedOrdinals: IndexSet(integer: 0), knownItemIDsByOrdinal: [:], authority: authority)
+        await repository.unregisterLibraryFilter(filter.descriptor)
+        await repository.unregisterMapFilter(map.descriptor)
+        let result = await SelectionItemResolver(repository: repository).resolve(selection)
+        XCTAssertEqual(result?.map(\.id), [2])
+        let mapRemoved = await waitUntil { await repository.latestTimelineSnapshot(collection: map.descriptor) == nil }
+        let filterRemoved = await waitUntil { await repository.latestTimelineSnapshot(collection: filter.descriptor) == nil }
+        XCTAssertTrue(mapRemoved)
+        XCTAssertTrue(filterRemoved)
+        await controller.shutdown()
+    }
+
 }

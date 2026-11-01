@@ -67,6 +67,8 @@ extension CachedPhotosRepository {
             let filterIDs = metadata.libraryFilters.filter { $0.value.registration.sourceCollection == collection }.map(\.key)
             for id in filterIDs {
                 if let state = metadata.libraryFilters.removeValue(forKey: id) {
+                    metadata.selectionRetentions.removeValue(forKey: state.registration.descriptor)
+                    metadata.deferredSelectionUnregisters.remove(state.registration.descriptor)
                     metadata.latestTimelines.removeValue(forKey: state.registration.descriptor)
                 }
             }

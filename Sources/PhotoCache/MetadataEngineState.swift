@@ -53,6 +53,9 @@ struct MetadataEngineState {
     var locationRecords: [Int64: PhotoLocationRecord] = [:]
     var locationRevision: UInt64 = 0
     var mapFilterInvalidationObservers: [UUID: AsyncStream<PhotoCollectionDescriptor>.Continuation] = [:]
+    var selectionRetentions: [PhotoCollectionDescriptor: SelectionRegistrationRetention] = [:]
+    var selectionLeases: [UUID: Set<PhotoCollectionDescriptor>] = [:]
+    var deferredSelectionUnregisters: Set<PhotoCollectionDescriptor> = []
     var mapFilters: [UUID: MapFilterState] = [:]
     var sessionFilterCatalogs: [PhotoCollectionDescriptor: LibraryFilterCatalog] = [:]
     var libraryFilters: [UUID: LibraryFilterCollectionState] = [:]

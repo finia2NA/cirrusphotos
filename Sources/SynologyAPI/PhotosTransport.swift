@@ -109,6 +109,7 @@ public protocol PhotosTransport: Sendable {
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult
     func readAlbumCatalogBatch(albumID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry]
     func albums() async throws -> [AlbumSummary]
+    func addableAlbums() async throws -> [AlbumSummary]
     func album(id: Int64) async throws -> AlbumSummary
     func createAlbum(name: String, itemIDs: [Int64]) async throws -> AlbumSummary
     func addItems(_ itemIDs: [Int64], toAlbum id: Int64) async throws
@@ -145,6 +146,7 @@ public protocol PhotosTransport: Sendable {
 }
 
 public extension PhotosTransport {
+    func addableAlbums() async throws -> [AlbumSummary] { throw SynologyAPIError.unsupported("Addable album listing is unavailable.") }
     func album(id: Int64) async throws -> AlbumSummary { throw SynologyAPIError.unsupported("Album lookup is unavailable.") }
     func createAlbum(name: String, itemIDs: [Int64]) async throws -> AlbumSummary { throw SynologyAPIError.unsupported("Album creation is unavailable.") }
     func addItems(_ itemIDs: [Int64], toAlbum id: Int64) async throws { throw SynologyAPIError.unsupported("Album membership changes are unavailable.") }

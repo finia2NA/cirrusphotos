@@ -23,6 +23,16 @@ struct BrowserCommandSnapshot: Sendable {
     let selectionGeneration: String?
     let selectedOrdinals: IndexSet
     let knownItemIDsByOrdinal: [Int: Int64]
+    var timeline: TimelineSnapshot? = nil
+    var authority: PhotoSelectionAuthority? = nil
+    var sourceAlbumID: Int64? = nil
+
+    func captureSelection(timeline fallback: TimelineSnapshot?) -> PhotoSelectionSnapshot? {
+        guard let timeline = timeline ?? fallback else { return nil }
+        return PhotoSelectionSnapshot(collection: collection, timeline: timeline,
+            timelineFingerprint: indexFingerprint ?? LibraryIndex(snapshot: timeline).fingerprint,
+            selectedOrdinals: selectedOrdinals, knownItemIDsByOrdinal: knownItemIDsByOrdinal, authority: authority)
+    }
 
     static let inactive = BrowserCommandSnapshot(
         owner: UUID(),
@@ -226,6 +236,8 @@ struct LibraryBrowserView: View {
                 VStack(spacing: 0) {
                     HStack(spacing: 0) {
                         LibraryBrowserScrollView(snapshot: snapshot,
+                                             authority: library.selectionAuthority(for: collection),
+                                             sourceAlbumID: library.sourceAlbumID(for: collection),
                                              filterMembership: library.filterMembership(for: collection),
                                              filterAuthority: library.filterAuthority(for: collection),
                                              collection: collection,
@@ -642,6 +654,8 @@ private struct HostedPlaceholder: View {
 
 struct LibraryBrowserScrollView: NSViewRepresentable {
     let snapshot: TimelineSnapshot
+    let authority: PhotoSelectionAuthority?
+    let sourceAlbumID: Int64?
     let filterMembership: [[Int64]]?
     let filterAuthority: [[Bool]]?
     let collection: PhotoCollectionDescriptor
@@ -733,6 +747,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         var observer: NSObjectProtocol?
         private var index: LibraryIndex?
         private var timelineSnapshot: TimelineSnapshot?
+        private var selectionAuthority: PhotoSelectionAuthority?
+        private var sourceAlbumID: Int64?
         private var geometry: LibraryViewportGeometry?
         private var window: LibraryPageWindow?
         private var pages: [Int: LibraryPage] = [:]
@@ -797,6 +813,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             let reusesWindow = collection == input.collection && repository === input.repository && window != nil
             collection = input.collection
             timelineSnapshot = input.snapshot
+            selectionAuthority = input.authority
+            sourceAlbumID = input.sourceAlbumID
             onVisibleDay = input.onVisibleDay
             onRetry = input.onRetry
             onOpenPhoto = input.onOpenPhoto
@@ -1303,7 +1321,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             let command = BrowserCommandSnapshot(owner: commandOwner, active: true, canOpen: count == 1,
                 canToggleFavorite: false, collection: collection, indexFingerprint: index.fingerprint,
                 selectionGeneration: selectionState.generation, selectedOrdinals: selected,
-                knownItemIDsByOrdinal: known)
+                knownItemIDsByOrdinal: known, timeline: timelineSnapshot, authority: selectionAuthority, sourceAlbumID: sourceAlbumID)
             let filename: String
             if count == 1 {
                 let name = clicked.photo.filename.flatMap { $0.isEmpty ? nil : $0 } ?? "Photo-\(clicked.photo.id)"
@@ -1328,12 +1346,12 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             let snapshot = BrowserCommandSnapshot(owner: commandOwner, active: true, canOpen: false,
                 canToggleFavorite: false, collection: collection, indexFingerprint: index?.fingerprint,
                 selectionGeneration: selectionState.generation, selectedOrdinals: selection.indexes,
-                knownItemIDsByOrdinal: known)
+                knownItemIDsByOrdinal: known, timeline: timelineSnapshot, authority: selectionAuthority, sourceAlbumID: sourceAlbumID)
             let menu = photoDownloadMenu { [weak self] kind, choose in self?.onDownload?(snapshot, kind, choose) }
             let editSnapshot = BrowserCommandSnapshot(owner: commandOwner, active: true, canOpen: true,
                 canToggleFavorite: false, collection: collection, indexFingerprint: index?.fingerprint,
                 selectionGeneration: selectionState.generation, selectedOrdinals: IndexSet(integer: ordinal),
-                knownItemIDsByOrdinal: [ordinal: item.photo.id])
+                knownItemIDsByOrdinal: [ordinal: item.photo.id], timeline: timelineSnapshot, authority: selectionAuthority, sourceAlbumID: sourceAlbumID)
             addEditMenu(to: menu, filename: item.photo.filename) { [weak self] application in
                 self?.onEdit?(editSnapshot, application)
             }
@@ -1364,7 +1382,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 indexFingerprint: index?.fingerprint,
                 selectionGeneration: selectionState.generation,
                 selectedOrdinals: selection.indexes,
-                knownItemIDsByOrdinal: knownItemIDs
+                knownItemIDsByOrdinal: knownItemIDs, timeline: timelineSnapshot, authority: selectionAuthority, sourceAlbumID: sourceAlbumID
             )
             DispatchQueue.main.async { callback?(snapshot, handler) }
         }

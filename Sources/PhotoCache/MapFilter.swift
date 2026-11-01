@@ -4,6 +4,7 @@ import SynologyAPI
 public struct MapFilterRegistration: Sendable {
     public let descriptor: PhotoCollectionDescriptor
     public let snapshot: TimelineSnapshot
+    public let authority: PhotoSelectionAuthority
 }
 
 extension CachedPhotosRepository {
@@ -44,7 +45,8 @@ extension CachedPhotosRepository {
         try storeMapFilter(descriptor, snapshot: built.snapshot,
                               itemIDsBySection: built.itemIDsBySection,
                               locationRevision: locationRevision.rawValue)
-        return MapFilterRegistration(descriptor: descriptor, snapshot: built.snapshot)
+        return MapFilterRegistration(descriptor: descriptor, snapshot: built.snapshot,
+                                     authority: selectionAuthority(collection: descriptor, snapshot: built.snapshot)!)
     }
 
     private func storeMapFilter(_ descriptor: PhotoCollectionDescriptor,
@@ -62,6 +64,7 @@ extension CachedPhotosRepository {
             idsBySection[section] = ids
         }
         guard !metadata.resetInProgress else { throw MetadataAdmissionError.resetInProgress }
+        installSelectionRetention(descriptor)
         metadata.mapFilters[filterID] = MapFilterState(registrationID: UUID(),
                                                        metadataEpoch: metadata.admissionEpoch,
                                                        locationRevision: locationRevision,
@@ -72,8 +75,14 @@ extension CachedPhotosRepository {
     }
 
     public func unregisterMapFilter(_ descriptor: PhotoCollectionDescriptor) {
+        if deferSelectionUnregister(descriptor) { return }
+        removeMapFilter(descriptor)
+    }
+
+    func removeMapFilter(_ descriptor: PhotoCollectionDescriptor) {
         guard let filterID = descriptor.mapFilterID,
               metadata.mapFilters.removeValue(forKey: filterID) != nil else { return }
+        metadata.selectionRetentions.removeValue(forKey: descriptor)
         metadata.latestTimelines.removeValue(forKey: descriptor)
         metadata.sessionFilterCatalogs.removeValue(forKey: descriptor)
         metadata.mutationEpochs.removeValue(forKey: descriptor)
@@ -132,7 +141,7 @@ extension CachedPhotosRepository {
     func invalidateMapFiltersForLocationChange() {
         let descriptors = metadata.mapFilters.keys.map(PhotoCollectionDescriptor.mapFilter)
         for descriptor in descriptors {
-            unregisterMapFilter(descriptor)
+            removeMapFilter(descriptor)
             for observer in metadata.mapFilterInvalidationObservers.values {
                 observer.yield(descriptor)
             }

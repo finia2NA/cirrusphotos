@@ -2,6 +2,13 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
+    /// Fetches the server's current list of albums eligible for adding items.
+    public func addableAlbums() async throws -> [AlbumSummary] {
+        try await initializeMetadataEngine()
+        try await connect()
+        try await reconcileMetadataSource()
+        return try await client.addableAlbums()
+    }
     /// Cached-first, validate-once-per-run stream of the Personal Space album list.
     public func albums() -> AsyncStream<ResourceEvent<[AlbumSummary]>> {
         let subscriber = UUID()

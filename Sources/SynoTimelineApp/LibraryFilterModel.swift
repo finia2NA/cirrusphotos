@@ -186,14 +186,15 @@ final class LibraryFilterModel: ObservableObject {
             }
         }
         do {
+            let authority: PhotoSelectionAuthority
             if activeCollection == registration.descriptor {
-                try await repository.replaceLibraryFilterSnapshot(registration)
+                authority = try await repository.replaceLibraryFilterSnapshot(registration)
             } else {
                 if let old = activeCollection {
                     await repository.unregisterLibraryFilter(old)
                     library.unregisterSessionCollection(old)
                 }
-                try await repository.registerLibraryFilter(registration)
+                authority = try await repository.registerLibraryFilter(registration)
             }
             guard token == applyToken,
                   installingRegistration?.descriptor == registration.descriptor,
@@ -205,6 +206,7 @@ final class LibraryFilterModel: ObservableObject {
             }
             activeCollection = registration.descriptor
             library.registerSessionCollection(registration.descriptor, snapshot: registration.snapshot,
+                                              authority: authority, source: registration.sourceCollection,
                                               filterMembership: registration.referencesBySection.map { $0.map(\.itemID) },
                                               filterAuthority: registration.referencesBySection.map { $0.map(\.sourceVerified) })
             installedRegistration = registration

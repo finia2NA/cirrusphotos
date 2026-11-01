@@ -11,6 +11,18 @@ struct PhotoDragPayload: Sendable {
     let snapshot: TimelineSnapshot?
     let count: Int
     let filename: String
+    let capturedSelection: PhotoSelectionSnapshot?
+
+    init(repository: CachedPhotosRepository, item: PhotoItem?, selection: BrowserCommandSnapshot?,
+         snapshot: TimelineSnapshot?, count: Int, filename: String) {
+        self.repository = repository
+        self.item = item
+        self.selection = selection
+        self.snapshot = snapshot
+        self.count = count
+        self.filename = filename
+        self.capturedSelection = selection?.captureSelection(timeline: snapshot)
+    }
 }
 
 private final class PromiseCompletion: @unchecked Sendable {

@@ -123,6 +123,8 @@ extension CachedPhotosRepository {
         metadata.pendingPagePromotions.removeAll()
         metadata.locationRecords.removeAll()
         metadata.locationRevision &+= 1
+        metadata.selectionRetentions.removeAll()
+        metadata.deferredSelectionUnregisters.removeAll()
         metadata.mapFilters.removeAll()
         metadata.libraryFilters.removeAll()
         metadata.sessionFilterCatalogs.removeAll()

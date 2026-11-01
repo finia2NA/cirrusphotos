@@ -154,6 +154,11 @@ struct AppShellView: View {
             infoPanel.clearBrowserContext()
             updateInfoPanelContext()
         }
+        .onChange(of: model.albumMembershipRevision) { _, _ in
+            guard sourceCollection?.albumID == model.changedAlbumID else { return }
+            libraryFilter.clear()
+            viewer?.invalidateForNewIndex()
+        }
         .onChange(of: model.mapFilterInvalidationRevision) { _, _ in
             guard model.invalidatedMapFilter == openedMapFilter else { return }
             mapFilterOpenGeneration &+= 1
@@ -210,6 +215,17 @@ struct AppShellView: View {
             Button("OK") { model.dismissRotationFailure(); viewer?.dismissRotationFailure() }
         } message: {
             Text(model.rotationFailure ?? viewer?.rotationFailure ?? "The photo could not be rotated.")
+        }
+        .sheet(item: $model.albumOperation) { operation in
+            AlbumOperationView(model: model, operation: operation)
+        }
+        .alert("Album Update Failed", isPresented: Binding(
+            get: { model.albumOperationError != nil },
+            set: { if !$0 { model.albumOperationError = nil } }
+        )) {
+            Button("OK") { model.albumOperationError = nil }
+        } message: {
+            Text(model.albumOperationError ?? "The album update failed.")
         }
         .sheet(isPresented: Binding(
             get: { model.thumbnailRotationProgress != nil },

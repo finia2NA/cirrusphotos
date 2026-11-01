@@ -218,6 +218,29 @@ public actor SynologyClient: PhotosTransport {
         return collected
     }
 
+    public func addableAlbums() async throws -> [AlbumSummary] {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        let pageLimit = 100
+        var collected: [AlbumSummary] = []
+        var offset = 0
+        while true {
+            let response: APIEnvelope<AlbumListData> = try await post(
+                path: "/webapi/entry.cgi/SYNO.Foto.Browse.NormalAlbum",
+                parameters: [
+                    "api": "SYNO.Foto.Browse.NormalAlbum", "version": "2", "method": "list",
+                    "offset": String(offset), "limit": String(pageLimit),
+                    "category": "\"addable\"", "sort_by": "\"album_name\"", "sort_direction": "\"asc\"",
+                    "additional": "[\"sharing_info\",\"thumbnail\"]", "_sid": sid
+                ], authenticated: true
+            )
+            guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+            collected.append(contentsOf: data.list)
+            guard data.list.count == pageLimit else { break }
+            offset += pageLimit
+        }
+        return collected
+    }
+
     public func album(id: Int64) async throws -> AlbumSummary {
         guard let sid else { throw SynologyAPIError.api(119) }
         let response: APIEnvelope<AlbumListData> = try await post(

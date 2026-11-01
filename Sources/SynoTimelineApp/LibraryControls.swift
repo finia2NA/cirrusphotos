@@ -392,6 +392,14 @@ struct LibraryCommands: Commands {
                 .keyboardShortcut(.space, modifiers: [])
                 .disabled(!model.canCloseViewer && !model.canOpenSelectedPhoto)
             Divider()
+            Button("New Album…") { model.beginAlbumOperation(.create) }
+                .disabled(!model.canManageAlbumSelection)
+            Button("Add to Album…") { model.beginAlbumOperation(.add) }
+                .disabled(!model.canManageAlbumSelection)
+            if model.canRemoveAlbumSelection {
+                Button("Remove from Album…") { model.beginAlbumOperation(.remove) }
+            }
+            Divider()
             Button("Toggle Favorite") { model.toggleSelectionFavorite() }
                 .keyboardShortcut(".", modifiers: [])
                 .disabled(!model.canToggleFavorite)

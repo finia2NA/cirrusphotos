@@ -2,12 +2,14 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
-    public func registerLibraryFilter(_ registration: LibraryFilterRegistration) throws {
+    @discardableResult public func registerLibraryFilter(_ registration: LibraryFilterRegistration) throws -> PhotoSelectionAuthority {
         try storeLibraryFilter(registration)
+        return selectionAuthority(collection: registration.descriptor, snapshot: registration.snapshot)!
     }
 
-    public func replaceLibraryFilterSnapshot(_ registration: LibraryFilterRegistration) throws {
+    @discardableResult public func replaceLibraryFilterSnapshot(_ registration: LibraryFilterRegistration) throws -> PhotoSelectionAuthority {
         try storeLibraryFilter(registration)
+        return selectionAuthority(collection: registration.descriptor, snapshot: registration.snapshot)!
     }
 
     private func storeLibraryFilter(_ registration: LibraryFilterRegistration) throws {
@@ -29,14 +31,22 @@ extension CachedPhotosRepository {
         for (section, references) in zip(registration.snapshot.sections, registration.referencesBySection) {
             mapping[section] = references
         }
+        metadata.deferredSelectionUnregisters.remove(registration.descriptor)
+        installSelectionRetention(registration.descriptor)
         metadata.libraryFilters[id] = .init(registrationID: UUID(), metadataEpoch: metadata.admissionEpoch,
                                             registration: registration, referencesBySection: mapping)
         metadata.latestTimelines[registration.descriptor] = registration.snapshot
     }
 
     public func unregisterLibraryFilter(_ descriptor: PhotoCollectionDescriptor) {
+        if deferSelectionUnregister(descriptor) { return }
+        removeLibraryFilter(descriptor)
+    }
+
+    func removeLibraryFilter(_ descriptor: PhotoCollectionDescriptor) {
         guard let id = descriptor.libraryFilterID,
               let state = metadata.libraryFilters.removeValue(forKey: id) else { return }
+        metadata.selectionRetentions.removeValue(forKey: descriptor)
         metadata.latestTimelines.removeValue(forKey: descriptor)
     }
 

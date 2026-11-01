@@ -46,6 +46,31 @@ final class SelectionInfoResolverTests: XCTestCase {
         return results
     }
 
+    func testAtomicSelectionFenceRejectsSameShapePageReplacement() async throws {
+        let root = temporaryTestRoot("selection-membership-fence")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = InfoResolverMockTransport()
+        let first = TimelineSection(offset: 0, limit: 1, list: [day(2024, 4, 3, 1)])
+        let second = TimelineSection(offset: 0, limit: 1, list: [day(2024, 4, 1, 1)])
+        let snapshot = TimelineSnapshot(sections: [first, second])
+        let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
+        let run = await repo.runID
+        try await seedMetadataPage([makeItem(id: 1)], section: first, repository: repo, validatedRun: run)
+        try await seedMetadataPage([makeItem(id: 2)], section: second, repository: repo, validatedRun: run)
+        let namespace = await repo.metadataNamespace
+        let store = await repo.store
+        let firstPage = try await store.metadataPage(DayPageAddress(section: first, collection: .personalLibrary), namespace: namespace, currentRun: run)
+        let secondPage = try await store.metadataPage(DayPageAddress(section: second, collection: .personalLibrary), namespace: namespace, currentRun: run)
+        let one = try XCTUnwrap(firstPage), two = try XCTUnwrap(secondPage)
+        let proofs = [SelectionMembershipProof(address: one.address, revision: one.membershipRevision, offsetsAndIDs: [(0, 1)]),
+                      SelectionMembershipProof(address: two.address, revision: two.membershipRevision, offsetsAndIDs: [(0, 2)])]
+        let initiallyValid = try await store.verifySelectionMembership(proofs, namespace: namespace, currentRun: run)
+        XCTAssertTrue(initiallyValid)
+        try await seedMetadataPage([makeItem(id: 3)], section: first, repository: repo, validatedRun: run)
+        let afterReplacement = try await store.verifySelectionMembership(proofs, namespace: namespace, currentRun: run)
+        XCTAssertFalse(afterReplacement)
+    }
+
     func testDownloadSelectionResolvesVerifiedPhotosAndRejectsChangedIdentity() async throws {
         let root = temporaryTestRoot("DownloadSelection")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -55,6 +80,11 @@ final class SelectionInfoResolverTests: XCTestCase {
         let snapshot = TimelineSnapshot(sections: [section])
         let repository = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
         for await _ in await repository.timeline(collection: .personalLibrary) {}
+        let selection = PhotoSelectionSnapshot(collection: .personalLibrary, timeline: snapshot,
+            timelineFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
+            selectedOrdinals: IndexSet(integersIn: 0...2), knownItemIDsByOrdinal: [0: 1])
+        let allItems = await SelectionItemResolver(repository: repository).resolve(selection)
+        XCTAssertEqual(allItems?.map(\.id), [1, 2, 3])
         let resolver = SelectionDownloadResolver(repository: repository)
         let result = await resolver.resolve(collection: .personalLibrary, snapshot: snapshot,
                                             selectedOrdinals: IndexSet(integersIn: 0...2),
