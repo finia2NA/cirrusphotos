@@ -10,21 +10,29 @@ struct AlbumsOverviewView: View {
     var contentTopInset: CGFloat = 0
     @EnvironmentObject private var model: LibraryModel
 
-    private let columns = [GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 20)]
-
     var body: some View {
         Group {
-            if !model.albums.isEmpty {
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 20) {
-                        ForEach(model.albums) { album in
-                            AlbumCardView(album: album, repository: model.repository, presentation: presentation) {
-                                onOpenAlbum(album)
+            if !model.albums.isEmpty || model.albumsVerified {
+                GeometryReader { geometry in
+                    let count = Self.columnCount(width: geometry.size.width)
+                    let columns = Array(repeating: GridItem(.flexible(maximum: 240), spacing: 20, alignment: .leading), count: count)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 28) {
+                            HStack {
+                                Spacer()
+                                Picker("Sort Albums", selection: Binding(get: { presentation.sort }, set: { presentation.setSort($0) })) {
+                                    ForEach(AlbumOverviewSort.allCases, id: \.self) { value in
+                                        Text(value.title).tag(value)
+                                    }
+                                }.pickerStyle(.menu).fixedSize()
                             }
+                            section("Shared Albums", shared: true, columns: columns, count: count)
+                            section("Albums", shared: false, columns: columns, count: count)
                         }
+                        .padding(24)
+                        .padding(.top, contentTopInset)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(24)
-                    .padding(.top, contentTopInset)
                 }
             } else if let error = model.albumListError {
                 ContentUnavailableView {
@@ -34,15 +42,39 @@ struct AlbumsOverviewView: View {
                 } actions: {
                     Button("Try Again") { Task { await model.reload() } }.disabled(model.isLoading)
                 }
-            } else if model.albumsVerified {
-                ContentUnavailableView("No albums", systemImage: "rectangle.stack",
-                                       description: Text("No albums in Personal Space."))
             } else {
                 ProgressView("Loading albums…")
             }
         }
         .background(Color(nsColor: .textBackgroundColor))
     }
+    static func columnCount(width: CGFloat) -> Int {
+        max(1, Int((max(0, width - 48) + 20) / 200))
+    }
+
+    private func section(_ title: String, shared: Bool, columns: [GridItem], count: Int) -> some View {
+        let albums = presentation.section(model.albums, shared: shared)
+        let expanded = shared ? presentation.sharedExpanded : presentation.albumsExpanded
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(title).font(.title2.weight(.semibold))
+                Spacer()
+                if albums.count > count {
+                    Button(expanded ? "Show Less" : "Show All") {
+                        presentation.setExpanded(!expanded, shared: shared)
+                    }.buttonStyle(.link)
+                }
+            }
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
+                ForEach(expanded ? albums : Array(albums.prefix(count))) { album in
+                    AlbumCardView(album: album, repository: model.repository, presentation: presentation) {
+                        onOpenAlbum(album)
+                    }
+                }
+            }
+        }
+    }
+
 }
 
 private struct AlbumCardView: View {

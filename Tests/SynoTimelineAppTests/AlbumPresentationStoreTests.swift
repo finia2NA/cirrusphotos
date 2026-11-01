@@ -8,6 +8,44 @@ import XCTest
 
 @MainActor
 final class AlbumPresentationStoreTests: XCTestCase {
+    func testSectionsSortAndPersistIndependentlyWithoutChangingPins() {
+        let suite = "AlbumSections.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = AlbumPresentationStore(defaults: defaults)
+        store.configure(namespace: "account")
+        store.add(1); store.add(2)
+        store.setExpanded(true, shared: true)
+        store.setSort(.newest)
+        let albums = [AlbumSummary(id: 1, name: "A", itemCount: 1, createTime: 1, shared: true),
+                      AlbumSummary(id: 2, name: "B", itemCount: 1, createTime: 2, shared: true),
+                      AlbumSummary(id: 3, name: "C", itemCount: 1, shared: false)]
+        XCTAssertEqual(store.section(albums, shared: true).map(\.id), [2, 1])
+        XCTAssertEqual(store.section(albums, shared: false).map(\.id), [3])
+        let moved = [AlbumSummary(id: 1, name: "A", itemCount: 1, shared: false)] + Array(albums.dropFirst())
+        store.reconcile(moved, verified: true)
+        XCTAssertEqual(store.pinnedIDs, [1, 2])
+        XCTAssertEqual(store.section(moved, shared: false).map(\.id), [1, 3])
+        let restored = AlbumPresentationStore(defaults: defaults)
+        restored.configure(namespace: "account")
+        XCTAssertTrue(restored.sharedExpanded)
+        XCTAssertFalse(restored.albumsExpanded)
+        XCTAssertEqual(restored.sort, .newest)
+        XCTAssertEqual(restored.pinnedIDs, [1, 2])
+        XCTAssertEqual(AlbumsOverviewView.columnCount(width: 448), 2)
+    }
+
+    func testSharingStatusUsesTopLevelFlagAndServerPrivacy() {
+        let grant = AlbumSharingPermission(photosUserID: 11, principalID: 1036, name: "Person", role: "view", type: "user")
+        let info = AlbumSharingInfo(privacyType: "public-download", isExpired: true, permission: [grant], reference: "stale")
+        let shared = AlbumHeaderModel(album: AlbumSummary(id: 1, name: "A", itemCount: 0, shared: true, sharingInfo: info))
+        XCTAssertEqual(shared.sharingStatus, "Sharing expired")
+        XCTAssertEqual(shared.recipients, [grant])
+        let disabled = AlbumHeaderModel(album: AlbumSummary(id: 1, name: "A", itemCount: 0, shared: false, sharingInfo: info))
+        XCTAssertEqual(disabled.sharingStatus, "Not shared")
+        XCTAssertTrue(disabled.recipients.isEmpty)
+    }
+
     func testAlbumDragUsesTheClickedCardIdentity() {
         var started: [Int] = []
         let suite = "AlbumDragSourceTests.\(UUID())"

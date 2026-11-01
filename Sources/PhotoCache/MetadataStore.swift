@@ -44,7 +44,7 @@ public struct MetadataStoreAdmission: Sendable {
 /// Typed helpers on the existing SQLite actor. No SQL transaction suspends.
 /// The normalized format is initialized explicitly when the engine enrolls it.
 extension DiskCache {
-    static let metadataFormatVersion = 1
+    static let metadataFormatVersion = 2
     private static let normalizedTables = ["filter_option_catalogs", "metadata_inventory_staging", "album_summaries", "page_items", "day_pages", "collection_days", "collection_state", "item_details", "item_index", "metadata_state"]
 
     public func initializeMetadataStore() throws {

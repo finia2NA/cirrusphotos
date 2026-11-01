@@ -13,9 +13,11 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
     public let thumbnail: ThumbnailInfo?
     public let type: String?
     public let ownerUserID: Int64?
+    public let shared: Bool
+    public let sharingInfo: AlbumSharingInfo?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, additional, type
+        case id, name, additional, type, shared
         case ownerUserID = "owner_user_id"
         case itemCount = "item_count"
         case createTime = "create_time"
@@ -27,12 +29,15 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
 
     private struct Additional: Codable {
         let thumbnail: ThumbnailInfo?
+        let sharingInfo: AlbumSharingInfo?
+        enum CodingKeys: String, CodingKey { case thumbnail; case sharingInfo = "sharing_info" }
     }
 
     public init(id: Int64, name: String, itemCount: Int,
                 createTime: Int64? = nil, startTime: Int64? = nil, endTime: Int64? = nil,
                 sortBy: String? = nil, sortDirection: String? = nil,
-                thumbnail: ThumbnailInfo? = nil, type: String? = nil, ownerUserID: Int64? = nil) {
+                thumbnail: ThumbnailInfo? = nil, type: String? = nil, ownerUserID: Int64? = nil,
+                shared: Bool = false, sharingInfo: AlbumSharingInfo? = nil) {
         self.id = id
         self.name = name
         self.itemCount = itemCount
@@ -44,6 +49,8 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
         self.thumbnail = thumbnail
         self.type = type
         self.ownerUserID = ownerUserID
+        self.shared = shared
+        self.sharingInfo = sharingInfo
     }
 
     public init(from decoder: Decoder) throws {
@@ -58,7 +65,10 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
         endTime = try container.decodeIfPresent(Int64.self, forKey: .endTime)
         sortBy = try container.decodeIfPresent(String.self, forKey: .sortBy)
         sortDirection = try container.decodeIfPresent(String.self, forKey: .sortDirection)
-        thumbnail = (try? container.decodeIfPresent(Additional.self, forKey: .additional))?.thumbnail
+        shared = try container.decodeIfPresent(Bool.self, forKey: .shared) ?? false
+        let additional = try container.decodeIfPresent(Additional.self, forKey: .additional)
+        thumbnail = additional?.thumbnail
+        sharingInfo = additional?.sharingInfo
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -73,8 +83,53 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
         try container.encodeIfPresent(endTime, forKey: .endTime)
         try container.encodeIfPresent(sortBy, forKey: .sortBy)
         try container.encodeIfPresent(sortDirection, forKey: .sortDirection)
-        if let thumbnail {
-            try container.encode(Additional(thumbnail: thumbnail), forKey: .additional)
+        try container.encode(shared, forKey: .shared)
+        if thumbnail != nil || sharingInfo != nil {
+            try container.encode(Additional(thumbnail: thumbnail, sharingInfo: sharingInfo), forKey: .additional)
         }
     }
+}
+
+/// Server values are retained verbatim; unfamiliar roles and privacy values confer no authority.
+public struct AlbumSharingInfo: Codable, Hashable, Sendable {
+    public let privacyType: String?
+    public let expiration: Int64?
+    public let isExpired: Bool?
+    public let enablePassword: Bool?
+    public let permission: [AlbumSharingPermission]?
+    public let owner: AlbumSharingOwner?
+    public let reference: String?
+    public let sharingLink: String?
+    enum CodingKeys: String, CodingKey {
+        case expiration, permission, owner
+        case reference = "passphrase", sharingLink = "sharing_link"
+        case privacyType = "privacy_type", isExpired = "is_expired", enablePassword = "enable_password"
+    }
+    public init(privacyType: String? = nil, expiration: Int64? = nil, isExpired: Bool? = nil,
+                enablePassword: Bool? = nil, permission: [AlbumSharingPermission]? = nil,
+                owner: AlbumSharingOwner? = nil, reference: String? = nil, sharingLink: String? = nil) {
+        self.privacyType = privacyType; self.expiration = expiration; self.isExpired = isExpired
+        self.enablePassword = enablePassword; self.permission = permission
+        self.owner = owner; self.reference = reference; self.sharingLink = sharingLink
+    }
+}
+
+public struct AlbumSharingPermission: Codable, Hashable, Sendable {
+    /// Photos identity for profile lookup; distinct from the DSM principal ID.
+    public let photosUserID: Int64?
+    public let principalID: Int64?
+    public let name: String
+    public let role: String
+    public let type: String
+    enum CodingKeys: String, CodingKey { case name, role, type; case photosUserID = "db_id", principalID = "id" }
+    public init(photosUserID: Int64?, principalID: Int64?, name: String, role: String, type: String) {
+        self.photosUserID = photosUserID; self.principalID = principalID
+        self.name = name; self.role = role; self.type = type
+    }
+}
+
+public struct AlbumSharingOwner: Codable, Hashable, Sendable {
+    public let id: Int64
+    public let name: String
+    public init(id: Int64, name: String) { self.id = id; self.name = name }
 }

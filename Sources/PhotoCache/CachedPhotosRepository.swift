@@ -20,6 +20,8 @@ public actor CachedPhotosRepository {
     var imageWork = RepositoryImageWork()
     var favorites = RepositoryFavoriteState()
     var itemMutations = RepositoryItemMutationState()
+    var avatars: [AvatarIdentity: Data] = [:]
+    var avatarTasks: [AvatarIdentity: AvatarWork] = [:]
 
     public init(credentials: SynologyCredentials, baseURL: URL = SynologyClient.defaultBaseURL,
                 budget: Int64 = CacheBudget.bytes(at: 0.5), cacheRoot: URL? = nil,

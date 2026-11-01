@@ -193,6 +193,43 @@ public actor SynologyClient: PhotosTransport {
         return data.section
     }
 
+    public func userProfiles(ids: [Int64]) async throws -> [PhotosUserProfile] {
+        guard let sid, !ids.isEmpty, ids.count <= 32 else { throw SynologyAPIError.invalidResponse }
+        struct ProfileList: Decodable { let list: [PhotosUserProfile] }
+        let response: APIEnvelope<ProfileList> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.UserInfo",
+            parameters: ["api": "SYNO.Foto.UserInfo", "version": "1", "method": "get", "id": Self.idArray(ids), "_sid": sid], authenticated: true)
+        guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+        return data.list
+    }
+
+    public func profilePhoto(descriptor: String) async throws -> Data {
+        guard let sid, !descriptor.isEmpty, descriptor.utf8.count <= 1024 else { throw SynologyAPIError.invalidResponse }
+        guard let source = URLComponents(string: descriptor), source.scheme == nil, source.host == nil,
+              source.path == "webapi/entry.cgi" || source.path == "/webapi/entry.cgi" else { throw SynologyAPIError.invalidResponse }
+        let items = source.queryItems ?? []
+        func single(_ name: String) -> String? {
+            let values = items.filter { $0.name == name }
+            return values.count == 1 ? values[0].value : nil
+        }
+        guard single("api") == "SYNO.Personal.Profile.Photo", single("method") == "get",
+              single("version") == "1", let filename = single("f"), !filename.isEmpty else { throw SynologyAPIError.invalidResponse }
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+        components.path = "/webapi/entry.cgi"
+        components.queryItems = [URLQueryItem(name: "api", value: "SYNO.Personal.Profile.Photo"),
+            URLQueryItem(name: "version", value: "1"), URLQueryItem(name: "method", value: "get"),
+            URLQueryItem(name: "f", value: filename)]
+        if let synoToken { components.queryItems?.append(URLQueryItem(name: "SynoToken", value: synoToken)) }
+        guard let url = components.url else { throw SynologyAPIError.invalidResponse }
+        var request = URLRequest(url: url)
+        request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
+        if let synoToken { request.setValue(synoToken, forHTTPHeaderField: "X-SYNO-TOKEN") }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+              http.value(forHTTPHeaderField: "Content-Type")?.lowercased().hasPrefix("image/png") == true,
+              data.count <= 2_000_000, !data.isEmpty else { throw SynologyAPIError.invalidResponse }
+        return data
+    }
+
     public func albums() async throws -> [AlbumSummary] {
         guard let sid else { throw SynologyAPIError.api(119) }
         let pageLimit = 100

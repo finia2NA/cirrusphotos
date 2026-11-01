@@ -1,14 +1,38 @@
 import Foundation
 import SynologyAPI
 
+enum AlbumOverviewSort: String, Codable, CaseIterable {
+    case name, newest, oldest
+    var title: String {
+        switch self { case .name: "Name"; case .newest: "Newest"; case .oldest: "Oldest" }
+    }
+    func sorted(_ albums: [AlbumSummary]) -> [AlbumSummary] {
+        albums.sorted { a, b in
+            if self != .name, a.createTime != b.createTime {
+                guard let left = a.createTime else { return false }
+                guard let right = b.createTime else { return true }
+                return self == .newest ? left > right : left < right
+            }
+            let result = a.name.localizedStandardCompare(b.name)
+            return result == .orderedSame ? a.id < b.id : result == .orderedAscending
+        }
+    }
+}
+
 /// Presentation preferences belong to one account on one server, not to album data.
 @MainActor
 final class AlbumPresentationStore: ObservableObject {
     private struct State: Codable {
-        var version = 1
+        var version = 2
         var pinnedIDs: [Int64] = []
+        var sharedExpanded = false
+        var albumsExpanded = false
+        var sort: AlbumOverviewSort = .name
     }
     @Published private(set) var pinnedIDs: [Int64] = []
+    @Published private(set) var sharedExpanded = false
+    @Published private(set) var albumsExpanded = false
+    @Published private(set) var sort: AlbumOverviewSort = .name
     private let defaults: UserDefaults
     private var key: String?
 
@@ -19,15 +43,24 @@ final class AlbumPresentationStore: ObservableObject {
         guard key != newKey else { return }
         key = newKey
         if let data = defaults.data(forKey: newKey),
-           let state = try? JSONDecoder().decode(State.self, from: data), state.version == 1,
+           let state = try? JSONDecoder().decode(State.self, from: data), state.version == 2,
            Set(state.pinnedIDs).count == state.pinnedIDs.count {
             pinnedIDs = state.pinnedIDs
+            sharedExpanded = state.sharedExpanded; albumsExpanded = state.albumsExpanded; sort = state.sort
         } else {
-            pinnedIDs = []
+            pinnedIDs = []; sharedExpanded = false; albumsExpanded = false; sort = .name
             defaults.removeObject(forKey: newKey)
         }
     }
 
+    func setExpanded(_ expanded: Bool, shared: Bool) {
+        if shared { sharedExpanded = expanded } else { albumsExpanded = expanded }
+        save()
+    }
+    func setSort(_ value: AlbumOverviewSort) { sort = value; save() }
+    func section(_ albums: [AlbumSummary], shared: Bool) -> [AlbumSummary] {
+        sort.sorted(albums.filter { $0.shared == shared })
+    }
     func add(_ id: Int64) {
         guard key != nil, !pinnedIDs.contains(id) else { return }
         pinnedIDs.append(id); save()
@@ -61,7 +94,7 @@ final class AlbumPresentationStore: ObservableObject {
         pinnedIDs = retained; save()
     }
     private func save() {
-        guard let key, let data = try? JSONEncoder().encode(State(pinnedIDs: pinnedIDs)) else { return }
+        guard let key, let data = try? JSONEncoder().encode(State(pinnedIDs: pinnedIDs, sharedExpanded: sharedExpanded, albumsExpanded: albumsExpanded, sort: sort)) else { return }
         defaults.set(data, forKey: key)
     }
 }
