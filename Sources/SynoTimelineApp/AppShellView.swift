@@ -683,6 +683,16 @@ struct AppShellView: View {
             }
             .sharedBackgroundVisibility(.hidden)
             ToolbarSpacer(.flexible, placement: .primaryAction)
+            if selectedDestination == .albums {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: model.beginEmptyAlbumCreation) {
+                        Image(systemName: "plus")
+                    }
+                    .help("New Album")
+                    .accessibilityLabel("New Album")
+                    .disabled(model.repository == nil || model.albumOperation != nil)
+                }
+            }
         }
 
         ToolbarItem(placement: .primaryAction) { DownloadsToolbarControl() }

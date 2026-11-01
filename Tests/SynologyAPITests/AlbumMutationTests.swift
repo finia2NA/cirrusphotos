@@ -34,6 +34,25 @@ final class AlbumMutationTests: XCTestCase {
             XCTFail("Expected partial failure")
         } catch { }
     }
+
+    func testEmptyAlbumCreateEncodesEmptyItemList() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AlbumMutationProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let client = SynologyClient(baseURL: URL(string: "https://example.test")!, session: session)
+        try await client.login(credentials: .init(username: "test", password: "test"))
+        let album = try await client.createAlbum(name: "Empty", itemIDs: [])
+        XCTAssertEqual(album.itemCount, 0)
+    }
+
+    func testEmptyThumbnailObjectIsAbsentButMalformedThumbnailFails() throws {
+        let empty = Data(#"{"id":70,"name":"Empty","item_count":0,"additional":{"thumbnail":{}}}"#.utf8)
+        let album = try JSONDecoder().decode(AlbumSummary.self, from: empty)
+        XCTAssertNil(album.thumbnail)
+        let malformed = Data(#"{"id":70,"name":"Empty","item_count":0,"additional":{"thumbnail":{"unit_id":70}}}"#.utf8)
+        XCTAssertThrowsError(try JSONDecoder().decode(AlbumSummary.self, from: malformed))
+    }
 }
 
 private final class AlbumMutationProtocol: URLProtocol, @unchecked Sendable {
@@ -56,9 +75,14 @@ private final class AlbumMutationProtocol: URLProtocol, @unchecked Sendable {
         case "create":
             XCTAssertEqual(values["api"], "SYNO.Foto.Browse.NormalAlbum")
             XCTAssertEqual(values["version"], "1")
-            XCTAssertEqual(values["name"], #""A \"trip\"""#)
-            XCTAssertEqual(values["item"], "[11,12]")
-            json = #"{"success":true,"data":{"album":{"id":69,"name":"Trip","item_count":2},"error_list":[]}}"#
+            if values["name"] == #""Empty""# {
+                XCTAssertEqual(values["item"], "[]")
+                json = #"{"success":true,"data":{"album":{"id":70,"name":"Empty","item_count":0},"error_list":[]}}"#
+            } else {
+                XCTAssertEqual(values["name"], #""A \"trip\"""#)
+                XCTAssertEqual(values["item"], "[11,12]")
+                json = #"{"success":true,"data":{"album":{"id":69,"name":"Trip","item_count":2},"error_list":[]}}"#
+            }
         case "add_item":
             XCTAssertEqual(values["id"], "69")
             json = values["item"] == "[99]" ? #"{"success":true,"data":{"error_list":[{"anything":[1]}]}}"# : #"{"success":true,"data":{"error_list":[]}}"#

@@ -187,6 +187,8 @@ The vendored UI strings distinguish private, public view, public download, and v
 
 The captures now provide sufficient evidence for the initial owner workflow: create an album, change membership, invite a NAS user as Viewer/Downloader, manage observed sharing settings, copy a link, and disable sharing. Further captures need not block that slice. Settings writes should be followed by authoritative readback; ambiguous failures must not be presented as confirmed success.
 
+An additional empty-album probe sent the same `NormalAlbum.create` request with `item: []`. The NAS returned a zero-item album, and both album get and normal-album list subsequently contained it. Its additional thumbnail was `{}`, representing no cover; nonempty thumbnail descriptors still require normal validation.
+
 Only request additional captures when their feature enters scope:
 
 - **Incoming-album navigation in our app:** in a signed-in recipient's Photos session, navigate from the main sharing/album overview into an invitation. The current recipient capture establishes opening a known sharing reference, but contains no invitation enumeration request. This matters before deciding whether incoming albums need a separate sidebar destination.

@@ -31,6 +31,28 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
         let thumbnail: ThumbnailInfo?
         let sharingInfo: AlbumSharingInfo?
         enum CodingKeys: String, CodingKey { case thumbnail; case sharingInfo = "sharing_info" }
+        private struct AnyKey: CodingKey {
+            var stringValue: String
+            var intValue: Int? { nil }
+            init?(stringValue: String) { self.stringValue = stringValue }
+            init?(intValue: Int) { return nil }
+        }
+
+        init(thumbnail: ThumbnailInfo?, sharingInfo: AlbumSharingInfo?) {
+            self.thumbnail = thumbnail
+            self.sharingInfo = sharingInfo
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            if container.contains(.thumbnail), try !container.decodeNil(forKey: .thumbnail) {
+                let object = try container.nestedContainer(keyedBy: AnyKey.self, forKey: .thumbnail)
+                thumbnail = object.allKeys.isEmpty ? nil : try container.decode(ThumbnailInfo.self, forKey: .thumbnail)
+            } else {
+                thumbnail = nil
+            }
+            sharingInfo = try container.decodeIfPresent(AlbumSharingInfo.self, forKey: .sharingInfo)
+        }
     }
 
     public init(id: Int64, name: String, itemCount: Int,

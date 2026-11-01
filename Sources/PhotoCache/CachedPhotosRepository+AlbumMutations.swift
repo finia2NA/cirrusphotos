@@ -2,6 +2,10 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
+    public func createEmptyAlbum(name: String) async throws -> AlbumSummary {
+        try await createAlbum(name: name, itemIDs: [])
+    }
+
     func createAlbum(name: String, itemIDs: [Int64]) async throws -> AlbumSummary {
         try await performAlbumMutation(albumID: nil) { repository in
             try await repository.client.createAlbum(name: name, itemIDs: itemIDs)

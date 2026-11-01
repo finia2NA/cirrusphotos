@@ -661,6 +661,14 @@ final class LibraryModel: ObservableObject {
         beginAlbumOperation(kind, captured: browserCommandSnapshot)
     }
 
+    func beginEmptyAlbumCreation() {
+        guard albumOperation == nil, repository != nil else { return }
+        var operation = AlbumOperation(kind: .create, sourceAlbumID: nil)
+        operation.createsEmptyAlbum = true
+        operation.loading = false
+        albumOperation = operation
+    }
+
     func isNormalAlbum(_ id: Int64?) -> Bool {
         isKnownNormalAlbum(id, in: albums)
     }
@@ -668,12 +676,19 @@ final class LibraryModel: ObservableObject {
     func beginAlbumOperation(_ kind: AlbumOperation.Kind, captured: BrowserCommandSnapshot) {
         guard albumOperation == nil, let timeline = captured.timeline,
               let fingerprint = captured.indexFingerprint, let authority = captured.authority,
-              let repository else { return }
+              repository != nil else { return }
         if kind == .remove && !isNormalAlbum(captured.sourceAlbumID) { return }
         let selection = PhotoSelectionSnapshot(collection: captured.collection, timeline: timeline,
             timelineFingerprint: fingerprint, selectedOrdinals: captured.selectedOrdinals,
             knownItemIDsByOrdinal: captured.knownItemIDsByOrdinal, authority: authority)
-        let operation = AlbumOperation(kind: kind, sourceAlbumID: captured.sourceAlbumID)
+        beginAlbumOperation(kind, selection: selection, sourceAlbumID: captured.sourceAlbumID)
+    }
+
+    func beginAlbumOperation(_ kind: AlbumOperation.Kind, selection: PhotoSelectionSnapshot, sourceAlbumID: Int64?) {
+        guard albumOperation == nil, let repository, selection.authority != nil,
+              !selection.selectedOrdinals.isEmpty else { return }
+        if kind == .remove && !isNormalAlbum(sourceAlbumID) { return }
+        let operation = AlbumOperation(kind: kind, sourceAlbumID: sourceAlbumID)
         albumOperation = operation
         albumOperationTask = Task { [weak self] in
             let resolved = await SelectionItemResolver(repository: repository).resolveWithReceipt(selection)
@@ -743,7 +758,8 @@ final class LibraryModel: ObservableObject {
     }
 
     func submitAlbumOperation(name: String = "", albumID: Int64? = nil) {
-        guard var operation = albumOperation, !operation.loading, operation.selection != nil,
+        guard var operation = albumOperation, !operation.loading,
+              operation.selection != nil || operation.createsEmptyAlbum,
               let repository else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if operation.kind == .create && trimmed.isEmpty { return }
@@ -753,14 +769,18 @@ final class LibraryModel: ObservableObject {
         albumOperation = operation
         albumOperationTask = Task { [weak self] in
             do {
-                guard let selection = operation.selection else { return }
                 switch operation.kind {
-                case .create: _ = try await repository.createAlbum(name: trimmed, selection: selection)
+                case .create:
+                    if operation.createsEmptyAlbum {
+                        _ = try await repository.createEmptyAlbum(name: trimmed)
+                    } else if let selection = operation.selection {
+                        _ = try await repository.createAlbum(name: trimmed, selection: selection)
+                    }
                 case .add:
-                    guard let albumID else { return }
+                    guard let albumID, let selection = operation.selection else { return }
                     try await repository.addItems(selection, toAlbum: albumID)
                 case .remove:
-                    guard let source = operation.sourceAlbumID else { return }
+                    guard let source = operation.sourceAlbumID, let selection = operation.selection else { return }
                     try await repository.removeItems(selection, fromAlbum: source)
                 }
                 guard let self, self.albumOperation?.id == operation.id else { return }
@@ -1027,6 +1047,7 @@ struct AlbumOperation: Identifiable {
     let kind: Kind
     let sourceAlbumID: Int64?
     var selection: ResolvedPhotoSelection?
+    var createsEmptyAlbum = false
     var albums: [AlbumSummary] = []
     var loading = true
     var writing = false

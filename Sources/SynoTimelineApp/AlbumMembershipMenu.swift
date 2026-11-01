@@ -31,6 +31,14 @@ extension LibraryModel {
         if !menu.items.isEmpty { menu.addItem(.separator()) }
         let parent = NSMenuItem(title: "Add to Album", action: nil, keyEquivalent: "")
         let submenu = NSMenu(title: "Add to Album")
+        @MainActor func addNewAlbumAction() {
+            submenu.addItem(PhotoDownloadMenuItem(title: "New Album…") { [weak self] in
+                guard let self, self.repository?.namespace == repository.namespace else { return }
+                self.beginAlbumOperation(.create, selection: selection, sourceAlbumID: captured.sourceAlbumID)
+            })
+        }
+        addNewAlbumAction()
+        submenu.addItem(.separator())
         let loading = NSMenuItem(title: "Loading…", action: nil, keyEquivalent: "")
         loading.isEnabled = false
         submenu.addItem(loading)
@@ -47,22 +55,27 @@ extension LibraryModel {
                 let albums = try await repository.addableAlbums()
                 let ordered = orderedAddableAlbums(albums, pinnedIDs: pinnedIDs)
                 submenu.removeAllItems()
+                addNewAlbumAction()
                 @MainActor func append(_ album: AlbumSummary) {
                     submenu.addItem(PhotoDownloadMenuItem(title: album.name) { [weak self] in
                         guard let self, self.repository?.namespace == repository.namespace else { return }
                         _ = self.addCapturedSelection(selection, sourceAlbumID: captured.sourceAlbumID, to: album.id)
                     })
                 }
+                if !ordered.pinned.isEmpty || !ordered.remaining.isEmpty { submenu.addItem(.separator()) }
                 ordered.pinned.forEach(append)
                 if !ordered.pinned.isEmpty && !ordered.remaining.isEmpty { submenu.addItem(.separator()) }
                 ordered.remaining.forEach(append)
-                if submenu.items.isEmpty {
+                if ordered.pinned.isEmpty && ordered.remaining.isEmpty {
+                    submenu.addItem(.separator())
                     let empty = NSMenuItem(title: "No Albums Available", action: nil, keyEquivalent: "")
                     empty.isEnabled = false
                     submenu.addItem(empty)
                 }
             } catch {
                 submenu.removeAllItems()
+                addNewAlbumAction()
+                submenu.addItem(.separator())
                 let failed = NSMenuItem(title: "Could Not Load Albums", action: nil, keyEquivalent: "")
                 failed.isEnabled = false
                 submenu.addItem(failed)
