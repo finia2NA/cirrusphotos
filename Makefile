@@ -1,6 +1,6 @@
 SHELL := /bin/zsh
 .DEFAULT_GOAL := start
-.PHONY: start debug clean cloc
+.PHONY: start debug clean cloc switch-user
 
 start:
 	./scripts/run.sh
@@ -16,6 +16,9 @@ clean:
 
 cloc:
 	@python3 scripts/cloc_report.py
+
+switch-user:
+	@python3 scripts/switch_user.py
 
 # Temporary filesystem-driven Map/Diff evidence runner (phototest only).
 PYTHON ?= python3
