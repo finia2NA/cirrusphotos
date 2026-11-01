@@ -2,11 +2,52 @@ import AppKit
 import Foundation
 import PhotoCache
 import SynologyAPI
+import SwiftUI
 import XCTest
 @testable import SynoTimelineApp
 
 @MainActor
 final class AlbumPresentationStoreTests: XCTestCase {
+    func testAlbumDragUsesTheClickedCardIdentity() {
+        var started: [Int] = []
+        let suite = "AlbumDragSourceTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = AlbumPresentationStore(defaults: defaults)
+        store.configure(namespace: "account")
+        let cards = HStack(spacing: 20) {
+            ForEach(1...3, id: \.self) { id in
+                Color.gray.frame(width: 100, height: 100)
+                    .background(AlbumDragSourceView { _, _ in
+                        started.append(id)
+                        let nonce = AlbumDragRegistry.register(albumID: Int64(id), namespace: "account")
+                        defer { AlbumDragRegistry.remove(nonce) }
+                        return AlbumDragRegistry.insert(nonce.uuidString, namespace: "account", before: nil, presentation: store)
+                    })
+            }
+        }.frame(width: 340, height: 100)
+        let host = NSHostingView(rootView: cards)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 100),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        host.frame = NSRect(x: 0, y: 0, width: 340, height: 100)
+        host.layoutSubtreeIfNeeded()
+        func anchors(_ view: NSView) -> [AlbumDragAnchorView] {
+            (view as? AlbumDragAnchorView).map { [$0] } ?? view.subviews.flatMap(anchors)
+        }
+        let sources = anchors(host)
+        XCTAssertEqual(sources.count, 3)
+        for x in [50.0, 170.0, 290.0] {
+            let down = NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: x, y: 50), modifierFlags: [],
+                timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+            let drag = NSEvent.mouseEvent(with: .leftMouseDragged, location: NSPoint(x: x + 10, y: 50), modifierFlags: [],
+                timestamp: 1, windowNumber: window.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 1)!
+            for source in sources { _ = source.handleMouseEvent(down) }
+            for source in sources { _ = source.handleMouseEvent(drag) }
+        }
+        XCTAssertEqual(started, [1, 2, 3])
+        XCTAssertEqual(store.pinnedIDs, [1, 2, 3])
+    }
     func testAlbumDragAnchorDoesNotInterceptCardClicks() {
         let anchor = AlbumDragAnchorView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
         XCTAssertNil(anchor.hitTest(NSPoint(x: 50, y: 50)))

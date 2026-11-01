@@ -132,48 +132,34 @@ final class AlbumPromiseWriter: NSObject, @preconcurrency NSPasteboardWriting {
     }
 }
 
-/// SwiftUI owns hit testing and gesture recognition so clipped or covered cards cannot start a drag.
 struct AlbumDragGesture: ViewModifier {
     let albumID: Int64
     let name: String
     let repository: CachedPhotosRepository?
     let preview: NSImage?
-    @StateObject private var source = AlbumDragViewReference()
-    @State private var started = false
-
     func body(content: Content) -> some View {
         content
-            .background(AlbumDragSourceView(reference: source))
-            .simultaneousGesture(DragGesture(minimumDistance: 4).onChanged { _ in
-                guard !started, let view = source.view, let repository,
-                      let event = NSApp.currentEvent, event.type == .leftMouseDragged,
-                      event.window === view.window else { return }
+            .background(AlbumDragSourceView { view, event in
+                guard let repository else { return false }
                 let safe = name.components(separatedBy: CharacterSet(charactersIn: "/:\\").union(.controlCharacters))
                     .joined(separator: "-").trimmingCharacters(in: .whitespacesAndNewlines)
                 let filename = (safe.isEmpty || safe == "." || safe == ".." ? "Album" : safe) + ".zip"
                 let payload = PhotoDragPayload(repository: repository, source: .album(albumID), count: 1,
                                                filename: filename, forcesArchive: true)
-                started = PhotoFileDragSource.begin(payload: payload, previews: [preview].compactMap { $0 },
-                                                     cropsToSquare: true, from: view, event: event, albumID: albumID,
-                                                     onEnd: { started = false })
-            }.onEnded { _ in started = false })
+                return PhotoFileDragSource.begin(payload: payload, previews: [preview].compactMap { $0 },
+                                                 cropsToSquare: true, from: view, event: event, albumID: albumID)
+            })
     }
 }
 
-@MainActor
-private final class AlbumDragViewReference: ObservableObject {
-    weak var view: NSView?
-}
-
-private struct AlbumDragSourceView: NSViewRepresentable {
-    let reference: AlbumDragViewReference
+struct AlbumDragSourceView: NSViewRepresentable {
+    let begin: (NSView, NSEvent) -> Bool
     func makeNSView(context: Context) -> NSView {
         let view = AlbumDragAnchorView()
-        reference.view = view
+        view.begin = begin
         return view
     }
-    func updateNSView(_ view: NSView, context: Context) { reference.view = view }
-    static func dismantleNSView(_ view: NSView, coordinator: ()) { }
+    func updateNSView(_ view: NSView, context: Context) { (view as? AlbumDragAnchorView)?.begin = begin }
 }
 
 /// Opens the overview after a local photo selection hovers over Albums.
@@ -270,8 +256,48 @@ struct AlbumInsertionTarget: NSViewRepresentable {
     }
 }
 
-/// The anchor only supplies a coordinate space for AppKit's drag session.
 @MainActor
 final class AlbumDragAnchorView: NSView {
+    var begin: ((NSView, NSEvent) -> Bool)?
+    private var monitor: Any?
+    private var mouseDownPoint: NSPoint?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
+        mouseDownPoint = nil
+        guard window != nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            guard let self else { return event }
+            return self.handleMouseEvent(event)
+        }
+    }
+
+    func handleMouseEvent(_ event: NSEvent) -> NSEvent? {
+        guard event.window === window else { mouseDownPoint = nil; return event }
+        switch event.type {
+        case .leftMouseDown:
+            let point = convert(event.locationInWindow, from: nil)
+            guard bounds.contains(point), visibleRect.contains(point), let parent = superview,
+                  let content = window?.contentView,
+                  let hit = content.hitTest(content.convert(event.locationInWindow, from: nil)),
+                  hit === parent || hit.isDescendant(of: parent) || parent.isDescendant(of: hit) else {
+                mouseDownPoint = nil
+                return event
+            }
+            mouseDownPoint = event.locationInWindow
+        case .leftMouseDragged:
+            guard let start = mouseDownPoint,
+                  hypot(event.locationInWindow.x - start.x, event.locationInWindow.y - start.y) >= 4 else { return event }
+            mouseDownPoint = nil
+            if begin?(self, event) == true { return nil }
+        case .leftMouseUp:
+            mouseDownPoint = nil
+        default: break
+        }
+        return event
+    }
+
+    isolated deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
