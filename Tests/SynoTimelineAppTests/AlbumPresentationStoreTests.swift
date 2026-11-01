@@ -28,6 +28,41 @@ final class AlbumPresentationStoreTests: XCTestCase {
         XCTAssertEqual(again.pinnedIDs, [2])
     }
 
+    func testInsertionPinsAndReordersWithoutDuplicates() {
+        let suite = "AlbumInsertionTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = AlbumPresentationStore(defaults: defaults)
+        store.configure(namespace: "account")
+        store.add(1); store.add(3)
+        store.insert(2, before: 3)
+        store.insert(3, before: 1)
+        store.insert(3, before: 3)
+        XCTAssertEqual(store.pinnedIDs, [3, 1, 2])
+        store.insert(3, before: nil)
+        store.insert(9, before: 100)
+        let restored = AlbumPresentationStore(defaults: defaults)
+        restored.configure(namespace: "account")
+        XCTAssertEqual(restored.pinnedIDs, [1, 2, 3])
+    }
+
+    func testAlbumNonceIsScopedAndRemoved() {
+        let nonce = AlbumDragRegistry.register(albumID: 42, namespace: "account-a")
+        XCTAssertEqual(AlbumDragRegistry.album(nonce.uuidString, namespace: "account-a"), 42)
+        XCTAssertNil(AlbumDragRegistry.album(nonce.uuidString, namespace: "account-b"))
+        XCTAssertNil(AlbumDragRegistry.album(UUID().uuidString, namespace: "account-a"))
+        let suite = "AlbumDispatchTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = AlbumPresentationStore(defaults: defaults)
+        store.configure(namespace: "account-a")
+        XCTAssertFalse(AlbumDragRegistry.insert(nonce.uuidString, namespace: "account-b", before: nil, presentation: store))
+        XCTAssertTrue(AlbumDragRegistry.insert(nonce.uuidString, namespace: "account-a", before: nil, presentation: store))
+        XCTAssertEqual(store.pinnedIDs, [42])
+        AlbumDragRegistry.remove(nonce)
+        XCTAssertNil(AlbumDragRegistry.album(nonce.uuidString, namespace: "account-a"))
+    }
+
     func testProvisionalOrFailedListDoesNotPruneAndVerifiedListDoes() {
         let suite = "AlbumPresentationTests.\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!

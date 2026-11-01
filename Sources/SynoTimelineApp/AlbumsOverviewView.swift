@@ -50,11 +50,12 @@ private struct AlbumCardView: View {
     let repository: CachedPhotosRepository?
     @ObservedObject var presentation: AlbumPresentationStore
     let onOpen: () -> Void
+    @State private var dragPreview: NSImage?
 
     var body: some View {
         Button(action: onOpen) {
             VStack(alignment: .leading, spacing: 8) {
-                AlbumCoverView(thumbnail: album.thumbnail, repository: repository)
+                AlbumCoverView(thumbnail: album.thumbnail, repository: repository, onImage: { dragPreview = $0 })
                 VStack(alignment: .leading, spacing: 2) {
                     Text(album.name).font(.headline).lineLimit(1).truncationMode(.middle)
                     Text(itemCountText).font(.caption).foregroundStyle(.secondary)
@@ -62,6 +63,7 @@ private struct AlbumCardView: View {
             }
         }
         .buttonStyle(.plain)
+        .background(AlbumDragGesture(albumID: album.id, name: album.name, repository: repository, preview: dragPreview))
         .contextMenu {
             Button("Add to Sidebar") { presentation.add(album.id) }
             Divider()
@@ -100,6 +102,7 @@ struct AlbumCoverView: View {
     var cornerRadius: CGFloat = 8
     var placeholderFont: Font = .largeTitle
     var maxPixel: Int = 512
+    var onImage: (NSImage?) -> Void = { _ in }
     @State private var image: NSImage?
 
     private var identity: String {
@@ -129,6 +132,7 @@ struct AlbumCoverView: View {
 
     private func load() async {
         image = nil
+        onImage(nil)
         guard let thumbnail, let repository else { return }
         for await event in await repository.thumbnailWithFallback(
             thumbnail, size: .m, allowNetwork: true, priority: .visible
@@ -139,6 +143,7 @@ struct AlbumCoverView: View {
                 if let decoded = await DecodedImages.shared.image(from: value.data, maxPixel: maxPixel) {
                     guard !Task.isCancelled else { return }
                     image = decoded
+                    onImage(decoded)
                 }
             case .failure:
                 break

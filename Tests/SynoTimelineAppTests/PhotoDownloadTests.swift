@@ -233,6 +233,15 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let provider = NSFilePromiseProvider(fileType: UTType.data.identifier, delegate: delegate)
         provider.userInfo = delegate
         XCTAssertEqual(delegate.filePromiseProvider(provider, fileNameForType: UTType.data.identifier), "a.dng")
+        let nonce = AlbumDragRegistry.register(albumID: 7, namespace: repository.namespace)
+        let writer = AlbumPromiseWriter(provider: provider, nonce: nonce)
+        let pasteboard = NSPasteboard(name: .init("test.\(UUID())"))
+        defer { AlbumDragRegistry.remove(nonce); pasteboard.releaseGlobally() }
+        let types = writer.writableTypes(for: pasteboard)
+        XCTAssertTrue(types.contains(AlbumDragRegistry.type))
+        XCTAssertTrue(Set(provider.writableTypes(for: pasteboard)).isSubset(of: Set(types)))
+        XCTAssertEqual(writer.pasteboardPropertyList(forType: AlbumDragRegistry.type) as? String, nonce.uuidString)
+        XCTAssertEqual(AlbumDragRegistry.album(nonce.uuidString, namespace: repository.namespace), 7)
         let before = await transport.downloadedIDs
         XCTAssertTrue(before.isEmpty)
         let destination = root.appendingPathComponent("dropped.dng")
@@ -245,6 +254,30 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: destination), Data("raw-image".utf8))
         let after = await transport.downloadedIDs
         XCTAssertEqual(after, [1])
+    }
+
+    @MainActor
+    func testForcedArchivePromiseWrapsSingletonOriginal() async throws {
+        let root = temporaryTestRoot("ArchivePromise")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = EditingMockTransport()
+        let repository = try CachedPhotosRepository(credentials: .init(username: "test", password: "test"),
+                                                     budget: 100_000_000, cacheRoot: root.appendingPathComponent("cache"), transport: transport)
+        let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.dng\",\"time\":1,\"type\":\"photo\"}".utf8))
+        let payload = PhotoDragPayload(repository: repository, source: .item(photo), count: 1,
+                                       filename: "Album.zip", forcesArchive: true)
+        let manager = PhotoDownloadManager()
+        let destination = root.appendingPathComponent("Album.zip")
+        let finished = expectation(description: "album archive")
+        manager.fulfillPromise(payload, destination: destination) { error in
+            XCTAssertNil(error)
+            finished.fulfill()
+        }
+        await fulfillment(of: [finished], timeout: 10)
+        XCTAssertTrue(try Data(contentsOf: destination).starts(with: [0x50, 0x4b]))
+        let ids = await transport.downloadedIDs
+        XCTAssertEqual(ids, [1])
     }
 
     func testPromisedWriteFinishesWhileDestinationIsAlreadyCoordinated() async throws {

@@ -32,6 +32,15 @@ final class AlbumPresentationStore: ObservableObject {
         guard key != nil, !pinnedIDs.contains(id) else { return }
         pinnedIDs.append(id); save()
     }
+    func insert(_ id: Int64, before target: Int64?) {
+        guard key != nil, target != id else { return }
+        if let target, !pinnedIDs.contains(target) { return }
+        var updated = pinnedIDs.filter { $0 != id }
+        let index = target.flatMap { updated.firstIndex(of: $0) } ?? updated.endIndex
+        updated.insert(id, at: index)
+        guard updated != pinnedIDs else { return }
+        pinnedIDs = updated; save()
+    }
     func remove(_ id: Int64) {
         guard pinnedIDs.contains(id) else { return }
         pinnedIDs.removeAll { $0 == id }; save()

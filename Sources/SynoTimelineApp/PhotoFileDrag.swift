@@ -9,6 +9,7 @@ struct PhotoDragPayload: Sendable {
     let source: PhotoDownloadSource
     let count: Int
     let filename: String
+    var forcesArchive: Bool = false
 
 }
 
@@ -41,17 +42,24 @@ final class PhotoPromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
 final class PhotoFileDragSource: NSObject, NSDraggingSource {
     private static var active: [UUID: PhotoFileDragSource] = [:]
     private let id = UUID()
+    private var localNonce: UUID?
 
     static func begin(payload: PhotoDragPayload, previews: [NSImage], cropsToSquare: Bool,
-                      from view: NSView, event: NSEvent) -> Bool {
+                      from view: NSView, event: NSEvent, albumID: Int64? = nil) -> Bool {
         guard payload.count > 0, !payload.filename.isEmpty else { return false }
         let source = PhotoFileDragSource()
-        let fileType: UTType = payload.count > 1 ? .zip :
+        let fileType: UTType = payload.forcesArchive || payload.count > 1 ? .zip :
             (UTType(filenameExtension: URL(fileURLWithPath: payload.filename).pathExtension) ?? .data)
         let delegate = PhotoPromiseDelegate(payload: payload)
         let provider = NSFilePromiseProvider(fileType: fileType.identifier, delegate: delegate)
         provider.userInfo = delegate
-        let item = NSDraggingItem(pasteboardWriter: provider)
+        let writer: NSPasteboardWriting
+        if let albumID {
+            let nonce = AlbumDragRegistry.register(albumID: albumID, namespace: payload.repository.namespace)
+            source.localNonce = nonce
+            writer = AlbumPromiseWriter(provider: provider, nonce: nonce)
+        } else { writer = provider }
+        let item = NSDraggingItem(pasteboardWriter: writer)
         let image = dragPreview(images: Array(previews.prefix(20)), count: payload.count,
                                 cropsToSquare: cropsToSquare)
         let point = view.convert(event.locationInWindow, from: nil)
@@ -64,10 +72,11 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
     }
 
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        .copy
+        context == .withinApplication && localNonce != nil ? [.copy, .move] : .copy
     }
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        if let localNonce { AlbumDragRegistry.remove(localNonce) }
         Self.active[id] = nil
     }
 

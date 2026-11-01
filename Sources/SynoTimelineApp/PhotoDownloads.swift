@@ -203,9 +203,9 @@ final class PhotoDownloadManager: ObservableObject {
                     }
                 }
                 let response: PhotoDownloadResponse
-                if payload.count == 1, let cached = try await payload.repository.cachedOriginalForDownload(items[0], includeLivePhoto: true) {
+                if payload.count == 1 && !payload.forcesArchive, let cached = try await payload.repository.cachedOriginalForDownload(items[0], includeLivePhoto: true) {
                     response = cached
-                } else if payload.count == 1, items[0].mediaKind == .livePhoto {
+                } else if payload.count == 1 && !payload.forcesArchive, items[0].mediaKind == .livePhoto {
                     guard let still = try await payload.repository.livePhotoStillForEditing(items[0], progress: progress) else {
                         throw DownloadFailure.message("The Live Photo still is unavailable.")
                     }
@@ -218,7 +218,7 @@ final class PhotoDownloadManager: ObservableObject {
                 update(id) { $0.status = "Saving…" }
                 let writeTask = Task.detached(priority: .utility) {
                     try Self.writePromise(response.temporaryURL, destination: destination,
-                                          makeArchive: payload.count > 1 && items.count == 1 &&
+                                          makeArchive: (payload.forcesArchive || payload.count > 1) && items.count == 1 &&
                                             response.temporaryURL.pathExtension.lowercased() != "zip")
                 }
                 try await withTaskCancellationHandler {
