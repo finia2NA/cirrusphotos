@@ -192,7 +192,7 @@ final class LibraryModel: ObservableObject {
     /// Personal Library and Favorites are loaded eagerly by `load()`, and session
     /// collections (map filters) own their snapshots.
     func ensureCollectionLoaded(_ collection: PhotoCollectionDescriptor) {
-        guard collection.albumID != nil else { return }
+        guard collection.usesItemCatalog else { return }
         openedCollections.insert(collection)
         startCollectionFetchIfNeeded(collection)
     }
@@ -232,7 +232,7 @@ final class LibraryModel: ObservableObject {
             case .personalLibrary: title = "Personal Library"
             case .favorites: title = "Favorites"
             case .album(let id): title = albumName(for: collection) ?? "Album \(id)"
-            case .mapFilter, .libraryFilter: continue
+            case .folder, .mapFilter, .libraryFilter: continue
             }
             if timelineVerified(for: collection), let snapshot = snapshot(for: collection) {
                 targets.append(.init(collection: collection, snapshot: snapshot,

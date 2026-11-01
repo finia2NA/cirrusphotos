@@ -143,7 +143,7 @@ extension CachedPhotosRepository {
         defer { Task { await gate.release(.metadata) } }
         try await connect()
         guard let newest = section.list.first, let oldest = section.list.last else { throw CollectionCatalogError.invalidAddress }
-        let request = try CollectionPageRequest(collection: collection, order: collection.albumID == nil ? .timeline : .takenTimeDescending,
+        let request = try CollectionPageRequest(collection: collection, order: !collection.usesItemCatalog ? .timeline : .takenTimeDescending,
                                                 newestDay: CaptureDay(year: newest.year, month: newest.month, day: newest.day),
                                                 oldestDay: CaptureDay(year: oldest.year, month: oldest.month, day: oldest.day), offset: section.offset, limit: section.limit)
         let items = try await client.readCollectionBatch(request, fields: .fullPage).items

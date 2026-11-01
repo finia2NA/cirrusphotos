@@ -143,6 +143,7 @@ struct AlbumCoverView: View {
     let repository: CachedPhotosRepository?
     var cornerRadius: CGFloat = 8
     var placeholderFont: Font = .largeTitle
+    var placeholderSymbol: String = "rectangle.stack"
     var maxPixel: Int = 512
     var onImage: (NSImage?) -> Void = { _ in }
     @State private var image: NSImage?
@@ -161,7 +162,7 @@ struct AlbumCoverView: View {
                 } else {
                     ZStack {
                         Color.secondary.opacity(0.12)
-                        Image(systemName: "rectangle.stack")
+                        Image(systemName: placeholderSymbol)
                             .font(placeholderFont)
                             .foregroundStyle(.tertiary)
                     }

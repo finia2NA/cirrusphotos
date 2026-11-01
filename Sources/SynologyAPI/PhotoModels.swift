@@ -573,6 +573,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
     case favorites
     /// A Personal Space album, identified by its Synology album id.
     case album(Int64)
+    case folder(Int64)
     /// A session-only timeline filtered to an explicit item set (a map pin or
     /// cluster). Never persisted; pages use canonical item details.
     case mapFilter(UUID)
@@ -586,6 +587,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
         case .personalLibrary: "personal"
         case .favorites: "favorites"
         case .album(let id): "album:\(id)"
+        case .folder(let id): "folder:\(id)"
         case .mapFilter(let id): "map:\(id.uuidString)"
         case .libraryFilter(let id): "filter:\(id.uuidString)"
         }
@@ -595,6 +597,13 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
         if case .album(let id) = self { return id }
         return nil
     }
+
+    public var folderID: Int64? {
+        if case .folder(let id) = self { return id }
+        return nil
+    }
+
+    public var usesItemCatalog: Bool { albumID != nil || folderID != nil }
 
     public var mapFilterID: UUID? {
         if case .mapFilter(let id) = self { return id }
@@ -628,6 +637,10 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
                let id = Int64(rawValue.dropFirst(albumPrefix.count)) {
                 self = .album(id)
                 return
+            }
+            let folderPrefix = "folder:"
+            if rawValue.hasPrefix(folderPrefix), let id = Int64(rawValue.dropFirst(folderPrefix.count)) {
+                self = .folder(id); return
             }
             let mapPrefix = "map:"
             if rawValue.hasPrefix(mapPrefix),

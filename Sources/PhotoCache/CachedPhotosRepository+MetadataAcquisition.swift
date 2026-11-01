@@ -7,13 +7,16 @@ extension CachedPhotosRepository {
     func acquireCollectionCatalog(_ collection: PhotoCollectionDescriptor,
                                   initial: Bool = false,
                                   priority: RequestPriority = .visible) async throws -> CollectionCatalogRead {
-        if let albumID = collection.albumID {
+        if collection.usesItemCatalog {
             guard !initial else { throw SynologyAPIError.invalidResponse }
             var entries: [DayTimelineEntry] = []
             var seen: Set<Int64> = []
             for page in 0..<2048 {
                 let batch = try await metadataReadRequest(priority: priority) {
-                    try await client.readAlbumCatalogBatch(albumID: albumID, offset: page * 1000, limit: 1000)
+                    if let albumID = collection.albumID {
+                        return try await client.readAlbumCatalogBatch(albumID: albumID, offset: page * 1000, limit: 1000)
+                    }
+                    return try await client.readFolderCatalogBatch(folderID: collection.folderID!, offset: page * 1000, limit: 1000)
                 }
                 guard batch.count <= 1000 else { throw CollectionCatalogError.invalidCoverage }
                 for entry in batch {

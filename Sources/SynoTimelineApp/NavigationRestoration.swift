@@ -26,11 +26,14 @@ enum SidebarSelection: Codable, Hashable {
 }
 
 struct RestorableAppNavigationState: Codable, Equatable {
-    static let currentVersion = 4
+    static let currentVersion = 5
 
     var version = currentVersion
     var sidebarSelection: SidebarSelection = .destination(.personalLibrary)
     var openedAlbumID: Int64?
+    var showsFolders = false
+    var folderPath: [Int64] = []
+    var folderNamespace: String?
     /// Keyed by `PhotoCollectionDescriptor.rawValue`.
     var anchors: [String: PhotoTimelineRestorationAnchor] = [:]
 }
@@ -61,6 +64,14 @@ final class NavigationRestorationStore: ObservableObject {
     }
 
     var sidebarSelection: SidebarSelection { state.sidebarSelection }
+
+    var showsFolders: Bool { state.showsFolders }
+    var folderPath: [Int64] { state.folderPath }
+    func prepareFolders(namespace: String) -> [Int64] {
+        if state.folderNamespace != namespace { state.folderPath = []; state.folderNamespace = namespace; save() }
+        return state.folderPath
+    }
+    func setFolders(shown: Bool, path: [Int64]) { state.showsFolders = shown; state.folderPath = path; save() }
 
     var openedAlbumID: Int64? {
         state.openedAlbumID

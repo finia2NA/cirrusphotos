@@ -154,6 +154,35 @@ public actor SynologyClient: PhotosTransport {
         return data.list.map { DayTimelineEntry(id: $0.id, time: $0.time) }
     }
 
+    public func readFolderCatalogBatch(folderID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry] {
+        guard let sid, offset >= 0, limit > 0, limit <= 1000 else { throw SynologyAPIError.invalidResponse }
+        let response: APIEnvelope<ItemData> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item", parameters: ["api": "SYNO.Foto.Browse.Item", "version": "7", "method": "list", "offset": String(offset), "limit": String(limit), "folder_id": String(folderID), "sort_by": "\"takentime\"", "sort_direction": "\"desc\"", "additional": "[]", "_sid": sid], authenticated: true)
+        guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+        return data.list.map { DayTimelineEntry(id: $0.id, time: $0.time) }
+    }
+
+    public func folder(id: Int64) async throws -> FolderSummary {
+        struct Result: Decodable { let folder: FolderSummary }
+        guard let sid else { throw SynologyAPIError.api(119) }
+        let response: APIEnvelope<Result> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Browse.Folder", parameters: ["api": "SYNO.Foto.Browse.Folder", "version": "2", "method": "get", "id": String(id), "additional": "[]", "_sid": sid], authenticated: true)
+        guard response.success, let folder = response.data?.folder, folder.id > 0, id == 0 || folder.id == id else { throw SynologyAPIError.invalidResponse }
+        return folder
+    }
+
+    public func folders(parentID: Int64) async throws -> [FolderSummary] {
+        struct Result: Decodable { let list: [FolderSummary] }
+        guard let sid, parentID > 0 else { throw SynologyAPIError.invalidResponse }
+        var result: [FolderSummary] = []; var seen: Set<Int64> = []
+        for page in 0..<2048 {
+            let response: APIEnvelope<Result> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Browse.Folder", parameters: ["api": "SYNO.Foto.Browse.Folder", "version": "2", "method": "list", "id": String(parentID), "offset": String(page * 200), "limit": "200", "sort_by": "\"filename\"", "sort_direction": "\"asc\"", "additional": "[\"thumbnail\"]", "_sid": sid], authenticated: true)
+            guard response.success, let rows = response.data?.list, rows.count <= 200 else { throw SynologyAPIError.invalidResponse }
+            for row in rows { guard row.id > 0, row.id != parentID, row.parent == parentID, seen.insert(row.id).inserted else { throw SynologyAPIError.invalidResponse } }
+            result.append(contentsOf: rows)
+            if rows.count < 200 { return result }
+        }
+        throw CollectionCatalogError.exceedsLimit
+    }
+
     public func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
         guard let sid else { throw SynologyAPIError.api(119) }
         guard !request.collection.isSessionDerived else { throw SynologyAPIError.invalidResponse }
@@ -163,6 +192,7 @@ public actor SynologyClient: PhotosTransport {
                           "additional": Self.additionalParameter(for: fields.additional), "_sid": sid]
         if request.collection.favoriteOnly { parameters["favorite_only"] = "true" }
         if let albumID = request.collection.albumID { parameters["album_id"] = String(albumID) }
+        if let folderID = request.collection.folderID { parameters["folder_id"] = String(folderID) }
         if request.order == .takenTimeDescending {
             parameters["sort_by"] = "\"takentime\""; parameters["sort_direction"] = "\"desc\""
         }
@@ -173,7 +203,7 @@ public actor SynologyClient: PhotosTransport {
 
     private func fetchTimelineSections(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> [TimelineSection] {
         guard let sid else { throw SynologyAPIError.api(119) }
-        guard collection.albumID == nil else {
+        guard !collection.usesItemCatalog else {
             throw SynologyAPIError.unsupported("Albums use bounded item catalog enumeration.")
         }
         guard !initial || collection.supportsInitialTimeline else {

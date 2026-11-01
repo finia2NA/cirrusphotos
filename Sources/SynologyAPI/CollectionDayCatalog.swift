@@ -137,7 +137,7 @@ public struct DayPageAddress: Hashable, Codable, Sendable {
         guard capacity > 0, capacity <= 1000, offset >= 0, offset % capacity == 0,
               offset < CollectionDayCatalog.maximumItems else { throw CollectionCatalogError.invalidAddress }
         self.collection = collection; self.day = day; self.offset = offset; self.capacity = capacity
-        self.order = order ?? (collection.isSessionDerived ? .derived : (collection.albumID == nil ? .timeline : .takenTimeDescending))
+        self.order = order ?? (collection.isSessionDerived ? .derived : (!collection.usesItemCatalog ? .timeline : .takenTimeDescending))
     }
     public init(section: TimelineSection, collection: PhotoCollectionDescriptor) throws {
         guard section.list.count == 1, let raw = section.list.first,

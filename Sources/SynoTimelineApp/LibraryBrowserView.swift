@@ -188,6 +188,8 @@ struct LibraryBrowserView: View {
     let bridge: LibraryBrowserBridge
     var pinnedAlbumIDs: [Int64] = []
     var contentTopInset: CGFloat = 0
+    var hidesEmptyCollectionState = false
+    var customHeader: BrowserHeaderConfiguration?
     var onOpenPhoto: (PhotoViewerOpenRequest) -> Void = { _ in }
     var onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void = { _ in }
     @EnvironmentObject private var library: LibraryModel
@@ -212,6 +214,11 @@ struct LibraryBrowserView: View {
     }
 
     private var isAlbum: Bool { library.sourceAlbumID(for: collection) != nil }
+    private var browserHeader: BrowserHeaderConfiguration? { customHeader ?? albumHeader }
+    private var shouldHideEmptyCollectionState: Bool {
+        hidesEmptyCollectionState && !collection.isLibraryFilter &&
+            library.timelineVerified(for: collection) && library.error(for: collection) == nil
+    }
     private var albumHeader: BrowserHeaderConfiguration? {
         guard isAlbum else { return nil }
         let model = AlbumHeaderModel(album: library.album(for: collection))
@@ -231,6 +238,7 @@ struct LibraryBrowserView: View {
         if library.error(for: collection) != nil { return "Cached collection is empty. Connection unavailable." }
         guard library.timelineVerified(for: collection) else { return "Cached collection is empty. Checking Cirrus…" }
         if isAlbum { return "This album is empty." }
+        if collection.folderID != nil { return "This folder contains no photos." }
         return collection == .favorites ? "No photos are marked as favorites." : "Personal Space is empty."
     }
     private var loadingText: String {
@@ -266,13 +274,13 @@ struct LibraryBrowserView: View {
     var body: some View {
         Group {
             if let repository = library.repository,
-               (albumHeader != nil || !(library.snapshot(for: collection)?.timeline.days.isEmpty ?? true)) {
+               (browserHeader != nil || !(library.snapshot(for: collection)?.timeline.days.isEmpty ?? true)) {
                 let snapshot = library.snapshot(for: collection) ?? TimelineSnapshot(sections: [])
                 VStack(spacing: 0) {
                     HStack(spacing: 0) {
                         LibraryBrowserScrollView(snapshot: snapshot,
-                                             header: albumHeader,
-                                             emptyContent: snapshot.timeline.days.isEmpty ? AnyView(emptyState) : nil,
+                                             header: browserHeader,
+                                             emptyContent: snapshot.timeline.days.isEmpty && !shouldHideEmptyCollectionState ? AnyView(emptyState) : nil,
                                              authority: library.selectionAuthority(for: collection),
                                              sourceAlbumID: library.sourceAlbumID(for: collection),
                                              filterMembership: library.filterMembership(for: collection),
@@ -334,7 +342,11 @@ struct LibraryBrowserView: View {
                     }
                 }
             } else if library.snapshot(for: collection)?.timeline.days.isEmpty == true {
-                emptyState
+                if shouldHideEmptyCollectionState {
+                    Color.clear
+                } else {
+                    emptyState
+                }
             } else if let error = library.error(for: collection), library.snapshot(for: collection) == nil {
                 ContentUnavailableView {
                     Label(isAlbum ? "Album unavailable" : "Library unavailable",

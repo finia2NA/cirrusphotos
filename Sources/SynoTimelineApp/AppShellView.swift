@@ -16,6 +16,11 @@ struct AppShellView: View {
     @State private var viewer: PhotoViewerPresentation?
     @State private var selectedDestination: LibraryDestination
     @State private var openedAlbumID: Int64?
+    @State private var showsFolders: Bool
+    @State private var folderPath: [Int64]
+    @State private var folderDirectory: FolderDirectory?
+    @State private var folderDirectoryRequest: Int64?
+    @State private var folderError: String?
     @State private var dragOverviewNonce: String?
     @State private var openedMapFilter: PhotoCollectionDescriptor?
     @State private var mapFilterOpenGeneration: UInt64 = 0
@@ -30,13 +35,17 @@ struct AppShellView: View {
         _sidebarSelection = State(initialValue: navigationRestoration.sidebarSelection)
         _selectedDestination = State(initialValue: navigationRestoration.selectedDestination)
         _openedAlbumID = State(initialValue: navigationRestoration.openedAlbumID)
+        _showsFolders = State(initialValue: navigationRestoration.showsFolders)
+        _folderPath = State(initialValue: navigationRestoration.folderPath)
     }
 
     /// The collection currently browsed in the detail area, or nil for the Albums
     /// overview and the unfiltered map.
     private var sourceCollection: PhotoCollectionDescriptor? {
         switch selectedDestination {
-        case .personalLibrary: .personalLibrary
+        case .personalLibrary:
+            if showsFolders { folderDirectoryRequest == (folderPath.last ?? 0) ? folderDirectory.map { .folder($0.folder.id) } : nil }
+            else { .personalLibrary }
         case .favorites: .favorites
         case .albums: openedAlbumID.map { .album($0) }
         case .map: openedMapFilter
@@ -116,6 +125,9 @@ struct AppShellView: View {
         .onChange(of: selectedDestination) { _, _ in
             updateBackHandler(); updateTimelineSectionLoadSource()
         }
+        .onChange(of: showsFolders) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
+        .onChange(of: folderPath) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
+        .task(id: FolderLoadKey(namespace: model.presentationNamespace, active: selectedDestination == .personalLibrary && showsFolders, id: folderPath.last ?? 0, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadFolder() }
         .onChange(of: openedAlbumID) { _, _ in
             updateBackHandler(); updateTimelineSectionLoadSource()
         }
@@ -253,7 +265,11 @@ struct AppShellView: View {
         GeometryReader { geometry in
             let topInset = max(chrome.top, geometry.safeAreaInsets.top)
             ZStack(alignment: .topLeading) {
-                if let collection = selectedCollection {
+                if selectedDestination == .personalLibrary && showsFolders {
+                    folderDetail(topInset: topInset)
+                        .allowsHitTesting(viewer == nil)
+                        .ignoresSafeArea(.container, edges: .top)
+                } else if let collection = selectedCollection {
                     LibraryBrowserView(collection: collection,
                                        restorationAnchor: collection.isSessionDerived
                                            ? nil : navigationRestoration.timelineAnchor(for: collection),
@@ -314,6 +330,83 @@ struct AppShellView: View {
                     .allowsHitTesting(false)
             }
         }
+    }
+
+    private struct FolderLoadKey: Hashable {
+        let namespace: String?
+        let active: Bool
+        let id: Int64
+        let resetRevision: UInt64
+        let retryRevision: Int
+    }
+
+    private func loadFolder() async {
+        guard selectedDestination == .personalLibrary, showsFolders, let repository = model.repository else { return }
+        let restoredPath = navigationRestoration.prepareFolders(namespace: repository.namespace)
+        if restoredPath != folderPath { folderPath = restoredPath; return }
+        let id = folderPath.last ?? 0
+        folderDirectory = nil; folderDirectoryRequest = id; folderError = nil
+        for await event in await repository.folderDirectory(id: id) {
+            guard !Task.isCancelled, id == (folderPath.last ?? 0) else { return }
+            switch event {
+            case .value(let directory, _):
+                folderDirectory = directory
+                model.ensureCollectionLoaded(.folder(directory.folder.id))
+            case .failure(let message): folderError = message
+            }
+        }
+    }
+
+    private func folderBack() {
+        guard !folderPath.isEmpty else { return }
+        folderPath.removeLast()
+        navigationRestoration.setFolders(shown: showsFolders, path: folderPath)
+    }
+
+    @ViewBuilder private func folderDetail(topInset: CGFloat) -> some View {
+        if let directory = folderDirectory, folderDirectoryRequest == (folderPath.last ?? 0), let collection = selectedCollection {
+            VStack(spacing: 0) {
+                if let folderError { Text(folderError).font(.caption).foregroundStyle(.secondary).padding(6) }
+                LibraryBrowserView(collection: collection,
+                    restorationAnchor: collection.isSessionDerived ? nil : navigationRestoration.timelineAnchor(for: collection),
+                    bridge: browserBridge, pinnedAlbumIDs: albumPresentation.pinnedIDs, contentTopInset: topInset,
+                    hidesEmptyCollectionState: !directory.children.isEmpty,
+                    customHeader: folderHeader(directory.children),
+                    onOpenPhoto: openPhoto,
+                    onRestorationAnchorChanged: { anchor in
+                        guard !collection.isSessionDerived else { return }
+                        navigationRestoration.setTimelineAnchor(anchor, for: collection)
+                    }).id(collection)
+            }
+        } else if let folderError {
+            ContentUnavailableView { Label("Folders unavailable", systemImage: "folder.badge.questionmark") } description: { Text(folderError) } actions: { Button("Try Again") { Task { await model.reload() } } }
+        } else { ProgressView("Loading folders…") }
+    }
+
+    private func folderHeader(_ children: [FolderSummary]) -> BrowserHeaderConfiguration? {
+        guard !children.isEmpty else { return nil }
+        return BrowserHeaderConfiguration(identity: AnyHashable(children), height: { width in
+            let count = AlbumsOverviewView.columnCount(width: width)
+            let cardWidth = min(240, max(0, (width - 48 - CGFloat(count - 1) * 20) / CGFloat(count)))
+            let rows = (children.count + count - 1) / count
+            return 48 + CGFloat(rows) * (cardWidth + 26) + CGFloat(rows - 1) * 20
+        }, content: { repository, width in
+            let count = AlbumsOverviewView.columnCount(width: width)
+            let columns = Array(repeating: GridItem(.flexible(maximum: 240), spacing: 20, alignment: .leading), count: count)
+            return AnyView(LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
+                ForEach(children) { child in
+                    Button {
+                        folderPath.append(child.id)
+                        navigationRestoration.setFolders(shown: showsFolders, path: folderPath)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            AlbumCoverView(thumbnail: child.thumbnail, repository: repository, placeholderSymbol: "folder")
+                            Text(child.displayName).font(.headline).lineLimit(1).frame(height: 20, alignment: .top)
+                        }
+                    }.buttonStyle(.plain)
+                }
+            }.padding(24).frame(maxWidth: .infinity, alignment: .topLeading))
+        })
     }
 
     private func configureAlbumPresentation() {
@@ -509,6 +602,8 @@ struct AppShellView: View {
     private func updateBackHandler() {
         if viewer != nil {
             model.installBackHandler(closeViewer)
+        } else if selectedDestination == .personalLibrary && showsFolders && !folderPath.isEmpty {
+            model.installBackHandler(folderBack)
         } else if isAlbumBrowser {
             model.installBackHandler(closeAlbum)
         } else if isMapFilterBrowser {
@@ -537,6 +632,29 @@ struct AppShellView: View {
 
     @ToolbarContentBuilder
     private var applicationToolbar: some ToolbarContent {
+        if selectedDestination == .personalLibrary && viewer == nil {
+            if showsFolders && !folderPath.isEmpty {
+                ToolbarItem(placement: .navigation) {
+                    Button(action: folderBack) {
+                        Image(systemName: "chevron.left")
+                            .frame(width: ToolbarMetrics.controlHeight, height: ToolbarMetrics.controlHeight)
+                            .contentShape(.circle)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: Circle())
+                    .accessibilityLabel("Back to Parent Folder")
+                    .help("Back to Parent Folder")
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
+            ToolbarItem(placement: .navigation) {
+                Button { showsFolders.toggle(); navigationRestoration.setFolders(shown: showsFolders, path: folderPath) } label: {
+                    Image(systemName: showsFolders ? "photo.on.rectangle" : "folder")
+                }
+                .help(showsFolders ? "Show Timeline" : "Browse Folders")
+                .accessibilityLabel(showsFolders ? "Show Timeline" : "Browse Folders")
+            }
+        }
         if let viewer {
             ToolbarItem(placement: .navigation) {
                 Button(action: closeViewer) {
@@ -634,7 +752,10 @@ struct AppShellView: View {
                 BrowserThumbnailShapeControl(model: model)
                     .frame(height: ToolbarMetrics.controlHeight)
             }
-            if isAlbumBrowser {
+            if selectedDestination == .personalLibrary && showsFolders {
+                ToolbarItem(placement: .principal) { Text(folderDirectory?.folder.displayName ?? "Folders").font(.headline).lineLimit(1) }
+                .sharedBackgroundVisibility(.hidden)
+            } else if isAlbumBrowser {
                 ToolbarItem(placement: .principal) {
                     Text(sourceCollection.flatMap { model.albumName(for: $0) } ?? "Album")
                         .font(.headline)

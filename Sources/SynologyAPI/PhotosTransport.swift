@@ -108,6 +108,9 @@ public protocol PhotosTransport: Sendable {
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult
     func readAlbumCatalogBatch(albumID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry]
+    func readFolderCatalogBatch(folderID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry]
+    func folder(id: Int64) async throws -> FolderSummary
+    func folders(parentID: Int64) async throws -> [FolderSummary]
     func userProfiles(ids: [Int64]) async throws -> [PhotosUserProfile]
     func profilePhoto(descriptor: String) async throws -> Data
     func albums() async throws -> [AlbumSummary]
@@ -153,6 +156,9 @@ public protocol PhotosTransport: Sendable {
 }
 
 public extension PhotosTransport {
+    func readFolderCatalogBatch(folderID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry] { throw SynologyAPIError.unsupported("Folder catalog unavailable.") }
+    func folder(id: Int64) async throws -> FolderSummary { throw SynologyAPIError.unsupported("Folder unavailable.") }
+    func folders(parentID: Int64) async throws -> [FolderSummary] { throw SynologyAPIError.unsupported("Folders unavailable.") }
     func userProfiles(ids: [Int64]) async throws -> [PhotosUserProfile] { throw SynologyAPIError.unsupported("Profiles unavailable.") }
     func profilePhoto(descriptor: String) async throws -> Data { throw SynologyAPIError.unsupported("Profile photos unavailable.") }
     func addableAlbums() async throws -> [AlbumSummary] { throw SynologyAPIError.unsupported("Addable album listing is unavailable.") }

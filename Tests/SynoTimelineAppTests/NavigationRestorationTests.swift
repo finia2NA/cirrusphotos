@@ -43,6 +43,16 @@ final class NavigationRestorationTests: XCTestCase {
         XCTAssertEqual(reader.timelineAnchor(for: .album(54)), album)
     }
 
+    func testFolderModeAndPathRoundTrip() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = NavigationRestorationStore(defaults: defaults, key: "state")
+        store.setFolders(shown: true, path: [2, 8])
+        let restored = NavigationRestorationStore(defaults: defaults, key: "state")
+        XCTAssertTrue(restored.showsFolders)
+        XCTAssertEqual(restored.folderPath, [2, 8])
+    }
+
     func testAlbumAnchorIsIsolatedPerAlbum() throws {
         let (defaults, suite) = defaults()
         defer { defaults.removePersistentDomain(forName: suite) }

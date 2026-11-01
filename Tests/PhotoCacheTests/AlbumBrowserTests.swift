@@ -4,6 +4,21 @@ import SynologyAPI
 @testable import PhotoCache
 
 private actor AlbumFakeTransport: PhotosTransport {
+    var folderCatalogCalls: [Int64] = []
+    var folderFailure = false
+    func setFolderFailure() { folderFailure = true }
+    func folder(id: Int64) async throws -> FolderSummary {
+        if folderFailure { throw TestFailure("Offline") }
+        return try JSONDecoder().decode(FolderSummary.self, from: Data(#"{"id":2,"name":"/","parent":2}"#.utf8))
+    }
+    func folders(parentID: Int64) async throws -> [FolderSummary] {
+        if folderFailure { throw TestFailure("Offline") }
+        return [try JSONDecoder().decode(FolderSummary.self, from: Data(#"{"id":3,"name":"/Trip","parent":2,"additional":{"thumbnail":[]}}"#.utf8))]
+    }
+    func readFolderCatalogBatch(folderID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry] {
+        if offset == 0 { folderCatalogCalls.append(folderID) }
+        return Array((albumEntriesByID[folderID] ?? []).dropFirst(offset).prefix(limit))
+    }
     var albumList: [AlbumSummary] = []
     var albumListFailure: String?
     var albumEntriesByID: [Int64: [DayTimelineEntry]] = [:]
@@ -742,6 +757,48 @@ final class AlbumBrowserTests: XCTestCase {
         let cached = try await repository.store.metadataCatalog(.init(namespace: namespace, collection: .album(54)))
         XCTAssertEqual(cached?.catalog.days.map(\.day.id), ["2024-01-01", "2023-12-31"])
 
+    }
+
+    func testFolderDirectoryIsCachedAndSurvivesFailedRefresh() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let firstTransport = AlbumFakeTransport()
+        let first = try makeRepository(root: root, transport: firstTransport)
+        var verified = false
+        for await event in await first.folderDirectory(id: 0) {
+            if case .value(let directory, true) = event { verified = directory.children.map(\.id) == [3] }
+        }
+        XCTAssertTrue(verified)
+        let offline = AlbumFakeTransport()
+        await offline.setFolderFailure()
+        let second = try makeRepository(root: root, transport: offline)
+        var cached = false; var failed = false
+        for await event in await second.folderDirectory(id: 0) {
+            switch event {
+            case .value(let directory, false): cached = directory.children.map(\.id) == [3]
+            case .failure: failed = true
+            default: break
+            }
+        }
+        XCTAssertTrue(cached)
+        XCTAssertTrue(failed)
+    }
+
+    func testFolderTimelineUsesScopedCatalog() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        await transport.configure(albumEntriesByID: [8: [DayTimelineEntry(id: 11, time: 1_704_067_200)]])
+        let repository = try makeRepository(root: root, transport: transport)
+        var result: TimelineSnapshot?
+        for await event in await repository.timeline(collection: .folder(8)) {
+            if case .value(let snapshot, true) = event { result = snapshot }
+        }
+        XCTAssertEqual(result?.sections.first?.limit, 1)
+        let folderCalls = await transport.folderCatalogCalls
+        let albumCalls = await transport.albumTimelineCalls
+        let timelineCalls = await transport.collectionTimelineCalls
+        XCTAssertEqual(folderCalls, [8])
+        XCTAssertTrue(albumCalls.isEmpty)
+        XCTAssertTrue(timelineCalls.isEmpty)
     }
 
     func testEmptyAlbumScanProducesNoSections() async throws {
