@@ -19,8 +19,10 @@ final class PrivateSharingTransportTests: XCTestCase {
         try await client.updateAlbumSharing(reference: reference.passphrase, changes: [
             .init(action: "update", role: "download", member: member),
             .init(action: "delete", member: .init(type: "user", id: 1035))
-        ], initial: true)
-        try await client.updateAlbumSharing(reference: reference.passphrase, changes: [.init(action: "update", role: "view", member: member)], initial: false)
+        ], password: .unchanged, expiration: 0)
+        try await client.updateAlbumSharing(reference: reference.passphrase, changes: [.init(action: "update", role: "view", member: member)], password: .unchanged, expiration: nil)
+        try await client.updateAlbumSharing(reference: reference.passphrase, changes: [.init(action: "update", role: "view", member: .init(type: "public"))], password: .set("fixture-password"), expiration: 1794956399)
+        try await client.updateAlbumSharing(reference: reference.passphrase, changes: [.init(action: "delete", member: .init(type: "public"))], password: .clear, expiration: 0)
         _ = try await client.setAlbumShared(id: 69, enabled: false)
     }
 }
@@ -52,6 +54,22 @@ private final class PrivateSharingProtocol: URLProtocol, @unchecked Sendable {
         case "update":
             XCTAssertEqual(values["passphrase"], "\"fixture-reference\"")
             let changes = try! JSONSerialization.jsonObject(with: Data(values["permission"]!.utf8)) as! [[String: Any]]
+            let member = changes[0]["member"] as! [String: Any]
+            if member["type"] as? String == "public" {
+                XCTAssertNil(member["id"])
+                if changes[0]["action"] as? String == "update" {
+                    XCTAssertEqual(changes[0]["role"] as? String, "view")
+                    XCTAssertEqual(values["password"], "\"fixture-password\"")
+                    XCTAssertEqual(values["expiration"], "1794956399")
+                } else {
+                    XCTAssertEqual(changes[0]["action"] as? String, "delete")
+                    XCTAssertNil(changes[0]["role"])
+                    XCTAssertEqual(values["password"], "\"\"")
+                    XCTAssertEqual(values["expiration"], "0")
+                }
+                json = #"{"success":true}"#
+                break
+            }
             XCTAssertEqual(changes[0]["action"] as? String, "update")
             if changes.count == 1 {
                 XCTAssertNil(values["expiration"])

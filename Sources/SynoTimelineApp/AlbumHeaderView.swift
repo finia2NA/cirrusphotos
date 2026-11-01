@@ -31,7 +31,7 @@ struct AlbumHeaderModel: Hashable {
     }
     var recipients: [AlbumSharingPermission] {
         guard album?.shared == true else { return [] }
-        return album?.sharingInfo?.permission ?? []
+        return (album?.sharingInfo?.permission ?? []).filter { $0.type != "public" }
     }
     static func height(for width: CGFloat) -> CGFloat {
         240

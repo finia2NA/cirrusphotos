@@ -105,6 +105,16 @@ public struct AlbumSharingInfo: Codable, Hashable, Sendable {
         case reference = "passphrase", sharingLink = "sharing_link"
         case privacyType = "privacy_type", isExpired = "is_expired", enablePassword = "enable_password"
     }
+    // Sharing references and links are read from the NAS on demand and never cached.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(privacyType, forKey: .privacyType)
+        try container.encodeIfPresent(expiration, forKey: .expiration)
+        try container.encodeIfPresent(isExpired, forKey: .isExpired)
+        try container.encodeIfPresent(enablePassword, forKey: .enablePassword)
+        try container.encodeIfPresent(permission, forKey: .permission)
+        try container.encodeIfPresent(owner, forKey: .owner)
+    }
     public init(privacyType: String? = nil, expiration: Int64? = nil, isExpired: Bool? = nil,
                 enablePassword: Bool? = nil, permission: [AlbumSharingPermission]? = nil,
                 owner: AlbumSharingOwner? = nil, reference: String? = nil, sharingLink: String? = nil) {
@@ -151,8 +161,8 @@ public struct AlbumSharingReference: Decodable, Sendable {
 public struct SharingPermissionChange: Codable, Hashable, Sendable {
     public struct Member: Codable, Hashable, Sendable {
         public let type: String
-        public let id: Int64
-        public init(type: String, id: Int64) { self.type = type; self.id = id }
+        public let id: Int64?
+        public init(type: String, id: Int64? = nil) { self.type = type; self.id = id }
     }
     public let action: String
     public let role: String?
@@ -160,4 +170,11 @@ public struct SharingPermissionChange: Codable, Hashable, Sendable {
     public init(action: String, role: String? = nil, member: Member) {
         self.action = action; self.role = role; self.member = member
     }
+}
+
+/// Passwords are write-only and are never part of a persisted sharing snapshot.
+public enum SharingPasswordChange: Sendable, Equatable {
+    case unchanged
+    case set(String)
+    case clear
 }

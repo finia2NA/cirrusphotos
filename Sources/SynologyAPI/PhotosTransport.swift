@@ -116,7 +116,7 @@ public protocol PhotosTransport: Sendable {
     func currentPhotosUserID() async throws -> Int64
     func sharingPrincipals() async throws -> [SharingPrincipal]
     func setAlbumShared(id: Int64, enabled: Bool) async throws -> AlbumSharingReference
-    func updateAlbumSharing(reference: String, changes: [SharingPermissionChange], initial: Bool) async throws
+    func updateAlbumSharing(reference: String, changes: [SharingPermissionChange], password: SharingPasswordChange, expiration: Int64?) async throws
     func createAlbum(name: String, itemIDs: [Int64]) async throws -> AlbumSummary
     func addItems(_ itemIDs: [Int64], toAlbum id: Int64) async throws
     func removeItems(_ itemIDs: [Int64], fromAlbum id: Int64) async throws
@@ -159,7 +159,7 @@ public extension PhotosTransport {
     func currentPhotosUserID() async throws -> Int64 { throw SynologyAPIError.unsupported("Current user unavailable.") }
     func sharingPrincipals() async throws -> [SharingPrincipal] { throw SynologyAPIError.unsupported("Sharing users unavailable.") }
     func setAlbumShared(id: Int64, enabled: Bool) async throws -> AlbumSharingReference { throw SynologyAPIError.unsupported("Sharing unavailable.") }
-    func updateAlbumSharing(reference: String, changes: [SharingPermissionChange], initial: Bool) async throws { throw SynologyAPIError.unsupported("Sharing unavailable.") }
+    func updateAlbumSharing(reference: String, changes: [SharingPermissionChange], password: SharingPasswordChange, expiration: Int64?) async throws { throw SynologyAPIError.unsupported("Sharing unavailable.") }
     func createAlbum(name: String, itemIDs: [Int64]) async throws -> AlbumSummary { throw SynologyAPIError.unsupported("Album creation is unavailable.") }
     func addItems(_ itemIDs: [Int64], toAlbum id: Int64) async throws { throw SynologyAPIError.unsupported("Album membership changes are unavailable.") }
     func removeItems(_ itemIDs: [Int64], fromAlbum id: Int64) async throws { throw SynologyAPIError.unsupported("Album membership changes are unavailable.") }

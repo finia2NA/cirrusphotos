@@ -9,6 +9,9 @@ final class AlbumSharingTests: XCTestCase {
         XCTAssertEqual(album.sharingInfo?.permission, [])
         XCTAssertEqual(album.sharingInfo?.reference, "fixture-reference")
         XCTAssertEqual(album.sharingInfo?.sharingLink, "")
+        let encoded = String(decoding: try JSONEncoder().encode(album), as: UTF8.self)
+        XCTAssertFalse(encoded.contains("fixture-reference"))
+        XCTAssertFalse(encoded.contains("sharing_link"))
     }
     func testSharingRoundTripKeepsIdentityAndUnknownValues() throws {
         let data = Data(#"{"id":7,"name":"Example","item_count":2,"type":"normal","owner_user_id":1,"shared":true,"additional":{"sharing_info":{"privacy_type":"future-mode","expiration":3,"is_expired":true,"enable_password":false,"permission":[{"db_id":11,"id":1036,"name":"Person","role":"future-role","type":"user"}]}}}"#.utf8)

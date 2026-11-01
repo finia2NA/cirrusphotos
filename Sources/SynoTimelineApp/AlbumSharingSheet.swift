@@ -3,6 +3,13 @@ import AppKit
 import PhotoCache
 import SynologyAPI
 
+enum SharingExpiry {
+    static func endOfDay(_ date: Date, calendar: Calendar = .current) -> Int64? {
+        guard let next = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: date)) else { return nil }
+        return Int64(next.timeIntervalSince1970) - 1
+    }
+}
+
 struct AlbumSharingSheet: View {
     let albumID: Int64
     let repository: CachedPhotosRepository
@@ -13,10 +20,15 @@ struct AlbumSharingSheet: View {
     @State private var busy = false
     @State private var error: String?
     @State private var confirmDisable = false
+    @State private var access = "private"
+    @State private var passwordAction = "unchanged"
+    @State private var password = ""
+    @State private var hasExpiry = false
+    @State private var expiryDate = Date()
 
     private var editable: Bool {
         guard let album = snapshot?.album else { return false }
-        return album.sharingInfo?.privacyType == "private"
+        return ["private", "public-view", "public-download"].contains(album.sharingInfo?.privacyType ?? "")
     }
     private var existing: [Int64: AlbumSharingPermission] {
         var result: [Int64: AlbumSharingPermission] = [:]
@@ -37,6 +49,26 @@ struct AlbumSharingSheet: View {
             return SharingPermissionChange(action: "delete", member: member)
         }
     }
+    private var accessChange: AlbumSharingAccessChange {
+        guard let album = snapshot?.album, access != (album.shared ? (album.sharingInfo?.privacyType ?? "") : "private") else { return .unchanged }
+        return access == "private" ? .private : .publicView
+    }
+    private var expiryChange: Int64? {
+        let original = snapshot?.album.shared == true ? (snapshot?.album.sharingInfo?.expiration ?? 0) : 0
+        if !hasExpiry { return original == 0 ? nil : 0 }
+        if original > 0 && Calendar.current.isDate(expiryDate, inSameDayAs: Date(timeIntervalSince1970: TimeInterval(original))) { return nil }
+        return SharingExpiry.endOfDay(expiryDate)
+    }
+    private var passwordChange: SharingPasswordChange {
+        switch passwordAction {
+        case "set": return .set(password)
+        case "clear": return .clear
+        default: return .unchanged
+        }
+    }
+    private var hasChanges: Bool {
+        !changes.isEmpty || accessChange != .unchanged || passwordChange != .unchanged || expiryChange != nil
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Sharing").font(.title2.weight(.semibold))
@@ -44,6 +76,23 @@ struct AlbumSharingSheet: View {
                 Text(snapshot.album.name).foregroundStyle(.secondary)
                 if !editable { Text("These sharing settings cannot be edited here.").foregroundStyle(.secondary) }
                 if editable {
+                    Picker("Access", selection: $access) {
+                        Text("Private").tag("private")
+                        Text("Public View").tag("public-view")
+                        if snapshot.album.sharingInfo?.privacyType == "public-download" {
+                            Text("Public Download (existing)").tag("public-download")
+                        }
+                    }
+                    Picker("Password", selection: $passwordAction) {
+                        Text(snapshot.album.sharingInfo?.enablePassword == true ? "Keep current password" : "No password").tag("unchanged")
+                        Text("Set password").tag("set")
+                        if snapshot.album.sharingInfo?.enablePassword == true { Text("Clear password").tag("clear") }
+                    }
+                    if passwordAction == "set" { SecureField("New password", text: $password) }
+                    Toggle("Expires", isOn: $hasExpiry)
+                    if hasExpiry {
+                        DatePicker("Expiry date (local time)", selection: $expiryDate, displayedComponents: .date)
+                    }
                     List {
                         ForEach(roles.keys.sorted(), id: \.self) { id in
                             HStack {
@@ -87,7 +136,7 @@ struct AlbumSharingSheet: View {
                 Button("Close") { dismiss() }
                 if snapshot != nil && editable {
                     Button(snapshot?.album.shared == true ? "Save" : "Enable Sharing") { save(disable: false) }
-                        .disabled(snapshot?.album.shared == true && changes.isEmpty)
+                        .disabled((snapshot?.album.shared == true && !hasChanges) || (passwordAction == "set" && password.isEmpty))
                 }
             }
         }
@@ -106,6 +155,11 @@ struct AlbumSharingSheet: View {
             do {
                 let loaded = try await repository.albumSharing(id: albumID)
                 snapshot = loaded
+                access = loaded.album.shared ? (loaded.album.sharingInfo?.privacyType ?? "private") : "private"
+                passwordAction = "unchanged"; password = ""
+                let expiry = loaded.album.shared ? (loaded.album.sharingInfo?.expiration ?? 0) : 0
+                hasExpiry = expiry > 0
+                expiryDate = expiry > 0 ? Date(timeIntervalSince1970: TimeInterval(expiry)) : Date()
                 if loaded.album.shared {
                     for grant in loaded.album.sharingInfo?.permission ?? [] where grant.type == "user" {
                         if let id = grant.principalID { roles[id] = grant.role }
@@ -118,10 +172,11 @@ struct AlbumSharingSheet: View {
     private func save(disable: Bool) {
         guard let snapshot else { return }
         let delta = changes
+        let access = accessChange, password = passwordChange, expiry = expiryChange
         busy = true; error = nil
         Task {
             do {
-                _ = try await repository.saveAlbumSharing(snapshot: snapshot, changes: delta, disable: disable)
+                _ = try await repository.saveAlbumSharing(snapshot: snapshot, changes: delta, disable: disable, access: access, password: password, expiration: expiry)
                 load()
             } catch {
                 self.snapshot = nil

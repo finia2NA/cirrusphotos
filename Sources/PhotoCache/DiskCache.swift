@@ -31,7 +31,7 @@ public enum CacheBudget {
 }
 
 public actor DiskCache {
-    private static let schemaVersion = 3
+    private static let schemaVersion = 4
     private let root: URL
     private let images: URL
     nonisolated(unsafe) var db: OpaquePointer?

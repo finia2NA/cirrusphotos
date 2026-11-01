@@ -70,17 +70,22 @@ private actor AlbumFakeTransport: PhotosTransport {
             sharingInfo: .init(privacyType: "private", expiration: 0, permission: [], reference: "fixture-reference", sharingLink: enabled ? "https://example.test/share" : ""))
         return try JSONDecoder().decode(AlbumSharingReference.self, from: Data(#"{"passphrase":"fixture-reference","sharing_link":"https://example.test/share"}"#.utf8))
     }
-    func updateAlbumSharing(reference: String, changes: [SharingPermissionChange], initial: Bool) async throws {
+    func updateAlbumSharing(reference: String, changes: [SharingPermissionChange], password: SharingPasswordChange, expiration: Int64?) async throws {
         sharingWrites.append("update")
         if sharingFailsUpdate { throw TestFailure("fixture update failed") }
         let old = albumList[0]
         var permissions = old.sharingInfo?.permission ?? []
+        var privacy = old.sharingInfo?.privacyType ?? "private"
         for change in changes {
+            if change.member.type == "public" {
+                privacy = change.action == "delete" ? "private" : "public-view"
+                continue
+            }
             permissions.removeAll { $0.principalID == change.member.id && $0.type == "user" }
             if let role = change.role { permissions.append(.init(photosUserID: 99, principalID: change.member.id, name: "Test", role: role, type: "user")) }
         }
         albumList[0] = AlbumSummary(id: old.id, name: old.name, itemCount: old.itemCount, type: "normal", ownerUserID: 11, shared: true,
-            sharingInfo: .init(privacyType: "private", expiration: old.sharingInfo?.expiration, enablePassword: old.sharingInfo?.enablePassword, permission: permissions, reference: "fixture-reference", sharingLink: "https://example.test/share"))
+            sharingInfo: .init(privacyType: privacy, expiration: expiration ?? old.sharingInfo?.expiration, enablePassword: password == .unchanged ? old.sharingInfo?.enablePassword : password != .clear, permission: permissions, reference: "fixture-reference", sharingLink: "https://example.test/share"))
     }
 
     func login(credentials: SynologyCredentials) async throws {}
@@ -265,6 +270,52 @@ final class AlbumBrowserTests: XCTestCase {
         XCTAssertTrue(enabled.shared)
         XCTAssertEqual(enabled.sharingInfo?.permission, [])
         XCTAssertEqual(enabled.itemCount, 3)
+    }
+
+    func testFailedPublicUpdateRefreshesRepresentation() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let info = AlbumSharingInfo(privacyType: "private", expiration: 0, enablePassword: false, permission: [], reference: "fixture-reference")
+        await transport.configure(albumList: [.init(id: 54, name: "Album", itemCount: 0, type: "normal", ownerUserID: 11, shared: true, sharingInfo: info)])
+        let repository = try makeRepository(root: root, transport: transport)
+        let snapshot = try await repository.albumSharing(id: 54)
+        let events = await repository.albumSharingChanges()
+        let notification = Task { for await _ in events { return true }; return false }
+        await transport.configureSharingFailure(true)
+        do {
+            _ = try await repository.saveAlbumSharing(snapshot: snapshot, changes: [], disable: false, access: .publicView, password: .set("fixture-password"))
+            XCTFail("Expected failure")
+        } catch {}
+        let notified = await notification.value
+        XCTAssertTrue(notified)
+        var listed: [AlbumSummary]?
+        for await event in await repository.albums() { if case .value(let albums, true) = event { listed = albums } }
+        XCTAssertEqual(listed?.first?.sharingInfo?.privacyType, "private")
+    }
+
+    func testPublicSettingsPreserveAndDeleteNamedGrantsAndRefreshList() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let member = AlbumSharingPermission(photosUserID: 12, principalID: 1035, name: "Other", role: "view", type: "user")
+        let info = AlbumSharingInfo(privacyType: "private", expiration: 0, enablePassword: false, permission: [member], reference: "fixture-reference", sharingLink: "https://example.test/share")
+        await transport.configure(albumList: [.init(id: 54, name: "Album", itemCount: 0, type: "normal", ownerUserID: 11, shared: true, sharingInfo: info)])
+        let repository = try makeRepository(root: root, transport: transport)
+        let snapshot = try await repository.albumSharing(id: 54)
+        let publicAlbum = try await repository.saveAlbumSharing(snapshot: snapshot, changes: [], disable: false, access: .publicView, password: .set("fixture-password"), expiration: 1794956399)
+        XCTAssertEqual(publicAlbum.sharingInfo?.privacyType, "public-view")
+        XCTAssertEqual(publicAlbum.sharingInfo?.permission, [member])
+        XCTAssertEqual(publicAlbum.sharingInfo?.enablePassword, true)
+        XCTAssertEqual(publicAlbum.sharingInfo?.expiration, 1794956399)
+        var listed: [AlbumSummary]?
+        for await event in await repository.albums() { if case .value(let albums, true) = event { listed = albums } }
+        XCTAssertEqual(listed?.first?.sharingInfo?.privacyType, "public-view")
+        let next = try await repository.albumSharing(id: 54)
+        let remove = SharingPermissionChange(action: "delete", member: .init(type: "user", id: 1035))
+        let privateAlbum = try await repository.saveAlbumSharing(snapshot: next, changes: [remove], disable: false, access: .private, password: .clear, expiration: 0)
+        XCTAssertEqual(privateAlbum.sharingInfo?.privacyType, "private")
+        XCTAssertEqual(privateAlbum.sharingInfo?.permission, [])
+        XCTAssertEqual(privateAlbum.sharingInfo?.enablePassword, false)
+        XCTAssertEqual(privateAlbum.sharingInfo?.expiration, 0)
     }
 
     func testSharingRejectsAlbumListReadAdmittedBeforeWrite() async throws {

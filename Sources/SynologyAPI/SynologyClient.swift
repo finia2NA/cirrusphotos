@@ -313,13 +313,18 @@ public actor SynologyClient: PhotosTransport {
         return data
     }
 
-    public func updateAlbumSharing(reference: String, changes: [SharingPermissionChange], initial: Bool) async throws {
+    public func updateAlbumSharing(reference: String, changes: [SharingPermissionChange], password: SharingPasswordChange, expiration: Int64?) async throws {
         guard let sid, !reference.isEmpty else { throw SynologyAPIError.invalidResponse }
         let encoder = JSONEncoder()
         let encodedReference = String(decoding: try encoder.encode(reference), as: UTF8.self)
         let encodedChanges = String(decoding: try encoder.encode(changes), as: UTF8.self)
         var parameters = ["api": "SYNO.Foto.Sharing.Passphrase", "version": "1", "method": "update", "passphrase": encodedReference, "permission": encodedChanges, "_sid": sid]
-        if initial { parameters["expiration"] = "0" }
+        if let expiration { parameters["expiration"] = String(expiration) }
+        switch password {
+        case .unchanged: break
+        case .set(let value): parameters["password"] = String(decoding: try encoder.encode(value), as: UTF8.self)
+        case .clear: parameters["password"] = "\"\""
+        }
         let response: APIEnvelope<EmptyData> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Sharing.Passphrase", parameters: parameters, authenticated: true)
         guard response.success else { throw SynologyAPIError.api(response.error?.code ?? -1) }
     }

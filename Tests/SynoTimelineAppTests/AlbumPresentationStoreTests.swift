@@ -235,3 +235,15 @@ final class AlbumPresentationStoreTests: XCTestCase {
         }
     }
 }
+
+extension AlbumPresentationStoreTests {
+    func testSharingExpiryUsesInclusiveLocalDayAcrossDST() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/Berlin"))
+        let date = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 17, hour: 12)))
+        XCTAssertEqual(SharingExpiry.endOfDay(date, calendar: calendar), 1794956399)
+        let dst = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 3, day: 29, hour: 12)))
+        let nextDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 3, day: 30)))
+        XCTAssertEqual(SharingExpiry.endOfDay(dst, calendar: calendar), Int64(nextDay.timeIntervalSince1970) - 1)
+    }
+}
