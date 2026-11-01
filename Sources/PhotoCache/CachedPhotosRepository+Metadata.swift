@@ -33,7 +33,7 @@ extension CachedPhotosRepository {
                 let validation = runID
                 let epoch = metadata.admissionEpoch
                 let mutationEpoch = metadata.mutationEpochs[collection, default: 0]
-                let cached = try? await store.metadataCatalog(CollectionKey(namespace: metadataNamespace, collection: collection))
+                let cached = try? await store.metadataCatalog(CollectionKey(namespace: metadataNamespace(for: collection), collection: collection))
                 guard !Task.isCancelled, epoch == metadata.admissionEpoch, mutationEpoch == metadata.mutationEpochs[collection, default: 0], !metadata.resetInProgress else { continuation.finish(); return }
                 let snapshot = cached.flatMap { try? CollectionDayPager.snapshot(catalog: $0.catalog) }
                 let mutationInProgress = metadata.albumMutationWriting && collection.albumID != nil && collection.albumID == metadata.albumMutationID
@@ -91,7 +91,7 @@ extension CachedPhotosRepository {
                     guard let key = CacheKey.page(namespace: namespace, section: section, collection: collection) else { throw CollectionCatalogError.invalidAddress }
                     let epoch = metadata.admissionEpoch
                     let mutationEpoch = metadata.mutationEpochs[collection, default: 0]
-                    let cached = useCachedPages ? try await store.metadataPage(address, namespace: metadataNamespace, currentRun: runID) : nil
+                    let cached = useCachedPages ? try await store.metadataPage(address, namespace: metadataNamespace(for: collection), currentRun: runID) : nil
                     guard !Task.isCancelled, epoch == metadata.admissionEpoch, mutationEpoch == metadata.mutationEpochs[collection, default: 0], !metadata.resetInProgress else { continuation.finish(); return }
                     let mutationInProgress = metadata.albumMutationWriting && collection.albumID != nil && collection.albumID == metadata.albumMutationID
                     if let cached {
@@ -100,14 +100,14 @@ extension CachedPhotosRepository {
                             visible = PhotoPageSnapshot(address: cached.address, membershipRevision: cached.membershipRevision,
                                 membershipVerified: false, slots: cached.slots.map { PhotoItemSlot(itemID: $0.itemID, item: $0.item, verified: false) })
                         } else { visible = cached }
-                        continuation.yield(.value(applyingFavoriteOverrides(visible), verified: visible.verified))
+                        continuation.yield(.value((collection.incomingAlbumIdentity == nil ? applyingFavoriteOverrides(visible) : visible), verified: visible.verified))
                     }
                     guard !mutationInProgress else { continuation.finish(); return }
                     guard allowNetwork && cached?.verified != true else { continuation.finish(); return }
                     let task = registerPage(section, collection: collection, key: key, subscriber: subscriber, priority: priority, forceMembership: !useCachedPages)
                     let current = try await task.value
                     guard !Task.isCancelled else { continuation.finish(); return }
-                    continuation.yield(.value(applyingFavoriteOverrides(current), verified: current.verified))
+                    continuation.yield(.value((collection.incomingAlbumIdentity == nil ? applyingFavoriteOverrides(current) : current), verified: current.verified))
                 } catch {
                     if !Task.isCancelled && !(error is CancellationError) && !(error is NetworkGateError && priority == .prefetch) {
                         continuation.yield(.failure(error.localizedDescription))
@@ -209,21 +209,21 @@ extension CachedPhotosRepository {
             let token = try await captureMetadataWorkToken(resource: .timeline(collection), jobID: id, collection: collection)
             try await connect()
             try await reconcileMetadataSource()
-            let admission = try await store.metadataAdmission(metadataNamespace)
+            let admission = try await store.metadataAdmission(metadataNamespace(for: collection))
             let acquired = try await acquireCollectionCatalog(collection)
             let catalog = acquired.catalog
             try Task.checkCancellation()
             guard mutationEpoch == metadata.mutationEpochs[collection, default: 0],
                   await metadataTokenIsCurrent(token) else { throw CancellationError() }
-            try await store.storeMetadataCatalog(catalog, key: CollectionKey(namespace: metadataNamespace, collection: collection),
+            try await store.storeMetadataCatalog(catalog, key: CollectionKey(namespace: metadataNamespace(for: collection), collection: collection),
                                                  validatedRun: runID, admission: admission)
             if let membership = acquired.membership {
                 for (section, ids) in zip(membership.grouped.snapshot.sections, membership.grouped.itemIDsBySection) {
                     let address = try DayPageAddress(section: section, collection: collection)
-                    guard let generation = try await store.metadataDayGeneration(CollectionKey(namespace: metadataNamespace, collection: collection), day: address.day) else { throw CollectionCatalogError.invalidCoverage }
+                    guard let generation = try await store.metadataDayGeneration(CollectionKey(namespace: metadataNamespace(for: collection), collection: collection), day: address.day) else { throw CollectionCatalogError.invalidCoverage }
                     let read = try DayPageRead(address: address, dayCount: section.list[0].itemCount, membershipGeneration: UInt64(generation))
                     try await store.storeMetadataIdentityPage(read, entries: ids.map { DayTimelineEntry(id: $0, time: membership.times[$0]!) },
-                                                             namespace: metadataNamespace, currentRun: runID, admission: admission)
+                                                             namespace: metadataNamespace(for: collection), currentRun: runID, admission: admission)
                 }
             }
             guard await metadataTokenIsCurrent(token) else { throw MetadataAdmissionError.superseded }
@@ -290,15 +290,15 @@ extension CachedPhotosRepository {
     private func materializeCurrentPage(_ section: TimelineSection, collection: PhotoCollectionDescriptor,
                                         priority: RequestPriority, forceMembership: Bool) async throws -> PhotoPageSnapshot {
         if !forceMembership, let address = try? DayPageAddress(section: section, collection: collection),
-           let known = try await store.metadataPage(address, namespace: metadataNamespace, currentRun: runID), known.membershipVerified {
+           let known = try await store.metadataPage(address, namespace: metadataNamespace(for: collection), currentRun: runID), known.membershipVerified {
             let missing = known.slots.filter { !$0.verified }.map(\.itemID)
             if missing.isEmpty { return known }
             if missing.count == known.slots.count || missing.count > MetadataReadPlanner.lookupBatchSize {
                 return try await loadMetadataPage(section, collection: collection, priority: priority)
             }
-            let revision = try await store.metadataState(metadataNamespace).revision
-            _ = try await resolveMetadataItems(missing, priority: priority)
-            guard let page = try await store.metadataPage(address, namespace: metadataNamespace, currentRun: runID) else { throw CacheError.storage }
+            let revision = try await store.metadataState(metadataNamespace(for: collection)).revision
+            _ = try await resolveMetadataItems(missing, priority: priority, collection: collection)
+            guard let page = try await store.metadataPage(address, namespace: metadataNamespace(for: collection), currentRun: runID) else { throw CacheError.storage }
             guard page.membershipVerified else { throw MetadataMembershipReadFailure(revision: revision, cause: CollectionCatalogError.invalidCoverage) }
             return page
         }

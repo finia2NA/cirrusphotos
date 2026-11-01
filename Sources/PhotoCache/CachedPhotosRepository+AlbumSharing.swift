@@ -68,11 +68,11 @@ extension CachedPhotosRepository {
             for change in changes {
                 guard change.member.type == "user", let memberID = change.member.id, changedIDs.insert(memberID).inserted,
                       (change.action == "delete" && change.role == nil) ||
-                      (change.action == "update" && (change.role == "view" || change.role == "download")) else {
+                      (change.action == "update" && ["view", "download", "upload"].contains(change.role ?? "")) else {
                     throw SynologyAPIError.unsupported("Unsupported sharing change.")
                 }
                 if let grant = existing.first(where: { $0.type == "user" && $0.principalID == change.member.id }),
-                   grant.role != "view" && grant.role != "download" {
+                   !["view", "download", "upload"].contains(grant.role) {
                     throw SynologyAPIError.unsupported("An unsupported role cannot be edited.")
                 }
                 if change.action == "update", !snapshot.principals.contains(where: { $0.type == "user" && $0.id == change.member.id }),

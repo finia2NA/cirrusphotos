@@ -213,7 +213,7 @@ struct LibraryBrowserView: View {
         )
     }
 
-    private var isAlbum: Bool { library.sourceAlbumID(for: collection) != nil }
+    private var isAlbum: Bool { library.sourceAlbumID(for: collection) != nil || library.isIncomingCollection(collection) }
     private var browserHeader: BrowserHeaderConfiguration? { customHeader ?? albumHeader }
     private var shouldHideEmptyCollectionState: Bool {
         hidesEmptyCollectionState && !collection.isLibraryFilter &&
@@ -283,6 +283,8 @@ struct LibraryBrowserView: View {
                                              emptyContent: snapshot.timeline.days.isEmpty && !shouldHideEmptyCollectionState ? AnyView(emptyState) : nil,
                                              authority: library.selectionAuthority(for: collection),
                                              sourceAlbumID: library.sourceAlbumID(for: collection),
+                                             allowsPersonalActions: !library.isIncomingCollection(collection),
+                                             allowsDownloads: library.canDownload(in: collection),
                                              filterMembership: library.filterMembership(for: collection),
                                              filterAuthority: library.filterAuthority(for: collection),
                                              collection: collection,
@@ -649,6 +651,7 @@ final class TimelineScrollView: NSScrollView {
 }
 
 private struct HostedRow: View {
+    let collection: PhotoCollectionDescriptor
     let row: LibraryViewportGeometry.Row
     let repository: CachedPhotosRepository
     let size: ThumbnailSize
@@ -670,7 +673,7 @@ private struct HostedRow: View {
                         aspectRatio: item.photo.displayAspectRatio,
                         cropsToSquare: presentation.cropsToSquare)
                     ThumbnailCell(item: item.photo, repository: repository,
-                                  size: size, allowNetwork: item.verified, failures: failures,
+                                  size: size, allowNetwork: item.verified, collection: collection, failures: failures,
                                   fillsFrame: presentation.fillsFrame,
                                   isSelected: selection.indexes.contains(item.ordinal),
                                   onSelect: { onSelect(item.ordinal) },
@@ -715,6 +718,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let emptyContent: AnyView?
     let authority: PhotoSelectionAuthority?
     let sourceAlbumID: Int64?
+    let allowsPersonalActions: Bool
+    let allowsDownloads: Bool
     let filterMembership: [[Int64]]?
     let filterAuthority: [[Bool]]?
     let collection: PhotoCollectionDescriptor
@@ -809,6 +814,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var timelineSnapshot: TimelineSnapshot?
         private var selectionAuthority: PhotoSelectionAuthority?
         private var sourceAlbumID: Int64?
+        private var allowsPersonalActions = true
+        private var allowsDownloads = true
         private var geometry: LibraryViewportGeometry?
         private var header: BrowserHeaderConfiguration?
         private var emptyContent: AnyView?
@@ -879,6 +886,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             timelineSnapshot = input.snapshot
             selectionAuthority = input.authority
             sourceAlbumID = input.sourceAlbumID
+            allowsPersonalActions = input.allowsPersonalActions
+            allowsDownloads = input.allowsDownloads
             onVisibleDay = input.onVisibleDay
             onRetry = input.onRetry
             onOpenPhoto = input.onOpenPhoto
@@ -1241,7 +1250,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                           rowY <= y + height + overscan else { continue }
                     addHost("r:\(slice.source.dayID):\(slice.source.dayRange.lowerBound):\(rowIndex)",
                             frame: CGRect(x: 0, y: rowY, width: geometry.width, height: row.layout.height),
-                            content: AnyView(HostedRow(row: row, repository: repository,
+                            content: AnyView(HostedRow(collection: collection, row: row, repository: repository,
                                                        size: thumbnailSize, failures: thumbnailFailures,
                                                        pageForSection: { [weak self] in self?.pages[$0] },
                                                        onSelect: { [weak self] in self?.selectFromAccessibility($0) },
@@ -1378,6 +1387,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         func cancelFileDragGesture() { cancelPointerInteraction() }
 
         func beginFileDrag(at point: CGPoint, event: NSEvent) -> Bool {
+            guard allowsPersonalActions else { return false }
             guard let ordinal = geometry?.ordinal(at: point), let clicked = loadedItem(ordinal),
                   let document, let repository,
                   let timelineSnapshot, let index else { return false }
@@ -1430,10 +1440,10 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 canToggleFavorite: false, collection: collection, indexFingerprint: index?.fingerprint,
                 selectionGeneration: selectionState.generation, selectedOrdinals: selection.indexes,
                 knownItemIDsByOrdinal: known, timeline: timelineSnapshot, authority: selectionAuthority, sourceAlbumID: sourceAlbumID)
-            let menu = item.photo.hasDisplayableStillImage
+            let menu = item.photo.hasDisplayableStillImage && allowsDownloads
                 ? photoDownloadMenu { [weak self] kind, choose in self?.onDownload?(snapshot, kind, choose) }
                 : NSMenu()
-            if item.photo.hasDisplayableStillImage {
+            if allowsPersonalActions && item.photo.hasDisplayableStillImage {
                 let editSnapshot = BrowserCommandSnapshot(owner: commandOwner, active: true, canOpen: true,
                     canToggleFavorite: false, collection: collection, indexFingerprint: index?.fingerprint,
                     selectionGeneration: selectionState.generation, selectedOrdinals: IndexSet(integer: ordinal),
@@ -1442,7 +1452,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     self?.onEdit?(editSnapshot, application)
                 }
             }
-            onAlbumMenu?(menu, snapshot)
+            if allowsPersonalActions { onAlbumMenu?(menu, snapshot) }
             return menu.items.isEmpty ? nil : menu
         }
 

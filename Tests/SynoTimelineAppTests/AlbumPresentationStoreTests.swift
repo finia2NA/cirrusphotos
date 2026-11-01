@@ -34,18 +34,18 @@ final class AlbumPresentationStoreTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = AlbumPresentationStore(defaults: defaults)
         store.configure(namespace: "account")
-        store.add(1); store.add(2)
-        store.setExpanded(true, shared: true)
+        store.add(.album(1)); store.add(.album(2))
+        store.setExpanded(true, section: .shared)
         store.setSort(.newest)
         let albums = [AlbumSummary(id: 1, name: "A", itemCount: 1, createTime: 1, shared: true),
                       AlbumSummary(id: 2, name: "B", itemCount: 1, createTime: 2, shared: true),
                       AlbumSummary(id: 3, name: "C", itemCount: 1, shared: false)]
-        XCTAssertEqual(store.section(albums, shared: true).map(\.id), [2, 1])
-        XCTAssertEqual(store.section(albums, shared: false).map(\.id), [3])
+        XCTAssertEqual(store.section(albums, section: .shared).map(\.id), [2, 1])
+        XCTAssertEqual(store.section(albums, section: .albums).map(\.id), [3])
         let moved = [AlbumSummary(id: 1, name: "A", itemCount: 1, shared: false)] + Array(albums.dropFirst())
         store.reconcile(moved, verified: true)
         XCTAssertEqual(store.pinnedIDs, [1, 2])
-        XCTAssertEqual(store.section(moved, shared: false).map(\.id), [1, 3])
+        XCTAssertEqual(store.section(moved, section: .albums).map(\.id), [1, 3])
         let restored = AlbumPresentationStore(defaults: defaults)
         restored.configure(namespace: "account")
         XCTAssertTrue(restored.sharedExpanded)
@@ -53,6 +53,31 @@ final class AlbumPresentationStoreTests: XCTestCase {
         XCTAssertEqual(restored.sort, .newest)
         XCTAssertEqual(restored.pinnedIDs, [1, 2])
         XCTAssertEqual(AlbumsOverviewView.columnCount(width: 448), 2)
+    }
+
+    func testIncomingPinsKeepOwnerIdentityAndExistingPreferences() {
+        let suite = "IncomingPins.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let key = "albumPresentation.account"
+        defaults.set(Data(#"{"version":2,"pinnedIDs":[1],"sharedExpanded":true,"albumsExpanded":false,"sort":"name"}"#.utf8), forKey: key)
+        let store = AlbumPresentationStore(defaults: defaults)
+        store.configure(namespace: "account")
+        let incoming = PhotoCollectionDescriptor.incomingAlbum(ownerID: 7, albumID: 1)
+        XCTAssertEqual(store.pinnedCollections, [.album(1)])
+        XCTAssertTrue(store.sharedExpanded)
+        store.add(incoming)
+        store.setExpanded(true, section: .incoming)
+        let restored = AlbumPresentationStore(defaults: defaults)
+        restored.configure(namespace: "account")
+        XCTAssertEqual(restored.pinnedCollections, [.album(1), incoming])
+        XCTAssertTrue(restored.expanded(.incoming))
+        let albums = [AlbumSummary(id: 1, name: "Mine", itemCount: 0),
+                      AlbumSummary(id: 1, name: "Theirs", itemCount: 0, ownerUserID: 7, isIncoming: true)]
+        XCTAssertEqual(restored.section(albums, section: .albums).map(\.name), ["Mine"])
+        XCTAssertEqual(restored.section(albums, section: .incoming).map(\.name), ["Theirs"])
+        restored.reconcile(albums, verified: true)
+        XCTAssertEqual(restored.pinnedCollections, [.album(1), incoming])
     }
 
     func testSharingStatusUsesTopLevelFlagAndServerPrivacy() {
@@ -78,7 +103,7 @@ final class AlbumPresentationStoreTests: XCTestCase {
                 Color.gray.frame(width: 100, height: 100)
                     .background(AlbumDragSourceView { _, _ in
                         started.append(id)
-                        let nonce = AlbumDragRegistry.register(albumID: Int64(id), namespace: "account")
+                        let nonce = AlbumDragRegistry.register(collection: .album(Int64(id)), namespace: "account")
                         defer { AlbumDragRegistry.remove(nonce) }
                         return AlbumDragRegistry.insert(nonce.uuidString, namespace: "account", before: nil, presentation: store)
                     })
@@ -117,18 +142,18 @@ final class AlbumPresentationStoreTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = AlbumPresentationStore(defaults: defaults)
         store.configure(namespace: "server-a-alice")
-        store.add(2); store.add(1); store.add(2)
+        store.add(.album(2)); store.add(.album(1)); store.add(.album(2))
         XCTAssertEqual(store.pinnedIDs, [2, 1])
-        store.move(1, before: 2)
+        store.move(.album(1), before: .album(2))
         store.configure(namespace: "server-a-bob")
         XCTAssertEqual(store.pinnedIDs, [])
-        store.add(9)
+        store.add(.album(9))
         store.configure(namespace: "server-b-alice")
         XCTAssertEqual(store.pinnedIDs, [])
         let restored = AlbumPresentationStore(defaults: defaults)
         restored.configure(namespace: "server-a-alice")
         XCTAssertEqual(restored.pinnedIDs, [1, 2])
-        restored.remove(1); restored.remove(1)
+        restored.remove(.album(1)); restored.remove(.album(1))
         let again = AlbumPresentationStore(defaults: defaults)
         again.configure(namespace: "server-a-alice")
         XCTAssertEqual(again.pinnedIDs, [2])
@@ -140,13 +165,13 @@ final class AlbumPresentationStoreTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = AlbumPresentationStore(defaults: defaults)
         store.configure(namespace: "account")
-        store.add(1); store.add(3)
-        store.insert(2, before: 3)
-        store.insert(3, before: 1)
-        store.insert(3, before: 3)
+        store.add(.album(1)); store.add(.album(3))
+        store.insert(.album(2), before: .album(3))
+        store.insert(.album(3), before: .album(1))
+        store.insert(.album(3), before: .album(3))
         XCTAssertEqual(store.pinnedIDs, [3, 1, 2])
-        store.insert(3, before: nil)
-        store.insert(9, before: 100)
+        store.insert(.album(3), before: nil)
+        store.insert(.album(9), before: .album(100))
         let restored = AlbumPresentationStore(defaults: defaults)
         restored.configure(namespace: "account")
         XCTAssertEqual(restored.pinnedIDs, [1, 2, 3])
@@ -205,8 +230,8 @@ final class AlbumPresentationStoreTests: XCTestCase {
     }
 
     func testAlbumNonceIsScopedAndRemoved() {
-        let nonce = AlbumDragRegistry.register(albumID: 42, namespace: "account-a")
-        XCTAssertEqual(AlbumDragRegistry.album(nonce.uuidString, namespace: "account-a"), 42)
+        let nonce = AlbumDragRegistry.register(collection: .album(42), namespace: "account-a")
+        XCTAssertEqual(AlbumDragRegistry.album(nonce.uuidString, namespace: "account-a"), .album(42))
         XCTAssertNil(AlbumDragRegistry.album(nonce.uuidString, namespace: "account-b"))
         XCTAssertNil(AlbumDragRegistry.album(UUID().uuidString, namespace: "account-a"))
         let suite = "AlbumDispatchTests.\(UUID())"
@@ -227,7 +252,7 @@ final class AlbumPresentationStoreTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = AlbumPresentationStore(defaults: defaults)
         store.configure(namespace: "account")
-        store.add(1); store.add(2)
+        store.add(.album(1)); store.add(.album(2))
         let cached = [AlbumSummary(id: 1, name: "Cached", itemCount: 1)]
         store.reconcile(cached, verified: false)
         store.reconcile([], verified: false) // failed or unavailable validation

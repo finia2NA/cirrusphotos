@@ -107,7 +107,8 @@ extension CachedPhotosRepository {
         let admission = try await store.metadataAdmission(metadataNamespace)
         try await store.invalidateMetadataAlbumSummaries(metadataNamespace, admission: admission)
         if let selection {
-            guard !selection.items.isEmpty,
+            guard mediaCollection(for: selection.authority.originatingCollection) == .personalLibrary,
+                  !selection.items.isEmpty,
                   await verifySelectionFence(selection.authority, proofs: selection.proofs) else {
                 throw SynologyAPIError.unsupported("The selected items could not be verified. Try again.")
             }

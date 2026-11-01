@@ -24,6 +24,7 @@ extension PhotoViewerSession {
     }
 
     func applyItemChanges(_ change: PhotoItemChange) {
+        guard supportsPersonalMedia else { return }
         for (section, page) in metadata.pages {
             let updated = page.slots.map { slot in
                 PhotoItemSlot(itemID: slot.itemID, item: change.items[slot.itemID].map { replacement in

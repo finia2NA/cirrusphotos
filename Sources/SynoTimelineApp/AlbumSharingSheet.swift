@@ -37,6 +37,7 @@ struct AlbumSharingSheet: View {
     @State private var roles: [Int64: String] = [:]
     @State private var selectedID: Int64?
     @State private var busy = false
+    @State private var saving = false
     @State private var error: String?
     @State private var confirmDisable = false
     @State private var access = "private"
@@ -108,22 +109,23 @@ struct AlbumSharingSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(24)
             }
+            .disabled(busy)
 
             Divider()
             HStack {
                 if snapshot == nil && !busy { Button("Reload") { load() } }
                 Spacer()
                 Button("Close") { dismiss() }
+                    .disabled(saving)
                 if snapshot?.album.shared == true && editable {
                     Button("Save") { save(disable: false, closeOnSuccess: true) }
-                        .disabled(!hasChanges || passwordDraft.needsPassword)
+                        .disabled(busy || !hasChanges || passwordDraft.needsPassword)
                 }
             }
             .padding(.horizontal, 24).padding(.vertical, 16)
         }
         .frame(width: 560, height: 600)
-        .disabled(busy)
-        .interactiveDismissDisabled(busy)
+        .interactiveDismissDisabled(saving)
         .task { load() }
         .alert("Disable sharing?", isPresented: $confirmDisable) {
             Button("Disable Sharing", role: .destructive) { save(disable: true) }
@@ -252,10 +254,11 @@ struct AlbumSharingSheet: View {
                         Text(snapshot.principals.first(where: { $0.id == id })?.name ?? existing[id]?.name ?? "User")
                             .lineLimit(1)
                         Spacer(minLength: 8)
-                        if let role = roles[id], role == "view" || role == "download" {
+                        if let role = roles[id], ["view", "download", "upload"].contains(role) {
                             Picker("Role", selection: Binding(get: { roles[id] ?? "view" }, set: { roles[id] = $0 })) {
                                 Text("Viewer").tag("view")
                                 Text("Downloader").tag("download")
+                                Text("Provider").tag("upload")
                             }.labelsHidden().frame(width: 130)
                             Button("Remove") { roles.removeValue(forKey: id) }
                         } else {
@@ -293,10 +296,11 @@ struct AlbumSharingSheet: View {
         guard let snapshot else { return }
         let delta = changes
         let access = accessChange, password = passwordChange, expiry = expiryChange
-        busy = true; error = nil
+        busy = true; saving = true; error = nil
         Task {
             do {
                 _ = try await repository.saveAlbumSharing(snapshot: snapshot, changes: delta, disable: disable, access: access, password: password, expiration: expiry)
+                saving = false
                 if closeOnSuccess {
                     busy = false
                     dismiss()
@@ -304,6 +308,7 @@ struct AlbumSharingSheet: View {
                     load()
                 }
             } catch {
+                saving = false
                 load(warning: error.localizedDescription)
             }
         }

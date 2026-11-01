@@ -11,6 +11,7 @@ public actor PhotoViewerSession {
 
     let repository: CachedPhotosRepository
     let collection: PhotoCollectionDescriptor
+    var mediaScope: PhotoCollectionDescriptor?
     let index: LibraryIndex
     let thumbnailSize: ThumbnailSize
     let loadsLargePreviews: Bool
@@ -48,6 +49,7 @@ public actor PhotoViewerSession {
                 allowNetwork: Bool, maximumPages: Int = 3) {
         self.repository = repository
         self.collection = collection
+        self.mediaScope = collection.isLibraryFilter ? nil : collection
         self.index = index
         self.thumbnailSize = thumbnailSize
         self.loadsLargePreviews = loadsLargePreviews
@@ -186,10 +188,29 @@ public actor PhotoViewerSession {
                 if let change = await repository.takeMetadataChanges(observation.id) { await self?.invalidateMetadataPages(change) }
             }
         }
+        if mediaScope == nil {
+            Task { [weak self, collection] in
+                let scope = await repository.mediaCollection(for: collection)
+                await self?.setMediaScope(scope)
+            }
+        }
         startAssetsForCurrentMetadata()
         ensurePage(desired.sectionIndex, visible: true)
         scheduleThumbnailNeighbors()
         publish()
+    }
+
+    func setMediaScope(_ scope: PhotoCollectionDescriptor) {
+        guard !closed else { return }
+        mediaScope = scope
+        restartCurrentAssets()
+        scheduleThumbnailNeighbors()
+        publish()
+    }
+
+    var supportsPersonalMedia: Bool {
+        guard let mediaScope else { return false }
+        return mediaScope.incomingAlbumIdentity == nil && !mediaScope.isLibraryFilter
     }
 
     func select(_ location: PhotoViewerLocation) {
@@ -223,7 +244,7 @@ public actor PhotoViewerSession {
             thumbnailData: images.thumbnailData,
             thumbnailIsLargePreview: images.bestThumbnailTier == .largePreview,
             fullImageData: images.fullImageData,
-            videoResource: currentItem?.videoPlaybackResource(preference: videoQuality),
+            videoResource: supportsPersonalMedia ? currentItem?.videoPlaybackResource(preference: videoQuality) : nil,
             metadataStatus: metadataStatus,
             thumbnailStatus: images.thumbnailStatus,
             fullImageStatus: images.fullImageStatus,

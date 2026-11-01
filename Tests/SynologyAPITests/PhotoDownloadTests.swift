@@ -28,6 +28,19 @@ final class PhotoDownloadTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: result.temporaryURL), Data("original".utf8))
     }
 
+    func testIncomingDownloadIncludesEncodedSharingReference() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [DownloadFixtureProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let client = SynologyClient(baseURL: URL(string: "https://example.test")!, session: session)
+        try await client.login(credentials: .init(username: "test", password: "unused"))
+        let result = try await client.downloadIncomingPhotos(itemIDs: [2], kind: .compressedJPEG,
+                                                             reference: "fixture-reference", progress: { _ in })
+        defer { try? FileManager.default.removeItem(at: result.temporaryURL.deletingLastPathComponent()) }
+        XCTAssertEqual(result.filename, "fallback.heic")
+    }
+
     func testLiveOriginalAndExplicitDownloadBytesMatchWhenEnabled() async throws {
         guard ProcessInfo.processInfo.environment["RUN_LIVE_SYNOLOGY_TEST"] == "1" else {
             throw XCTSkip("Live download verification is opt-in.")
@@ -106,7 +119,12 @@ private final class DownloadFixtureProtocol: URLProtocol, @unchecked Sendable {
         if !login {
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(params["api"], "SYNO.Foto.Download")
-            XCTAssertEqual(params["item_id"], "[1]")
+            if params["item_id"] == "[2]" {
+                XCTAssertEqual(params["passphrase"], "\"fixture-reference\"")
+            } else {
+                XCTAssertEqual(params["item_id"], "[1]")
+                XCTAssertNil(params["passphrase"])
+            }
             XCTAssertEqual(params["download_type"], "\"optimized_jpeg\"")
         }
         let headers = login ? ["Content-Type": "application/json"] : ["Content-Type": "application/force-download", "Content-Disposition": "attachment; filename=\"fallback.heic\""]

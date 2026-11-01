@@ -47,7 +47,7 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
     private var onEnd: (() -> Void)?
 
     static func begin(payload: PhotoDragPayload, previews: [NSImage], cropsToSquare: Bool,
-                      from view: NSView, event: NSEvent, albumID: Int64? = nil,
+                      from view: NSView, event: NSEvent, albumCollection: PhotoCollectionDescriptor? = nil,
                       localSelection: SelectionDragRegistry.Entry? = nil, promisesFile: Bool = true,
                       onEnd: (() -> Void)? = nil) -> Bool {
         guard payload.count > 0, !payload.filename.isEmpty else { return false }
@@ -59,10 +59,10 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
         let provider = NSFilePromiseProvider(fileType: fileType.identifier, delegate: delegate)
         provider.userInfo = delegate
         let writer: NSPasteboardWriting
-        if let albumID {
-            let nonce = AlbumDragRegistry.register(albumID: albumID, namespace: payload.repository.namespace)
+        if let albumCollection {
+            let nonce = AlbumDragRegistry.register(collection: albumCollection, namespace: payload.repository.namespace)
             source.localNonce = nonce
-            writer = AlbumPromiseWriter(provider: provider, nonce: nonce)
+            writer = AlbumPromiseWriter(provider: promisesFile ? provider : nil, nonce: nonce)
         } else if let localSelection {
             let nonce = SelectionDragRegistry.register(localSelection)
             source.selectionNonce = nonce

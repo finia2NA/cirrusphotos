@@ -128,6 +128,10 @@ The replacement `phototestperspectivealbum.har` establishes regular authenticate
 
 Album, item, and permission calls use `/webapi/entry.cgi/<API>`, not the public visitor's `/mo/sharing/webapi` prefix. No `x-syno-sharing` header or `Core.Sharing.Login` call occurs in this authenticated trace. It demonstrates access through a regular signed-in session; it does not establish how to enumerate incoming invitations, since no album-list request is present. The album is still public-view at this point, but the named account receives download authority beyond the guest's view-only authority. A download button asset is loaded; no actual download request is captured.
 
+### Incoming album discovery probe
+
+A later read-only probe with the disposable recipient account found that the normal and addable album lists were empty, while `SYNO.Foto.Sharing.Misc` v1 `list_shared_with_me_album` with offset 0 and limit 100 returned two albums owned by another user. Each returned album had a nonempty top-level sharing reference. A regular-session `Browse.Album` v4 `get` by album ID returned no matching record, but selecting by that reference returned the album, and `Browse.Item` v7 `list` by the same reference returned its members. This was a bounded single-page probe: pagination, changed/revoked grants, recipient media/download addressing, and caching lifetimes remain unverified. Never log or expose the sharing references.
+
 Keep the identity namespaces separate: permission writes address `member.id: 1036` (DSM UID), while `UserInfo.me.id`, permission `user_id`, and the grant record's `db_id` are 11 (Photos internal identity). They cannot be substituted for one another.
 
 ## Editing and disabling sharing
@@ -191,10 +195,16 @@ An additional empty-album probe sent the same `NormalAlbum.create` request with 
 
 Only request additional captures when their feature enters scope:
 
-- **Incoming-album navigation in our app:** in a signed-in recipient's Photos session, navigate from the main sharing/album overview into an invitation. The current recipient capture establishes opening a known sharing reference, but contains no invitation enumeration request. This matters before deciding whether incoming albums need a separate sidebar destination.
-- **Recipient downloads:** trigger an actual photo download as an invited Downloader. The current capture establishes the capability and thumbnail reads, not the download request's addressing/context.
+- **Incoming-album navigation in our app:** the read-only probe above identifies an incoming-album listing and reference-based reads. A signed-in recipient's web-app HAR navigating the Shared with Me overview into an album would clarify its request parameters, pagination, and permission handling before implementation.
+- **Recipient downloads:** the later authenticated recipient capture below establishes a single original download; compressed and multi-item variants remain unverified.
 - **Provider contribution:** capture assignment plus the corresponding action if included in the first release. Existing readback values are insufficient to promise all write/upload behavior.
 
 Shared-state removal can be checked as part of membership implementation if needed; the common endpoint is a reasonable bounded inference from ordinary removal plus captured shared-state addition. Guest-link browsing implementation would need to resolve sharing-session propagation. No exhaustive probing of failures, expiration timing, or re-enable behavior is required for the owner-first slice; handle uncertain outcomes conservatively.
 
 A separate album-deletion capture confirms `SYNO.Foto.Browse.Album` v1 `delete` with an array of album IDs and a data-less success response. The client deletes one owned normal album per confirmed action.
+
+Further captures establish Provider behavior: the owner changes a named-user grant with role `upload`; the recipient's `access_permission.upload` is true for Provider and false for Viewer. The authenticated incoming-album overview uses `SYNO.Foto.Sharing.Misc` v2 `list_shared_with_me_album` with `additional` including `access_permission`, `sharing_info`, and `thumbnail`. A Provider adding a personal photo uses `SYNO.Foto.Browse.NormalAlbum` v1 `add_item` with the sharing reference and an item-ID array; a subsequent reference-scoped album and item read confirms the addition. Sharing references remain secret and are not recorded here.
+
+### Authenticated recipient download capture
+
+`downloadfromsharedalbum.har` records a successful single-photo original download from an incoming album. The signed-in web client sends `SYNO.Foto.Download` v2 `download` as a POST with `force_download`, an `item_id` array, JSON-string `passphrase`, and `download_type` set to `source`; the response is an attachment. The request uses a filename in the entry.cgi path and sends the session token as a query parameter. The app uses its existing authenticated download transport and includes the same scoped form fields. A subsequent read-only `phototest` probe used the app transport to enumerate an authorized incoming album, resolve one member, and successfully download a nonempty original using the generic entry.cgi path and token header. The temporary transfer was deleted. Neither the capture nor this probe establishes recipient compressed or multi-item behavior.

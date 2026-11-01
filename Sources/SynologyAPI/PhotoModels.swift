@@ -573,6 +573,8 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
     case favorites
     /// A Personal Space album, identified by its Synology album id.
     case album(Int64)
+    /// An album shared by another user; both IDs are needed to avoid collisions.
+    case incomingAlbum(ownerID: Int64, albumID: Int64)
     case folder(Int64)
     /// A session-only timeline filtered to an explicit item set (a map pin or
     /// cluster). Never persisted; pages use canonical item details.
@@ -587,6 +589,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
         case .personalLibrary: "personal"
         case .favorites: "favorites"
         case .album(let id): "album:\(id)"
+        case .incomingAlbum(let ownerID, let albumID): "incoming:\(ownerID):\(albumID)"
         case .folder(let id): "folder:\(id)"
         case .mapFilter(let id): "map:\(id.uuidString)"
         case .libraryFilter(let id): "filter:\(id.uuidString)"
@@ -598,12 +601,17 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
         return nil
     }
 
+    public var incomingAlbumIdentity: (ownerID: Int64, albumID: Int64)? {
+        if case .incomingAlbum(let ownerID, let albumID) = self { return (ownerID, albumID) }
+        return nil
+    }
+
     public var folderID: Int64? {
         if case .folder(let id) = self { return id }
         return nil
     }
 
-    public var usesItemCatalog: Bool { albumID != nil || folderID != nil }
+    public var usesItemCatalog: Bool { albumID != nil || incomingAlbumIdentity != nil || folderID != nil }
 
     public var mapFilterID: UUID? {
         if case .mapFilter(let id) = self { return id }
@@ -637,6 +645,12 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
                let id = Int64(rawValue.dropFirst(albumPrefix.count)) {
                 self = .album(id)
                 return
+            }
+            let incomingPrefix = "incoming:"
+            if rawValue.hasPrefix(incomingPrefix) {
+                let parts = rawValue.dropFirst(incomingPrefix.count).split(separator: ":")
+                guard parts.count == 2, let ownerID = Int64(parts[0]), let albumID = Int64(parts[1]) else { return nil }
+                self = .incomingAlbum(ownerID: ownerID, albumID: albumID); return
             }
             let folderPrefix = "folder:"
             if rawValue.hasPrefix(folderPrefix), let id = Int64(rawValue.dropFirst(folderPrefix.count)) {

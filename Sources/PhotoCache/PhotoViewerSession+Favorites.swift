@@ -4,6 +4,7 @@ import SynologyAPI
 // Actor-isolated favorites coordination; task identities remain owned by the session.
 extension PhotoViewerSession {
     public func toggleFavorite() async {
+        guard await repository.mediaCollection(for: collection) == .personalLibrary else { return }
         guard !closed, allowNetwork, metadataVerified, let item = currentItem,
               !pendingFavoriteIDs.contains(item.id) else { return }
         let itemID = item.id
@@ -59,6 +60,7 @@ extension PhotoViewerSession {
     }
 
     func applyingFavorite(_ item: PhotoItem) -> PhotoItem {
+        guard supportsPersonalMedia else { return item }
         guard let value = favoriteValues[item.id] else { return item }
         return item.withFavorite(value)
     }
@@ -66,6 +68,7 @@ extension PhotoViewerSession {
     func applyingFavorites(_ items: [PhotoItem]) -> [PhotoItem] { items.map(applyingFavorite) }
 
     func applyFavorites(_ values: [Int64: Bool]) {
+        guard supportsPersonalMedia else { return }
         for (itemID, value) in values {
             favoriteValues[itemID] = value
         }

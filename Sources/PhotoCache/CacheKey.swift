@@ -29,15 +29,17 @@ public enum CacheKey {
     }
 
     public static func thumbnail(namespace: String, descriptor: ThumbnailInfo,
-                                 size: ThumbnailSize) -> String {
-        digest("\(namespace)|personal|thumbnail|v2|unit|\(descriptor.unitID)|\(descriptor.cacheKey)|\(size.rawValue)")
+                                 size: ThumbnailSize, collection: PhotoCollectionDescriptor = .personalLibrary) -> String {
+        let scope = collection.incomingAlbumIdentity != nil || collection.albumID != nil || collection.isLibraryFilter ? collection.rawValue : "personal"
+        return digest("\(namespace)|\(scope)|thumbnail|v2|unit|\(descriptor.unitID)|\(descriptor.cacheKey)|\(size.rawValue)")
     }
 
     public static func thumbnailIdentity(namespace: String, descriptor: ThumbnailInfo,
-                                         size: ThumbnailSize) -> ThumbnailCacheIdentity {
-        ThumbnailCacheIdentity(
-            key: thumbnail(namespace: namespace, descriptor: descriptor, size: size),
-            family: digest("\(namespace)|personal|thumbnail-family|v1|unit|\(descriptor.unitID)|\(descriptor.cacheKey)"),
+                                         size: ThumbnailSize, collection: PhotoCollectionDescriptor = .personalLibrary) -> ThumbnailCacheIdentity {
+        let scope = collection.incomingAlbumIdentity != nil || collection.albumID != nil || collection.isLibraryFilter ? collection.rawValue : "personal"
+        return ThumbnailCacheIdentity(
+            key: thumbnail(namespace: namespace, descriptor: descriptor, size: size, collection: collection),
+            family: digest("\(namespace)|\(scope)|thumbnail-family|v1|unit|\(descriptor.unitID)|\(descriptor.cacheKey)"),
             size: size
         )
     }

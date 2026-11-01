@@ -10,6 +10,7 @@ public struct SelectionRotationResolver: Sendable {
     public func resolve(collection: PhotoCollectionDescriptor, snapshot: TimelineSnapshot,
                         selectedOrdinals: IndexSet, knownItemIDsByOrdinal: [Int: Int64],
                         expectedTimelineFingerprint: String? = nil) async -> SelectionRotationAction? {
+        guard await repository.mediaCollection(for: collection) == .personalLibrary else { return nil }
         guard !selectedOrdinals.isEmpty else { return nil }
         let index = LibraryIndex(snapshot: snapshot)
         guard expectedTimelineFingerprint == nil || expectedTimelineFingerprint == index.fingerprint else { return nil }

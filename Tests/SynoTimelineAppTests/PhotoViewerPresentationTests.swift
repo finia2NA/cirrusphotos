@@ -14,6 +14,7 @@ private actor PresentationTransport: PhotosTransport {
     private var releasedThumbnails: Set<Int64> = [1]
     private(set) var timelineCalls: [(PhotoCollectionDescriptor, Bool)] = []
     private(set) var albumListCalls = 0
+    private(set) var incomingListCalls = 0
 
     init(preview: Data) { self.preview = preview }
     func releaseThumbnail(_ id: Int64) { releasedThumbnails.insert(id) }
@@ -25,6 +26,10 @@ private actor PresentationTransport: PhotosTransport {
     }
     func albums() async throws -> [AlbumSummary] {
         albumListCalls += 1
+        return []
+    }
+    func incomingAlbums() async throws -> [IncomingAlbum] {
+        incomingListCalls += 1
         return []
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
@@ -452,11 +457,13 @@ final class LibraryModelTests: PhotoViewerPresentationTestCase {
         XCTAssertNotNil(model.snapshot(for: .favorites))
         let albumCallsBeforeDemand = await transport.albumListCalls
         XCTAssertEqual(albumCallsBeforeDemand, 0)
+        let incomingCallsBeforeDemand = await transport.incomingListCalls
+        XCTAssertEqual(incomingCallsBeforeDemand, 0)
 
         model.ensureAlbumsLoaded()
         var loadedAlbums = false
         for _ in 0..<500 {
-            if await transport.albumListCalls == 1, model.albumsVerified {
+            if await transport.albumListCalls == 1, await transport.incomingListCalls == 1, model.albumsVerified {
                 loadedAlbums = true
                 break
             }

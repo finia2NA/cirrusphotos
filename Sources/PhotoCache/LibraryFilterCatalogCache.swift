@@ -6,10 +6,10 @@ extension CachedPhotosRepository {
         try await initializeMetadataEngine()
         guard !metadata.resetInProgress, !Task.isCancelled else { throw MetadataAdmissionError.superseded }
         let epoch = metadata.admissionEpoch
-        let admission = try await store.metadataAdmission(metadataNamespace)
+        let admission = try await store.metadataAdmission(metadataNamespace(for: collection))
         let catalog: LibraryFilterCatalog?
         if collection.isSessionDerived { catalog = metadata.sessionFilterCatalogs[collection] }
-        else { catalog = try await store.filterOptionCatalog(CollectionKey(namespace: metadataNamespace, collection: collection)) }
+        else { catalog = try await store.filterOptionCatalog(CollectionKey(namespace: metadataNamespace(for: collection), collection: collection)) }
         guard !metadata.resetInProgress, !Task.isCancelled, metadata.admissionEpoch == epoch else { throw MetadataAdmissionError.superseded }
         return (catalog, admission)
     }
@@ -19,7 +19,7 @@ extension CachedPhotosRepository {
         guard !metadata.resetInProgress, !Task.isCancelled else { throw MetadataAdmissionError.superseded }
         let epoch = metadata.admissionEpoch
         for _ in 0..<2 {
-            let current = try await store.metadataAdmission(metadataNamespace)
+            let current = try await store.metadataAdmission(metadataNamespace(for: collection))
             guard !metadata.resetInProgress, !Task.isCancelled, metadata.admissionEpoch == epoch,
                   current.generation == originalAdmission.generation,
                   current.metadataGeneration == originalAdmission.metadataGeneration,
@@ -30,7 +30,7 @@ extension CachedPhotosRepository {
                 return
             }
             do {
-                try await store.storeFilterOptionCatalog(catalog, key: CollectionKey(namespace: metadataNamespace, collection: collection), admission: current)
+                try await store.storeFilterOptionCatalog(catalog, key: CollectionKey(namespace: metadataNamespace(for: collection), collection: collection), admission: current)
                 return
             } catch MetadataAdmissionError.superseded { continue }
         }

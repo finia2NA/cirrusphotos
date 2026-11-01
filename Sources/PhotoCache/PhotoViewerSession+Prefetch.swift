@@ -73,12 +73,13 @@ extension PhotoViewerSession {
                                         key: String, allowNetwork: Bool) {
         let id = UUID()
         let repository = repository
+        let collection = collection
         let identity = Self.viewerThumbnailIdentity(descriptor)
         let tier = request.tier
         let task = Task { [weak self] in
             if tier == .configured {
                 for await event in await repository.thumbnailWithFallback(
-                    descriptor, size: request.size, allowNetwork: allowNetwork, priority: .prefetch
+                    descriptor, size: request.size, allowNetwork: allowNetwork, collection: collection, priority: .prefetch
                 ) {
                     guard !Task.isCancelled else { break }
                     if case .value(let value, _) = event {
@@ -88,7 +89,7 @@ extension PhotoViewerSession {
                 }
             } else {
                 for await event in await repository.thumbnail(
-                    descriptor, size: request.size, allowNetwork: allowNetwork, priority: .prefetch,
+                    descriptor, size: request.size, allowNetwork: allowNetwork, collection: collection, priority: .prefetch,
                     cachePurpose: request.purpose
                 ) {
                     guard !Task.isCancelled else { break }
@@ -151,7 +152,7 @@ extension PhotoViewerSession {
     }
 
     func scheduleLoadedNeighbors() {
-        guard !closed, images.prefetchEnabledGeneration == generation else { return }
+        guard !closed, supportsPersonalMedia, images.prefetchEnabledGeneration == generation else { return }
         let locations = [-1, 1].compactMap { metadata.location(for: desired.ordinal + $0) }
         let desiredSections = Set(locations.map(\.sectionIndex) + [desired.sectionIndex])
         for section in desiredSections where metadata.pages[section] == nil || (allowNetwork && metadata.pages[section]?.verified == false) {

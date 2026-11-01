@@ -10,7 +10,11 @@ public struct AlbumSelectionResolver: Sendable {
     /// Returns nil when the album cannot be verified, and an empty array when it
     /// contains no eligible still images.
     public func resolve(albumID: Int64) async -> [PhotoItem]? {
-        let collection = PhotoCollectionDescriptor.album(albumID)
+        await resolve(collection: .album(albumID))
+    }
+
+    public func resolve(collection: PhotoCollectionDescriptor) async -> [PhotoItem]? {
+        guard collection.albumID != nil || collection.incomingAlbumIdentity != nil else { return nil }
         guard let timeline = try? await repository.verifiedTimelineSnapshot(collection: collection),
               !Task.isCancelled else { return nil }
         let index = LibraryIndex(snapshot: timeline)

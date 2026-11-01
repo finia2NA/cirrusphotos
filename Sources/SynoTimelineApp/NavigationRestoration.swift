@@ -18,7 +18,7 @@ enum LibraryDestination: String, Codable, Hashable, Sendable, CaseIterable {
 
 enum SidebarSelection: Codable, Hashable {
     case destination(LibraryDestination)
-    case album(Int64)
+    case album(PhotoCollectionDescriptor)
 
     var destination: LibraryDestination {
         switch self { case .destination(let destination): destination; case .album: .albums }
@@ -26,11 +26,11 @@ enum SidebarSelection: Codable, Hashable {
 }
 
 struct RestorableAppNavigationState: Codable, Equatable {
-    static let currentVersion = 5
+    static let currentVersion = 6
 
     var version = currentVersion
     var sidebarSelection: SidebarSelection = .destination(.personalLibrary)
-    var openedAlbumID: Int64?
+    var openedAlbum: PhotoCollectionDescriptor?
     var showsFolders = false
     var folderPath: [Int64] = []
     var folderNamespace: String?
@@ -73,8 +73,8 @@ final class NavigationRestorationStore: ObservableObject {
     }
     func setFolders(shown: Bool, path: [Int64]) { state.showsFolders = shown; state.folderPath = path; save() }
 
-    var openedAlbumID: Int64? {
-        state.openedAlbumID
+    var openedAlbum: PhotoCollectionDescriptor? {
+        state.openedAlbum
     }
 
     func selectSidebar(_ selection: SidebarSelection) {
@@ -82,8 +82,8 @@ final class NavigationRestorationStore: ObservableObject {
         save()
     }
 
-    func setOpenedAlbum(_ id: Int64?) {
-        state.openedAlbumID = id
+    func setOpenedAlbum(_ collection: PhotoCollectionDescriptor?) {
+        state.openedAlbum = collection
         save()
     }
 
@@ -91,9 +91,9 @@ final class NavigationRestorationStore: ObservableObject {
     /// that it no longer exists. Returns true when persisted state changed.
     @discardableResult
     func clearOpenedAlbumIfMissing(in albums: [AlbumSummary], verified: Bool) -> Bool {
-        guard verified, let id = state.openedAlbumID,
-              !albums.contains(where: { $0.id == id }) else { return false }
-        state.openedAlbumID = nil
+        guard verified, let collection = state.openedAlbum,
+              !albums.contains(where: { $0.collection == collection }) else { return false }
+        state.openedAlbum = nil
         if case .album = state.sidebarSelection { state.sidebarSelection = .destination(.albums) }
         save()
         return true

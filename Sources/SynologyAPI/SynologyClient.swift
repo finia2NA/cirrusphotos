@@ -95,6 +95,17 @@ public actor SynologyClient: PhotosTransport {
 
     public func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind,
                                progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
+        try await downloadPhotos(itemIDs: itemIDs, kind: kind, reference: nil, progress: progress)
+    }
+
+    public func downloadIncomingPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, reference: String,
+                                       progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
+        guard !reference.isEmpty else { throw SynologyAPIError.invalidResponse }
+        return try await downloadPhotos(itemIDs: itemIDs, kind: kind, reference: reference, progress: progress)
+    }
+
+    private func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, reference: String?,
+                                progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
         guard let sid else { throw SynologyAPIError.api(119) }
         guard !itemIDs.isEmpty else { throw SynologyAPIError.invalidResponse }
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
@@ -106,9 +117,11 @@ public actor SynologyClient: PhotosTransport {
         request.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
         request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
         if let synoToken { request.setValue(synoToken, forHTTPHeaderField: "X-SYNO-TOKEN") }
-        request.httpBody = formBody(["api": "SYNO.Foto.Download", "version": "2", "method": "download",
+        var parameters = ["api": "SYNO.Foto.Download", "version": "2", "method": "download",
                                     "force_download": "true", "item_id": "[\(itemIDs.map(String.init).joined(separator: ","))]",
-                                    "download_type": "\"\(kind.rawValue)\"", "_sid": sid])
+                                    "download_type": "\"\(kind.rawValue)\"", "_sid": sid]
+        if let reference { parameters["passphrase"] = String(decoding: try JSONEncoder().encode(reference), as: UTF8.self) }
+        request.httpBody = formBody(parameters)
         let (temporary, response) = try await session.download(for: request, delegate: DownloadProgressDelegate(progress: progress))
         guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
         guard http.statusCode == 200 else { throw SynologyAPIError.http(http.statusCode) }
@@ -152,6 +165,32 @@ public actor SynologyClient: PhotosTransport {
                          "sort_by": "\"takentime\"", "sort_direction": "\"desc\"", "additional": "[]", "_sid": sid], authenticated: true)
         guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
         return data.list.map { DayTimelineEntry(id: $0.id, time: $0.time) }
+    }
+
+    public func readIncomingAlbumCatalogBatch(reference: String, offset: Int, limit: Int) async throws -> [DayTimelineEntry] {
+        guard let sid, !reference.isEmpty, offset >= 0, limit > 0, limit <= 1000 else { throw SynologyAPIError.invalidResponse }
+        let encoded = String(decoding: try JSONEncoder().encode(reference), as: UTF8.self)
+        let response: APIEnvelope<ItemData> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item",
+            parameters: ["api": "SYNO.Foto.Browse.Item", "version": "7", "method": "list", "passphrase": encoded,
+                         "offset": String(offset), "limit": String(limit), "sort_by": "\"takentime\"",
+                         "sort_direction": "\"desc\"", "additional": "[]", "_sid": sid], authenticated: true)
+        guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+        return data.list.map { DayTimelineEntry(id: $0.id, time: $0.time) }
+    }
+
+    public func readIncomingCollectionBatch(_ request: CollectionPageRequest, reference: String, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        guard let sid, !reference.isEmpty, request.collection.incomingAlbumIdentity != nil else { throw SynologyAPIError.invalidResponse }
+        let encoded = String(decoding: try JSONEncoder().encode(reference), as: UTF8.self)
+        var parameters = ["api": "SYNO.Foto.Browse.Item", "version": "7", "method": "list", "passphrase": encoded,
+                          "offset": String(request.offset), "limit": String(request.limit),
+                          "start_time": String(request.oldestDay.startTime), "end_time": String(request.newestDay.endTime),
+                          "additional": Self.additionalParameter(for: fields.additional), "_sid": sid]
+        if request.order == .takenTimeDescending {
+            parameters["sort_by"] = "\"takentime\""; parameters["sort_direction"] = "\"desc\""
+        }
+        let response: APIEnvelope<ItemData> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item", parameters: parameters, authenticated: true)
+        guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+        return CollectionBatchResult(items: data.list, profile: fields)
     }
 
     public func readFolderCatalogBatch(folderID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry] {
@@ -285,6 +324,30 @@ public actor SynologyClient: PhotosTransport {
         return collected
     }
 
+    public func incomingAlbums() async throws -> [IncomingAlbum] {
+        struct DataList: Decodable { let list: [IncomingAlbum] }
+        guard let sid else { throw SynologyAPIError.api(119) }
+        var albums: [IncomingAlbum] = []
+        var seen = Set<Int64>()
+        for page in 0..<2048 {
+            let response: APIEnvelope<DataList> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Sharing.Misc",
+                parameters: ["api": "SYNO.Foto.Sharing.Misc", "version": "2", "method": "list_shared_with_me_album",
+                             "offset": String(page * 50), "limit": "50", "sort_by": "\"share_modify_time\"",
+                             "sort_direction": "\"desc\"", "additional": "[\"sharing_info\",\"thumbnail\",\"access_permission\"]", "_sid": sid], authenticated: true)
+            guard response.success, let list = response.data?.list, list.count <= 50 else {
+                throw SynologyAPIError.api(response.error?.code ?? -1)
+            }
+            for entry in list {
+                guard entry.summary.id > 0, seen.insert(entry.summary.id).inserted else { throw SynologyAPIError.invalidResponse }
+                albums.append(entry)
+            }
+            if list.count < 50 {
+                return albums
+            }
+        }
+        throw CollectionCatalogError.exceedsLimit
+    }
+
     public func addableAlbums() async throws -> [AlbumSummary] {
         guard let sid else { throw SynologyAPIError.api(119) }
         let pageLimit = 100
@@ -376,6 +439,12 @@ public actor SynologyClient: PhotosTransport {
 
     public func addItems(_ itemIDs: [Int64], toAlbum id: Int64) async throws {
         _ = try await albumMutation(method: "add_item", parameters: ["id": String(id), "item": Self.idArray(itemIDs)], requireData: true)
+    }
+
+    public func addItems(_ itemIDs: [Int64], toSharedAlbumReference reference: String) async throws {
+        guard !reference.isEmpty, !itemIDs.isEmpty else { throw SynologyAPIError.invalidResponse }
+        let encodedReference = String(decoding: try JSONEncoder().encode(reference), as: UTF8.self)
+        _ = try await albumMutation(method: "add_item", parameters: ["passphrase": encodedReference, "item": Self.idArray(itemIDs)], requireData: true)
     }
 
     public func removeItems(_ itemIDs: [Int64], fromAlbum id: Int64) async throws {
@@ -479,6 +548,33 @@ public actor SynologyClient: PhotosTransport {
                 "id": Self.idArray(ids), "additional": Self.additionalParameter(), "_sid": sid,
             ], authenticated: true
         )
+        guard response.success, let data = response.data else {
+            throw SynologyAPIError.api(response.error?.code ?? -1)
+        }
+        return data.list
+    }
+
+    public func albumItems(ids: [Int64], albumID: Int64) async throws -> [PhotoItem] {
+        guard let sid, albumID > 0, !ids.isEmpty, ids.count <= 1_000 else { throw SynologyAPIError.invalidResponse }
+        let response: APIEnvelope<ItemData> = try await post(
+            path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item",
+            parameters: ["api": "SYNO.Foto.Browse.Item", "version": "7", "method": "get",
+                         "id": Self.idArray(ids), "album_id": String(albumID),
+                         "additional": Self.additionalParameter(), "_sid": sid], authenticated: true)
+        guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+        return data.list
+    }
+
+    public func incomingItems(ids: [Int64], reference: String) async throws -> [PhotoItem] {
+        guard let sid, !reference.isEmpty, !ids.isEmpty, ids.count <= 1_000 else {
+            throw SynologyAPIError.invalidResponse
+        }
+        let encoded = String(decoding: try JSONEncoder().encode(reference), as: UTF8.self)
+        let response: APIEnvelope<ItemData> = try await post(
+            path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item",
+            parameters: ["api": "SYNO.Foto.Browse.Item", "version": "7", "method": "get",
+                         "id": Self.idArray(ids), "passphrase": encoded,
+                         "additional": Self.additionalParameter(), "_sid": sid], authenticated: true)
         guard response.success, let data = response.data else {
             throw SynologyAPIError.api(response.error?.code ?? -1)
         }
@@ -670,6 +766,23 @@ public actor SynologyClient: PhotosTransport {
 
     public func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                           etag: String? = nil, lastModified: String? = nil) async throws -> ThumbnailResponse {
+        try await thumbnail(descriptor, size: size, albumID: nil, reference: nil, etag: etag, lastModified: lastModified)
+    }
+
+    public func albumThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, albumID: Int64,
+                               etag: String? = nil, lastModified: String? = nil) async throws -> ThumbnailResponse {
+        guard albumID > 0 else { throw SynologyAPIError.invalidResponse }
+        return try await thumbnail(descriptor, size: size, albumID: albumID, reference: nil, etag: etag, lastModified: lastModified)
+    }
+
+    public func incomingThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, reference: String,
+                                  etag: String? = nil, lastModified: String? = nil) async throws -> ThumbnailResponse {
+        guard !reference.isEmpty else { throw SynologyAPIError.invalidResponse }
+        return try await thumbnail(descriptor, size: size, albumID: nil, reference: reference, etag: etag, lastModified: lastModified)
+    }
+
+    private func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, albumID: Int64?, reference: String?,
+                           etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         guard let sid else { throw SynologyAPIError.api(119) }
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
         components.path = "/synofoto/api/v2/p/Thumbnail/get"
@@ -680,6 +793,10 @@ public actor SynologyClient: PhotosTransport {
             URLQueryItem(name: "size", value: "\"\(size.rawValue)\""),
             URLQueryItem(name: "_sid", value: sid)
         ]
+        if let albumID { parameters.append(URLQueryItem(name: "album_id", value: String(albumID))) }
+        if let reference {
+            parameters.append(URLQueryItem(name: "passphrase", value: String(decoding: try JSONEncoder().encode(reference), as: UTF8.self)))
+        }
         if let synoToken { parameters.append(URLQueryItem(name: "SynoToken", value: synoToken)) }
         components.queryItems = parameters
         guard let url = components.url else { throw SynologyAPIError.invalidResponse }
@@ -692,7 +809,11 @@ public actor SynologyClient: PhotosTransport {
         let data: Data
         let response: URLResponse
         do { (data, response) = try await session.data(for: request) }
-        catch { throw SynologyAPIError.transport(error.localizedDescription) }
+        catch {
+            // URLSession errors may contain the request URL, including its sharing reference.
+            if reference != nil { throw SynologyAPIError.transport("Shared thumbnail request failed.") }
+            throw SynologyAPIError.transport(error.localizedDescription)
+        }
         guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
         if http.statusCode == 304 {
             return ThumbnailResponse(data: nil, etag: http.value(forHTTPHeaderField: "ETag"),

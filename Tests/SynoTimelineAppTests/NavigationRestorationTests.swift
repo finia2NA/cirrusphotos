@@ -31,13 +31,13 @@ final class NavigationRestorationTests: XCTestCase {
         writer.setTimelineAnchor(favorites, for: .favorites)
         writer.setTimelineAnchor(album, for: .album(54))
         writer.selectSidebar(.destination(.albums))
-        writer.setOpenedAlbum(54)
-        writer.selectSidebar(.album(54))
+        writer.setOpenedAlbum(.album(54))
+        writer.selectSidebar(.album(.album(54)))
 
         let reader = NavigationRestorationStore(defaults: defaults, key: key)
         XCTAssertEqual(reader.selectedDestination, .albums)
-        XCTAssertEqual(reader.openedAlbumID, 54)
-        XCTAssertEqual(reader.sidebarSelection, .album(54))
+        XCTAssertEqual(reader.openedAlbum, .album(54))
+        XCTAssertEqual(reader.sidebarSelection, .album(.album(54)))
         XCTAssertEqual(reader.timelineAnchor(for: .personalLibrary), personal)
         XCTAssertEqual(reader.timelineAnchor(for: .favorites), favorites)
         XCTAssertEqual(reader.timelineAnchor(for: .album(54)), album)
@@ -71,10 +71,10 @@ final class NavigationRestorationTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let key = "state"
         let store = NavigationRestorationStore(defaults: defaults, key: key)
-        store.setOpenedAlbum(11)
-        XCTAssertEqual(NavigationRestorationStore(defaults: defaults, key: key).openedAlbumID, 11)
+        store.setOpenedAlbum(.album(11))
+        XCTAssertEqual(NavigationRestorationStore(defaults: defaults, key: key).openedAlbum, .album(11))
         store.setOpenedAlbum(nil)
-        XCTAssertNil(NavigationRestorationStore(defaults: defaults, key: key).openedAlbumID)
+        XCTAssertNil(NavigationRestorationStore(defaults: defaults, key: key).openedAlbum)
     }
 
     func testMissingOpenedAlbumClearsOnlyAfterVerifiedList() {
@@ -82,16 +82,16 @@ final class NavigationRestorationTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let key = "state"
         let store = NavigationRestorationStore(defaults: defaults, key: key)
-        store.setOpenedAlbum(11)
-        store.selectSidebar(.album(11))
+        store.setOpenedAlbum(.album(11))
+        store.selectSidebar(.album(.album(11)))
         let other = AlbumSummary(id: 12, name: "Other", itemCount: 1)
 
         XCTAssertFalse(store.clearOpenedAlbumIfMissing(in: [other], verified: false))
-        XCTAssertEqual(store.openedAlbumID, 11)
+        XCTAssertEqual(store.openedAlbum, .album(11))
         XCTAssertTrue(store.clearOpenedAlbumIfMissing(in: [other], verified: true))
-        XCTAssertNil(store.openedAlbumID)
+        XCTAssertNil(store.openedAlbum)
         XCTAssertEqual(store.sidebarSelection, .destination(.albums))
-        XCTAssertNil(NavigationRestorationStore(defaults: defaults, key: key).openedAlbumID)
+        XCTAssertNil(NavigationRestorationStore(defaults: defaults, key: key).openedAlbum)
     }
 
     func testMapDestinationRoundTripsWithoutPersistentFilterState() {
@@ -104,7 +104,7 @@ final class NavigationRestorationTests: XCTestCase {
 
         let restored = NavigationRestorationStore(defaults: defaults, key: key)
         XCTAssertEqual(restored.selectedDestination, .map)
-        XCTAssertNil(restored.openedAlbumID)
+        XCTAssertNil(restored.openedAlbum)
         XCTAssertEqual(restored.state.anchors, [:])
     }
 
@@ -130,7 +130,7 @@ final class NavigationRestorationTests: XCTestCase {
         let store = NavigationRestorationStore(defaults: defaults, key: key)
 
         XCTAssertEqual(store.selectedDestination, .personalLibrary, file: file, line: line)
-        XCTAssertNil(store.openedAlbumID, file: file, line: line)
+        XCTAssertNil(store.openedAlbum, file: file, line: line)
         XCTAssertNil(store.timelineAnchor(for: .personalLibrary), file: file, line: line)
         XCTAssertNil(store.timelineAnchor(for: .favorites), file: file, line: line)
         XCTAssertNil(defaults.object(forKey: key), file: file, line: line)

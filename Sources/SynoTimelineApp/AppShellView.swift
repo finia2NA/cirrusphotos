@@ -15,7 +15,7 @@ struct AppShellView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var viewer: PhotoViewerPresentation?
     @State private var selectedDestination: LibraryDestination
-    @State private var openedAlbumID: Int64?
+    @State private var openedAlbum: PhotoCollectionDescriptor?
     @State private var showsFolders: Bool
     @State private var folderPath: [Int64]
     @State private var folderDirectory: FolderDirectory?
@@ -34,7 +34,7 @@ struct AppShellView: View {
         self.albumPresentation = albumPresentation
         _sidebarSelection = State(initialValue: navigationRestoration.sidebarSelection)
         _selectedDestination = State(initialValue: navigationRestoration.selectedDestination)
-        _openedAlbumID = State(initialValue: navigationRestoration.openedAlbumID)
+        _openedAlbum = State(initialValue: navigationRestoration.openedAlbum)
         _showsFolders = State(initialValue: navigationRestoration.showsFolders)
         _folderPath = State(initialValue: navigationRestoration.folderPath)
     }
@@ -47,7 +47,7 @@ struct AppShellView: View {
             if showsFolders { folderDirectoryRequest == (folderPath.last ?? 0) ? folderDirectory.map { .folder($0.folder.id) } : nil }
             else { .personalLibrary }
         case .favorites: .favorites
-        case .albums: openedAlbumID.map { .album($0) }
+        case .albums: openedAlbum
         case .map: openedMapFilter
         }
     }
@@ -65,7 +65,7 @@ struct AppShellView: View {
     }
 
     private var isAlbumBrowser: Bool {
-        selectedDestination == .albums && openedAlbumID != nil
+        selectedDestination == .albums && openedAlbum != nil
     }
 
     private var isMapFilterBrowser: Bool {
@@ -128,7 +128,7 @@ struct AppShellView: View {
         .onChange(of: showsFolders) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
         .onChange(of: folderPath) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
         .task(id: FolderLoadKey(namespace: model.presentationNamespace, active: selectedDestination == .personalLibrary && showsFolders, id: folderPath.last ?? 0, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadFolder() }
-        .onChange(of: openedAlbumID) { _, _ in
+        .onChange(of: openedAlbum) { _, _ in
             updateBackHandler(); updateTimelineSectionLoadSource()
         }
         .onChange(of: openedMapFilter) { _, _ in
@@ -149,9 +149,9 @@ struct AppShellView: View {
             dismissWindow(id: InfoPanelScene.id)
         }
         .task {
-            guard selectedDestination == .albums || !albumPresentation.pinnedIDs.isEmpty else { return }
+            guard selectedDestination == .albums || !albumPresentation.pinnedCollections.isEmpty else { return }
             model.ensureAlbumsLoaded()
-            if let id = openedAlbumID { model.ensureCollectionLoaded(.album(id)) }
+            if let collection = openedAlbum { model.ensureCollectionLoaded(collection) }
         }
         .onChange(of: timelineVerified) { _, verified in
             viewer?.updateAllowNetwork(verified)
@@ -191,8 +191,8 @@ struct AppShellView: View {
             updateTimelineSectionLoadSource()
         }
         .onChange(of: model.presentationNamespace) { _, _ in configureAlbumPresentation() }
-        .onChange(of: albumPresentation.pinnedIDs) { _, _ in
-            if !albumPresentation.pinnedIDs.isEmpty { model.ensureAlbumsLoaded() }
+        .onChange(of: albumPresentation.pinnedCollections) { _, _ in
+            if !albumPresentation.pinnedCollections.isEmpty { model.ensureAlbumsLoaded() }
             synchronizeAlbumSelection()
         }
         .onChange(of: model.albums) { _, albums in
@@ -412,7 +412,7 @@ struct AppShellView: View {
     private func configureAlbumPresentation() {
         guard let namespace = model.presentationNamespace else { return }
         albumPresentation.configure(namespace: namespace)
-        if !albumPresentation.pinnedIDs.isEmpty { model.ensureAlbumsLoaded() }
+        if !albumPresentation.pinnedCollections.isEmpty { model.ensureAlbumsLoaded() }
         validateOpenedAlbum(in: model.albums)
         synchronizeAlbumSelection()
     }
@@ -447,7 +447,7 @@ struct AppShellView: View {
         // Returning to Albums from another destination restores its last open route.
         let selection: SidebarSelection
         if requested == .destination(.albums), selectedDestination != .albums,
-           let id = openedAlbumID, albumPresentation.pinnedIDs.contains(id) {
+           let id = openedAlbum, albumPresentation.pinnedCollections.contains(id) {
             selection = .album(id)
         } else {
             selection = requested
@@ -458,15 +458,15 @@ struct AppShellView: View {
         selectedDestination = selection.destination
         switch selection {
         case .album(let id):
-            openedAlbumID = id
+            openedAlbum = id
             navigationRestoration.setOpenedAlbum(id)
             model.ensureAlbumsLoaded()
-            model.ensureCollectionLoaded(.album(id))
+            model.ensureCollectionLoaded(id)
         case .destination(.albums):
-            if returningToAlbums, let id = openedAlbumID {
-                model.ensureCollectionLoaded(.album(id))
+            if returningToAlbums, let id = openedAlbum {
+                model.ensureCollectionLoaded(id)
             } else {
-                openedAlbumID = nil
+                openedAlbum = nil
                 navigationRestoration.setOpenedAlbum(nil)
             }
             model.ensureAlbumsLoaded()
@@ -478,8 +478,8 @@ struct AppShellView: View {
 
     private func synchronizeAlbumSelection() {
         guard selectedDestination == .albums else { return }
-        let selection: SidebarSelection = openedAlbumID.flatMap {
-            albumPresentation.pinnedIDs.contains($0) ? .album($0) : nil
+        let selection: SidebarSelection = openedAlbum.flatMap {
+            albumPresentation.pinnedCollections.contains($0) ? .album($0) : nil
         } ?? .destination(.albums)
         sidebarSelection = selection
         navigationRestoration.selectSidebar(selection)
@@ -490,22 +490,23 @@ struct AppShellView: View {
         guard navigationRestoration.clearOpenedAlbumIfMissing(
             in: albums, verified: model.albumsVerified
         ) else { return }
-        openedAlbumID = nil
+        openedAlbum = nil
         synchronizeAlbumSelection()
         updateInfoPanelContext()
     }
 
     private func openAlbum(_ album: AlbumSummary) {
-        openedAlbumID = album.id
-        navigationRestoration.setOpenedAlbum(album.id)
+        guard let collection = album.collection else { return }
+        openedAlbum = collection
+        navigationRestoration.setOpenedAlbum(collection)
         synchronizeAlbumSelection()
-        model.ensureCollectionLoaded(.album(album.id))
+        model.ensureCollectionLoaded(collection)
         updateBackHandler()
         updateInfoPanelContext()
     }
 
     private func closeAlbum() {
-        openedAlbumID = nil
+        openedAlbum = nil
         navigationRestoration.setOpenedAlbum(nil)
         synchronizeAlbumSelection()
         updateBackHandler()
@@ -567,6 +568,7 @@ struct AppShellView: View {
                                          request: request, thumbnailSize: model.thumbnailSize,
                                          loadsLargePreviews: model.loadsLargeViewerPreviews,
                                          videoQuality: model.videoQuality,
+                                         isIncoming: model.isIncomingCollection(collection),
                                          allowNetwork: model.timelineVerified(for: collection),
                                          snapshotRevision: model.viewerSnapshotRevision(for: collection))
         lastViewerFollowSelection = nil

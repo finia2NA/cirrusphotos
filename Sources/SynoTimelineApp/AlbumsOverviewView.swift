@@ -26,8 +26,9 @@ struct AlbumsOverviewView: View {
                                     }
                                 }.pickerStyle(.menu).fixedSize()
                             }
-                            section("Shared Albums", shared: true, columns: columns, count: count)
-                            section("Albums", shared: false, columns: columns, count: count)
+                            ForEach(AlbumOverviewSection.allCases, id: \.self) { group in
+                                section(group, columns: columns, count: count)
+                            }
                         }
                         .padding(24)
                         .padding(.top, contentTopInset)
@@ -52,23 +53,25 @@ struct AlbumsOverviewView: View {
         max(1, Int((max(0, width - 48) + 20) / 200))
     }
 
-    private func section(_ title: String, shared: Bool, columns: [GridItem], count: Int) -> some View {
-        let albums = presentation.section(model.albums, shared: shared)
-        let expanded = shared ? presentation.sharedExpanded : presentation.albumsExpanded
+    private func section(_ group: AlbumOverviewSection, columns: [GridItem], count: Int) -> some View {
+        let albums = presentation.section(model.albums, section: group)
+        let expanded = presentation.expanded(group)
         return VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text(title).font(.title2.weight(.semibold))
+                Text(group.title).font(.title2.weight(.semibold))
                 Spacer()
                 if albums.count > count {
                     Button(expanded ? "Show Less" : "Show All") {
-                        presentation.setExpanded(!expanded, shared: shared)
+                        presentation.setExpanded(!expanded, section: group)
                     }.buttonStyle(.link)
                 }
             }
             LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
                 ForEach(expanded ? albums : Array(albums.prefix(count))) { album in
-                    AlbumCardView(album: album, repository: model.repository, presentation: presentation) {
-                        onOpenAlbum(album)
+                    if let collection = album.collection {
+                        AlbumCardView(album: album, collection: collection, repository: model.repository, presentation: presentation) {
+                            onOpenAlbum(album)
+                        }
                     }
                 }
             }
@@ -80,6 +83,7 @@ struct AlbumsOverviewView: View {
 private struct AlbumCardView: View {
     @EnvironmentObject private var model: LibraryModel
     let album: AlbumSummary
+    let collection: PhotoCollectionDescriptor
     let repository: CachedPhotosRepository?
     @ObservedObject var presentation: AlbumPresentationStore
     let onOpen: () -> Void
@@ -89,7 +93,7 @@ private struct AlbumCardView: View {
     var body: some View {
         Button(action: onOpen) {
             VStack(alignment: .leading, spacing: 8) {
-                AlbumCoverView(thumbnail: album.thumbnail, repository: repository, onImage: { dragPreview = $0 })
+                AlbumCoverView(thumbnail: album.thumbnail, repository: repository, collection: collection, onImage: { dragPreview = $0 })
                 VStack(alignment: .leading, spacing: 2) {
                     Text(album.name).font(.headline).lineLimit(1).truncationMode(.middle)
                     Text(itemCountText).font(.caption).foregroundStyle(.secondary)
@@ -97,15 +101,19 @@ private struct AlbumCardView: View {
             }
         }
         .buttonStyle(.plain)
-        .modifier(AlbumDragGesture(albumID: album.id, name: album.name, repository: repository, preview: dragPreview))
-        .background(AlbumMembershipTarget(albumID: album.id, model: model))
+        .modifier(AlbumDragGesture(collection: collection, name: album.name, repository: repository, preview: dragPreview))
+        .background(AlbumMembershipTarget(collection: collection, model: model))
         .contextMenu {
-            Button("Add to Sidebar") { presentation.add(album.id) }
-            Divider()
-            AlbumDownloadCommands(albumID: album.id, repository: repository)
-            Divider()
-            Button("Delete Album…", role: .destructive) { confirmDelete = true }
-                .disabled(model.deletingAlbumID != nil || model.albumOperation != nil || album.type != "normal")
+            Button("Add to Sidebar") { presentation.add(collection) }
+            if !album.isIncoming || model.canDownload(in: collection) {
+                Divider()
+                AlbumDownloadCommands(albumID: album.id, repository: repository, incomingCollection: album.isIncoming ? collection : nil)
+            }
+            if !album.isIncoming {
+                Divider()
+                Button("Delete Album…", role: .destructive) { confirmDelete = true }
+                    .disabled(model.deletingAlbumID != nil || model.albumOperation != nil || album.type != "normal")
+            }
         }
         .alert("Delete Album?", isPresented: $confirmDelete) {
             Button("Delete Album", role: .destructive) { model.deleteAlbum(album.id) }
@@ -124,12 +132,13 @@ private struct AlbumCardView: View {
 struct AlbumDownloadCommands: View {
     let albumID: Int64
     let repository: CachedPhotosRepository?
+    var incomingCollection: PhotoCollectionDescriptor? = nil
 
     var body: some View {
         ForEach(Array(photoDownloadActions.enumerated()), id: \.offset) { _, action in
             Button(action.0) {
                 guard let repository else { return }
-                PhotoDownloadManager.shared.start(repository: repository, source: .album(albumID),
+                PhotoDownloadManager.shared.start(repository: repository, source: incomingCollection.map { .incomingAlbum($0) } ?? .album(albumID),
                                                   kind: action.1, choose: action.2)
             }.disabled(repository == nil)
         }
@@ -141,6 +150,7 @@ struct AlbumDownloadCommands: View {
 struct AlbumCoverView: View {
     let thumbnail: ThumbnailInfo?
     let repository: CachedPhotosRepository?
+    var collection: PhotoCollectionDescriptor = .personalLibrary
     var cornerRadius: CGFloat = 8
     var placeholderFont: Font = .largeTitle
     var placeholderSymbol: String = "rectangle.stack"
@@ -150,7 +160,7 @@ struct AlbumCoverView: View {
 
     private var identity: String {
         guard let thumbnail else { return "missing" }
-        return "\(repository?.namespace ?? "unavailable"):\(thumbnail.unitID):\(thumbnail.cacheKey):\(maxPixel)"
+        return "\(repository?.namespace ?? "unavailable"):\(collection.rawValue):\(thumbnail.unitID):\(thumbnail.cacheKey):\(maxPixel)"
     }
 
     var body: some View {
@@ -178,7 +188,7 @@ struct AlbumCoverView: View {
         onImage(nil)
         guard let thumbnail, let repository else { return }
         for await event in await repository.thumbnailWithFallback(
-            thumbnail, size: .m, allowNetwork: true, priority: .visible
+            thumbnail, size: .m, allowNetwork: true, collection: collection, priority: .visible
         ) {
             guard !Task.isCancelled else { return }
             switch event {

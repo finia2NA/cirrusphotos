@@ -13,6 +13,7 @@ final class AlbumMutationTests: XCTestCase {
         let created = try await client.createAlbum(name: "A \"trip\"", itemIDs: [11, 12])
         XCTAssertEqual(created.id, 69)
         try await client.addItems([13, 14], toAlbum: 69)
+        try await client.addItems([13], toSharedAlbumReference: "fixture-reference")
         try await client.removeItems([11], fromAlbum: 69)
         try await client.deleteAlbum(id: 69)
         let album = try await client.album(id: 69)
@@ -85,7 +86,13 @@ private final class AlbumMutationProtocol: URLProtocol, @unchecked Sendable {
                 json = #"{"success":true,"data":{"album":{"id":69,"name":"Trip","item_count":2},"error_list":[]}}"#
             }
         case "add_item":
-            XCTAssertEqual(values["id"], "69")
+            if values["passphrase"] != nil {
+                XCTAssertNil(values["id"])
+                XCTAssertEqual(values["passphrase"], "\"fixture-reference\"")
+                XCTAssertEqual(values["item"], "[13]")
+            } else {
+                XCTAssertEqual(values["id"], "69")
+            }
             json = values["item"] == "[99]" ? #"{"success":true,"data":{"error_list":[{"anything":[1]}]}}"# : #"{"success":true,"data":{"error_list":[]}}"#
         case "delete_item":
             XCTAssertEqual(values["item"], "[11]")

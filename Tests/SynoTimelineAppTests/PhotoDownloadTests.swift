@@ -7,6 +7,16 @@ import XCTest
 @testable import SynoTimelineApp
 
 final class PhotoDownloadDestinationTests: XCTestCase {
+    func testIncomingDownloadCommandsRequireVerifiedDownloadGrant() {
+        let source = PhotoCollectionDescriptor.incomingAlbum(ownerID: 7, albumID: 42)
+        let viewer = AlbumSummary(id: 42, name: "Shared", itemCount: 1, ownerUserID: 7, isIncoming: true)
+        let downloader = AlbumSummary(id: 42, name: "Shared", itemCount: 1, ownerUserID: 7, isIncoming: true, recipientCanDownload: true)
+        XCTAssertFalse(permitsAlbumDownloads(source: source, incomingVerified: false, albums: [downloader]))
+        XCTAssertFalse(permitsAlbumDownloads(source: source, incomingVerified: true, albums: [viewer]))
+        XCTAssertTrue(permitsAlbumDownloads(source: source, incomingVerified: true, albums: [downloader]))
+        XCTAssertFalse(permitsAlbumDownloads(source: .incomingAlbum(ownerID: 8, albumID: 42), incomingVerified: true, albums: [downloader]))
+    }
+
     @MainActor
     func testContextMenuRoutesEachRequestedDownloadMode() {
         _ = NSApplication.shared
@@ -189,13 +199,13 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let resource = try XCTUnwrap(photo.fullImageResource)
         for await _ in await repository.fullImage(resource) {}
         let manager = PhotoDownloadManager()
-        manager.start(repository: repository, source: .item(photo), kind: .original, choose: false)
+        manager.start(repository: repository, source: .item(photo, collection: .personalLibrary), kind: .original, choose: false)
         let originalFinished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
         XCTAssertTrue(originalFinished)
         XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("a.dng")), Data("raw-image".utf8))
         let firstCalls = await transport.downloadedIDs
         XCTAssertTrue(firstCalls.isEmpty)
-        manager.start(repository: repository, source: .item(photo), kind: .compressedJPEG, choose: false)
+        manager.start(repository: repository, source: .item(photo, collection: .personalLibrary), kind: .compressedJPEG, choose: false)
         let compressedFinished = await waitUntil { manager.jobs.count == 2 && !manager.jobs[0].active }
         XCTAssertTrue(compressedFinished)
         let kind = await transport.kind
@@ -228,12 +238,12 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let repository = try CachedPhotosRepository(credentials: .init(username: "test", password: "test"),
                                                      budget: 100_000_000, cacheRoot: root.appendingPathComponent("cache"), transport: transport)
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.dng\",\"time\":1,\"type\":\"photo\"}".utf8))
-        let payload = PhotoDragPayload(repository: repository, source: .item(photo), count: 1, filename: "a.dng")
+        let payload = PhotoDragPayload(repository: repository, source: .item(photo, collection: .personalLibrary), count: 1, filename: "a.dng")
         let delegate = PhotoPromiseDelegate(payload: payload)
         let provider = NSFilePromiseProvider(fileType: UTType.data.identifier, delegate: delegate)
         provider.userInfo = delegate
         XCTAssertEqual(delegate.filePromiseProvider(provider, fileNameForType: UTType.data.identifier), "a.dng")
-        let nonce = AlbumDragRegistry.register(albumID: 7, namespace: repository.namespace)
+        let nonce = AlbumDragRegistry.register(collection: .album(7), namespace: repository.namespace)
         let writer = AlbumPromiseWriter(provider: provider, nonce: nonce)
         let pasteboard = NSPasteboard(name: .init("test.\(UUID())"))
         defer { AlbumDragRegistry.remove(nonce); pasteboard.releaseGlobally() }
@@ -241,7 +251,7 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         XCTAssertTrue(types.contains(AlbumDragRegistry.type))
         XCTAssertTrue(Set(provider.writableTypes(for: pasteboard)).isSubset(of: Set(types)))
         XCTAssertEqual(writer.pasteboardPropertyList(forType: AlbumDragRegistry.type) as? String, nonce.uuidString)
-        XCTAssertEqual(AlbumDragRegistry.album(nonce.uuidString, namespace: repository.namespace), 7)
+        XCTAssertEqual(AlbumDragRegistry.album(nonce.uuidString, namespace: repository.namespace), .album(7))
         let selectionWriter = SelectionPromiseWriter(provider: provider, nonce: nonce)
         let selectionTypes = selectionWriter.writableTypes(for: pasteboard)
         XCTAssertTrue(selectionTypes.contains(SelectionDragRegistry.type))
@@ -272,7 +282,7 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let repository = try CachedPhotosRepository(credentials: .init(username: "test", password: "test"),
                                                      budget: 100_000_000, cacheRoot: root.appendingPathComponent("cache"), transport: transport)
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.dng\",\"time\":1,\"type\":\"photo\"}".utf8))
-        let payload = PhotoDragPayload(repository: repository, source: .item(photo), count: 1,
+        let payload = PhotoDragPayload(repository: repository, source: .item(photo, collection: .personalLibrary), count: 1,
                                        filename: "Album.zip", forcesArchive: true)
         let manager = PhotoDownloadManager()
         let destination = root.appendingPathComponent("Album.zip")

@@ -4,7 +4,27 @@ import SynologyAPI
 extension CachedPhotosRepository {
     /// One full-detail lane shared by every collection and derived consumer.
     /// Membership remains separate; these rows never authorize collection order.
-    func resolveMetadataItems(_ ids: [Int64], priority: RequestPriority) async throws -> [PhotoItem] {
+    func resolveMetadataItems(_ ids: [Int64], priority: RequestPriority, collection: PhotoCollectionDescriptor = .personalLibrary) async throws -> [PhotoItem] {
+        let source = collection.albumID != nil ? collection : mediaCollection(for: collection)
+        guard !source.isLibraryFilter else { throw SynologyAPIError.unsupported("The source collection is no longer available.") }
+        if source.incomingAlbumIdentity != nil || source.albumID != nil {
+            guard ids.count <= 2000, Set(ids).count == ids.count else { throw CollectionCatalogError.exceedsLimit }
+            let scopedNamespace = metadataNamespace(for: source)
+            let admission = try await store.metadataAdmission(scopedNamespace)
+            var items: [PhotoItem] = []
+            for start in stride(from: 0, to: ids.count, by: MetadataReadPlanner.lookupBatchSize) {
+                let chunk = Array(ids[start..<min(start + MetadataReadPlanner.lookupBatchSize, ids.count)])
+                let batch = try await metadataReadRequest(priority: priority) {
+                    if let albumID = source.albumID { return try await client.albumItems(ids: chunk, albumID: albumID) }
+                    guard let reference = incomingReference(for: source) else { throw SynologyAPIError.unsupported("Shared album access is unavailable.") }
+                    return try await client.incomingItems(ids: chunk, reference: reference)
+                }
+                items.append(contentsOf: batch)
+            }
+            guard items.count == ids.count, Set(items.map(\.id)) == Set(ids) else { throw CollectionCatalogError.invalidCoverage }
+            _ = try await store.storeMetadataDetails(items, namespace: scopedNamespace, currentRun: runID, admission: admission)
+            return items
+        }
         guard ids.count <= 2000, Set(ids).count == ids.count else { throw CollectionCatalogError.exceedsLimit }
         let admissionEpoch = metadata.admissionEpoch
         let cached = try await store.metadataDetails(metadataNamespace, ids: ids, currentRun: runID)

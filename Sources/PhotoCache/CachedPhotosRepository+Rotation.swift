@@ -36,6 +36,9 @@ extension CachedPhotosRepository {
     /// `Browse.Item.get` records. Any transport or refresh failure restores the prior items.
     public func rotate(_ action: SelectionRotationAction,
                        direction: PhotoRotationDirection) async throws {
+        guard mediaCollection(for: action.collection) == .personalLibrary else {
+            throw SynologyAPIError.unsupported("Rotation is unavailable for shared album photos.")
+        }
         guard !action.itemIDs.isEmpty else { return }
         let mutationCacheEpoch = metadata.admissionEpoch
         guard action.itemIDs.allSatisfy({ action.itemsByID[$0]?.hasDisplayableStillImage == true }) else {
@@ -123,6 +126,13 @@ extension CachedPhotosRepository {
         operation: ThumbnailRotationOperation,
         continuation: AsyncStream<ThumbnailRotationProgress>.Continuation
     ) async {
+        guard mediaCollection(for: action.collection) == .personalLibrary else {
+            let message = "Rotation is unavailable for shared album photos."
+            continuation.yield(.init(completedItems: 0, totalItems: action.itemIDs.count, itemID: nil,
+                                     stage: .finished, failures: [message], activity: [message]))
+            continuation.finish()
+            return
+        }
         let mutationCacheEpoch = metadata.admissionEpoch
         let total = action.itemIDs.count
         var completed = 0

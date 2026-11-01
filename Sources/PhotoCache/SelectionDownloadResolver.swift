@@ -8,7 +8,7 @@ public struct SelectionDownloadResolver: Sendable {
     public init(repository: CachedPhotosRepository) { self.repository = repository }
 
     public func resolve(_ selection: PhotoSelectionSnapshot) async -> [PhotoItem]? {
-        await SelectionItemResolver(repository: repository).resolve(selection)?.filter(\.hasDisplayableStillImage)
+        return await SelectionItemResolver(repository: repository).resolve(selection)?.filter(\.hasDisplayableStillImage)
     }
 
     public func resolve(collection: PhotoCollectionDescriptor, snapshot: TimelineSnapshot,

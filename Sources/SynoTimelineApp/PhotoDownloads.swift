@@ -14,16 +14,18 @@ struct PhotoDownloadJob: Identifiable {
 }
 
 enum PhotoDownloadSource: Sendable {
-    case item(PhotoItem)
+    case item(PhotoItem, collection: PhotoCollectionDescriptor)
     case selection(PhotoSelectionSnapshot)
     case album(Int64)
+    case incomingAlbum(PhotoCollectionDescriptor)
 
     func resolve(repository: CachedPhotosRepository) async throws -> [PhotoItem] {
         let items: [PhotoItem]?
         switch self {
-        case .item(let item): items = [item]
+        case .item(let item, _): items = [item]
         case .selection(let selection): items = await SelectionDownloadResolver(repository: repository).resolve(selection)
         case .album(let id): items = await AlbumSelectionResolver(repository: repository).resolve(albumID: id)
+        case .incomingAlbum(let collection): items = await AlbumSelectionResolver(repository: repository).resolve(collection: collection)
         }
         try Task.checkCancellation()
         guard let items else { throw DownloadFailure.message("The photos could not be verified.") }
@@ -31,8 +33,17 @@ enum PhotoDownloadSource: Sendable {
         return items
     }
 
+    var collection: PhotoCollectionDescriptor {
+        switch self {
+        case .item(_, let collection): return collection
+        case .selection(let selection): return selection.collection
+        case .album: return .personalLibrary
+        case .incomingAlbum(let collection): return collection
+        }
+    }
+
     var initialName: String {
-        if case .item(let item) = self { return item.filename ?? "Photo" }
+        if case .item(let item, _) = self { return item.filename ?? "Photo" }
         return "Preparing download…"
     }
 }
@@ -85,12 +96,13 @@ final class PhotoDownloadManager: ObservableObject {
             do {
                 let items = try await source.resolve(repository: repository)
                 update(id) { $0.name = Self.jobName(items); $0.status = "Downloading…" }
-                let cached = try await (items.count == 1 && kind == .original
+                let personal = await repository.mediaCollection(for: source.collection) == .personalLibrary
+                let cached = try await (personal && items.count == 1 && kind == .original
                     ? repository.cachedOriginalForDownload(items[0]) : nil)
                 let result: PhotoDownloadResponse
                 if let cached { result = cached }
                 else {
-                    result = try await repository.downloadPhotos(itemIDs: items.map(\.id), kind: kind) { [weak self] progress in
+                    result = try await repository.downloadPhotos(itemIDs: items.map(\.id), kind: kind, collection: source.collection) { [weak self] progress in
                         Task { @MainActor [weak self] in
                             self?.update(id) { if $0.active { $0.progress = progress.fractionCompleted } }
                         }

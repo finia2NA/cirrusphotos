@@ -2,15 +2,28 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
+    /// Preserve album authority for thumbnail requests, including filtered album views.
+    private func thumbnailCollection(for collection: PhotoCollectionDescriptor) -> PhotoCollectionDescriptor {
+        var source = collection
+        var seen: Set<PhotoCollectionDescriptor> = []
+        while let filterID = source.libraryFilterID {
+            guard seen.insert(source).inserted, let state = metadata.libraryFilters[filterID] else { return source }
+            source = state.registration.sourceCollection
+        }
+        return source.albumID != nil || source.incomingAlbumIdentity != nil ? source : .personalLibrary
+    }
+
     /// Provisional metadata can request cached bytes with allowNetwork=false.
     public func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, allowNetwork: Bool,
+                          collection: PhotoCollectionDescriptor = .personalLibrary,
                           priority: RequestPriority = .visible,
                           cachePurpose: ThumbnailCachePurpose = .library) -> AsyncStream<ResourceEvent<Data>> {
+        let scope = thumbnailCollection(for: collection)
         let subscriber = UUID()
         let producer = StreamProducer()
         return AsyncStream(bufferingPolicy: .bufferingNewest(3)) { continuation in
             producer.task = Task {
-                let identity = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: size)
+                let identity = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: size, collection: scope)
                 let key = identity.key
                 let cached = try? await store.getThumbnail(identity)
                 guard !Task.isCancelled else { continuation.finish(); return }
@@ -20,7 +33,7 @@ extension CachedPhotosRepository {
                 if let cached { continuation.yield(.value(cached.data, verified: cached.validatedRun == runID)) }
                 guard allowNetwork && cached?.validatedRun != runID else { continuation.finish(); return }
                 do {
-                    let task = registerImage(descriptor, size: size, key: key,
+                    let task = registerImage(descriptor, size: size, key: key, collection: scope,
                                              subscriber: subscriber, priority: priority,
                                              cachePurpose: cachePurpose)
                     let current = try await task.value
@@ -39,7 +52,7 @@ extension CachedPhotosRepository {
             }
             continuation.onTermination = { @Sendable _ in
                 producer.task?.cancel()
-                Task { await self.releaseImage(key: CacheKey.thumbnail(namespace: self.namespace, descriptor: descriptor, size: size), subscriber: subscriber) }
+                Task { await self.releaseImage(key: CacheKey.thumbnail(namespace: self.namespace, descriptor: descriptor, size: size, collection: scope), subscriber: subscriber) }
             }
         }
     }
@@ -48,16 +61,18 @@ extension CachedPhotosRepository {
     /// configured size. Alternate sizes are never fetched or treated as exact completion.
     public func thumbnailWithFallback(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                                       allowNetwork: Bool,
+                                      collection: PhotoCollectionDescriptor = .personalLibrary,
                                       priority: RequestPriority = .visible) -> AsyncStream<ResourceEvent<ThumbnailRenditionValue>> {
+        let scope = thumbnailCollection(for: collection)
         let producer = StreamProducer()
         return AsyncStream(bufferingPolicy: .bufferingNewest(4)) { continuation in
             producer.task = Task {
                 let exact = CacheKey.thumbnailIdentity(namespace: namespace,
-                                                       descriptor: descriptor, size: size)
+                                                       descriptor: descriptor, size: size, collection: scope)
                 let exactCached = try? await store.getThumbnail(exact)
                 guard !Task.isCancelled else { continuation.finish(); return }
                 if exactCached == nil,
-                   let fallback = await bestCachedFallback(descriptor, target: size) {
+                   let fallback = await bestCachedFallback(descriptor, target: size, collection: scope) {
                     continuation.yield(.value(
                         ThumbnailRenditionValue(data: fallback.entry.data, size: fallback.size,
                                                 isExact: false),
@@ -67,7 +82,7 @@ extension CachedPhotosRepository {
                 guard !Task.isCancelled else { continuation.finish(); return }
                 for await event in thumbnail(descriptor, size: size,
                                              allowNetwork: allowNetwork && descriptor.isReady(size),
-                                             priority: priority, cachePurpose: .library) {
+                                             collection: scope, priority: priority, cachePurpose: .library) {
                     guard !Task.isCancelled else { continuation.finish(); return }
                     switch event {
                     case .value(let data, let verified):
@@ -90,10 +105,10 @@ extension CachedPhotosRepository {
     }
 
     private func bestCachedFallback(_ descriptor: ThumbnailInfo,
-                                    target: ThumbnailSize) async -> (entry: CacheEntry, size: ThumbnailSize)? {
+                                    target: ThumbnailSize, collection: PhotoCollectionDescriptor) async -> (entry: CacheEntry, size: ThumbnailSize)? {
         for candidate in Self.fallbackSizes(for: target) {
             let identity = CacheKey.thumbnailIdentity(namespace: namespace,
-                                                      descriptor: descriptor, size: candidate)
+                                                      descriptor: descriptor, size: candidate, collection: collection)
             if let entry = try? await store.getThumbnail(identity) { return (entry, candidate) }
         }
         return nil
@@ -132,7 +147,7 @@ extension CachedPhotosRepository {
         }
         try Task.checkCancellation()
         let subscriber = UUID()
-        let task = registerImage(descriptor, size: size, key: key,
+        let task = registerImage(descriptor, size: size, key: key, collection: .personalLibrary,
                                  subscriber: subscriber, priority: priority,
                                  cachePurpose: .library)
         return try await withTaskCancellationHandler {
@@ -153,6 +168,7 @@ extension CachedPhotosRepository {
     }
 
     private func registerImage(_ descriptor: ThumbnailInfo, size: ThumbnailSize, key: String,
+                               collection: PhotoCollectionDescriptor,
                                subscriber: UUID, priority: RequestPriority,
                                cachePurpose: ThumbnailCachePurpose) -> Task<ImageResolution, Error> {
         if var job = imageWork.thumbnailJobs[key] {
@@ -162,7 +178,7 @@ extension CachedPhotosRepository {
             return job.task
         }
         let id = UUID()
-        let identity = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: size)
+        let identity = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: size, collection: collection)
         let task = Task<ImageResolution, Error> {
             defer { finishImageJob(key: key, id: id) }
             let generation = await store.currentGeneration()
@@ -171,10 +187,25 @@ extension CachedPhotosRepository {
             try Task.checkCancellation()
             try await connect()
             let prior = try? await store.getThumbnail(identity)
-            var response = try await client.thumbnail(descriptor, size: size,
-                                                      etag: prior?.etag, lastModified: prior?.lastModified)
+            func request(etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                if collection.isLibraryFilter {
+                    throw SynologyAPIError.unsupported("Collection access is unavailable.")
+                }
+                if collection.incomingAlbumIdentity != nil {
+                    guard let reference = incomingReference(for: collection) else {
+                        throw SynologyAPIError.unsupported("Shared album access is unavailable.")
+                    }
+                    return try await client.incomingThumbnail(descriptor, size: size, reference: reference,
+                                                              etag: etag, lastModified: lastModified)
+                }
+                if let albumID = collection.albumID {
+                    return try await client.albumThumbnail(descriptor, size: size, albumID: albumID, etag: etag, lastModified: lastModified)
+                }
+                return try await client.thumbnail(descriptor, size: size, etag: etag, lastModified: lastModified)
+            }
+            var response = try await request(etag: prior?.etag, lastModified: prior?.lastModified)
             if response.notModified && prior == nil {
-                response = try await client.thumbnail(descriptor, size: size, etag: nil, lastModified: nil)
+                response = try await request(etag: nil, lastModified: nil)
             }
             try Task.checkCancellation()
             if response.notModified, let prior {

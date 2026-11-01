@@ -21,6 +21,7 @@ final class PrivateSharingTransportTests: XCTestCase {
             .init(action: "delete", member: .init(type: "user", id: 1035))
         ], password: .unchanged, expiration: 0)
         try await client.updateAlbumSharing(reference: reference.passphrase, changes: [.init(action: "update", role: "view", member: member)], password: .unchanged, expiration: nil)
+        try await client.updateAlbumSharing(reference: reference.passphrase, changes: [.init(action: "update", role: "upload", member: member)], password: .unchanged, expiration: nil)
         try await client.updateAlbumSharing(reference: reference.passphrase, changes: [.init(action: "update", role: "view", member: .init(type: "public"))], password: .set("fixture-password"), expiration: 1794956399)
         try await client.updateAlbumSharing(reference: reference.passphrase, changes: [.init(action: "update", role: "download", member: .init(type: "public"))], password: .unchanged, expiration: nil)
         try await client.updateAlbumSharing(reference: reference.passphrase, changes: [.init(action: "delete", member: .init(type: "public"))], password: .clear, expiration: 0)
@@ -80,7 +81,7 @@ private final class PrivateSharingProtocol: URLProtocol, @unchecked Sendable {
             if changes.count == 1 {
                 XCTAssertNil(values["expiration"])
                 XCTAssertNil(values["password"])
-                XCTAssertEqual(changes[0]["role"] as? String, "view")
+                XCTAssertTrue(["view", "upload"].contains(changes[0]["role"] as? String ?? ""))
                 json = #"{"success":true}"#
                 break
             }

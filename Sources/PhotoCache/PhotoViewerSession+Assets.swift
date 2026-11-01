@@ -31,7 +31,10 @@ extension PhotoViewerSession {
         }
 
         let resource: FullImageResource?
-        if item.isVideo {
+        if !supportsPersonalMedia {
+            resource = nil
+            images.fullImageStatus = .unsupported("Full-size media is unavailable for this shared album.")
+        } else if item.isVideo {
             images.fullImageStatus = .idle
             resource = nil
             let requestedPreference = videoQuality
@@ -130,13 +133,14 @@ extension PhotoViewerSession {
         let attempt = UUID()
         let expectedGeneration = generation
         let repository = repository
+        let collection = collection
         let key = Self.thumbnailKey(descriptor, size: request.size)
         let identity = Self.viewerThumbnailIdentity(descriptor)
         if images.thumbnailData == nil { images.thumbnailStatus = .loading }
         let task = Task { [weak self] in
             if request.purpose == .library {
                 for await event in await repository.thumbnailWithFallback(
-                    descriptor, size: request.size, allowNetwork: allowNetwork, priority: .visible
+                    descriptor, size: request.size, allowNetwork: allowNetwork, collection: collection, priority: .visible
                 ) {
                     guard !Task.isCancelled else { break }
                     let mapped: ResourceEvent<Data>
@@ -150,7 +154,7 @@ extension PhotoViewerSession {
                 }
             } else {
                 for await event in await repository.thumbnail(
-                    descriptor, size: request.size, allowNetwork: allowNetwork, priority: .visible,
+                    descriptor, size: request.size, allowNetwork: allowNetwork, collection: collection, priority: .visible,
                     cachePurpose: request.purpose
                 ) {
                     guard !Task.isCancelled else { break }

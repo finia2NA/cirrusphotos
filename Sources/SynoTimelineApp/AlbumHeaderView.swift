@@ -19,6 +19,7 @@ struct AlbumHeaderModel: Hashable {
 
     var sharingStatus: String? {
         guard let album else { return nil }
+        if album.isIncoming { return "Shared with me" }
         guard album.shared else { return "Not shared" }
         guard let info = album.sharingInfo else { return "Shared" }
         if info.isExpired == true { return "Sharing expired" }
@@ -47,7 +48,7 @@ struct AlbumHeaderView: View {
     var body: some View {
         let coverSize = min(144, max(0, width * 0.25))
         HStack(alignment: .top, spacing: 20) {
-            AlbumCoverView(thumbnail: model.album?.thumbnail, repository: repository)
+            AlbumCoverView(thumbnail: model.album?.thumbnail, repository: repository, collection: model.album?.collection ?? .personalLibrary)
                 .frame(width: coverSize, height: coverSize)
             VStack(alignment: .leading, spacing: 6) {
                 Text(model.album?.name ?? "Album")
@@ -59,7 +60,7 @@ struct AlbumHeaderView: View {
                 if let status = model.sharingStatus {
                     Text(status).font(.callout).foregroundStyle(.secondary)
                 }
-                if model.album != nil, repository != nil {
+                if let album = model.album, !album.isIncoming, repository != nil {
                     Button(model.album?.shared == true ? "Manage Sharing…" : "Share…") { onManageSharing() }
                 }
                 if !model.recipients.isEmpty {

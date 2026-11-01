@@ -61,14 +61,14 @@ struct PhotoViewerView: View {
                                 }
                               },
                               livePhotoConfiguration: viewer.state.flatMap { state in
-                                guard let item = state.item, item.mediaKind == .livePhoto,
+                                guard !viewer.isIncoming, let item = state.item, item.mediaKind == .livePhoto,
                                       state.metadataVerified, state.allowNetwork,
                                       viewer.isDisplayingFullResolution,
                                       item.additional?.orientation == item.additional?.orientationOriginal else { return nil }
                                 return LivePhotoConfiguration(repository: viewer.repository, itemID: item.id,
                                                               generation: state.selection.generation, isMuted: videoMuted)
                               },
-                              showsLivePhotoIndicator: viewer.state?.item?.mediaKind == .livePhoto,
+                              showsLivePhotoIndicator: !viewer.isIncoming && viewer.state?.item?.mediaKind == .livePhoto,
                               controller: viewer.canvasController,
                               onPrevious: viewer.navigatePrevious,
                               onNext: viewer.navigateNext,
@@ -83,15 +83,15 @@ struct PhotoViewerView: View {
                                 guard let state = viewer.state, state.metadataVerified, state.allowNetwork,
                                       let item = state.item else { return nil }
                                 let repository = viewer.repository
-                                let menu = item.hasDisplayableStillImage ? photoDownloadMenu { kind, choose in
-                                    library.downloadViewerItem(item, repository: repository, kind: kind, choose: choose)
+                                let menu = item.hasDisplayableStillImage && library.canDownload(in: viewer.collection) ? photoDownloadMenu { kind, choose in
+                                    library.downloadViewerItem(item, repository: repository, collection: viewer.collection, kind: kind, choose: choose)
                                 } : NSMenu()
-                                if item.hasDisplayableStillImage {
+                                if !viewer.isIncoming && item.hasDisplayableStillImage {
                                     addEditMenu(to: menu, filename: item.filename) { application in
                                         library.editViewerItem(item, repository: repository, application: application)
                                     }
                                 }
-                                if let timeline = library.snapshot(for: viewer.collection),
+                                if !viewer.isIncoming, let timeline = library.snapshot(for: viewer.collection),
                                    LibraryIndex(snapshot: timeline).fingerprint == viewer.index.fingerprint,
                                    let authority = library.selectionAuthority(for: viewer.collection) {
                                     let ordinal = state.desiredLocation.ordinal
@@ -105,11 +105,11 @@ struct PhotoViewerView: View {
                                 }
                                 return menu.items.isEmpty ? nil : menu
                               }, startFileDrag: { view, event in
-                                guard let state = viewer.state, state.metadataVerified, state.allowNetwork,
+                                guard !viewer.isIncoming, let state = viewer.state, state.metadataVerified, state.allowNetwork,
                                       let item = state.item, item.hasDisplayableStillImage,
                                       let filename = item.filename, !filename.isEmpty else { return false }
                                 let name = URL(fileURLWithPath: filename).lastPathComponent
-                                let payload = PhotoDragPayload(repository: viewer.repository, source: .item(item),
+                                let payload = PhotoDragPayload(repository: viewer.repository, source: .item(item, collection: viewer.collection),
                                                                count: 1, filename: name)
                                 let preview = state.thumbnailData.flatMap { NSImage(data: $0) } ?? viewer.source.image ?? viewer.image
                                 return PhotoFileDragSource.begin(payload: payload, previews: [preview].compactMap { $0 },

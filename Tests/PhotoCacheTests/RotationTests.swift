@@ -7,6 +7,29 @@ import SynologyAPI
 @testable import PhotoCache
 
 final class RotationTests: XCTestCase {
+    func testIncomingAlbumCannotMutatePersonalPhotoWithSameID() async throws {
+        let root = temporaryTestRoot("IncomingMutationGuard")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let photo = try item(1)
+        let transport = RotationTransport(thumbnail: try jpeg(), refreshed: photo)
+        let repository = try repository(transport, root: root)
+        let collection = PhotoCollectionDescriptor.incomingAlbum(ownerID: 2, albumID: 3)
+        let action = SelectionRotationAction(itemIDs: [1], sectionsByID: [:],
+                                             collection: collection, itemsByID: [1: photo])
+        do {
+            try await repository.rotate(action, direction: .clockwise)
+            XCTFail("An incoming album must not authorize personal photo rotation")
+        } catch {}
+        let calls = await transport.rotateCalls
+        XCTAssertTrue(calls.isEmpty)
+        let stream = await repository.rotateThumbnails(action, direction: .clockwise)
+        var finished = false
+        for await update in stream {
+            if update.stage == .finished { finished = true; XCTAssertFalse(update.failures.isEmpty) }
+        }
+        XCTAssertTrue(finished)
+    }
+
     private func item(_ id: Int64, key: String = "old", orientation: Int = 1,
                       width: Int = 400, height: Int = 300) throws -> PhotoItem {
         try JSONDecoder().decode(PhotoItem.self, from: Data("""

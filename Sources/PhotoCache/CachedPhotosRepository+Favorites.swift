@@ -40,6 +40,9 @@ extension CachedPhotosRepository {
     /// Executes an already-prepared batch favorite mutation with chunking, optimistic publication,
     /// rollback on failure, and an authoritative Favorites refresh.
     public func setFavoritesBatch(action: SelectionFavoriteAction) async throws {
+        guard mediaCollection(for: action.collection) == .personalLibrary else {
+            throw SynologyAPIError.unsupported("Favorites are unavailable for shared album photos.")
+        }
         let allIDs = action.affectedIDs
         guard !allIDs.isEmpty else { return }
         let target = action.targetFavorite

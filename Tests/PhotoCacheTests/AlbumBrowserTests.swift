@@ -280,6 +280,21 @@ final class AlbumBrowserTests: XCTestCase {
         XCTAssertEqual(result.sharingInfo?.permission, [member])
     }
 
+    func testProviderGrantCanBeSetAndChanged() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let info = AlbumSharingInfo(privacyType: "private", expiration: 0, permission: [], reference: "fixture-reference")
+        await transport.configure(albumList: [.init(id: 54, name: "Album", itemCount: 0, type: "normal", ownerUserID: 11, shared: true, sharingInfo: info)])
+        let repository = try makeRepository(root: root, transport: transport)
+        let snapshot = try await repository.albumSharing(id: 54)
+        let member = SharingPermissionChange.Member(type: "user", id: 1036)
+        let added = try await repository.saveAlbumSharing(snapshot: snapshot, changes: [.init(action: "update", role: "upload", member: member)], disable: false)
+        XCTAssertEqual(added.sharingInfo?.permission?.first?.role, "upload")
+        let next = try await repository.albumSharing(id: 54)
+        let updated = try await repository.saveAlbumSharing(snapshot: next, changes: [.init(action: "update", role: "view", member: member)], disable: false)
+        XCTAssertEqual(updated.sharingInfo?.permission?.first?.role, "view")
+    }
+
     func testAlbumDeletionRefreshesListAndRequiresOwnership() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
         let transport = AlbumFakeTransport()

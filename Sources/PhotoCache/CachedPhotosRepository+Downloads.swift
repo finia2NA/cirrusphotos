@@ -48,4 +48,23 @@ extension CachedPhotosRepository {
         try await connect()
         return try await client.downloadPhotos(itemIDs: itemIDs, kind: kind, progress: progress)
     }
+    /// Incoming IDs are only meaningful in their album's scope. Refresh the grant
+    /// immediately before transfer and never reuse personal-space originals.
+    public func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, collection: PhotoCollectionDescriptor,
+                               progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
+        let source = mediaCollection(for: collection)
+        guard source.incomingAlbumIdentity != nil else {
+            guard source == .personalLibrary else { throw SynologyAPIError.unsupported("The album context is unavailable.") }
+            return try await downloadPhotos(itemIDs: itemIDs, kind: kind, progress: progress)
+        }
+        try await connect()
+        let rows = try await metadataReadRequest(priority: .visible) { try await client.incomingAlbums() }
+        guard let row = rows.first(where: { $0.summary.collection == source }), row.access.view, row.access.download else {
+            incomingAccess.removeValue(forKey: source)
+            throw SynologyAPIError.unsupported("You no longer have permission to download from this album.")
+        }
+        incomingAccess[source] = row
+        return try await client.downloadIncomingPhotos(itemIDs: itemIDs, kind: kind, reference: row.sharingReference, progress: progress)
+    }
+
 }

@@ -7,19 +7,19 @@ import SynologyAPI
 @MainActor
 enum AlbumDragRegistry {
     static let type = NSPasteboard.PasteboardType("com.synotimeline.local-album")
-    private static var entries: [UUID: (id: Int64, namespace: String)] = [:]
-    static func register(albumID: Int64, namespace: String) -> UUID {
+    private static var entries: [UUID: (collection: PhotoCollectionDescriptor, namespace: String)] = [:]
+    static func register(collection: PhotoCollectionDescriptor, namespace: String) -> UUID {
         let nonce = UUID()
-        entries[nonce] = (albumID, namespace)
+        entries[nonce] = (collection, namespace)
         return nonce
     }
     static func remove(_ nonce: UUID) { entries[nonce] = nil }
-    static func album(_ value: String?, namespace: String) -> Int64? {
+    static func album(_ value: String?, namespace: String) -> PhotoCollectionDescriptor? {
         guard let value, let nonce = UUID(uuidString: value), let entry = entries[nonce],
               entry.namespace == namespace else { return nil }
-        return entry.id
+        return entry.collection
     }
-    static func insert(_ value: String?, namespace: String, before: Int64?, presentation: AlbumPresentationStore) -> Bool {
+    static func insert(_ value: String?, namespace: String, before: PhotoCollectionDescriptor?, presentation: AlbumPresentationStore) -> Bool {
         guard let id = album(value, namespace: namespace) else { return false }
         presentation.insert(id, before: before)
         return true
@@ -80,12 +80,12 @@ final class SelectionPromiseWriter: NSObject, @preconcurrency NSPasteboardWritin
 
 /// Accepts only in-process selection handles; never requests a promised file.
 struct AlbumMembershipTarget: NSViewRepresentable {
-    let albumID: Int64
+    let collection: PhotoCollectionDescriptor
     @ObservedObject var model: LibraryModel
     func makeNSView(context: Context) -> TargetView { TargetView() }
-    func updateNSView(_ view: TargetView, context: Context) { view.albumID = albumID; view.model = model }
+    func updateNSView(_ view: TargetView, context: Context) { view.collection = collection; view.model = model }
     @MainActor final class TargetView: NSView {
-        var albumID: Int64 = 0
+        var collection: PhotoCollectionDescriptor = .album(0)
         weak var model: LibraryModel?
         private var active = false { didSet { needsDisplay = true } }
         override init(frame: NSRect) { super.init(frame: frame); registerForDraggedTypes([SelectionDragRegistry.type]) }
@@ -93,7 +93,7 @@ struct AlbumMembershipTarget: NSViewRepresentable {
         private func value(_ sender: NSDraggingInfo) -> String? { sender.draggingPasteboard.string(forType: SelectionDragRegistry.type) }
         private func valid(_ sender: NSDraggingInfo) -> Bool {
             guard let model, let namespace = model.repository?.namespace, model.albumOperation == nil,
-                  model.albums.contains(where: { $0.id == albumID }) else { return false }
+                  model.albums.contains(where: { $0.collection == collection && (!$0.isIncoming || $0.recipientCanUpload) }) else { return false }
             return SelectionDragRegistry.lookup(value(sender), namespace: namespace) != nil
         }
         override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { active = valid(sender); return active ? .copy : [] }
@@ -104,7 +104,7 @@ struct AlbumMembershipTarget: NSViewRepresentable {
             defer { active = false }
             guard valid(sender), let model, let namespace = model.repository?.namespace,
                   let entry = SelectionDragRegistry.take(value(sender), namespace: namespace) else { return false }
-            return model.addCapturedSelection(entry.selection, sourceAlbumID: entry.sourceAlbumID, to: albumID)
+            return model.addCapturedSelection(entry.selection, sourceAlbumID: entry.sourceAlbumID, to: collection)
         }
         override func draw(_ dirtyRect: NSRect) {
             guard active else { return }
@@ -118,22 +118,22 @@ struct AlbumMembershipTarget: NSViewRepresentable {
 
 @MainActor
 final class AlbumPromiseWriter: NSObject, @preconcurrency NSPasteboardWriting {
-    private let provider: NSFilePromiseProvider
+    private let provider: NSFilePromiseProvider?
     private let nonce: UUID
-    init(provider: NSFilePromiseProvider, nonce: UUID) { self.provider = provider; self.nonce = nonce }
+    init(provider: NSFilePromiseProvider?, nonce: UUID) { self.provider = provider; self.nonce = nonce }
     func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
-        provider.writableTypes(for: pasteboard) + [AlbumDragRegistry.type]
+        (provider?.writableTypes(for: pasteboard) ?? []) + [AlbumDragRegistry.type]
     }
     func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
-        type == AlbumDragRegistry.type ? nonce.uuidString : provider.pasteboardPropertyList(forType: type)
+        type == AlbumDragRegistry.type ? nonce.uuidString : provider?.pasteboardPropertyList(forType: type)
     }
     func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
-        type == AlbumDragRegistry.type ? [] : provider.writingOptions(forType: type, pasteboard: pasteboard)
+        type == AlbumDragRegistry.type ? [] : (provider?.writingOptions(forType: type, pasteboard: pasteboard) ?? [])
     }
 }
 
 struct AlbumDragGesture: ViewModifier {
-    let albumID: Int64
+    let collection: PhotoCollectionDescriptor
     let name: String
     let repository: CachedPhotosRepository?
     let preview: NSImage?
@@ -144,10 +144,10 @@ struct AlbumDragGesture: ViewModifier {
                 let safe = name.components(separatedBy: CharacterSet(charactersIn: "/:\\").union(.controlCharacters))
                     .joined(separator: "-").trimmingCharacters(in: .whitespacesAndNewlines)
                 let filename = (safe.isEmpty || safe == "." || safe == ".." ? "Album" : safe) + ".zip"
-                let payload = PhotoDragPayload(repository: repository, source: .album(albumID), count: 1,
+                let payload = PhotoDragPayload(repository: repository, source: .album(collection.albumID ?? 0), count: 1,
                                                filename: filename, forcesArchive: true)
                 return PhotoFileDragSource.begin(payload: payload, previews: [preview].compactMap { $0 },
-                                                 cropsToSquare: true, from: view, event: event, albumID: albumID)
+                                                 cropsToSquare: true, from: view, event: event, albumCollection: collection, promisesFile: collection.albumID != nil)
             })
     }
 }
@@ -216,7 +216,7 @@ struct AlbumOverviewSpringTarget: NSViewRepresentable {
 
 /// A narrow insertion target leaves the middle of each row free for future membership drops.
 struct AlbumInsertionTarget: NSViewRepresentable {
-    let before: Int64?
+    let before: PhotoCollectionDescriptor?
     let namespace: String?
     @ObservedObject var presentation: AlbumPresentationStore
     func makeNSView(context: Context) -> TargetView { TargetView() }
@@ -224,13 +224,13 @@ struct AlbumInsertionTarget: NSViewRepresentable {
         view.before = before; view.namespace = namespace; view.presentation = presentation
     }
     @MainActor final class TargetView: NSView {
-        var before: Int64?
+        var before: PhotoCollectionDescriptor?
         var namespace: String?
         weak var presentation: AlbumPresentationStore?
         private var active = false { didSet { needsDisplay = true } }
         override init(frame: NSRect) { super.init(frame: frame); registerForDraggedTypes([AlbumDragRegistry.type]) }
         required init?(coder: NSCoder) { fatalError() }
-        private func album(_ sender: NSDraggingInfo) -> Int64? {
+        private func album(_ sender: NSDraggingInfo) -> PhotoCollectionDescriptor? {
             guard let namespace else { return nil }
             return AlbumDragRegistry.album(sender.draggingPasteboard.string(forType: AlbumDragRegistry.type), namespace: namespace)
         }

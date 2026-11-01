@@ -1,5 +1,48 @@
 import Foundation
 
+/// An incoming album and the recipient's current server-reported capabilities.
+/// The reference is session-only and this type deliberately does not encode.
+public struct IncomingAlbum: Decodable, Sendable {
+    public let summary: AlbumSummary
+    public let sharingReference: String
+    public let access: AlbumAccessPermission
+
+    private enum CodingKeys: String, CodingKey { case passphrase, additional }
+    private struct Additional: Decodable { let accessPermission: AlbumAccessPermission
+        enum CodingKeys: String, CodingKey { case accessPermission = "access_permission" }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let decoded = try AlbumSummary(from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sharingReference = try container.decode(String.self, forKey: .passphrase)
+        guard !sharingReference.isEmpty else {
+            throw DecodingError.dataCorruptedError(forKey: .passphrase, in: container, debugDescription: "Missing sharing reference")
+        }
+        let permission = try container.decode(Additional.self, forKey: .additional).accessPermission
+        access = permission
+        summary = decoded.asIncoming(canUpload: permission.upload, canDownload: permission.download)
+    }
+}
+
+public struct AlbumAccessPermission: Decodable, Sendable, Equatable {
+    public let view: Bool
+    public let download: Bool
+    public let upload: Bool
+    public let manage: Bool
+    public let own: Bool
+
+    private enum CodingKeys: String, CodingKey { case view, download, upload, manage, own }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        view = try values.decodeIfPresent(Bool.self, forKey: .view) ?? false
+        download = try values.decodeIfPresent(Bool.self, forKey: .download) ?? false
+        upload = try values.decodeIfPresent(Bool.self, forKey: .upload) ?? false
+        manage = try values.decodeIfPresent(Bool.self, forKey: .manage) ?? false
+        own = try values.decodeIfPresent(Bool.self, forKey: .own) ?? false
+    }
+}
+
 /// A Personal Space album as returned by `SYNO.Foto.Browse.Album method=list`.
 public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
     public let id: Int64
@@ -15,9 +58,13 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
     public let ownerUserID: Int64?
     public let shared: Bool
     public let sharingInfo: AlbumSharingInfo?
+    public let isIncoming: Bool
+    /// Cached capabilities are provisional until the album list is verified.
+    public let recipientCanUpload: Bool
+    public let recipientCanDownload: Bool
 
     enum CodingKeys: String, CodingKey {
-        case id, name, additional, type, shared
+        case id, name, additional, type, shared, isIncoming, recipientCanUpload, recipientCanDownload
         case ownerUserID = "owner_user_id"
         case itemCount = "item_count"
         case createTime = "create_time"
@@ -59,7 +106,8 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
                 createTime: Int64? = nil, startTime: Int64? = nil, endTime: Int64? = nil,
                 sortBy: String? = nil, sortDirection: String? = nil,
                 thumbnail: ThumbnailInfo? = nil, type: String? = nil, ownerUserID: Int64? = nil,
-                shared: Bool = false, sharingInfo: AlbumSharingInfo? = nil) {
+                shared: Bool = false, sharingInfo: AlbumSharingInfo? = nil,
+                isIncoming: Bool = false, recipientCanUpload: Bool = false, recipientCanDownload: Bool = false) {
         self.id = id
         self.name = name
         self.itemCount = itemCount
@@ -73,6 +121,25 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
         self.ownerUserID = ownerUserID
         self.shared = shared
         self.sharingInfo = sharingInfo
+        self.isIncoming = isIncoming
+        self.recipientCanUpload = recipientCanUpload
+        self.recipientCanDownload = recipientCanDownload
+    }
+
+    /// Stable identity for navigation and persistence, excluding sharing credentials.
+    public var collection: PhotoCollectionDescriptor? {
+        if isIncoming {
+            guard let ownerUserID else { return nil }
+            return .incomingAlbum(ownerID: ownerUserID, albumID: id)
+        }
+        return .album(id)
+    }
+
+    func asIncoming(canUpload: Bool, canDownload: Bool) -> AlbumSummary {
+        AlbumSummary(id: id, name: name, itemCount: itemCount, createTime: createTime,
+                     startTime: startTime, endTime: endTime, sortBy: sortBy, sortDirection: sortDirection,
+                     thumbnail: thumbnail, type: type, ownerUserID: ownerUserID, shared: shared,
+                     sharingInfo: sharingInfo, isIncoming: true, recipientCanUpload: canUpload, recipientCanDownload: canDownload)
     }
 
     public init(from decoder: Decoder) throws {
@@ -88,6 +155,9 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
         sortBy = try container.decodeIfPresent(String.self, forKey: .sortBy)
         sortDirection = try container.decodeIfPresent(String.self, forKey: .sortDirection)
         shared = try container.decodeIfPresent(Bool.self, forKey: .shared) ?? false
+        isIncoming = try container.decodeIfPresent(Bool.self, forKey: .isIncoming) ?? false
+        recipientCanUpload = try container.decodeIfPresent(Bool.self, forKey: .recipientCanUpload) ?? false
+        recipientCanDownload = try container.decodeIfPresent(Bool.self, forKey: .recipientCanDownload) ?? false
         let additional = try container.decodeIfPresent(Additional.self, forKey: .additional)
         thumbnail = additional?.thumbnail
         sharingInfo = additional?.sharingInfo
@@ -106,6 +176,9 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
         try container.encodeIfPresent(sortBy, forKey: .sortBy)
         try container.encodeIfPresent(sortDirection, forKey: .sortDirection)
         try container.encode(shared, forKey: .shared)
+        if isIncoming { try container.encode(true, forKey: .isIncoming) }
+        if isIncoming && recipientCanUpload { try container.encode(true, forKey: .recipientCanUpload) }
+        if isIncoming && recipientCanDownload { try container.encode(true, forKey: .recipientCanDownload) }
         if thumbnail != nil || sharingInfo != nil {
             try container.encode(Additional(thumbnail: thumbnail, sharingInfo: sharingInfo), forKey: .additional)
         }

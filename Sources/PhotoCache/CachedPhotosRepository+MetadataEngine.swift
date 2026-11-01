@@ -4,6 +4,12 @@ import SynologyAPI
 extension CachedPhotosRepository {
     var metadataNamespace: MetadataNamespace { MetadataNamespace(account: namespace) }
 
+    func metadataNamespace(for collection: PhotoCollectionDescriptor) -> MetadataNamespace {
+        let source = mediaCollection(for: collection)
+        guard source.incomingAlbumIdentity != nil else { return metadataNamespace }
+        return MetadataNamespace(account: namespace + "|" + source.rawValue)
+    }
+
     /// Enroll the normalized format only when its consumer pipeline is admitted.
     func initializeMetadataEngine() async throws {
         guard !metadata.initialized else { return }

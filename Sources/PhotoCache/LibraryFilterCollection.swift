@@ -62,6 +62,8 @@ extension CachedPhotosRepository {
                     try await initializeMetadataEngine()
                     guard let id = collection.libraryFilterID, let state = metadata.libraryFilters[id],
                           let references = state.referencesBySection[section] else { throw SynologyAPIError.unsupported("This library filter is no longer available.") }
+                    let sourceScope = mediaCollection(for: state.registration.sourceCollection)
+                    guard !sourceScope.isLibraryFilter else { throw SynologyAPIError.unsupported("The source collection is no longer available.") }
                     let address = try DayPageAddress(section: section, collection: collection)
                     let ids = references.map(\.itemID)
                     func current() -> Bool {
@@ -83,21 +85,21 @@ extension CachedPhotosRepository {
                         }
                         return PhotoPageSnapshot(address: address, membershipRevision: state.registration.revision, membershipVerified: references.allSatisfy(\.sourceVerified), slots: slots)
                     }
-                    let cached = snapshot(try await store.metadataDetails(metadataNamespace, ids: ids, currentRun: runID))
+                    let cached = snapshot(try await store.metadataDetails(metadataNamespace(for: state.registration.sourceCollection), ids: ids, currentRun: runID))
                     guard current() else { continuation.finish(); return }
                     if cached.slots.contains(where: { $0.item != nil }) {
-                        continuation.yield(.value(applyingFavoriteOverrides(cached), verified: cached.verified))
+                        continuation.yield(.value((sourceScope.incomingAlbumIdentity == nil ? applyingFavoriteOverrides(cached) : cached), verified: cached.verified))
                     }
                     guard allowNetwork && !cached.verified && references.allSatisfy(\.sourceVerified) else { continuation.finish(); return }
                     try await connect()
                     try await reconcileMetadataSource()
                     guard current() else { continuation.finish(); return }
-                    _ = try await resolveMetadataItems(ids, priority: priority)
+                    _ = try await resolveMetadataItems(ids, priority: priority, collection: state.registration.sourceCollection)
                     guard current() else { continuation.finish(); return }
-                    let result = snapshot(try await store.metadataDetails(metadataNamespace, ids: ids, currentRun: runID))
+                    let result = snapshot(try await store.metadataDetails(metadataNamespace(for: state.registration.sourceCollection), ids: ids, currentRun: runID))
                     guard current() else { continuation.finish(); return }
                     guard result.verified else { throw SynologyAPIError.unsupported("The requested photos no longer match this filter.") }
-                    continuation.yield(.value(applyingFavoriteOverrides(result), verified: true))
+                    continuation.yield(.value((sourceScope.incomingAlbumIdentity == nil ? applyingFavoriteOverrides(result) : result), verified: true))
                 } catch {
                     if !Task.isCancelled { continuation.yield(.failure(error.localizedDescription)) }
                 }

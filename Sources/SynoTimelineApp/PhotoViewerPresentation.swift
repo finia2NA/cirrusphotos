@@ -27,6 +27,7 @@ final class PhotoViewerPresentation: ObservableObject {
     let index: LibraryIndex
     let repository: CachedPhotosRepository
     let collection: PhotoCollectionDescriptor
+    let isIncoming: Bool
     private let videoQuality: VideoQualityPreference
 
     private var stateTask: Task<Void, Never>?
@@ -47,6 +48,7 @@ final class PhotoViewerPresentation: ObservableObject {
          index: LibraryIndex, request: PhotoViewerOpenRequest,
          thumbnailSize: ThumbnailSize, loadsLargePreviews: Bool = false,
          videoQuality: VideoQualityPreference = .automatic,
+         isIncoming: Bool = false,
          allowNetwork: Bool, snapshotRevision: Int) {
         source = request.source
         originalItemID = request.seed.item.id
@@ -55,6 +57,7 @@ final class PhotoViewerPresentation: ObservableObject {
         self.repository = repository
         self.collection = collection
         self.videoQuality = videoQuality
+        self.isIncoming = isIncoming
         self.snapshotRevision = snapshotRevision
         image = request.source.image
         session = PhotoViewerSession(repository: repository, collection: collection,
@@ -162,7 +165,7 @@ final class PhotoViewerPresentation: ObservableObject {
     var showsUnsupportedVideo: Bool { state?.item?.isVideo == true && state?.videoResource == nil }
 
     var canToggleFavorite: Bool {
-        invalidationMessage == nil && !isClosing && state?.item != nil &&
+        !isIncoming && invalidationMessage == nil && !isClosing && state?.item != nil &&
             state?.metadataVerified == true && state?.allowNetwork == true &&
             state?.favoriteUpdating == false
     }
@@ -173,7 +176,7 @@ final class PhotoViewerPresentation: ObservableObject {
     }
 
     var canRotate: Bool {
-        invalidationMessage == nil && !isClosing && !rotationPending &&
+        !isIncoming && invalidationMessage == nil && !isClosing && !rotationPending &&
             state?.metadataVerified == true && state?.allowNetwork == true &&
             state?.item?.hasDisplayableStillImage == true
     }

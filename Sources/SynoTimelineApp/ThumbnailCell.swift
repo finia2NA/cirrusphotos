@@ -11,6 +11,7 @@ struct ThumbnailCell: View {
     let repository: CachedPhotosRepository?
     let size: ThumbnailSize
     let allowNetwork: Bool
+    var collection: PhotoCollectionDescriptor = .personalLibrary
     let failures: ThumbnailFailureRegistry
     var fillsFrame = false
     var isSelected = false
@@ -24,7 +25,7 @@ struct ThumbnailCell: View {
 
     private var descriptor: ThumbnailInfo? { item.additional?.thumbnail }
     private var familyIdentity: String {
-        "\(item.id):\(descriptor?.unitID ?? 0):\(descriptor?.cacheKey ?? "missing")"
+        "\(collection.rawValue):\(item.id):\(descriptor?.unitID ?? 0):\(descriptor?.cacheKey ?? "missing")"
     }
     private var renditionIdentity: String {
         "\(familyIdentity):\(size.rawValue)"
@@ -76,7 +77,7 @@ struct ThumbnailCell: View {
         let priorFailure = failures.contains(renditionIdentity)
         failed = priorFailure
         for await event in await repository.thumbnailWithFallback(descriptor, size: size,
-                                                                  allowNetwork: allowNetwork && !priorFailure) {
+                                                                  allowNetwork: allowNetwork && !priorFailure, collection: collection) {
             guard !Task.isCancelled else { return }
             switch event {
             case .value(let value, _):

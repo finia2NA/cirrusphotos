@@ -20,6 +20,8 @@ public struct PhotoSelectionAuthority: Sendable, Equatable {
         lhs.sourceMutationEpoch == rhs.sourceMutationEpoch
     }
 
+    var originatingCollection: PhotoCollectionDescriptor { source ?? collection }
+
     func retain() -> SelectionSnapshotRetention { SelectionSnapshotRetention(retentions) }
 }
 
@@ -82,7 +84,7 @@ extension CachedPhotosRepository {
 
     func verifySelectionFence(_ authority: PhotoSelectionAuthority, proofs: [SelectionMembershipProof]) async -> Bool {
         guard selectionAuthorityIsCurrent(authority), !Task.isCancelled else { return false }
-        let valid = (try? await store.verifySelectionMembership(proofs, namespace: metadataNamespace, currentRun: runID)) == true
+        let valid = (try? await store.verifySelectionMembership(proofs, namespace: metadataNamespace(for: authority.originatingCollection), currentRun: runID)) == true
         return valid && !Task.isCancelled && selectionAuthorityIsCurrent(authority)
     }
 

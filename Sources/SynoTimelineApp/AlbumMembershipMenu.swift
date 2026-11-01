@@ -4,7 +4,7 @@ import SynologyAPI
 
 func isKnownNormalAlbum(_ id: Int64?, in albums: [AlbumSummary]) -> Bool {
     guard let id else { return false }
-    return albums.contains { $0.id == id && $0.type == "normal" }
+    return albums.contains { !$0.isIncoming && $0.id == id && $0.type == "normal" }
 }
 
 /// Preserve sidebar order, followed by the server's album-name order.
