@@ -579,6 +579,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
     case incomingAlbum(ownerID: Int64, albumID: Int64)
     case folder(Int64)
     case person(Int64)
+    case subject(Int64)
     /// A session-only timeline filtered to an explicit item set (a map pin or
     /// cluster). Never persisted; pages use canonical item details.
     case mapFilter(UUID)
@@ -595,6 +596,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
         case .incomingAlbum(let ownerID, let albumID): "incoming:\(ownerID):\(albumID)"
         case .folder(let id): "folder:\(id)"
         case .person(let id): "person:\(id)"
+        case .subject(let id): "subject:\(id)"
         case .mapFilter(let id): "map:\(id.uuidString)"
         case .libraryFilter(let id): "filter:\(id.uuidString)"
         }
@@ -616,6 +618,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
     }
 
     public var personID: Int64? { if case .person(let id) = self { return id }; return nil }
+    public var subjectID: Int64? { if case .subject(let id) = self { return id }; return nil }
 
     public var usesItemCatalog: Bool { albumID != nil || incomingAlbumIdentity != nil || folderID != nil }
 
@@ -663,6 +666,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
                 self = .folder(id); return
             }
             if rawValue.hasPrefix("person:"), let id = Int64(rawValue.dropFirst(7)), id > 0 { self = .person(id); return }
+            if rawValue.hasPrefix("subject:"), let id = Int64(rawValue.dropFirst(8)), id > 0 { self = .subject(id); return }
             let mapPrefix = "map:"
             if rawValue.hasPrefix(mapPrefix),
                let id = UUID(uuidString: String(rawValue.dropFirst(mapPrefix.count))) {

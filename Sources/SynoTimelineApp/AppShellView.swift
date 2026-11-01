@@ -15,6 +15,9 @@ struct AppShellView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var viewer: PhotoViewerPresentation?
     @State private var selectedDestination: LibraryDestination
+    @State private var openedSubjectID: Int64?
+    @State private var subjects: [SubjectSummary]?
+    @State private var subjectsError: String?
     @State private var openedPersonID: Int64?
     @State private var people: [PersonSummary]?
     @State private var peopleError: String?
@@ -51,6 +54,7 @@ struct AppShellView: View {
             else { .personalLibrary }
         case .favorites: .favorites
         case .people: openedPersonID.map { .person($0) }
+        case .subjects: openedSubjectID.map { .subject($0) }
         case .albums: openedAlbum
         case .map: openedMapFilter
         }
@@ -103,6 +107,8 @@ struct AppShellView: View {
                         .tag(SidebarSelection.destination(.favorites))
                     Label("People", systemImage: "person.2")
                         .tag(SidebarSelection.destination(.people))
+                    Label("Subjects", systemImage: "square.grid.2x2")
+                        .tag(SidebarSelection.destination(.subjects))
                     Label("Map", systemImage: "map")
                         .tag(SidebarSelection.destination(.map))
                 }
@@ -134,6 +140,8 @@ struct AppShellView: View {
         .onChange(of: showsFolders) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
         .onChange(of: folderPath) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
         .task(id: PeopleLoadKey(namespace: model.presentationNamespace, active: selectedDestination == .people, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadPeople() }
+        .task(id: SubjectsLoadKey(namespace: model.presentationNamespace, active: selectedDestination == .subjects, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadSubjects() }
+        .onChange(of: openedSubjectID) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
         .onChange(of: openedPersonID) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
         .task(id: FolderLoadKey(namespace: model.presentationNamespace, active: selectedDestination == .personalLibrary && showsFolders, id: folderPath.last ?? 0, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadFolder() }
         .onChange(of: openedAlbum) { _, _ in
@@ -296,6 +304,10 @@ struct AppShellView: View {
                     peopleDetail(topInset: topInset)
                         .allowsHitTesting(viewer == nil)
                         .ignoresSafeArea(.container, edges: .top)
+                } else if selectedDestination == .subjects {
+                    subjectsDetail(topInset: topInset)
+                        .allowsHitTesting(viewer == nil)
+                        .ignoresSafeArea(.container, edges: .top)
                 } else if selectedDestination == .map {
                     MapBrowserView(model: mapModel, contentTopInset: topInset,
                                    onOpenPhoto: { openMapGroup([$0]) },
@@ -403,6 +415,67 @@ struct AppShellView: View {
         } else if let peopleError {
             ContentUnavailableView { Label("People unavailable", systemImage: "person.2") } description: { Text(peopleError) } actions: { Button("Try Again") { Task { await model.reload() } } }
         } else { ProgressView("Loading people…") }
+    }
+
+    private struct SubjectsLoadKey: Hashable {
+        let namespace: String?
+        let active: Bool
+        let resetRevision: UInt64
+        let retryRevision: Int
+    }
+
+    private func loadSubjects() async {
+        guard selectedDestination == .subjects, let repository = model.repository else { return }
+        let restored = navigationRestoration.prepareSubject(namespace: repository.namespace)
+        openedSubjectID = restored
+        if let restored { model.ensureCollectionLoaded(.subject(restored)) }
+        subjects = nil; subjectsError = nil
+        for await event in await repository.subjects() {
+            guard !Task.isCancelled else { return }
+            switch event {
+            case .value(let list, let verified):
+                subjects = list
+                if verified, let id = openedSubjectID, !list.contains(where: { $0.id == id }) {
+                    openedSubjectID = nil; navigationRestoration.setOpenedSubject(nil)
+                }
+            case .failure(let error): subjectsError = error
+            }
+        }
+    }
+
+    private func closeSubject() {
+        openedSubjectID = nil
+        navigationRestoration.setOpenedSubject(nil)
+        updateBackHandler(); updateInfoPanelContext()
+    }
+
+    @ViewBuilder private func subjectsDetail(topInset: CGFloat) -> some View {
+        if let subjects {
+            ScrollView {
+                if let subjectsError { Text(subjectsError).font(.caption).foregroundStyle(.secondary) }
+                if subjects.isEmpty { ContentUnavailableView("No Subjects", systemImage: "square.grid.2x2") }
+                else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140, maximum: 220), spacing: 20)], alignment: .leading, spacing: 20) {
+                        ForEach(subjects) { subject in
+                            Button {
+                                openedSubjectID = subject.id
+                                navigationRestoration.setOpenedSubject(subject.id)
+                                model.ensureCollectionLoaded(.subject(subject.id))
+                                updateBackHandler(); updateInfoPanelContext()
+                            } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    AlbumCoverView(thumbnail: subject.thumbnail, repository: model.repository, placeholderSymbol: "square.grid.2x2")
+                                    Text(subject.name.isEmpty ? "Unnamed" : subject.name).font(.headline).lineLimit(1)
+                                    Text("\(subject.itemCount) items").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }.buttonStyle(.plain)
+                        }
+                    }
+                }
+            }.contentMargins(.top, topInset + 24).contentMargins(.horizontal, 24)
+        } else if let subjectsError {
+            ContentUnavailableView { Label("Subjects unavailable", systemImage: "square.grid.2x2") } description: { Text(subjectsError) } actions: { Button("Try Again") { Task { await model.reload() } } }
+        } else { ProgressView("Loading subjects…") }
     }
 
     private struct FolderLoadKey: Hashable {
@@ -681,6 +754,8 @@ struct AppShellView: View {
             model.installBackHandler(folderBack)
         } else if selectedDestination == .people && openedPersonID != nil {
             model.installBackHandler(closePerson)
+        } else if selectedDestination == .subjects && openedSubjectID != nil {
+            model.installBackHandler(closeSubject)
         } else if isAlbumBrowser {
             model.installBackHandler(closeAlbum)
         } else if isMapFilterBrowser {
@@ -793,41 +868,36 @@ struct AppShellView: View {
             }
             ToolbarSpacer(.fixed, placement: .primaryAction)
         } else if let collection = selectedCollection {
-            if selectedDestination == .people && openedPersonID != nil {
-                ToolbarItem(placement: .navigation) {
-                    Button(action: closePerson) { Image(systemName: "chevron.left").frame(width: ToolbarMetrics.controlHeight, height: ToolbarMetrics.controlHeight).contentShape(.circle) }
-                        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle())
-                        .accessibilityLabel("Back to People").help("Back to People")
-                }.sharedBackgroundVisibility(.hidden)
-            } else if isAlbumBrowser {
-                ToolbarItem(placement: .navigation) {
-                    Button(action: closeAlbum) {
-                        Image(systemName: "chevron.left")
-                            .frame(width: ToolbarMetrics.controlHeight,
-                                   height: ToolbarMetrics.controlHeight)
-                            .contentShape(.circle)
-                    }
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: Circle())
-                    .accessibilityLabel("Back to Albums")
-                    .help("Back to Albums")
-                }
-                .sharedBackgroundVisibility(.hidden)
-            } else if isMapFilterBrowser {
-                ToolbarItem(placement: .navigation) {
-                    Button(action: closeMapFilter) {
-                        Image(systemName: "chevron.left")
-                            .frame(width: ToolbarMetrics.controlHeight,
-                                   height: ToolbarMetrics.controlHeight)
-                            .contentShape(.circle)
-                    }
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: Circle())
-                    .accessibilityLabel("Back to Map")
-                    .help("Back to Map")
-                }
-                .sharedBackgroundVisibility(.hidden)
+            collectionToolbar(collection)
+        } else {
+            ToolbarItem(placement: .principal) {
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityHidden(true)
             }
+            .sharedBackgroundVisibility(.hidden)
+            ToolbarSpacer(.flexible, placement: .primaryAction)
+            if selectedDestination == .albums {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: model.beginEmptyAlbumCreation) {
+                        Image(systemName: "plus")
+                    }
+                    .help("New Album")
+                    .accessibilityLabel("New Album")
+                    .disabled(model.repository == nil || model.albumOperation != nil)
+                }
+            }
+        }
+
+        ToolbarItem(placement: .primaryAction) { DownloadsToolbarControl() }
+        ToolbarItem(placement: .primaryAction) {
+            ConnectionToolbarItem()
+        }
+    }
+
+    @ToolbarContentBuilder
+    private func collectionToolbar(_ collection: PhotoCollectionDescriptor) -> some ToolbarContent {
+            collectionBackToolbar
             ToolbarItem(placement: .navigation) {
                 LibrarySizeControl(value: $model.itemsPerRow)
             }
@@ -835,11 +905,55 @@ struct AppShellView: View {
                 BrowserThumbnailShapeControl(model: model)
                     .frame(height: ToolbarMetrics.controlHeight)
             }
+            collectionTitleToolbar
+            ToolbarSpacer(.flexible, placement: .primaryAction)
+            ToolbarItemGroup(placement: .primaryAction) {
+                LibraryFilterToolbarControl()
+                    .frame(height: ToolbarMetrics.controlHeight)
+                BrowserRotationControls(model: model)
+                    .frame(height: ToolbarMetrics.controlHeight)
+                BrowserFavoriteControl(model: model, collection: collection)
+                    .frame(height: ToolbarMetrics.controlHeight)
+                InfoPanelToolbarControl()
+                    .frame(height: ToolbarMetrics.controlHeight)
+            }
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+    }
+
+    private var collectionBackAction: (String, () -> Void)? {
+        if selectedDestination == .people && openedPersonID != nil { return ("Back to People", closePerson) }
+        if selectedDestination == .subjects && openedSubjectID != nil { return ("Back to Subjects", closeSubject) }
+        if isAlbumBrowser { return ("Back to Albums", closeAlbum) }
+        if isMapFilterBrowser { return ("Back to Map", closeMapFilter) }
+        return nil
+    }
+
+    @ToolbarContentBuilder
+    private var collectionBackToolbar: some ToolbarContent {
+        if let (label, action) = collectionBackAction {
+            ToolbarItem(placement: .navigation) {
+                Button(action: action) {
+                    Image(systemName: "chevron.left")
+                        .frame(width: ToolbarMetrics.controlHeight, height: ToolbarMetrics.controlHeight)
+                        .contentShape(.circle)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: Circle())
+                .accessibilityLabel(label).help(label)
+            }.sharedBackgroundVisibility(.hidden)
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var collectionTitleToolbar: some ToolbarContent {
             if selectedDestination == .personalLibrary && showsFolders {
                 ToolbarItem(placement: .principal) { Text(folderDirectory?.folder.displayName ?? "Folders").font(.headline).lineLimit(1) }
                 .sharedBackgroundVisibility(.hidden)
             } else if selectedDestination == .people {
                 ToolbarItem(placement: .principal) { Text(people?.first(where: { $0.id == openedPersonID })?.name ?? "Person").font(.headline).lineLimit(1) }
+                    .sharedBackgroundVisibility(.hidden)
+            } else if selectedDestination == .subjects {
+                ToolbarItem(placement: .principal) { Text(subjects?.first(where: { $0.id == openedSubjectID })?.name ?? "Subject").font(.headline).lineLimit(1) }
                     .sharedBackgroundVisibility(.hidden)
             } else if isAlbumBrowser {
                 ToolbarItem(placement: .principal) {
@@ -870,42 +984,6 @@ struct AppShellView: View {
                 }
                 .sharedBackgroundVisibility(.hidden)
             }
-            ToolbarSpacer(.flexible, placement: .primaryAction)
-            ToolbarItemGroup(placement: .primaryAction) {
-                LibraryFilterToolbarControl()
-                    .frame(height: ToolbarMetrics.controlHeight)
-                BrowserRotationControls(model: model)
-                    .frame(height: ToolbarMetrics.controlHeight)
-                BrowserFavoriteControl(model: model, collection: collection)
-                    .frame(height: ToolbarMetrics.controlHeight)
-                InfoPanelToolbarControl()
-                    .frame(height: ToolbarMetrics.controlHeight)
-            }
-            ToolbarSpacer(.fixed, placement: .primaryAction)
-        } else {
-            ToolbarItem(placement: .principal) {
-                Color.clear
-                    .frame(width: 1, height: 1)
-                    .accessibilityHidden(true)
-            }
-            .sharedBackgroundVisibility(.hidden)
-            ToolbarSpacer(.flexible, placement: .primaryAction)
-            if selectedDestination == .albums {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(action: model.beginEmptyAlbumCreation) {
-                        Image(systemName: "plus")
-                    }
-                    .help("New Album")
-                    .accessibilityLabel("New Album")
-                    .disabled(model.repository == nil || model.albumOperation != nil)
-                }
-            }
-        }
-
-        ToolbarItem(placement: .primaryAction) { DownloadsToolbarControl() }
-        ToolbarItem(placement: .primaryAction) {
-            ConnectionToolbarItem()
-        }
     }
 
 }

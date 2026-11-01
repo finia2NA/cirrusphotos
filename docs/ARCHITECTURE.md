@@ -169,3 +169,7 @@ The Library folder mode resolves the root using Folder v2 get, enumerates immedi
 ## People
 
 The People sidebar destination fetches the expanded, non-hidden Person v1 index in bounded pages, checking counts and unique identities before publishing a complete listing. Repository-owned jobs coalesce requests, fence resets, and store account-scoped summaries cached-first with once-per-run validation. Person IDs identify persistent collection descriptors: Timeline v6 and Item v7 reads carry the same person ID through the common metadata engine and browser. The face cover uses the existing thumbnail pipeline with the captured person thumbnail type and a separate cache identity. Person mutations are not implemented.
+
+## Subjects
+
+The Subjects destination reads the non-hidden Concept v2 index in bounded pages, checking counts and unique IDs before persisting account-scoped summaries. Repository-owned jobs coalesce, fence resets, and validate once per run while retaining stale cached data. Subject IDs identify persistent collection descriptors; Timeline v6 and Item v7 requests use the same concept ID through the shared metadata engine. Covers use the standard thumbnail pipeline.

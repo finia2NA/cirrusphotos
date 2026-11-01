@@ -111,6 +111,7 @@ public protocol PhotosTransport: Sendable {
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult
     func readAlbumCatalogBatch(albumID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry]
     func readFolderCatalogBatch(folderID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry]
+    func subjects() async throws -> [SubjectSummary]
     func people() async throws -> [PersonSummary]
     func folder(id: Int64) async throws -> FolderSummary
     func folders(parentID: Int64) async throws -> [FolderSummary]
@@ -178,6 +179,7 @@ public extension PhotosTransport {
     func incomingThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, reference: String, etag: String?, lastModified: String?) async throws -> ThumbnailResponse { throw SynologyAPIError.unsupported("Incoming album thumbnails are unavailable.") }
     func addItems(_ itemIDs: [Int64], toSharedAlbumReference reference: String) async throws { throw SynologyAPIError.unsupported("Shared album contribution is unavailable.") }
     func readFolderCatalogBatch(folderID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry] { throw SynologyAPIError.unsupported("Folder catalog unavailable.") }
+    func subjects() async throws -> [SubjectSummary] { throw SynologyAPIError.unsupported("Subjects unavailable.") }
     func people() async throws -> [PersonSummary] { throw SynologyAPIError.unsupported("People unavailable.") }
     func folder(id: Int64) async throws -> FolderSummary { throw SynologyAPIError.unsupported("Folder unavailable.") }
     func folders(parentID: Int64) async throws -> [FolderSummary] { throw SynologyAPIError.unsupported("Folders unavailable.") }

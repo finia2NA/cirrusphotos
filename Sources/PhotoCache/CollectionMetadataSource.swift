@@ -11,7 +11,7 @@ public enum CollectionMetadataSource {
     public static func membershipPolicy(for collection: PhotoCollectionDescriptor) -> CollectionMembershipPolicy {
         switch collection {
         case .personalLibrary: .itemInventory
-        case .favorites, .album, .incomingAlbum, .folder, .person: .authoritativePerRun
+        case .favorites, .album, .incomingAlbum, .folder, .person, .subject: .authoritativePerRun
         case .mapFilter, .libraryFilter: .sessionDerived
         }
     }

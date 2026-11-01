@@ -224,6 +224,30 @@ public actor SynologyClient: PhotosTransport {
         throw CollectionCatalogError.exceedsLimit
     }
 
+    public func subjects() async throws -> [SubjectSummary] {
+        struct List: Decodable { let list: [SubjectSummary] }
+        struct Count: Decodable { let count: Int }
+        guard let sid else { throw SynologyAPIError.api(119) }
+        func count() async throws -> Int {
+            let response: APIEnvelope<Count> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Browse.Concept", parameters: ["api": "SYNO.Foto.Browse.Concept", "version": "2", "method": "count", "show_hidden": "false", "_sid": sid], authenticated: true)
+            guard response.success, let value = response.data?.count, value >= 0, value <= 204_800 else { throw SynologyAPIError.invalidResponse }
+            return value
+        }
+        let expectedCount = try await count()
+        var result: [SubjectSummary] = []; var seen: Set<Int64> = []
+        for page in 0..<2048 {
+            let response: APIEnvelope<List> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Browse.Concept", parameters: ["api": "SYNO.Foto.Browse.Concept", "version": "2", "method": "list", "offset": String(page * 100), "limit": "100", "additional": "[\"thumbnail\"]", "show_hidden": "false", "_sid": sid], authenticated: true)
+            guard response.success, let rows = response.data?.list, rows.count <= 100 else { throw SynologyAPIError.invalidResponse }
+            for row in rows { guard row.id > 0, row.itemCount >= 0, seen.insert(row.id).inserted else { throw SynologyAPIError.invalidResponse } }
+            result.append(contentsOf: rows)
+            if rows.count < 100 {
+                guard result.count == expectedCount, try await count() == expectedCount else { throw SynologyAPIError.invalidResponse }
+                return result
+            }
+        }
+        throw CollectionCatalogError.exceedsLimit
+    }
+
     public func folder(id: Int64) async throws -> FolderSummary {
         struct Result: Decodable { let folder: FolderSummary }
         guard let sid else { throw SynologyAPIError.api(119) }
@@ -257,6 +281,7 @@ public actor SynologyClient: PhotosTransport {
         if let albumID = request.collection.albumID { parameters["album_id"] = String(albumID) }
         if let folderID = request.collection.folderID { parameters["folder_id"] = String(folderID) }
         if let personID = request.collection.personID { parameters["person_id"] = String(personID) }
+        if let subjectID = request.collection.subjectID { parameters["concept_id"] = String(subjectID) }
         if request.order == .takenTimeDescending {
             parameters["sort_by"] = "\"takentime\""; parameters["sort_direction"] = "\"desc\""
         }
@@ -280,6 +305,7 @@ public actor SynologyClient: PhotosTransport {
         ]
         if collection.favoriteOnly { parameters["favorite_only"] = "true" }
         if let personID = collection.personID { parameters["person_id"] = String(personID) }
+        if let subjectID = collection.subjectID { parameters["concept_id"] = String(subjectID) }
         let response: APIEnvelope<TimelineData> = try await post(
             path: "/webapi/entry.cgi/SYNO.Foto.Browse.Timeline",
             parameters: parameters, authenticated: true

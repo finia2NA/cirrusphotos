@@ -12,7 +12,7 @@ Authentication uses `USER` and `PW` from `.env`; `OTP` is optional for accounts 
 
 ## Current product surface
 
-The native split-view sidebar contains Library, Favorites, People, Map, and Albums destinations. The app restores the last persistent destination and collection-specific photo/date scroll anchors. Session Map filters are not restored.
+The native split-view sidebar contains Library, Favorites, People, Subjects, Map, and Albums destinations. The app restores the last persistent destination and collection-specific photo/date scroll anchors. Session Map filters are not restored.
 
 ### Library, Favorites, and albums
 
@@ -86,3 +86,7 @@ Photo capture times are treated as capture-local wall-clock values. Grouping and
 ## Deferred scope
 
 Generated people/subject albums, Shared Space browsing, place names, upload, sharing controls, and coordinated session renewal after expiry remain future work. New collection types should reuse the repository and shared browser rather than introduce destination-specific cache systems.
+
+## Subjects
+
+Subjects lists Synology’s recognized categories with their cover and item count. Opening a subject shows its photos in the shared browser, with the usual selection, viewer, and session metadata filters. The index and opened collections are cached-first and remain available when validation fails. Subject management is not implemented.

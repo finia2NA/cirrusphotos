@@ -105,6 +105,8 @@ extension CachedPhotosRepository {
         for job in metadata.pageJobs.values { job.task.cancel() }
         metadata.peopleJob?.task.cancel()
         metadata.peopleJob = nil
+        metadata.subjectsJob?.task.cancel()
+        metadata.subjectsJob = nil
         metadata.folderJobs.values.forEach { $0.task.cancel() }
         metadata.folderJobs.removeAll()
         metadata.albumListJob?.task.cancel()
