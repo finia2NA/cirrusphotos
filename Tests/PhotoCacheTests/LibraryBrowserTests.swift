@@ -507,6 +507,21 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         await window.cancelAll()
     }
 
+    func testWindowRetainsAllVisiblePagesBeyondPrefetchTarget() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let repository = try repository(root: root, transport: FakeTransport())
+        let sections = [section(5), section(4), section(3), section(2)]
+        for (offset, descriptor) in sections.enumerated() {
+            try await seed([try item(offset + 1)], section: descriptor, repository: repository)
+        }
+        let window = LibraryPageWindow(repository: repository, maximumPages: 2)
+        let index = LibraryIndex(snapshot: TimelineSnapshot(sections: sections))
+        await window.update(index: index, allowNetwork: false, visible: [0, 1, 2], prefetch: [3])
+        let loaded = await waitUntil { await window.retainedPages().map(\.sectionIndex) == [0, 1, 2] }
+        XCTAssertTrue(loaded)
+        await window.cancelAll()
+    }
+
     func testWindowRetryReopensFailedPageWithoutDroppingCachedPage() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
         let fake = FakeTransport()

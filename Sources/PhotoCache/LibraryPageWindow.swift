@@ -133,7 +133,6 @@ public actor LibraryPageWindow {
         var visibleSet: Set<Int> = []
         for section in visible where index.sections.indices.contains(section) {
             if visibleSet.insert(section).inserted { desired.append(section) }
-            if desired.count == maximumPages { break }
         }
         let visibleCount = desired.count
         for section in prefetch where desired.count < maximumPages &&

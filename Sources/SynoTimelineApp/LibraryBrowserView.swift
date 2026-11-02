@@ -1284,7 +1284,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                     }
                 }
             }
-            // At most eight current pages, plus immediate neighbors in either direction.
+            // Demand all viewport sections; immediate neighbors are optional prefetch.
             let first = visibleSections.first ?? 0, last = visibleSections.last ?? first
             var prefetch: [Int] = []
             if first > 0 { prefetch.append(first - 1) }

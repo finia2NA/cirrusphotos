@@ -163,11 +163,7 @@ final class LibraryFilterModel: ObservableObject {
             await install(registration)
             if needsInitialBatch && !event.progress.isDiscoveringCachedPages {
                 needsInitialBatch = false
-                if registration.snapshot.sections.isEmpty {
-                    await controller?.loadInitialBatch()
-                } else {
-                    await controller?.demandVisibleResultSections([0], direction: .older, userScrollGeneration: 0)
-                }
+                await controller?.startContinuousScan()
             }
         }
     }

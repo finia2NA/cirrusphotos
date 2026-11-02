@@ -105,6 +105,7 @@ public actor LibraryFilterController {
     private var invalidationTask: Task<Void, Never>?
     private var stopped = false
     private var scheduler: Task<Void, Never>?
+    private var continuousScan = false
     private var pending: [QueuedRead] = []
     private var activeIndices = Set<Int>()
     private var lastDemand: (direction: LibraryFilterScanDirection, sources: [Int], generation: UInt64)?
@@ -156,6 +157,8 @@ public actor LibraryFilterController {
 
     public func apply(_ filter: LibraryFilter) -> LibraryFilterRegistration {
         startCacheDiscovery()
+        continuousScan = false
+        pending.removeAll()
         activeFilter = filter
         descriptor = .libraryFilter(UUID(), scope: sourceCollection.contentScope)
         revision &+= 1
@@ -191,11 +194,24 @@ public actor LibraryFilterController {
                 candidates.append(contentsOf: (last + 1)..<states.count)
             }
         }
-        enqueue(candidates, useCachedPages: true, limit: 8)
+        enqueue(candidates.filter { states[$0] != .failed }, useCachedPages: true, limit: 8)
     }
 
     public func loadInitialBatch() {
         enqueue(states.indices.filter { states[$0] != .failed }, useCachedPages: true, limit: 8)
+    }
+
+    public func startContinuousScan() {
+        guard activeFilter != nil, !stopped else { return }
+        continuousScan = true
+        refillContinuousScan()
+    }
+
+    private func refillContinuousScan() {
+        guard continuousScan, activeFilter != nil else { return }
+        let capacity = max(0, 8 - pending.count - activeIndices.count)
+        guard capacity > 0 else { return }
+        enqueue(states.indices.filter { states[$0] != .failed }, useCachedPages: true, limit: capacity)
     }
 
     public func retryFailed() {
@@ -206,6 +222,8 @@ public actor LibraryFilterController {
     }
 
     public func unregisterFilter() {
+        continuousScan = false
+        pending.removeAll()
         activeFilter = nil
         descriptor = nil
         cachedRegistration = nil
@@ -372,6 +390,7 @@ public actor LibraryFilterController {
                 }
                 if changed { publish() }
             }
+            refillContinuousScan()
         }
         activeIndices.removeAll()
         scheduler = nil

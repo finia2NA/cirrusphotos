@@ -4,6 +4,53 @@ import SynologyAPI
 @testable import PhotoCache
 
 final class LibraryFilterControllerTests: XCTestCase {
+    func testClearingFilterStopsContinuousScheduling() async throws {
+        let root = temporaryTestRoot("FilterContinuousStop")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let snapshot = TimelineSnapshot(sections: sections(12))
+        let transport = ScannerTransport(snapshot: snapshot, pages: [:], delay: .milliseconds(150))
+        let controller = LibraryFilterController(repository: try repository(transport: transport, root: root), snapshot: snapshot)
+        _ = await controller.apply(LibraryFilter(cameras: ["Match"]))
+        await controller.indexCachedPages()
+        await controller.startContinuousScan()
+        let started = await waitUntil { await transport.requestCount() >= 2 }
+        XCTAssertTrue(started)
+        await controller.unregisterFilter()
+        try await Task.sleep(for: .milliseconds(400))
+        let calls = await transport.requestCount()
+        XCTAssertEqual(calls, 2)
+        await controller.shutdown()
+    }
+
+    func testContinuousScanPassesBatchBoundaryAndSkipsFailures() async throws {
+        let root = temporaryTestRoot("FilterContinuous")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = sections(12)
+        let snapshot = TimelineSnapshot(sections: source)
+        var pages: [Int: [PhotoItem]] = [:]
+        for index in source.indices {
+            pages[index] = [try item(Int64(index + 1), day: 1_713_571_200 - Int64(index * 86_400), camera: "Match")]
+        }
+        let transport = ScannerTransport(snapshot: snapshot, pages: pages, persistentFailures: [0])
+        let controller = LibraryFilterController(repository: try repository(transport: transport, root: root), snapshot: snapshot)
+        _ = await controller.apply(LibraryFilter(cameras: ["Match"]))
+        await controller.indexCachedPages()
+        await controller.startContinuousScan()
+        let finished = await waitUntil {
+            let progress = (await controller.currentEvent()).progress
+            return progress.verified + progress.failed == 12
+        }
+        XCTAssertTrue(finished)
+        let event = await controller.currentEvent()
+        XCTAssertGreaterThan(event.progress.verified, 8)
+        XCTAssertGreaterThanOrEqual(event.progress.failed, 1)
+        XCTAssertEqual(event.registration?.referencesBySection.flatMap { $0 }.count, event.progress.verified)
+        let calls = await transport.callCount(offset: 0)
+        let maximum = await transport.maximumConcurrentReads()
+        XCTAssertEqual(calls, 1)
+        XCTAssertLessThanOrEqual(maximum, 2)
+        await controller.shutdown()
+    }
     private func item(_ id: Int64, day: Int64, camera: String) throws -> PhotoItem {
         try JSONDecoder().decode(PhotoItem.self, from: Data("""
         {"id":\(id),"filename":"\(id).JPG","time":\(day),"type":"photo",
@@ -437,6 +484,7 @@ private actor ScannerTransport: PhotosTransport {
     let persistentFailures: Set<Int>
     let delay: Duration
     private var calls: [Int: Int] = [:]
+    private var requests = 0
     private var active = 0
     private var maximumActive = 0
 
@@ -451,6 +499,7 @@ private actor ScannerTransport: PhotosTransport {
     }
 
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
+        requests += 1
         let indices = snapshot.sections.indices.filter { position in
             guard let bounds = snapshot.sections[position].dateBounds else { return false }
             return bounds.start >= request.oldestDay.startTime && bounds.end <= request.newestDay.endTime
@@ -472,6 +521,7 @@ private actor ScannerTransport: PhotosTransport {
 
     func callCount(offset: Int) -> Int { calls[offset, default: 0] }
     func totalCalls() -> Int { calls.values.reduce(0, +) }
+    func requestCount() -> Int { requests }
     func maximumConcurrentReads() -> Int { maximumActive }
     func calledOffsets() -> Set<Int> { Set(calls.keys) }
 }
