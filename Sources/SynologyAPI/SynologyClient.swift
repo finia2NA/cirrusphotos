@@ -310,7 +310,13 @@ public actor SynologyClient: PhotosTransport {
         if request.order == .takenTimeDescending {
             parameters["sort_by"] = "\"takentime\""; parameters["sort_direction"] = "\"desc\""
         }
-        let response: APIEnvelope<ItemData> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Browse.Item", parameters: parameters, authenticated: true)
+        let path: String
+        if request.collection == .recentlyAdded {
+            parameters["api"] = "SYNO.Foto.Browse.RecentlyAdded"
+            parameters["version"] = "6"
+            path = "/webapi/entry.cgi/SYNO.Foto.Browse.RecentlyAdded"
+        } else { path = "/webapi/entry.cgi/SYNO.Foto.Browse.Item" }
+        let response: APIEnvelope<ItemData> = try await post(path: path, parameters: parameters, authenticated: true)
         guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
         return CollectionBatchResult(items: data.list, profile: fields)
     }
@@ -332,9 +338,14 @@ public actor SynologyClient: PhotosTransport {
         if let personID = collection.personID { parameters["person_id"] = String(personID) }
         if let subjectID = collection.subjectID { parameters["concept_id"] = String(subjectID) }
         if let tagID = collection.tagID { parameters["general_tag_id"] = String(tagID) }
+        let path: String
+        if collection == .recentlyAdded {
+            parameters["api"] = "SYNO.Foto.Browse.RecentlyAdded"
+            parameters["method"] = "get_timeline"
+            path = "/webapi/entry.cgi/SYNO.Foto.Browse.RecentlyAdded"
+        } else { path = "/webapi/entry.cgi/SYNO.Foto.Browse.Timeline" }
         let response: APIEnvelope<TimelineData> = try await post(
-            path: "/webapi/entry.cgi/SYNO.Foto.Browse.Timeline",
-            parameters: parameters, authenticated: true
+            path: path, parameters: parameters, authenticated: true
         )
         guard response.success, let data = response.data else { throw SynologyAPIError.api(response.error?.code ?? -1) }
         return data.section

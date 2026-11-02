@@ -177,3 +177,7 @@ The Subjects destination reads the non-hidden Concept v2 index in bounded pages,
 ## Tags
 
 The Tags destination reads the GeneralTag v2 index in bounded pages, checking counts and unique IDs before persisting account-scoped summaries. Repository-owned jobs coalesce, fence resets, and validate once per run while retaining stale cached data. Tag IDs identify persistent collection descriptors; Timeline v6 and Item v7 requests use the same general tag ID through the shared metadata engine. Covers use the standard thumbnail pipeline.
+
+## Recently Added
+
+Recently Added uses the `Browse.RecentlyAdded` v6 timeline and item list. Timeline/day-page membership uses the returned `indexed_time` (milliseconds converted to seconds); canonical `PhotoItem.time` remains capture time. Page acquisition validates the indexing day against its requested section and fails closed when indexing time is missing or inconsistent. The shared metadata engine, account-scoped catalog and pages, browser, and filter registration retain server order and index-day grouping. The server determines the collection window; the exact expiry boundary is not inferred locally.

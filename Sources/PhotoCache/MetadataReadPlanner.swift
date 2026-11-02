@@ -24,7 +24,10 @@ public struct CollectionReadBatch: Sendable {
         var materialized: [[PhotoItem]] = []
         for page in pages {
             let slice = Array(result.items[position..<(position + page.count)])
-            guard try slice.allSatisfy({ try CaptureDay(time: $0.time) == page.address.day }) else {
+            guard try slice.allSatisfy({ item in
+                guard let time = page.address.collection.membershipTime(for: item) else { return false }
+                return try CaptureDay(time: time) == page.address.day
+            }) else {
                 throw CollectionCatalogError.invalidCoverage
             }
             materialized.append(slice)

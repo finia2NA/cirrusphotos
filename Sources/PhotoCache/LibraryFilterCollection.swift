@@ -78,7 +78,9 @@ extension CachedPhotosRepository {
                         let slots = references.map { reference -> PhotoItemSlot in
                             let id = reference.itemID
                             guard let detail = details[id], let item = detail.item,
-                                  state.registration.filter.matches(item), (try? CaptureDay(time: item.time)) == address.day else {
+                                  state.registration.filter.matches(item),
+                                  let time = state.registration.sourceCollection.membershipTime(for: item),
+                                  (try? CaptureDay(time: time)) == address.day else {
                                 return PhotoItemSlot(itemID: id, item: nil, verified: false)
                             }
                             return PhotoItemSlot(itemID: id, item: item, verified: detail.verified && reference.sourceVerified)

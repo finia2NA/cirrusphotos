@@ -56,6 +56,7 @@ struct AppShellView: View {
             if showsFolders { folderDirectoryRequest == (folderPath.last ?? 0) ? folderDirectory.map { .folder($0.folder.id) } : nil }
             else { .personalLibrary }
         case .favorites: .favorites
+        case .recentlyAdded: .recentlyAdded
         case .people: openedPersonID.map { .person($0) }
         case .subjects: openedSubjectID.map { .subject($0) }
         case .tags: openedTagID.map { .tag($0) }
@@ -107,6 +108,8 @@ struct AppShellView: View {
                 Label("Library", systemImage: "photo.on.rectangle.angled")
                     .tag(SidebarSelection.destination(.personalLibrary))
                 Section("Collections") {
+                    Label("Recently Added", systemImage: "clock")
+                        .tag(SidebarSelection.destination(.recentlyAdded))
                     Label("Favorites", systemImage: "heart")
                         .tag(SidebarSelection.destination(.favorites))
                     Label("People", systemImage: "person.2")
@@ -173,6 +176,7 @@ struct AppShellView: View {
             dismissWindow(id: InfoPanelScene.id)
         }
         .task {
+            if selectedDestination == .recentlyAdded { model.ensureCollectionLoaded(.recentlyAdded) }
             guard selectedDestination == .albums || !albumPresentation.pinnedCollections.isEmpty else { return }
             model.ensureAlbumsLoaded()
             if let collection = openedAlbum { model.ensureCollectionLoaded(collection) }
@@ -681,6 +685,8 @@ struct AppShellView: View {
             navigationRestoration.setOpenedAlbum(id)
             model.ensureAlbumsLoaded()
             model.ensureCollectionLoaded(id)
+        case .destination(.recentlyAdded):
+            model.ensureCollectionLoaded(.recentlyAdded)
         case .destination(.albums):
             if returningToAlbums, let id = openedAlbum {
                 model.ensureCollectionLoaded(id)

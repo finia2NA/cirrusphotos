@@ -352,7 +352,10 @@ extension DiskCache {
             let id = sqlite3_column_int64(statement, 1)
             let item = try metadataBlob(statement, 2).map { try JSONDecoder().decode(PhotoItem.self, from: $0) }
             guard item == nil || item?.id == id else { throw CacheError.storage }
-            if let item, (try? CaptureDay(time: item.time)) != address.day { membershipVerified = false }
+            if let item {
+                let time = address.collection.membershipTime(for: item)
+                if time.flatMap({ try? CaptureDay(time: $0) }) != address.day { membershipVerified = false }
+            }
             let detailVerified = sqlite3_column_int64(statement, 3) == state.resetEpoch && columnString(statement, 4) == currentRun
             slots.append(PhotoItemSlot(itemID: id, item: item, verified: membershipVerified && detailVerified))
         }
@@ -372,7 +375,10 @@ extension DiskCache {
                                   namespace: MetadataNamespace, currentRun: String,
                                   admission: MetadataStoreAdmission) throws {
         guard items.count == page.count, Set(items.map(\.id)).count == items.count,
-              try items.allSatisfy({ try CaptureDay(time: $0.time) == page.address.day }) else { throw CollectionCatalogError.invalidCoverage }
+              try items.allSatisfy({ item in
+                  guard let time = page.address.collection.membershipTime(for: item) else { return false }
+                  return try CaptureDay(time: time) == page.address.day
+              }) else { throw CollectionCatalogError.invalidCoverage }
         try metadataTransaction {
             try admit(admission, namespace: namespace)
             let key = CollectionKey(namespace: namespace, collection: page.address.collection)

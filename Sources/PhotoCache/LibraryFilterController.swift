@@ -418,8 +418,9 @@ public actor LibraryFilterController {
         if !verified && states[sectionIndex] == .verified { return false }
         let records = items.enumerated().compactMap { offset, optional -> LibraryFilterRecord? in
             guard let item = optional else { return nil }
+            guard let time = sourceCollection.membershipTime(for: item) else { return nil }
             return LibraryFilterRecord(reference: .init(sourceSectionIndex: sectionIndex, sourcePageOffset: offset, itemID: item.id, sourceVerified: verified),
-                                       time: item.time, values: LibraryFilterValues(item))
+                                       time: time, values: LibraryFilterValues(item))
         }
         let nextState: LibraryFilterSectionState = verified ? .verified : .provisional
         guard recordsBySection[sectionIndex] != records || states[sectionIndex] != nextState else { return false }

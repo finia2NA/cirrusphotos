@@ -250,7 +250,7 @@ final class LibraryModel: ObservableObject {
             case .personalLibrary: title = "Personal Library"
             case .favorites: title = "Favorites"
             case .album(let id): title = albumName(for: collection) ?? "Album \(id)"
-            case .incomingAlbum, .folder, .person, .subject, .tag, .mapFilter, .libraryFilter: continue
+            case .recentlyAdded, .incomingAlbum, .folder, .person, .subject, .tag, .mapFilter, .libraryFilter: continue
             }
             if timelineVerified(for: collection), let snapshot = snapshot(for: collection) {
                 targets.append(.init(collection: collection, snapshot: snapshot,

@@ -12,7 +12,7 @@ Authentication uses `USER` and `PW` from `.env`; `OTP` is optional for accounts 
 
 ## Current product surface
 
-The native split-view sidebar contains Library, Favorites, People, Subjects, Tags, Map, and Albums destinations. The app restores the last persistent destination and collection-specific photo/date scroll anchors. Session Map filters are not restored.
+The native split-view sidebar contains Library, Favorites, Recently Added, People, Subjects, Tags, Map, and Albums destinations. The app restores the last persistent destination and collection-specific photo/date scroll anchors. Session Map filters are not restored.
 
 ### Library, Favorites, and albums
 
@@ -94,3 +94,7 @@ Subjects lists Synology’s recognized categories with their cover and item coun
 ## Tags
 
 Tags lists Synology tags with their cover and item count. Opening a tag shows its photos in the shared browser, with selection, viewer and session metadata filters. The index and opened collections are cached-first and remain available when validation fails. Tag editing is not implemented.
+
+### Recently Added
+
+Recently Added shows the NAS collection in the shared browser, grouped by indexing day and ordered by the server. Capture dates remain available in photo metadata. Its timeline and requested pages are cached-first and remain available when validation fails. Membership is determined by the NAS; it is not calculated from a client-side age threshold.

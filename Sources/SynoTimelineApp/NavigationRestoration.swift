@@ -13,7 +13,7 @@ struct PhotoTimelineRestorationAnchor: Codable, Equatable {
 /// from the destination itself so the last opened album or location filter survives a
 /// switch away from it.
 enum LibraryDestination: String, Codable, Hashable, Sendable, CaseIterable {
-    case personalLibrary, favorites, albums, map, people, subjects, tags
+    case personalLibrary, favorites, recentlyAdded, albums, map, people, subjects, tags
 }
 
 enum SidebarSelection: Codable, Hashable {

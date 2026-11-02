@@ -33,6 +33,8 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
     /// Format with a GMT calendar/time zone; converting through the computer's current
     /// time zone changes the time the camera recorded.
     public let time: Int64
+    /// Server indexing timestamp, in milliseconds since the Unix epoch.
+    public let indexedTime: Int64?
     public let type: String
     public let liveType: String?
     public let filesize: Int64?
@@ -44,6 +46,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id, filename, time, type, filesize, additional
+        case indexedTime = "indexed_time"
         case liveType = "live_type"
     }
 
@@ -573,6 +576,7 @@ public struct ExifInfo: Codable, Sendable, Equatable {
 public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable {
     case personalLibrary
     case favorites
+    case recentlyAdded
     /// A Personal Space album, identified by its Synology album id.
     case album(Int64)
     /// An album shared by another user; both IDs are needed to avoid collisions.
@@ -593,6 +597,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
         switch self {
         case .personalLibrary: "personal"
         case .favorites: "favorites"
+        case .recentlyAdded: "recently-added"
         case .album(let id): "album:\(id)"
         case .incomingAlbum(let ownerID, let albumID): "incoming:\(ownerID):\(albumID)"
         case .folder(let id): "folder:\(id)"
@@ -640,6 +645,11 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
     public var isLibraryFilter: Bool { libraryFilterID != nil }
     public var isSessionDerived: Bool { isMapFilter || isLibraryFilter }
 
+    public func membershipTime(for item: PhotoItem) -> Int64? {
+        if self == .recentlyAdded { return item.indexedTime.map { $0 / 1000 } }
+        return item.time
+    }
+
     public var favoriteOnly: Bool { self == .favorites }
     public var supportsInitialTimeline: Bool { self == .personalLibrary }
 
@@ -651,6 +661,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
         switch rawValue {
         case "personal": self = .personalLibrary
         case "favorites": self = .favorites
+        case "recently-added": self = .recentlyAdded
         default:
             let albumPrefix = "album:"
             if rawValue.hasPrefix(albumPrefix),
