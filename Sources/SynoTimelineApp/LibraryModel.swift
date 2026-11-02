@@ -535,7 +535,7 @@ final class LibraryModel: ObservableObject {
     }
 
     var canRotateThumbnails: Bool {
-        canRotate && allowsPersonalActions(in: activeViewer?.collection ?? browserCommandSnapshot.collection)
+        canRotate && allowsSpaceItemActions(in: activeViewer?.collection ?? browserCommandSnapshot.collection)
     }
 
     func rotateThumbnailPreviews(_ direction: PhotoRotationDirection) {

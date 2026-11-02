@@ -319,13 +319,11 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
                                      filename: filename, variant: variant, itemID: id)
     }
 
-    /// Additional clockwise quarter turns required after ImageIO has applied the
-    /// stored original's EXIF orientation. Synology normal rotation changes
-    /// `orientation` while leaving `orientation_original` and original bytes intact.
+    /// Additional clockwise quarter turns after the served file's EXIF transform.
     /// Mirrored EXIF orientations form their own four-state rotation cycle.
-    public var originalDisplayQuarterTurns: Int {
+    public func displayQuarterTurns(fileOrientation: Int?) -> Int {
         guard let current = additional?.orientation,
-              let original = additional?.orientationOriginal else { return 0 }
+              let original = fileOrientation ?? additional?.orientationOriginal else { return 0 }
         let cycles = [[1, 6, 3, 8], [2, 7, 4, 5]]
         for cycle in cycles {
             guard let originalIndex = cycle.firstIndex(of: original),

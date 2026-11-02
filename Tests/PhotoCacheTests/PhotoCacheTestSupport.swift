@@ -63,9 +63,6 @@ extension PhotosTransport {
         throw TestFailure("Unexpected Diff request")
     }
 
-    func setRegenerating(itemIDs: [Int64]) async throws -> [RegeneratingThumbnailUnit] { throw TestFailure("Unexpected regeneration") }
-    func restoreFromRegenerating(unitIDs: [Int64]) async throws { throw TestFailure("Unexpected regeneration restore") }
-    func uploadConvertedThumbnails(unitID: Int64, files: ConvertedThumbnailFiles) async throws { throw TestFailure("Unexpected converted upload") }
 
     func fullImage(
         _ resource: FullImageResource,

@@ -236,6 +236,60 @@ final class RotationTests: XCTestCase {
         XCTAssertEqual(cachedItem.additional?.thumbnail?.cacheKey, "set-committed")
     }
 
+    func testSharedAutomaticRepairUploadsWithSharedScope() async throws {
+        let root = temporaryTestRoot("SharedAutomaticRepair")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let image = try patternedImage(width: 72, height: 108)
+        let originalData = try encoded(image, type: .jpeg)
+        let wrong = try encoded(ThumbnailOrientationMatcher.rotate(image, clockwiseQuarterTurns: -1), type: .jpeg)
+        let original = try item(24, width: 72, height: 108)
+        let refreshed = try item(24, key: "new", width: 72, height: 108)
+        let transport = RotationTransport(thumbnails: [.sm: wrong, .m: wrong, .xl: wrong],
+                                          original: originalData, refreshed: refreshed)
+        let repository = try repository(transport, root: root)
+        let action = SelectionRotationAction(itemIDs: [24], sectionsByID: [:],
+                                             collection: .library(.shared), itemsByID: [24: original])
+        var final: ThumbnailRotationProgress?
+        for await progress in await repository.fixThumbnailRotations(action) { final = progress }
+        XCTAssertEqual(final?.stage, .finished)
+        XCTAssertTrue(final?.failures.isEmpty == true)
+        let calls = await transport.thumbnailOperationSpaces
+        XCTAssertEqual(calls, [.shared, .shared])
+        let uploaded = await transport.uploadedUnits
+        XCTAssertEqual(uploaded, [124])
+    }
+
+    func testSharedThumbnailRotationUsesSharedScopeThroughRecovery() async throws {
+        let root = temporaryTestRoot("SharedThumbnailRecovery")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = try item(7)
+        let transport = RotationTransport(thumbnail: try jpeg(), refreshed: original, failUpload: true)
+        let repository = try repository(transport, root: root)
+        let action = SelectionRotationAction(itemIDs: [7], sectionsByID: [:],
+                                             collection: .library(.shared), itemsByID: [7: original])
+        var final: ThumbnailRotationProgress?
+        for await progress in await repository.rotateThumbnails(action, direction: .clockwise) { final = progress }
+        XCTAssertEqual(final?.failures.count, 1)
+        let calls = await transport.thumbnailOperationSpaces
+        XCTAssertEqual(calls, [.shared, .shared, .shared])
+        let restored = await transport.restoredUnits
+        XCTAssertEqual(restored, [[107]])
+    }
+
+    func testMatcherUsesOrientationOfServedOriginal() throws {
+        let source = try patternedImage(width: 72, height: 108)
+        let result = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(result, UTType.jpeg.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, source, [kCGImagePropertyOrientation: 6] as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let original = result as Data
+        let thumbnail = try encoded(ThumbnailOrientationMatcher.rotate(source, clockwiseQuarterTurns: 1), type: .jpeg)
+        let metadata = try item(20, orientation: 6)
+        let match = try ThumbnailOrientationMatcher.match(originalData: original, item: metadata,
+            thumbnails: [.sm: thumbnail, .m: thumbnail, .xl: thumbnail])
+        XCTAssertEqual(match.clockwiseQuarterTurns, 0)
+    }
+
     func testAutomaticMatcherSupportsImageIOOriginalFormats() throws {
         let source = try patternedImage(width: 72, height: 108)
         let wrongThumbnail = try encoded(
@@ -512,6 +566,7 @@ private actor RotationTransport: PhotosTransport {
     var currentItem: PhotoItem
     var rotateCalls: [([Int64], PhotoRotationDirection)] = []
     var regenerationCalls: [[Int64]] = []
+    var thumbnailOperationSpaces: [PhotoSpace] = []
     var restoredUnits: [[Int64]] = []
     var uploadedUnits: [Int64] = []
     var uploadedFiles: [ConvertedThumbnailFiles] = []
@@ -569,7 +624,8 @@ private actor RotationTransport: PhotosTransport {
                    lastModified: String?) async throws -> ThumbnailResponse {
         ThumbnailResponse(data: thumbnails[size], etag: nil, lastModified: nil)
     }
-    func setRegenerating(itemIDs: [Int64]) async throws -> [RegeneratingThumbnailUnit] {
+    func setRegenerating(itemIDs: [Int64], space: PhotoSpace) async throws -> [RegeneratingThumbnailUnit] {
+        thumbnailOperationSpaces.append(space)
         regenerationCalls.append(itemIDs)
         if setCommitsThenThrows {
             currentItem = refreshed
@@ -577,7 +633,7 @@ private actor RotationTransport: PhotosTransport {
         }
         return [RegeneratingThumbnailUnit(itemID: itemIDs.first, unitID: (itemIDs.first ?? 0) + 100)]
     }
-    func restoreFromRegenerating(unitIDs: [Int64]) async throws { restoredUnits.append(unitIDs) }
+    func restoreFromRegenerating(unitIDs: [Int64], space: PhotoSpace) async throws { thumbnailOperationSpaces.append(space); restoredUnits.append(unitIDs) }
     func uploadConvertedThumbnails(unitID: Int64, files: ConvertedThumbnailFiles) async throws {
         uploadedUnits.append(unitID)
         uploadedFiles.append(files)
@@ -588,9 +644,10 @@ private actor RotationTransport: PhotosTransport {
         if failUpload { throw TestFailure("upload failed") }
     }
     func uploadConvertedThumbnails(
-        unitID: Int64, files: ConvertedThumbnailFiles,
+        unitID: Int64, files: ConvertedThumbnailFiles, space: PhotoSpace,
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws {
+        thumbnailOperationSpaces.append(space)
         progress(TransferProgress(completedBytes: 50, totalBytes: 100))
         try await uploadConvertedThumbnails(unitID: unitID, files: files)
         progress(TransferProgress(completedBytes: 100, totalBytes: 100))

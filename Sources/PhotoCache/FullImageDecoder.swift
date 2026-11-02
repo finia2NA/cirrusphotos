@@ -7,8 +7,8 @@ public final class FullImageBitmap: @unchecked Sendable {
     public var byteCount: Int { image.bytesPerRow * image.height }
     init(_ image: CGImage) { self.image = image }
 
-    /// Applies only Synology's display-orientation delta. The decoder has already
-    /// applied the original file's EXIF transform, so this must never be used for
+    /// Applies only the remaining display-orientation delta. The decoder has already
+    /// applied the served file's EXIF transform, so this must never be used for
     /// server-generated thumbnails.
     public func rotatedForDisplay(quarterTurns: Int) throws -> FullImageBitmap {
         let turns = ((quarterTurns % 4) + 4) % 4
@@ -56,6 +56,12 @@ public actor FullImageDecoder {
         self.maximumBytes = max(4, maximumBytes)
     }
 
+    public nonisolated static func fileOrientation(_ data: Data) -> Int? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else { return nil }
+        return (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue
+    }
+
     public func decode(_ data: Data) async throws -> FullImageBitmap {
         try await acquire()
         defer { release() }
@@ -76,7 +82,7 @@ public actor FullImageDecoder {
             guard width * height * bytesPerPixel <= Double(budget) else {
                 throw FullImageDecodeError.tooLarge
             }
-            // ImageIO applies the original's orientation exactly once, at full pixel size.
+            // ImageIO applies the served file's orientation exactly once, at full pixel size.
             guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,

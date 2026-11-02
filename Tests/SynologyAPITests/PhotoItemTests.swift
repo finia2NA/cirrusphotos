@@ -84,14 +84,18 @@ final class PhotoItemTests: XCTestCase {
             {"id":1,"time":1700000000,"type":"photo","additional":{"orientation":\(current),"orientation_original":\(original)}}
             """.utf8))
         }
-        XCTAssertEqual(try item(original: 1, current: 1).originalDisplayQuarterTurns, 0)
-        XCTAssertEqual(try item(original: 1, current: 6).originalDisplayQuarterTurns, 1)
-        XCTAssertEqual(try item(original: 1, current: 3).originalDisplayQuarterTurns, 2)
-        XCTAssertEqual(try item(original: 1, current: 8).originalDisplayQuarterTurns, -1)
-        XCTAssertEqual(try item(original: 2, current: 7).originalDisplayQuarterTurns, 1)
-        XCTAssertEqual(try item(original: 7, current: 5).originalDisplayQuarterTurns, 2)
-        XCTAssertEqual(try item(original: 5, current: 4).originalDisplayQuarterTurns, -1)
-        XCTAssertEqual(try item(original: 1, current: 2).originalDisplayQuarterTurns, 0)
+        XCTAssertEqual(try item(original: 1, current: 1).displayQuarterTurns(fileOrientation: nil), 0)
+        XCTAssertEqual(try item(original: 1, current: 6).displayQuarterTurns(fileOrientation: nil), 1)
+        XCTAssertEqual(try item(original: 1, current: 3).displayQuarterTurns(fileOrientation: nil), 2)
+        XCTAssertEqual(try item(original: 1, current: 8).displayQuarterTurns(fileOrientation: nil), -1)
+        XCTAssertEqual(try item(original: 2, current: 7).displayQuarterTurns(fileOrientation: nil), 1)
+        XCTAssertEqual(try item(original: 7, current: 5).displayQuarterTurns(fileOrientation: nil), 2)
+        XCTAssertEqual(try item(original: 5, current: 4).displayQuarterTurns(fileOrientation: nil), -1)
+        XCTAssertEqual(try item(original: 1, current: 2).displayQuarterTurns(fileOrientation: nil), 0)
+        let rotated = try item(original: 1, current: 6)
+        XCTAssertEqual(rotated.displayQuarterTurns(fileOrientation: 1), 1)
+        XCTAssertEqual(rotated.displayQuarterTurns(fileOrientation: 6), 0)
+        XCTAssertEqual(rotated.displayQuarterTurns(fileOrientation: nil), 1)
     }
     func testOrientationIsDecodedButDoesNotRotateServerResolutionAgain() throws {
         for orientation in [1, 3, 6, 8] {
