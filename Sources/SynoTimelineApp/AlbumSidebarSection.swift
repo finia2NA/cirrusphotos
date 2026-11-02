@@ -47,6 +47,7 @@ private struct AlbumSidebarRow: View {
     @ObservedObject var presentation: AlbumPresentationStore
     @State private var dragPreview: NSImage?
     @State private var confirmDelete = false
+    @State private var rename = false
     var body: some View {
         HStack(spacing: 8) {
             AlbumCoverView(thumbnail: album?.thumbnail, repository: repository, collection: id,
@@ -64,10 +65,13 @@ private struct AlbumSidebarRow: View {
                 Divider()
                 AlbumDownloadCommands(albumID: albumID, repository: repository)
                 Divider()
+                Button("Rename Album…") { rename = true }
+                    .disabled(model.deletingAlbumID != nil || model.albumOperation != nil || album.type != "normal")
                 Button("Delete Album…", role: .destructive) { confirmDelete = true }
                     .disabled(model.deletingAlbumID != nil || model.albumOperation != nil || album.type != "normal")
             }
         }
+        .sheet(isPresented: $rename) { if let album { AlbumRenameView(album: album) } }
         .alert("Delete Album?", isPresented: $confirmDelete) {
             Button("Delete Album", role: .destructive) { if let albumID = id.albumID { model.deleteAlbum(albumID) } }
             Button("Cancel", role: .cancel) {}

@@ -572,6 +572,15 @@ public actor SynologyClient: PhotosTransport {
         guard response.success else { throw SynologyAPIError.api(response.error?.code ?? -1) }
     }
 
+    public func renameAlbum(id: Int64, name: String) async throws {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        let encodedName = String(decoding: try JSONEncoder().encode(name), as: UTF8.self)
+        let response: APIEnvelope<EmptyData> = try await post(path: "/webapi/entry.cgi/SYNO.Foto.Browse.Album",
+            parameters: ["api": "SYNO.Foto.Browse.Album", "version": "1", "method": "set_name",
+                         "id": String(id), "name": encodedName, "_sid": sid], authenticated: true)
+        guard response.success else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+    }
+
     public func addItems(_ itemIDs: [Int64], toAlbum id: Int64) async throws {
         _ = try await albumMutation(method: "add_item", parameters: ["id": String(id), "item": Self.idArray(itemIDs)], requireData: true)
     }

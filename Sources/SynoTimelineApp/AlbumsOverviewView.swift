@@ -89,6 +89,7 @@ private struct AlbumCardView: View {
     let onOpen: () -> Void
     @State private var dragPreview: NSImage?
     @State private var confirmDelete = false
+    @State private var rename = false
 
     var body: some View {
         Button(action: onOpen) {
@@ -111,10 +112,13 @@ private struct AlbumCardView: View {
             }
             if !album.isIncoming {
                 Divider()
+                Button("Rename Album…") { rename = true }
+                    .disabled(model.deletingAlbumID != nil || model.albumOperation != nil || album.type != "normal")
                 Button("Delete Album…", role: .destructive) { confirmDelete = true }
                     .disabled(model.deletingAlbumID != nil || model.albumOperation != nil || album.type != "normal")
             }
         }
+        .sheet(isPresented: $rename) { AlbumRenameView(album: album) }
         .alert("Delete Album?", isPresented: $confirmDelete) {
             Button("Delete Album", role: .destructive) { model.deleteAlbum(album.id) }
             Button("Cancel", role: .cancel) {}

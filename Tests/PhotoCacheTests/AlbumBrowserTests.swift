@@ -150,6 +150,15 @@ private actor AlbumFakeTransport: PhotosTransport {
         albumEntriesByID[id] = nil
     }
 
+    func renameAlbum(id: Int64, name: String) async throws {
+        mutationWrites += 1
+        if mutationFails { throw TestFailure("Album rename failed") }
+        guard let index = albumList.firstIndex(where: { $0.id == id }) else { throw TestFailure("Missing album") }
+        let old = albumList[index]
+        albumList[index] = AlbumSummary(id: old.id, name: name, itemCount: old.itemCount, type: old.type,
+                                         ownerUserID: old.ownerUserID, shared: old.shared, sharingInfo: old.sharingInfo)
+    }
+
     func addItems(_ itemIDs: [Int64], toAlbum id: Int64) async throws {
         mutationWrites += 1
         writtenIDs = itemIDs
@@ -308,6 +317,25 @@ final class AlbumBrowserTests: XCTestCase {
         var verified: [AlbumSummary]?
         for await event in await repository.albums() { if case .value(let albums, true) = event { verified = albums } }
         XCTAssertEqual(verified?.map(\.id), [55])
+        let writes = await transport.mutationWrites
+        XCTAssertEqual(writes, 1)
+    }
+
+    func testAlbumRenameRefreshesAndRequiresOwnership() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let info = AlbumSharingInfo(privacyType: "private", expiration: 0, permission: [], reference: "fixture-reference")
+        await transport.configure(albumList: [.init(id: 54, name: "Owned", itemCount: 0, type: "normal", ownerUserID: 11, shared: true, sharingInfo: info),
+                                              .init(id: 55, name: "Other", itemCount: 0, type: "normal", ownerUserID: 12)])
+        let repository = try makeRepository(root: root, transport: transport)
+        do { try await repository.renameAlbum(id: 55, name: "Denied"); XCTFail("Non-owner rename accepted") } catch {}
+        try await repository.renameAlbum(id: 54, name: " Updated ")
+        var verified: [AlbumSummary]?
+        for await event in await repository.albums() { if case .value(let albums, true) = event { verified = albums } }
+        let renamed = verified?.first { $0.id == 54 }
+        XCTAssertEqual(renamed?.name, "Updated")
+        XCTAssertEqual(renamed?.shared, true)
+        XCTAssertEqual(renamed?.sharingInfo?.privacyType, "private")
         let writes = await transport.mutationWrites
         XCTAssertEqual(writes, 1)
     }

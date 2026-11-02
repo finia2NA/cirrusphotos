@@ -741,6 +741,20 @@ final class LibraryModel: ObservableObject {
         }
     }
 
+    func renameAlbum(_ id: Int64, name: String) async throws {
+        guard deletingAlbumID == nil, albumOperation == nil, let repository else {
+            throw SynologyAPIError.unsupported("Another album change is in progress. Try again.")
+        }
+        deletingAlbumID = id
+        defer {
+            deletingAlbumID = nil
+            albumsTask?.cancel()
+            albumsTask = nil
+            ensureAlbumsLoaded()
+        }
+        try await repository.renameAlbum(id: id, name: name)
+    }
+
     func isNormalAlbum(_ id: Int64?) -> Bool {
         isKnownNormalAlbum(id, in: albums)
     }

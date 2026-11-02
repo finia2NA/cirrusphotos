@@ -17,6 +17,22 @@ extension CachedPhotosRepository {
         }
     }
 
+    public func renameAlbum(id: Int64, name: String) async throws {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw SynologyAPIError.unsupported("Enter an album name.") }
+        try await performAlbumMutation(albumID: id) { repository in
+            let user = try await repository.client.currentPhotosUserID()
+            let album = try await repository.client.album(id: id)
+            guard album.type == "normal", album.ownerUserID == user else {
+                throw SynologyAPIError.unsupported("Only the owner can rename a normal album.")
+            }
+            try await repository.client.renameAlbum(id: id, name: trimmed)
+            guard try await repository.client.album(id: id).name == trimmed else {
+                throw SynologyAPIError.unsupported("The server did not confirm the album name.")
+            }
+        }
+    }
+
     func createAlbum(name: String, itemIDs: [Int64]) async throws -> AlbumSummary {
         try await performAlbumMutation(albumID: nil) { repository in
             try await repository.client.createAlbum(name: name, itemIDs: itemIDs)
