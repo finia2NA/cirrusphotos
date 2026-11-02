@@ -207,11 +207,10 @@ final class LibraryModel: ObservableObject {
         }
     }
 
-    /// Starts loading an album timeline lazily. Non-album collections are ignored;
-    /// Personal Library and Favorites are loaded eagerly by `load()`, and session
-    /// collections (map filters) own their snapshots.
+    /// Starts loading a persistent collection lazily. Session-derived collections
+    /// own their snapshots and are registered separately.
     func ensureCollectionLoaded(_ collection: PhotoCollectionDescriptor) {
-        guard collection.usesItemCatalog else { return }
+        guard !collection.isSessionDerived else { return }
         openedCollections.insert(collection)
         startCollectionFetchIfNeeded(collection)
     }
@@ -1098,7 +1097,7 @@ final class LibraryModel: ObservableObject {
         for collection in PhotoCollectionDescriptor.allCases {
             startCollectionFetchIfNeeded(collection)
         }
-        for collection in openedCollections where collection.albumID != nil {
+        for collection in openedCollections {
             startCollectionFetchIfNeeded(collection)
         }
         if albumListRequested { startAlbumListFetchIfNeeded() }
