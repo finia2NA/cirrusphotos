@@ -118,6 +118,43 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         XCTAssertEqual(closes, 2)
     }
 
+    func testMouseWheelZoomsAroundPointerAndUpdatesControl() {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        let anchor = CGPoint(x: 500, y: 350)
+        var reportedZoom: CGFloat = 0
+        canvas.onZoomChanged = { reportedZoom = $0 }
+        let original = canvas.presentedImageFrame
+
+        canvas.routeMouseWheelZoom(deltaY: 3, anchor: anchor)
+
+        let enlarged = canvas.presentedImageFrame
+        XCTAssertGreaterThan(canvas.currentZoom, 1)
+        XCTAssertEqual(reportedZoom, canvas.currentZoom, accuracy: 0.0001)
+        XCTAssertEqual((anchor.x - original.minX) / original.width,
+                       (anchor.x - enlarged.minX) / enlarged.width, accuracy: 0.0001)
+        XCTAssertEqual((anchor.y - original.minY) / original.height,
+                       (anchor.y - enlarged.minY) / enlarged.height, accuracy: 0.0001)
+
+        canvas.routeMouseWheelZoom(deltaY: -3, anchor: anchor)
+        XCTAssertEqual(canvas.currentZoom, 1, accuracy: 0.0001)
+        XCTAssertEqual(reportedZoom, 1, accuracy: 0.0001)
+    }
+
+    func testMouseWheelZoomRespectsBoundsAndIgnoresInvalidDeltas() {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        var updates = 0
+        canvas.onZoomChanged = { _ in updates += 1 }
+        canvas.routeMouseWheelZoom(deltaY: 0, anchor: .zero)
+        canvas.routeMouseWheelZoom(deltaY: .nan, anchor: .zero)
+        XCTAssertEqual(updates, 0)
+        canvas.routeMouseWheelZoom(deltaY: 10_000, anchor: .zero)
+        XCTAssertEqual(canvas.currentZoom, 16)
+        canvas.routeMouseWheelZoom(deltaY: -10_000, anchor: .zero)
+        XCTAssertEqual(canvas.currentZoom, 1)
+    }
+
     func testDownwardTwoFingerSwipeBeginsAndCommitsInteractiveDismissal() async {
         let (canvas, window) = makeCanvas()
         defer { window.orderOut(nil) }
