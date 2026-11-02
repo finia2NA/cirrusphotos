@@ -63,7 +63,7 @@ enum ThumbnailOrientationMatcher {
         guard let decodedOriginal = decode(originalData) else {
             throw ThumbnailOrientationMatchError.undecodableOriginal
         }
-        let reference = try rotate(decodedOriginal, clockwiseQuarterTurns: item.originalDisplayQuarterTurns)
+        let reference = try rotate(decodedOriginal, clockwiseQuarterTurns: item.displayQuarterTurns(fileOrientation: FullImageDecoder.fileOrientation(originalData)))
         let referenceRaster = try raster(reference)
         var winners: [ThumbnailSize: Int] = [:]
         var allScores: [ThumbnailSize: [Double]] = [:]

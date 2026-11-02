@@ -13,6 +13,11 @@ final class SharedMediaTransportTests: XCTestCase {
         try await client.setFavorite(itemIDs: [5], favorite: true, space: .shared)
         try await client.setFavorite(itemIDs: [5], favorite: false, space: .shared)
         try await client.rotate(itemIDs: [5], direction: .counterClockwise, space: .shared)
+        let units = try await client.setRegenerating(itemIDs: [5], space: .shared)
+        XCTAssertEqual(units.first?.unitID, 9)
+        try await client.restoreFromRegenerating(unitIDs: [9], space: .shared)
+        let body = SynologyClient.convertedThumbnailMultipartBody(boundary: "test", unitID: 9, files: .init(sm: Data([1]), m: Data([2]), xl: Data([3])), space: .shared)
+        XCTAssertTrue(String(decoding: body, as: UTF8.self).contains("SYNO.FotoTeam.Upload.ConvertedFile"))
         let still = try await client.fullImage(.init(scope: .space(.shared), unitID: 9, cacheKey: "revision"))
         XCTAssertNotNil(still.data)
         let download = try await client.downloadPhotos(itemIDs: [5], kind: .original, space: .shared, progress: { _ in })
@@ -65,7 +70,16 @@ private final class SharedMediaProtocol: URLProtocol, @unchecked Sendable {
         if api == "SYNO.API.Auth" { payload = Data(#"{"success":true,"data":{"sid":"fixture"}}"#.utf8) }
         else {
             XCTAssertTrue(api.hasPrefix("SYNO.FotoTeam."))
-            if api.hasSuffix("Browse.Item") {
+            if api.hasSuffix("RegeneratePreview") {
+                if values["method"] == "set_regenerating" {
+                    XCTAssertEqual(values["item_id"], "[5]")
+                    payload = Data(#"{"success":true,"data":{"list":[{"item_id":5,"unit_id":9}]}}"#.utf8)
+                } else {
+                    XCTAssertEqual(values["method"], "restore_from_regenerating")
+                    XCTAssertEqual(values["unit_id"], "[9]")
+                    payload = Data(#"{"success":true,"data":{}}"#.utf8)
+                }
+            } else if api.hasSuffix("Browse.Item") {
                 XCTAssertEqual(values["version"], "7")
                 XCTAssertEqual(values["id"], "[5]")
                 if values["method"] == "set_favorite" { XCTAssertTrue(["true", "false"].contains(values["favorite"] ?? "")) }

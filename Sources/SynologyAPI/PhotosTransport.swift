@@ -172,13 +172,10 @@ public protocol PhotosTransport: Sendable {
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem]
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse
 
-    func setRegenerating(itemIDs: [Int64]) async throws -> [RegeneratingThumbnailUnit]
-    func restoreFromRegenerating(unitIDs: [Int64]) async throws
-    func uploadConvertedThumbnails(unitID: Int64, files: ConvertedThumbnailFiles) async throws
-    func uploadConvertedThumbnails(
-        unitID: Int64, files: ConvertedThumbnailFiles,
-        progress: @escaping @Sendable (TransferProgress) -> Void
-    ) async throws
+    func setRegenerating(itemIDs: [Int64], space: PhotoSpace) async throws -> [RegeneratingThumbnailUnit]
+    func restoreFromRegenerating(unitIDs: [Int64], space: PhotoSpace) async throws
+    func uploadConvertedThumbnails(unitID: Int64, files: ConvertedThumbnailFiles, space: PhotoSpace,
+                                   progress: @escaping @Sendable (TransferProgress) -> Void) async throws
 
     func fullImage(_ resource: FullImageResource,
                    etag: String?, lastModified: String?) async throws -> FullImageResponse
@@ -264,12 +261,10 @@ public extension PhotosTransport {
         throw SynologyAPIError.unsupported("Shared album downloads are unavailable.")
     }
 
-    func uploadConvertedThumbnails(
-        unitID: Int64, files: ConvertedThumbnailFiles,
-        progress: @escaping @Sendable (TransferProgress) -> Void
-    ) async throws {
-        try await uploadConvertedThumbnails(unitID: unitID, files: files)
-    }
+    func setRegenerating(itemIDs: [Int64], space: PhotoSpace) async throws -> [RegeneratingThumbnailUnit] { throw SynologyAPIError.unsupported("Thumbnail regeneration unavailable.") }
+    func restoreFromRegenerating(unitIDs: [Int64], space: PhotoSpace) async throws { throw SynologyAPIError.unsupported("Thumbnail regeneration unavailable.") }
+    func uploadConvertedThumbnails(unitID: Int64, files: ConvertedThumbnailFiles, space: PhotoSpace,
+                                   progress: @escaping @Sendable (TransferProgress) -> Void) async throws { throw SynologyAPIError.unsupported("Thumbnail regeneration unavailable.") }
 
     func fullImage(
         _ resource: FullImageResource, etag: String?, lastModified: String?,

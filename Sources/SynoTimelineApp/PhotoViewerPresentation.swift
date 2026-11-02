@@ -410,7 +410,7 @@ final class PhotoViewerPresentation: ObservableObject {
                 let bitmap = try await FullImageDecoder.shared.decode(data)
                 guard !Task.isCancelled, self?.state?.selection == selection else { return }
                 let displayBitmap = try bitmap.rotatedForDisplay(
-                    quarterTurns: self?.state?.item?.originalDisplayQuarterTurns ?? 0
+                    quarterTurns: self?.state?.item?.displayQuarterTurns(fileOrientation: FullImageDecoder.fileOrientation(data)) ?? 0
                 )
                 SynologyDiagnostics.decoding.info(
                     "Full-size decode succeeded item_id=\(selection.itemID ?? -1, privacy: .public) width=\(bitmap.image.width, privacy: .public) height=\(bitmap.image.height, privacy: .public) generation=\(selection.generation, privacy: .public)"

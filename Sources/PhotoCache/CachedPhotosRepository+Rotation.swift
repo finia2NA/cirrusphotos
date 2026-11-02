@@ -142,10 +142,11 @@ extension CachedPhotosRepository {
         operation: ThumbnailRotationOperation,
         continuation: AsyncStream<ThumbnailRotationProgress>.Continuation
     ) async {
+        let space: PhotoSpace
         do {
             let source = mediaCollection(for: action.collection)
-            let space = source.albumID != nil ? try await albumItemSpace(itemIDs: action.itemIDs, collection: source) : source.contentScope.space
-            guard space == .personal else { throw SynologyAPIError.unsupported("Thumbnail rotation requires verified Personal Space items.") }
+            guard source.incomingAlbumIdentity == nil, !source.isSessionDerived else { throw SynologyAPIError.unsupported("Thumbnail rotation is unavailable for this collection.") }
+            space = try await itemActionSpace(itemIDs: action.itemIDs, collection: source)
         } catch {
             let message = error.localizedDescription
             continuation.yield(.init(completedItems: 0, totalItems: action.itemIDs.count, itemID: nil,
@@ -160,7 +161,7 @@ extension CachedPhotosRepository {
         var activity: [String] = []
         var claimedIDs: Set<Int64> = []
         defer {
-            for id in claimedIDs { itemMutations.pendingIDs.remove(PhotoItemIdentity(scope: .space(.personal), itemID: id)) }
+            for id in claimedIDs { itemMutations.pendingIDs.remove(PhotoItemIdentity(scope: .space(space), itemID: id)) }
         }
         continuation.yield(.init(completedItems: 0, totalItems: total, itemID: nil,
                                  stage: .preparing, activity: activity))
@@ -175,6 +176,20 @@ extension CachedPhotosRepository {
                                      activity: activity))
             continuation.finish(); return
         }
+        let operationItems: [Int64: PhotoItem]
+        do {
+            if mediaCollection(for: action.collection).albumID != nil {
+                operationItems = Dictionary(uniqueKeysWithValues: try await lookupAllRotationItems(action.itemIDs, space: space).map { ($0.id, $0) })
+            } else {
+                operationItems = action.itemsByID
+            }
+        } catch {
+            let message = error.localizedDescription
+            continuation.yield(.init(completedItems: 0, totalItems: total, itemID: nil,
+                                     stage: .finished, failures: [message], activity: [message]))
+            continuation.finish()
+            return
+        }
         for id in action.itemIDs {
             if Task.isCancelled {
                 SynologyDiagnostics.rotations.info(
@@ -184,7 +199,7 @@ extension CachedPhotosRepository {
                 activity.append("Photo \(id): cancelled before processing.")
                 break
             }
-            guard !itemMutations.pendingIDs.contains(PhotoItemIdentity(scope: .space(.personal), itemID: id)) else {
+            guard !itemMutations.pendingIDs.contains(PhotoItemIdentity(scope: .space(space), itemID: id)) else {
                 SynologyDiagnostics.rotations.error(
                     "Thumbnail rotation rejected pending item item_id=\(id, privacy: .public)"
                 )
@@ -193,9 +208,9 @@ extension CachedPhotosRepository {
                 completed += 1
                 continue
             }
-            itemMutations.pendingIDs.insert(PhotoItemIdentity(scope: .space(.personal), itemID: id))
+            itemMutations.pendingIDs.insert(PhotoItemIdentity(scope: .space(space), itemID: id))
             claimedIDs.insert(id)
-            guard let item = action.itemsByID[id], let descriptor = item.additional?.thumbnail,
+            guard let item = operationItems[id], let descriptor = item.additional?.thumbnail,
                   item.hasDisplayableStillImage else {
                 SynologyDiagnostics.rotations.error(
                     "Thumbnail rotation missing eligible descriptor item_id=\(id, privacy: .public)"
@@ -203,7 +218,7 @@ extension CachedPhotosRepository {
                 failures.append("Photo \(id) does not have three replaceable thumbnails.")
                 activity.append("Photo \(id): failed — replaceable thumbnails are unavailable.")
                 completed += 1
-                itemMutations.pendingIDs.remove(PhotoItemIdentity(scope: .space(.personal), itemID: id))
+                itemMutations.pendingIDs.remove(PhotoItemIdentity(scope: .space(space), itemID: id))
                 claimedIDs.remove(id)
                 continue
             }
@@ -235,7 +250,7 @@ extension CachedPhotosRepository {
                         throw SynologyAPIError.unsupported("The \(size.rawValue) thumbnail is not ready.")
                     }
                     let response = try await client.thumbnail(descriptor, size: size,
-                                                              space: .personal, etag: nil, lastModified: nil)
+                                                              space: space, etag: nil, lastModified: nil)
                     guard let data = response.data else { throw SynologyAPIError.invalidResponse }
                     downloaded[size] = data
                     completedThumbnailDownloadBytes += Self.estimatedDownloadBytes(for: size)
@@ -259,7 +274,7 @@ extension CachedPhotosRepository {
                 case .manual(let direction):
                     clockwiseQuarterTurns = direction == .clockwise ? 1 : -1
                 case .automatic:
-                    guard let resource = item.fullImageResource(in: .space(.personal)) else {
+                    guard let resource = item.fullImageResource(in: .space(space)) else {
                         throw SynologyAPIError.unsupported("A full-size image is unavailable.")
                     }
                     let downloadActivity = activity
@@ -311,7 +326,7 @@ extension CachedPhotosRepository {
                     )
                     activity.append("Photo \(id): already correct.")
                     completed += 1
-                    itemMutations.pendingIDs.remove(PhotoItemIdentity(scope: .space(.personal), itemID: id))
+                    itemMutations.pendingIDs.remove(PhotoItemIdentity(scope: .space(space), itemID: id))
                     claimedIDs.remove(id)
                     continue
                 }
@@ -330,25 +345,26 @@ extension CachedPhotosRepository {
                 )
                 let units: [RegeneratingThumbnailUnit]
                 do {
-                    units = try await client.setRegenerating(itemIDs: [id])
+                    units = try await client.setRegenerating(itemIDs: [id], space: space)
                 } catch {
                     Self.logRotationFailure(
                         "set_regenerating", itemID: id, unitID: descriptor.unitID, error: error
                     )
                     await recoverThumbnailAfterAmbiguousFailure(
                         action: action, itemID: id, descriptor: descriptor,
-                        unitIDs: [descriptor.unitID],
+                        unitIDs: [descriptor.unitID], space: space,
                         mutationCacheEpoch: mutationCacheEpoch
                     )
                     throw error
                 }
-                guard let unit = units.first, units.count == 1 else {
+                guard let unit = units.first, units.count == 1, unit.unitID == descriptor.unitID,
+                      unit.itemID == nil || unit.itemID == id else {
                     SynologyDiagnostics.rotations.error(
                         "Unexpected set_regenerating result item_id=\(id, privacy: .public) descriptor_unit_id=\(descriptor.unitID, privacy: .public) returned_units=\(units.count, privacy: .public)"
                     )
                     await recoverThumbnailAfterAmbiguousFailure(
                         action: action, itemID: id, descriptor: descriptor,
-                        unitIDs: Array(Set(units.map(\.unitID) + [descriptor.unitID])),
+                        unitIDs: [descriptor.unitID], space: space,
                         mutationCacheEpoch: mutationCacheEpoch
                     )
                     throw SynologyAPIError.invalidResponse
@@ -365,7 +381,7 @@ extension CachedPhotosRepository {
                     let uploadFailures = failures
                     let uploadCompleted = completed
                     try await client.uploadConvertedThumbnails(
-                        unitID: unit.unitID, files: files,
+                        unitID: unit.unitID, files: files, space: space,
                         progress: { transfer in
                             continuation.yield(.init(
                                 completedItems: uploadCompleted, totalItems: total, itemID: id,
@@ -380,12 +396,12 @@ extension CachedPhotosRepository {
                                              itemID: id, stage: .refreshing, failures: failures,
                                              itemProgress: 1, activity: activity))
                     let refreshedItem = try await waitForThumbnailRevision(itemID: id,
-                                                                           oldCacheKey: descriptor.cacheKey)
+                                                                           oldCacheKey: descriptor.cacheKey, space: space)
                     await patchRotationPages(action: action, replacements: [id: refreshedItem], metadataEpoch: mutationCacheEpoch)
-                    itemMutations.publish(PhotoItemChange(items: [id: refreshedItem]))
+                    itemMutations.publish(PhotoItemChange(items: [id: refreshedItem], scope: .space(space)))
                     let source = mediaCollection(for: action.collection)
                     if source.albumID != nil {
-                        await patchRotationSpace([id: refreshedItem], space: .personal, epoch: mutationCacheEpoch)
+                        await patchRotationSpace([id: refreshedItem], space: space, epoch: mutationCacheEpoch)
                         itemMutations.publish(PhotoItemChange(items: [id: refreshedItem], scope: source.contentScope))
                     }
                     activity.append("Photo \(id): applied \(Self.rotationDescription(clockwiseQuarterTurns)).")
@@ -398,7 +414,7 @@ extension CachedPhotosRepository {
                     )
                     await recoverThumbnailAfterAmbiguousFailure(
                         action: action, itemID: id, descriptor: descriptor,
-                        unitIDs: [unit.unitID],
+                        unitIDs: [unit.unitID], space: space,
                         mutationCacheEpoch: mutationCacheEpoch
                     )
                     throw error
@@ -418,7 +434,7 @@ extension CachedPhotosRepository {
                 activity.append("Photo \(id): failed — \(error.localizedDescription)")
             }
             completed += 1
-            itemMutations.pendingIDs.remove(PhotoItemIdentity(scope: .space(.personal), itemID: id))
+            itemMutations.pendingIDs.remove(PhotoItemIdentity(scope: .space(space), itemID: id))
             claimedIDs.remove(id)
         }
         continuation.yield(.init(completedItems: completed, totalItems: total, itemID: nil,
@@ -485,7 +501,7 @@ extension CachedPhotosRepository {
         return 0.5 * min(1, max(0, Double(completedBytes) / Double(totalBytes)))
     }
 
-    private func lookupAllRotationItems(_ ids: [Int64], space: PhotoSpace = .personal) async throws -> [PhotoItem] {
+    private func lookupAllRotationItems(_ ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] {
         var result: [PhotoItem] = []
         for start in stride(from: 0, to: ids.count, by: 1_000) {
             let requested = Array(ids[start..<min(start + 1_000, ids.count)])
@@ -496,11 +512,11 @@ extension CachedPhotosRepository {
         return result
     }
 
-    private func waitForThumbnailRevision(itemID: Int64, oldCacheKey: String) async throws -> PhotoItem {
+    private func waitForThumbnailRevision(itemID: Int64, oldCacheKey: String, space: PhotoSpace) async throws -> PhotoItem {
         for attempt in 0..<8 {
             try Task.checkCancellation()
-            if let item = try await lookupAllRotationItems([itemID]).first {
-                let changed = item.additional?.thumbnail?.cacheKey != oldCacheKey
+            if let item = try await lookupAllRotationItems([itemID], space: space).first {
+                let changed = item.additional?.thumbnail.map { $0.cacheKey != oldCacheKey } ?? false
                 SynologyDiagnostics.rotations.debug(
                     "Polled thumbnail revision item_id=\(itemID, privacy: .public) attempt=\(attempt + 1, privacy: .public) changed=\(changed, privacy: .public)"
                 )
@@ -511,14 +527,14 @@ extension CachedPhotosRepository {
         throw SynologyAPIError.invalidResponse
     }
 
-    private func restoreRegeneratingUnits(_ unitIDs: [Int64]) async {
+    private func restoreRegeneratingUnits(_ unitIDs: [Int64], space: PhotoSpace) async {
         let client = client
         SynologyDiagnostics.rotations.info(
             "Restoring regenerating thumbnail units count=\(unitIDs.count, privacy: .public) first_unit_id=\(unitIDs.first ?? -1, privacy: .public)"
         )
         await Task.detached(priority: .utility) {
             do {
-                try await client.restoreFromRegenerating(unitIDs: unitIDs)
+                try await client.restoreFromRegenerating(unitIDs: unitIDs, space: space)
                 SynologyDiagnostics.rotations.info(
                     "Restored regenerating thumbnail units count=\(unitIDs.count, privacy: .public) first_unit_id=\(unitIDs.first ?? -1, privacy: .public)"
                 )
@@ -535,14 +551,15 @@ extension CachedPhotosRepository {
         itemID: Int64,
         descriptor: ThumbnailInfo,
         unitIDs: [Int64],
+        space: PhotoSpace,
         mutationCacheEpoch: UInt64
     ) async {
-        await restoreRegeneratingUnits(unitIDs)
+        await restoreRegeneratingUnits(unitIDs, space: space)
         let client = client
         let refreshed = await Task.detached(priority: .utility) { () -> PhotoItem? in
             for attempt in 0..<8 {
-                if let item = try? await client.items(ids: [itemID], space: .personal).first,
-                   item.additional?.thumbnail?.cacheKey != descriptor.cacheKey {
+                if let item = try? await client.items(ids: [itemID], space: space).first,
+                   item.additional?.thumbnail.map({ $0.cacheKey != descriptor.cacheKey }) == true {
                     SynologyDiagnostics.rotations.info(
                         "Reconciled advanced thumbnail revision after failure item_id=\(itemID, privacy: .public) attempt=\(attempt + 1, privacy: .public)"
                     )
@@ -559,10 +576,10 @@ extension CachedPhotosRepository {
             return
         }
         await patchRotationPages(action: action, replacements: [itemID: refreshed], metadataEpoch: mutationCacheEpoch)
-        itemMutations.publish(PhotoItemChange(items: [itemID: refreshed]))
+        itemMutations.publish(PhotoItemChange(items: [itemID: refreshed], scope: .space(space)))
         let source = mediaCollection(for: action.collection)
         if source.albumID != nil {
-            await patchRotationSpace([itemID: refreshed], space: .personal, epoch: mutationCacheEpoch)
+            await patchRotationSpace([itemID: refreshed], space: space, epoch: mutationCacheEpoch)
             itemMutations.publish(PhotoItemChange(items: [itemID: refreshed], scope: source.contentScope))
         }
     }

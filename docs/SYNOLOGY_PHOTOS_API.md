@@ -101,6 +101,15 @@ as proof that a routing field was literally absent. Rotation diagnostics use the
 subsystem and the `repository.rotations` / `transport.rotations` categories to identify that stage
 without logging credentials, session material, cache keys, filenames, URLs, or response bodies.
 
+## Shared Space thumbnail regeneration
+
+The NAS advertises `SYNO.FotoTeam.RegeneratePreview` v1 and
+`SYNO.FotoTeam.Upload.ConvertedFile` v3. The application infers the Personal Space
+request shapes and recovery workflow for these Shared Space counterparts. API
+availability does not establish write behavior; this workflow has not yet been
+verified against a disposable Shared Space photo. The application keeps all
+reads, writes, recovery and cache updates in the resolved space.
+
 ## Personal Space rotation
 
 An authorized clockwise/inverse probe against `cirrus` on 2026-10-09 confirmed the Photos web

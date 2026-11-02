@@ -691,7 +691,7 @@ public actor SynologyClient: PhotosTransport {
         guard response.data?.errorList.isEmpty == true else { throw SynologyAPIError.invalidResponse }
     }
 
-    public func setRegenerating(itemIDs: [Int64]) async throws -> [RegeneratingThumbnailUnit] {
+    public func setRegenerating(itemIDs: [Int64], space: PhotoSpace) async throws -> [RegeneratingThumbnailUnit] {
         guard let sid else { throw SynologyAPIError.api(119) }
         guard !itemIDs.isEmpty else { return [] }
         SynologyDiagnostics.rotationTransport.info(
@@ -702,7 +702,7 @@ public actor SynologyClient: PhotosTransport {
             response = try await post(
                 path: "/webapi/entry.cgi",
                 parameters: [
-                    "api": "SYNO.Foto.RegeneratePreview", "version": "1",
+                    "api": space == .personal ? "SYNO.Foto.RegeneratePreview" : "SYNO.FotoTeam.RegeneratePreview", "version": "1",
                     "method": "set_regenerating", "item_id": Self.idArray(itemIDs), "_sid": sid,
                 ], authenticated: true
             )
@@ -724,7 +724,7 @@ public actor SynologyClient: PhotosTransport {
         return data.list.map { RegeneratingThumbnailUnit(itemID: $0.itemID, unitID: $0.unitID) }
     }
 
-    public func restoreFromRegenerating(unitIDs: [Int64]) async throws {
+    public func restoreFromRegenerating(unitIDs: [Int64], space: PhotoSpace) async throws {
         guard let sid else { throw SynologyAPIError.api(119) }
         guard !unitIDs.isEmpty else { return }
         SynologyDiagnostics.rotationTransport.info(
@@ -735,7 +735,7 @@ public actor SynologyClient: PhotosTransport {
             response = try await post(
                 path: "/webapi/entry.cgi",
                 parameters: [
-                    "api": "SYNO.Foto.RegeneratePreview", "version": "1",
+                    "api": space == .personal ? "SYNO.Foto.RegeneratePreview" : "SYNO.FotoTeam.RegeneratePreview", "version": "1",
                     "method": "restore_from_regenerating", "unit_id": Self.idArray(unitIDs), "_sid": sid,
                 ], authenticated: true
             )
@@ -756,12 +756,8 @@ public actor SynologyClient: PhotosTransport {
         )
     }
 
-    public func uploadConvertedThumbnails(unitID: Int64, files: ConvertedThumbnailFiles) async throws {
-        try await uploadConvertedThumbnails(unitID: unitID, files: files, progress: { _ in })
-    }
-
     public func uploadConvertedThumbnails(
-        unitID: Int64, files: ConvertedThumbnailFiles,
+        unitID: Int64, files: ConvertedThumbnailFiles, space: PhotoSpace,
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws {
         guard let sid else { throw SynologyAPIError.api(119) }
@@ -770,7 +766,7 @@ public actor SynologyClient: PhotosTransport {
         )
         let boundary = "SynoTimeline-\(UUID().uuidString)"
         let body = Self.convertedThumbnailMultipartBody(
-            boundary: boundary, unitID: unitID, files: files
+            boundary: boundary, unitID: unitID, files: files, space: space
         )
 
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
@@ -830,7 +826,7 @@ public actor SynologyClient: PhotosTransport {
     }
 
     static func convertedThumbnailMultipartBody(
-        boundary: String, unitID: Int64, files: ConvertedThumbnailFiles
+        boundary: String, unitID: Int64, files: ConvertedThumbnailFiles, space: PhotoSpace = .personal
     ) -> Data {
         var body = Data()
         func append(_ string: String) { body.append(Data(string.utf8)) }
@@ -839,7 +835,7 @@ public actor SynologyClient: PhotosTransport {
         // variant added `_sid` and sorted these fields; that request received API error
         // 101, so keep this body byte-shape aligned with the confirmed working request.
         let fields = [
-            ("api", "SYNO.Foto.Upload.ConvertedFile"),
+            ("api", space == .personal ? "SYNO.Foto.Upload.ConvertedFile" : "SYNO.FotoTeam.Upload.ConvertedFile"),
             ("version", "3"),
             ("method", "upload"),
             ("unit_id", String(unitID)),
