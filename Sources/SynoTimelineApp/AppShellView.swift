@@ -15,6 +15,9 @@ struct AppShellView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var viewer: PhotoViewerPresentation?
     @State private var selectedDestination: LibraryDestination
+    @State private var openedTagID: Int64?
+    @State private var tags: [TagSummary]?
+    @State private var tagsError: String?
     @State private var openedSubjectID: Int64?
     @State private var subjects: [SubjectSummary]?
     @State private var subjectsError: String?
@@ -55,6 +58,7 @@ struct AppShellView: View {
         case .favorites: .favorites
         case .people: openedPersonID.map { .person($0) }
         case .subjects: openedSubjectID.map { .subject($0) }
+        case .tags: openedTagID.map { .tag($0) }
         case .albums: openedAlbum
         case .map: openedMapFilter
         }
@@ -109,6 +113,8 @@ struct AppShellView: View {
                         .tag(SidebarSelection.destination(.people))
                     Label("Subjects", systemImage: "square.grid.2x2")
                         .tag(SidebarSelection.destination(.subjects))
+                    Label("Tags", systemImage: "tag")
+                        .tag(SidebarSelection.destination(.tags))
                     Label("Map", systemImage: "map")
                         .tag(SidebarSelection.destination(.map))
                 }
@@ -141,6 +147,8 @@ struct AppShellView: View {
         .onChange(of: folderPath) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
         .task(id: PeopleLoadKey(namespace: model.presentationNamespace, active: selectedDestination == .people, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadPeople() }
         .task(id: SubjectsLoadKey(namespace: model.presentationNamespace, active: selectedDestination == .subjects, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadSubjects() }
+        .task(id: TagsLoadKey(namespace: model.presentationNamespace, active: selectedDestination == .tags, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadTags() }
+        .onChange(of: openedTagID) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
         .onChange(of: openedSubjectID) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
         .onChange(of: openedPersonID) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
         .task(id: FolderLoadKey(namespace: model.presentationNamespace, active: selectedDestination == .personalLibrary && showsFolders, id: folderPath.last ?? 0, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadFolder() }
@@ -306,6 +314,10 @@ struct AppShellView: View {
                         .ignoresSafeArea(.container, edges: .top)
                 } else if selectedDestination == .subjects {
                     subjectsDetail(topInset: topInset)
+                        .allowsHitTesting(viewer == nil)
+                        .ignoresSafeArea(.container, edges: .top)
+                } else if selectedDestination == .tags {
+                    tagsDetail(topInset: topInset)
                         .allowsHitTesting(viewer == nil)
                         .ignoresSafeArea(.container, edges: .top)
                 } else if selectedDestination == .map {
@@ -476,6 +488,67 @@ struct AppShellView: View {
         } else if let subjectsError {
             ContentUnavailableView { Label("Subjects unavailable", systemImage: "square.grid.2x2") } description: { Text(subjectsError) } actions: { Button("Try Again") { Task { await model.reload() } } }
         } else { ProgressView("Loading subjects…") }
+    }
+
+    private struct TagsLoadKey: Hashable {
+        let namespace: String?
+        let active: Bool
+        let resetRevision: UInt64
+        let retryRevision: Int
+    }
+
+    private func loadTags() async {
+        guard selectedDestination == .tags, let repository = model.repository else { return }
+        let restored = navigationRestoration.prepareTag(namespace: repository.namespace)
+        openedTagID = restored
+        if let restored { model.ensureCollectionLoaded(.tag(restored)) }
+        tags = nil; tagsError = nil
+        for await event in await repository.tags() {
+            guard !Task.isCancelled else { return }
+            switch event {
+            case .value(let list, let verified):
+                tags = list
+                if verified, let id = openedTagID, !list.contains(where: { $0.id == id }) {
+                    openedTagID = nil; navigationRestoration.setOpenedTag(nil)
+                }
+            case .failure(let error): tagsError = error
+            }
+        }
+    }
+
+    private func closeTag() {
+        openedTagID = nil
+        navigationRestoration.setOpenedTag(nil)
+        updateBackHandler(); updateInfoPanelContext()
+    }
+
+    @ViewBuilder private func tagsDetail(topInset: CGFloat) -> some View {
+        if let tags {
+            ScrollView {
+                if let tagsError { Text(tagsError).font(.caption).foregroundStyle(.secondary) }
+                if tags.isEmpty { ContentUnavailableView("No Tags", systemImage: "tag") }
+                else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140, maximum: 220), spacing: 20)], alignment: .leading, spacing: 20) {
+                        ForEach(tags) { tag in
+                            Button {
+                                openedTagID = tag.id
+                                navigationRestoration.setOpenedTag(tag.id)
+                                model.ensureCollectionLoaded(.tag(tag.id))
+                                updateBackHandler(); updateInfoPanelContext()
+                            } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    AlbumCoverView(thumbnail: tag.thumbnail, repository: model.repository, placeholderSymbol: "tag")
+                                    Text(tag.name.isEmpty ? "Unnamed" : tag.name).font(.headline).lineLimit(1)
+                                    Text("\(tag.itemCount) items").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }.buttonStyle(.plain)
+                        }
+                    }
+                }
+            }.contentMargins(.top, topInset + 24).contentMargins(.horizontal, 24)
+        } else if let tagsError {
+            ContentUnavailableView { Label("Tags unavailable", systemImage: "tag") } description: { Text(tagsError) } actions: { Button("Try Again") { Task { await model.reload() } } }
+        } else { ProgressView("Loading tags…") }
     }
 
     private struct FolderLoadKey: Hashable {
@@ -756,6 +829,8 @@ struct AppShellView: View {
             model.installBackHandler(closePerson)
         } else if selectedDestination == .subjects && openedSubjectID != nil {
             model.installBackHandler(closeSubject)
+        } else if selectedDestination == .tags && openedTagID != nil {
+            model.installBackHandler(closeTag)
         } else if isAlbumBrowser {
             model.installBackHandler(closeAlbum)
         } else if isMapFilterBrowser {
@@ -923,6 +998,7 @@ struct AppShellView: View {
     private var collectionBackAction: (String, () -> Void)? {
         if selectedDestination == .people && openedPersonID != nil { return ("Back to People", closePerson) }
         if selectedDestination == .subjects && openedSubjectID != nil { return ("Back to Subjects", closeSubject) }
+        if selectedDestination == .tags && openedTagID != nil { return ("Back to Tags", closeTag) }
         if isAlbumBrowser { return ("Back to Albums", closeAlbum) }
         if isMapFilterBrowser { return ("Back to Map", closeMapFilter) }
         return nil
@@ -954,6 +1030,9 @@ struct AppShellView: View {
                     .sharedBackgroundVisibility(.hidden)
             } else if selectedDestination == .subjects {
                 ToolbarItem(placement: .principal) { Text(subjects?.first(where: { $0.id == openedSubjectID })?.name ?? "Subject").font(.headline).lineLimit(1) }
+                    .sharedBackgroundVisibility(.hidden)
+            } else if selectedDestination == .tags {
+                ToolbarItem(placement: .principal) { Text(tags?.first(where: { $0.id == openedTagID })?.name ?? "Tag").font(.headline).lineLimit(1) }
                     .sharedBackgroundVisibility(.hidden)
             } else if isAlbumBrowser {
                 ToolbarItem(placement: .principal) {

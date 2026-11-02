@@ -45,7 +45,7 @@ public struct MetadataStoreAdmission: Sendable {
 /// The normalized format is initialized explicitly when the engine enrolls it.
 extension DiskCache {
     static let metadataFormatVersion = 2
-    private static let normalizedTables = ["subject_summaries", "people_summaries", "filter_option_catalogs", "metadata_inventory_staging", "folder_directories", "album_summaries", "page_items", "day_pages", "collection_days", "collection_state", "item_details", "item_index", "metadata_state"]
+    private static let normalizedTables = ["tag_summaries", "subject_summaries", "people_summaries", "filter_option_catalogs", "metadata_inventory_staging", "folder_directories", "album_summaries", "page_items", "day_pages", "collection_days", "collection_state", "item_details", "item_index", "metadata_state"]
 
     public func initializeMetadataStore() throws {
         try metadataTransaction {
@@ -92,6 +92,8 @@ extension DiskCache {
               page_offset INTEGER NOT NULL, capacity INTEGER NOT NULL, sort_order TEXT NOT NULL,
               ordinal INTEGER NOT NULL, item_id INTEGER NOT NULL,
               PRIMARY KEY(namespace,collection,day,page_offset,capacity,sort_order,ordinal));
+            CREATE TABLE IF NOT EXISTS tag_summaries (
+              namespace TEXT PRIMARY KEY, payload BLOB NOT NULL, validated_run TEXT);
             CREATE TABLE IF NOT EXISTS subject_summaries (
               namespace TEXT PRIMARY KEY, payload BLOB NOT NULL, validated_run TEXT);
             CREATE TABLE IF NOT EXISTS people_summaries (
@@ -199,6 +201,24 @@ extension DiskCache {
             let statement = try prepare("INSERT OR REPLACE INTO subject_summaries VALUES (?,?,?)")
             bind(namespace.key, at: 1, in: statement)
             metadataBind(try JSONEncoder().encode(subjects), at: 2, in: statement)
+            bind(currentRun, at: 3, in: statement)
+            try metadataStep(statement)
+        }
+    }
+
+    public func metadataTags(_ namespace: MetadataNamespace) throws -> ([TagSummary], String?)? {
+        let statement = try prepare("SELECT payload,validated_run FROM tag_summaries WHERE namespace=?")
+        defer { sqlite3_finalize(statement) }
+        bind(namespace.key, at: 1, in: statement)
+        guard sqlite3_step(statement) == SQLITE_ROW, let data = metadataBlob(statement, 0) else { return nil }
+        return (try JSONDecoder().decode([TagSummary].self, from: data), columnString(statement, 1))
+    }
+    public func storeMetadataTags(_ tags: [TagSummary], namespace: MetadataNamespace, currentRun: String, admission: MetadataStoreAdmission) throws {
+        try metadataTransaction {
+            try admit(admission, namespace: namespace)
+            let statement = try prepare("INSERT OR REPLACE INTO tag_summaries VALUES (?,?,?)")
+            bind(namespace.key, at: 1, in: statement)
+            metadataBind(try JSONEncoder().encode(tags), at: 2, in: statement)
             bind(currentRun, at: 3, in: statement)
             try metadataStep(statement)
         }

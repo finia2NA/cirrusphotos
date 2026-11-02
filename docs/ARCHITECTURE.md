@@ -173,3 +173,7 @@ The People sidebar destination fetches the expanded, non-hidden Person v1 index 
 ## Subjects
 
 The Subjects destination reads the non-hidden Concept v2 index in bounded pages, checking counts and unique IDs before persisting account-scoped summaries. Repository-owned jobs coalesce, fence resets, and validate once per run while retaining stale cached data. Subject IDs identify persistent collection descriptors; Timeline v6 and Item v7 requests use the same concept ID through the shared metadata engine. Covers use the standard thumbnail pipeline.
+
+## Tags
+
+The Tags destination reads the GeneralTag v2 index in bounded pages, checking counts and unique IDs before persisting account-scoped summaries. Repository-owned jobs coalesce, fence resets, and validate once per run while retaining stale cached data. Tag IDs identify persistent collection descriptors; Timeline v6 and Item v7 requests use the same general tag ID through the shared metadata engine. Covers use the standard thumbnail pipeline.
