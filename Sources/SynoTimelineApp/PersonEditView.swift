@@ -6,7 +6,6 @@ struct PersonEditRequest: Identifiable {
     let id = UUID()
     let person: PersonSummary
     let space: PhotoSpace
-    let merge: Bool
 }
 
 struct PersonEditView: View {
@@ -28,13 +27,13 @@ struct PersonEditView: View {
         self.people = people
         self.repository = repository
         self.onFinish = onFinish
-        _name = State(initialValue: request.merge ? "" : request.person.name)
-        _hasEdited = State(initialValue: request.merge)
+        _name = State(initialValue: request.person.name)
+        _hasEdited = State(initialValue: false)
     }
 
     private var query: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var valid: Bool {
-        repository != nil && !working && error == nil && !query.isEmpty && (!request.merge || target != nil)
+        repository != nil && !working && error == nil && !query.isEmpty
     }
     private var suggestionQuery: String {
         hasEdited && target == nil && !working && error == nil ? query : ""
@@ -45,14 +44,15 @@ struct PersonEditView: View {
             $0.id != request.person.id && (query.isEmpty || $0.name.localizedStandardContains(query))
         }
         var seen: Set<Int64> = [request.person.id]
-        return Array((remoteSuggestions + cached).filter { seen.insert($0.id).inserted }.prefix(10))
+        return Array((remoteSuggestions + cached).filter {
+            !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && seen.insert($0.id).inserted
+        }.prefix(10))
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(request.merge ? "Merge People" : "Rename Person").font(.headline)
-            if request.merge { Text("Merge \(displayName(request.person)) into another person.") }
-            TextField(request.merge ? "Find a person" : "Name", text: Binding(
+            Text("Rename Person").font(.headline)
+            TextField("Name", text: Binding(
                 get: { name },
                 set: { value in
                     name = value
@@ -80,7 +80,7 @@ struct PersonEditView: View {
                         ForEach(suggestions) { person in
                             Button {
                                 target = person
-                                name = person.name.isEmpty ? request.person.name : person.name
+                                name = person.name
                                 remoteSuggestions = []
                             } label: {
                                 HStack(spacing: 10) {
@@ -106,7 +106,7 @@ struct PersonEditView: View {
                 if working { ProgressView().controlSize(.small) }
                 Spacer()
                 Button(error == nil ? "Cancel" : "Close") { dismiss() }.disabled(working)
-                Button(target != nil || request.merge ? "Merge…" : "Rename") {
+                Button(target != nil ? "Merge…" : "Rename") {
                     if target != nil { confirming = true } else { submit() }
                 }.disabled(!valid)
             }

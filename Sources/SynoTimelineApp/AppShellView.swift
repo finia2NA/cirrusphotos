@@ -463,9 +463,7 @@ struct AppShellView: View {
                                 }
                             }.buttonStyle(.plain)
                             .contextMenu {
-                                Button("Rename…") { personEdit = PersonEditRequest(person: person, space: selectedSpace, merge: false) }
-                                Button("Merge…") { personEdit = PersonEditRequest(person: person, space: selectedSpace, merge: true) }
-                                    .disabled(people.count < 2)
+                                Button("Rename…") { personEdit = PersonEditRequest(person: person, space: selectedSpace) }
                             }
                         }
                     }
