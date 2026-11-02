@@ -1,5 +1,6 @@
 import Foundation
 import SynologyAPI
+@_exported import TransportTestSupport
 @testable import PhotoCache
 
 struct TestFailure: LocalizedError {
@@ -27,50 +28,6 @@ func waitUntil(
         try? await Task.sleep(for: interval)
     }
     return false
-}
-
-extension PhotosTransport {
-    func login(credentials: SynologyCredentials) async throws {}
-
-    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
-        throw TestFailure("Unexpected timeline request")
-    }
-
-    func albums() async throws -> [AlbumSummary] {
-        throw TestFailure("Unexpected album-list request")
-    }
-
-    func readAlbumCatalogBatch(albumID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry] {
-        throw TestFailure("Unexpected album-timeline request")
-    }
-
-    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
-        let section = fixtureSection(request)
-        let collection = request.collection
-
-        throw TestFailure("Unexpected item-page request")
-    }
-
-    func readPersonalInventoryBatch(offset: Int, limit: Int) async throws -> [PhotoItem] {
-        throw TestFailure("Unexpected location-scan request")
-    }
-
-    func diffVersion() async throws -> DiffCursor {
-        throw SynologyAPIError.api(103)
-    }
-
-    func changes(since cursor: DiffCursor) async throws -> PhotoDiff {
-        throw TestFailure("Unexpected Diff request")
-    }
-
-
-    func fullImage(
-        _ resource: FullImageResource,
-        etag: String?,
-        lastModified: String?
-    ) async throws -> FullImageResponse {
-        throw TestFailure("Unexpected original-image request")
-    }
 }
 
 /// Fixtures seed the current normalized model directly, never legacy page payloads.

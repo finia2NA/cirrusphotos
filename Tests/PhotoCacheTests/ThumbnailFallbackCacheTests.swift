@@ -3,20 +3,20 @@ import SynologyAPI
 import XCTest
 @testable import PhotoCache
 
-private actor FallbackThumbnailTransport: PhotosTransport {
+private actor FallbackThumbnailTransport: TestPhotosTransport {
     private(set) var requestedSizes: [ThumbnailSize] = []
     var failuresRemaining = 0
 
     func failNextRequest() { failuresRemaining = 1 }
 
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
         requestedSizes.append(size)
         if failuresRemaining > 0 {
             failuresRemaining -= 1
             throw TestFailure("Thumbnail request failed")
         }
-        return ThumbnailResponse(data: Data("network-\(size.rawValue)".utf8),
+        return MediaResponse(data: Data("network-\(size.rawValue)".utf8),
                                  etag: size.rawValue, lastModified: nil)
     }
 }

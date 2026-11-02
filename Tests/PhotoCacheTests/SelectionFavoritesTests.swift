@@ -48,9 +48,8 @@ final class SelectionFavoritesTests: XCTestCase {
 
         let section = TimelineSection(offset: 0, limit: 10, list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 10)])
         let snapshot = TimelineSnapshot(sections: [section])
-        let resolver = SelectionFavoriteResolver(repository: repo)
 
-        let action = await resolver.resolve(
+        let action = await resolveFavorites(repo,
             collection: .library(.personal),
             snapshot: snapshot,
             selectedOrdinals: IndexSet(),
@@ -73,9 +72,7 @@ final class SelectionFavoritesTests: XCTestCase {
         let snapshot = TimelineSnapshot(sections: [section])
         await transport.setTimeline(snapshot, for: .library(.personal))
         let repo = try makeRepository(transport: transport, root: root)
-
-        let resolver = SelectionFavoriteResolver(repository: repo)
-        let resolved = await resolver.resolve(
+        let resolved = await resolveFavorites(repo,
             collection: .library(.personal),
             snapshot: snapshot,
             selectedOrdinals: IndexSet(integersIn: 0...5),
@@ -98,9 +95,7 @@ final class SelectionFavoritesTests: XCTestCase {
         let snapshot = TimelineSnapshot(sections: [section])
         await transport.setTimeline(snapshot, for: .library(.personal))
         let repo = try makeRepository(transport: transport, root: root)
-
-        let resolver = SelectionFavoriteResolver(repository: repo)
-        let resolved = await resolver.resolve(
+        let resolved = await resolveFavorites(repo,
             collection: .library(.personal),
             snapshot: snapshot,
             selectedOrdinals: IndexSet(integersIn: 0...5),
@@ -123,9 +118,7 @@ final class SelectionFavoritesTests: XCTestCase {
         let snapshot = TimelineSnapshot(sections: [section])
         await transport.setTimeline(snapshot, for: .library(.personal))
         let repo = try makeRepository(transport: transport, root: root)
-
-        let resolver = SelectionFavoriteResolver(repository: repo)
-        let resolved = await resolver.resolve(
+        let resolved = await resolveFavorites(repo,
             collection: .library(.personal),
             snapshot: snapshot,
             selectedOrdinals: IndexSet(integersIn: 0...5),
@@ -150,9 +143,7 @@ final class SelectionFavoritesTests: XCTestCase {
         let snapshot = TimelineSnapshot(sections: [section])
         await transport.setTimeline(snapshot, for: .library(.personal))
         let repo = try makeRepository(transport: transport, root: root)
-
-        let resolver = SelectionFavoriteResolver(repository: repo)
-        let resolved = await resolver.resolve(
+        let resolved = await resolveFavorites(repo,
             collection: .library(.personal),
             snapshot: snapshot,
             selectedOrdinals: IndexSet(integersIn: 0...99),
@@ -179,12 +170,10 @@ final class SelectionFavoritesTests: XCTestCase {
         let snapshot = TimelineSnapshot(sections: [sec0, sec1])
         await transport.setTimeline(snapshot, for: .library(.personal))
         let repo = try makeRepository(transport: transport, root: root)
-
-        let resolver = SelectionFavoriteResolver(repository: repo)
         // Select ordinals 0 (id 1), 2 (id 3), 3 (id 4)
         var selected = IndexSet()
         selected.insert(0); selected.insert(2); selected.insert(3)
-        let resolved = await resolver.resolve(
+        let resolved = await resolveFavorites(repo,
             collection: .library(.personal),
             snapshot: snapshot,
             selectedOrdinals: selected,
@@ -207,9 +196,7 @@ final class SelectionFavoritesTests: XCTestCase {
         let snapshot = TimelineSnapshot(sections: [sec])
         await transport.setTimeline(snapshot, for: .library(.personal))
         let repo = try makeRepository(transport: transport, root: root)
-
-        let resolver = SelectionFavoriteResolver(repository: repo)
-        _ = await resolver.resolve(
+        _ = await resolveFavorites(repo,
             collection: .library(.personal),
             snapshot: snapshot,
             selectedOrdinals: IndexSet(integersIn: 0...1),
@@ -235,9 +222,7 @@ final class SelectionFavoritesTests: XCTestCase {
         let changedSnapshot = TimelineSnapshot(sections: [changedSec])
         await transport.setTimeline(changedSnapshot, for: .library(.personal))
         for await _ in await repo.timeline(collection: .library(.personal)) {}
-
-        let resolver = SelectionFavoriteResolver(repository: repo)
-        let action = await resolver.resolve(
+        let action = await resolveFavorites(repo,
             collection: .library(.personal),
             snapshot: snapshot, // older snapshot with different fingerprint
             selectedOrdinals: IndexSet(integer: 0),
@@ -255,10 +240,8 @@ final class SelectionFavoritesTests: XCTestCase {
         let snapshot = TimelineSnapshot(sections: [sec])
         await transport.setTimeline(snapshot, for: .library(.personal))
         let repo = try makeRepository(transport: transport, root: root)
-
-        let resolver = SelectionFavoriteResolver(repository: repo)
         // Known ID was 999, but page verifies with ID 100 -> abort!
-        let action = await resolver.resolve(
+        let action = await resolveFavorites(repo,
             collection: .library(.personal),
             snapshot: snapshot,
             selectedOrdinals: IndexSet(integer: 0),
@@ -286,8 +269,7 @@ final class SelectionFavoritesTests: XCTestCase {
             limit: 2,
             list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 2)]
         )
-        let resolver = SelectionFavoriteResolver(repository: repo)
-        let action = await resolver.resolve(
+        let action = await resolveFavorites(repo,
             collection: .library(.personal),
             snapshot: snapshot,
             selectedOrdinals: IndexSet(integer: 0),
@@ -655,7 +637,7 @@ final class SelectionFavoritesTests: XCTestCase {
 
 // MARK: - Test Transport Mock
 
-actor SelectionFavoritesMockTransport: PhotosTransport {
+actor SelectionFavoritesMockTransport: TestPhotosTransport {
     private var pages: [Int: [PhotoItem]] = [:]
     private var timelineSnapshots: [PhotoCollectionDescriptor: TimelineSnapshot] = [:]
     private(set) var setFavoriteCalls: [(itemIDs: [Int64], favorite: Bool)] = []
@@ -747,13 +729,25 @@ actor SelectionFavoritesMockTransport: PhotosTransport {
         for key in pages.keys { pages[key] = pages[key]?.map { itemIDs.contains($0.id) ? $0.withFavorite(favorite) : $0 } }
     }
 
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
         thumbnailCount += 1
-        return ThumbnailResponse(data: Data([1, 2, 3]), etag: "etag", lastModified: "now")
+        return MediaResponse(data: Data([1, 2, 3]), etag: "etag", lastModified: "now")
     }
 
-    func fullImage(_ resource: FullImageResource, etag: String?, lastModified: String?) async throws -> FullImageResponse {
+    func fullImage(_ resource: FullImageResource, etag: String?, lastModified: String?) async throws -> MediaResponse {
         fullImageCount += 1
-        return FullImageResponse(data: Data([4, 5, 6]), etag: "etag", lastModified: "now")
+        return MediaResponse(data: Data([4, 5, 6]), etag: "etag", lastModified: "now")
     }
+}
+
+/// Resolves as the browser does: the displayed timeline is loaded before a command runs.
+private func resolveFavorites(_ repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor,
+                              snapshot: TimelineSnapshot, selectedOrdinals: IndexSet,
+                              knownItemIDsByOrdinal: [Int: Int64],
+                              expectedTimelineFingerprint: String? = nil) async -> SelectionFavoriteAction? {
+    for await _ in await repository.timeline(collection: collection) {}
+    let selection = PhotoSelectionSnapshot(collection: collection, timeline: snapshot,
+        timelineFingerprint: expectedTimelineFingerprint ?? LibraryIndex(snapshot: snapshot).fingerprint,
+        selectedOrdinals: selectedOrdinals, knownItemIDsByOrdinal: knownItemIDsByOrdinal)
+    return await SelectionFavoriteResolver(repository: repository).resolve(selection)
 }

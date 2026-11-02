@@ -3,19 +3,19 @@ import SynologyAPI
 import XCTest
 @testable import PhotoCache
 
-private actor IncomingThumbnailTransport: PhotosTransport {
+private actor IncomingThumbnailTransport: TestPhotosTransport {
     var personalRequests = 0
     var references: [String] = []
 
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
         personalRequests += 1
-        return ThumbnailResponse(data: Data("personal".utf8), etag: nil, lastModified: nil)
+        return MediaResponse(data: Data("personal".utf8), etag: nil, lastModified: nil)
     }
 
     func incomingThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, reference: String,
-                           etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                           etag: String?, lastModified: String?) async throws -> MediaResponse {
         references.append(reference)
-        return ThumbnailResponse(data: Data(reference.utf8), etag: nil, lastModified: nil)
+        return MediaResponse(data: Data(reference.utf8), etag: nil, lastModified: nil)
     }
 }
 

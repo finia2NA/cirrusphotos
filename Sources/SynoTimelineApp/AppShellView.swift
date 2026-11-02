@@ -15,15 +15,9 @@ struct AppShellView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var viewer: PhotoViewerPresentation?
     @State private var selectedDestination: LibraryDestination
-    @State private var openedTagID: Int64?
-    @State private var tags: [TagSummary]?
-    @State private var tagsError: String?
-    @State private var openedSubjectID: Int64?
-    @State private var subjects: [SubjectSummary]?
-    @State private var subjectsError: String?
-    @State private var openedPersonID: Int64?
-    @State private var people: [PersonSummary]?
-    @State private var peopleError: String?
+    @State private var openedIndexEntryIDs: [CollectionIndexKind: Int64] = [:]
+    @State private var indexEntries: [CollectionIndexKind: [CollectionIndexEntry]] = [:]
+    @State private var indexErrors: [CollectionIndexKind: String] = [:]
     @State private var personEdit: PersonEditRequest?
     @State private var peopleEditRevision: UInt64 = 0
     @State private var openedAlbum: PhotoCollectionDescriptor?
@@ -61,9 +55,8 @@ struct AppShellView: View {
             else { .library(selectedSpace) }
         case .favorites: .favorites(selectedSpace)
         case .recentlyAdded: .recentlyAdded
-        case .people: openedPersonID.map { .person($0, space: selectedSpace) }
-        case .subjects: openedSubjectID.map { .subject($0, space: selectedSpace) }
-        case .tags: openedTagID.map { .tag($0, space: selectedSpace) }
+        case .people, .subjects, .tags:
+            selectedDestination.indexKind.flatMap { kind in openedIndexEntryIDs[kind].map { kind.collection($0, space: selectedSpace) } }
         case .albums: openedAlbum
         case .map: openedMapFilter
         }
@@ -162,8 +155,7 @@ struct AppShellView: View {
             }
             if selectedDestination == .map { mapModel.start(repository: model.repository, space: space) }
             else { mapModel.stopObservingProjection(); mapModel.invalidateMetadata(restart: false) }
-            openedPersonID = nil; openedSubjectID = nil; openedTagID = nil
-            people = nil; subjects = nil; tags = nil; folderDirectory = nil; folderDirectoryRequest = nil
+            openedIndexEntryIDs = [:]; indexEntries = [:]; folderDirectory = nil; folderDirectoryRequest = nil
             showsFolders = navigationRestoration.showsFolders
             folderPath = navigationRestoration.folderPath
             if let collection = sourceCollection { model.ensureCollectionLoaded(collection) }
@@ -172,12 +164,8 @@ struct AppShellView: View {
         }
         .onChange(of: showsFolders) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
         .onChange(of: folderPath) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
-        .task(id: PeopleLoadKey(namespace: model.presentationNamespace.map { $0 + ":" + selectedSpace.rawValue }, active: selectedDestination == .people, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision, editRevision: peopleEditRevision)) { await loadPeople() }
-        .task(id: SubjectsLoadKey(namespace: model.presentationNamespace.map { $0 + ":" + selectedSpace.rawValue }, active: selectedDestination == .subjects, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadSubjects() }
-        .task(id: TagsLoadKey(namespace: model.presentationNamespace.map { $0 + ":" + selectedSpace.rawValue }, active: selectedDestination == .tags, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadTags() }
-        .onChange(of: openedTagID) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
-        .onChange(of: openedSubjectID) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
-        .onChange(of: openedPersonID) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
+        .task(id: IndexLoadKey(namespace: model.presentationNamespace.map { $0 + ":" + selectedSpace.rawValue }, kind: selectedDestination.indexKind, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision, editRevision: peopleEditRevision)) { await loadIndex() }
+        .onChange(of: openedIndexEntryIDs) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
         .task(id: FolderLoadKey(namespace: model.presentationNamespace.map { $0 + ":" + selectedSpace.rawValue }, active: selectedDestination == .personalLibrary && showsFolders, id: folderPath.last ?? 0, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadFolder() }
         .onChange(of: openedAlbum) { _, _ in
             updateBackHandler(); updateTimelineSectionLoadSource()
@@ -246,7 +234,7 @@ struct AppShellView: View {
             updateTimelineSectionLoadSource()
         }
         .onChange(of: model.presentationNamespace) { _, _ in
-            people = nil
+            indexEntries = [:]
             configureAlbumPresentation()
         }
         .onChange(of: albumPresentation.pinnedCollections) { _, _ in
@@ -296,7 +284,7 @@ struct AppShellView: View {
             Text(model.rotationFailure ?? viewer?.rotationFailure ?? "The photo could not be rotated.")
         }
         .sheet(item: $personEdit) { request in
-            PersonEditView(request: request, people: people ?? [], repository: model.repository) {
+            PersonEditView(request: request, people: indexEntries[.person] ?? [], repository: model.repository) {
                 peopleEditRevision &+= 1
             }
         }
@@ -360,16 +348,8 @@ struct AppShellView: View {
                         .id(collection)
                         .allowsHitTesting(viewer == nil)
                         .ignoresSafeArea(.container, edges: .top)
-                } else if selectedDestination == .people {
-                    peopleDetail(topInset: topInset)
-                        .allowsHitTesting(viewer == nil)
-                        .ignoresSafeArea(.container, edges: .top)
-                } else if selectedDestination == .subjects {
-                    subjectsDetail(topInset: topInset)
-                        .allowsHitTesting(viewer == nil)
-                        .ignoresSafeArea(.container, edges: .top)
-                } else if selectedDestination == .tags {
-                    tagsDetail(topInset: topInset)
+                } else if let kind = selectedDestination.indexKind {
+                    indexDetail(kind, topInset: topInset)
                         .allowsHitTesting(viewer == nil)
                         .ignoresSafeArea(.container, edges: .top)
                 } else if selectedDestination == .map {
@@ -420,191 +400,80 @@ struct AppShellView: View {
         }
     }
 
-    private struct PeopleLoadKey: Hashable {
+    private struct IndexLoadKey: Hashable {
         let namespace: String?
-        let active: Bool
+        let kind: CollectionIndexKind?
         let resetRevision: UInt64
         let retryRevision: Int
         let editRevision: UInt64
     }
 
-    private func loadPeople() async {
-        guard selectedDestination == .people, let repository = model.repository else { return }
-        let restored = navigationRestoration.preparePerson(namespace: repository.namespace)
-        openedPersonID = restored
-        if let restored { model.ensureCollectionLoaded(PhotoCollectionDescriptor.person(restored, space: selectedSpace)) }
-        peopleError = nil
-        for await event in await repository.people(space: selectedSpace) {
+    private func loadIndex() async {
+        guard let kind = selectedDestination.indexKind, let repository = model.repository else { return }
+        let restored = navigationRestoration.prepareIndexEntry(kind, namespace: repository.namespace)
+        openedIndexEntryIDs[kind] = restored
+        if let restored { model.ensureCollectionLoaded(kind.collection(restored, space: selectedSpace)) }
+        indexErrors[kind] = nil
+        for await event in await repository.collectionIndex(kind, space: selectedSpace) {
             guard !Task.isCancelled else { return }
             switch event {
             case .value(let list, let verified):
-                people = list
-                if verified, let id = openedPersonID, !list.contains(where: { $0.id == id }) {
-                    openedPersonID = nil; navigationRestoration.setOpenedPerson(nil)
+                indexEntries[kind] = list
+                if verified, let id = openedIndexEntryIDs[kind], !list.contains(where: { $0.id == id }) {
+                    openedIndexEntryIDs[kind] = nil; navigationRestoration.setOpenedIndexEntry(kind, id: nil)
                 }
-            case .failure(let error): peopleError = error
+            case .failure(let error): indexErrors[kind] = error
             }
         }
     }
 
-    private func closePerson() {
-        openedPersonID = nil
-        navigationRestoration.setOpenedPerson(nil)
+    private func openIndexEntry(_ entry: CollectionIndexEntry, kind: CollectionIndexKind) {
+        openedIndexEntryIDs[kind] = entry.id
+        navigationRestoration.setOpenedIndexEntry(kind, id: entry.id)
+        model.ensureCollectionLoaded(kind.collection(entry.id, space: selectedSpace))
         updateBackHandler(); updateInfoPanelContext()
     }
 
-    @ViewBuilder private func peopleDetail(topInset: CGFloat) -> some View {
-        if let people {
+    private func closeIndexEntry() {
+        guard let kind = selectedDestination.indexKind else { return }
+        openedIndexEntryIDs[kind] = nil
+        navigationRestoration.setOpenedIndexEntry(kind, id: nil)
+        updateBackHandler(); updateInfoPanelContext()
+    }
+
+    /// The opened person, subject or tag of the current destination.
+    private var openedIndexEntryID: Int64? {
+        selectedDestination.indexKind.flatMap { openedIndexEntryIDs[$0] }
+    }
+
+    @ViewBuilder private func indexDetail(_ kind: CollectionIndexKind, topInset: CGFloat) -> some View {
+        let style = IndexOverviewStyle(kind)
+        if let entries = indexEntries[kind] {
             ScrollView {
-                if let peopleError { Text(peopleError).font(.caption).foregroundStyle(.secondary) }
-                if people.isEmpty { ContentUnavailableView("No People", systemImage: "person.2") }
+                if let error = indexErrors[kind] { Text(error).font(.caption).foregroundStyle(.secondary) }
+                if entries.isEmpty { ContentUnavailableView("No \(style.title)", systemImage: style.symbol) }
                 else {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 140, maximum: 220), spacing: 20)], alignment: .leading, spacing: 20) {
-                        ForEach(people) { person in
-                            Button {
-                                openedPersonID = person.id
-                                navigationRestoration.setOpenedPerson(person.id)
-                                model.ensureCollectionLoaded(PhotoCollectionDescriptor.person(person.id, space: selectedSpace))
-                                updateBackHandler(); updateInfoPanelContext()
-                            } label: {
+                        ForEach(entries) { entry in
+                            Button { openIndexEntry(entry, kind: kind) } label: {
                                 VStack(alignment: .leading, spacing: 6) {
-                                    AlbumCoverView(thumbnail: person.thumbnail, repository: model.repository, collection: PhotoCollectionDescriptor.library(selectedSpace), placeholderSymbol: "person.crop.square")
-                                    Text(person.name.isEmpty ? "Unnamed" : person.name).font(.headline).lineLimit(1)
-                                    Text("\(person.itemCount) items").font(.caption).foregroundStyle(.secondary)
+                                    AlbumCoverView(thumbnail: entry.thumbnail, repository: model.repository, collection: PhotoCollectionDescriptor.library(selectedSpace), placeholderSymbol: style.coverSymbol)
+                                    Text(entry.name.isEmpty ? "Unnamed" : entry.name).font(.headline).lineLimit(1)
+                                    Text("\(entry.itemCount) items").font(.caption).foregroundStyle(.secondary)
                                 }
                             }.buttonStyle(.plain)
                             .contextMenu {
-                                Button("Rename…") { personEdit = PersonEditRequest(person: person, space: selectedSpace) }
+                                if kind == .person {
+                                    Button("Rename…") { personEdit = PersonEditRequest(person: entry, space: selectedSpace) }
+                                }
                             }
                         }
                     }
                 }
             }.contentMargins(.top, topInset + 24).contentMargins(.horizontal, 24)
-        } else if let peopleError {
-            ContentUnavailableView { Label("People unavailable", systemImage: "person.2") } description: { Text(peopleError) } actions: { Button("Try Again") { Task { await model.reload() } } }
-        } else { ProgressView("Loading people…") }
-    }
-
-    private struct SubjectsLoadKey: Hashable {
-        let namespace: String?
-        let active: Bool
-        let resetRevision: UInt64
-        let retryRevision: Int
-    }
-
-    private func loadSubjects() async {
-        guard selectedDestination == .subjects, let repository = model.repository else { return }
-        let restored = navigationRestoration.prepareSubject(namespace: repository.namespace)
-        openedSubjectID = restored
-        if let restored { model.ensureCollectionLoaded(PhotoCollectionDescriptor.subject(restored, space: selectedSpace)) }
-        subjects = nil; subjectsError = nil
-        for await event in await repository.subjects(space: selectedSpace) {
-            guard !Task.isCancelled else { return }
-            switch event {
-            case .value(let list, let verified):
-                subjects = list
-                if verified, let id = openedSubjectID, !list.contains(where: { $0.id == id }) {
-                    openedSubjectID = nil; navigationRestoration.setOpenedSubject(nil)
-                }
-            case .failure(let error): subjectsError = error
-            }
-        }
-    }
-
-    private func closeSubject() {
-        openedSubjectID = nil
-        navigationRestoration.setOpenedSubject(nil)
-        updateBackHandler(); updateInfoPanelContext()
-    }
-
-    @ViewBuilder private func subjectsDetail(topInset: CGFloat) -> some View {
-        if let subjects {
-            ScrollView {
-                if let subjectsError { Text(subjectsError).font(.caption).foregroundStyle(.secondary) }
-                if subjects.isEmpty { ContentUnavailableView("No Subjects", systemImage: "square.grid.2x2") }
-                else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140, maximum: 220), spacing: 20)], alignment: .leading, spacing: 20) {
-                        ForEach(subjects) { subject in
-                            Button {
-                                openedSubjectID = subject.id
-                                navigationRestoration.setOpenedSubject(subject.id)
-                                model.ensureCollectionLoaded(PhotoCollectionDescriptor.subject(subject.id, space: selectedSpace))
-                                updateBackHandler(); updateInfoPanelContext()
-                            } label: {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    AlbumCoverView(thumbnail: subject.thumbnail, repository: model.repository, collection: PhotoCollectionDescriptor.library(selectedSpace), placeholderSymbol: "square.grid.2x2")
-                                    Text(subject.name.isEmpty ? "Unnamed" : subject.name).font(.headline).lineLimit(1)
-                                    Text("\(subject.itemCount) items").font(.caption).foregroundStyle(.secondary)
-                                }
-                            }.buttonStyle(.plain)
-                        }
-                    }
-                }
-            }.contentMargins(.top, topInset + 24).contentMargins(.horizontal, 24)
-        } else if let subjectsError {
-            ContentUnavailableView { Label("Subjects unavailable", systemImage: "square.grid.2x2") } description: { Text(subjectsError) } actions: { Button("Try Again") { Task { await model.reload() } } }
-        } else { ProgressView("Loading subjects…") }
-    }
-
-    private struct TagsLoadKey: Hashable {
-        let namespace: String?
-        let active: Bool
-        let resetRevision: UInt64
-        let retryRevision: Int
-    }
-
-    private func loadTags() async {
-        guard selectedDestination == .tags, let repository = model.repository else { return }
-        let restored = navigationRestoration.prepareTag(namespace: repository.namespace)
-        openedTagID = restored
-        if let restored { model.ensureCollectionLoaded(PhotoCollectionDescriptor.tag(restored, space: selectedSpace)) }
-        tags = nil; tagsError = nil
-        for await event in await repository.tags(space: selectedSpace) {
-            guard !Task.isCancelled else { return }
-            switch event {
-            case .value(let list, let verified):
-                tags = list
-                if verified, let id = openedTagID, !list.contains(where: { $0.id == id }) {
-                    openedTagID = nil; navigationRestoration.setOpenedTag(nil)
-                }
-            case .failure(let error): tagsError = error
-            }
-        }
-    }
-
-    private func closeTag() {
-        openedTagID = nil
-        navigationRestoration.setOpenedTag(nil)
-        updateBackHandler(); updateInfoPanelContext()
-    }
-
-    @ViewBuilder private func tagsDetail(topInset: CGFloat) -> some View {
-        if let tags {
-            ScrollView {
-                if let tagsError { Text(tagsError).font(.caption).foregroundStyle(.secondary) }
-                if tags.isEmpty { ContentUnavailableView("No Tags", systemImage: "tag") }
-                else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140, maximum: 220), spacing: 20)], alignment: .leading, spacing: 20) {
-                        ForEach(tags) { tag in
-                            Button {
-                                openedTagID = tag.id
-                                navigationRestoration.setOpenedTag(tag.id)
-                                model.ensureCollectionLoaded(PhotoCollectionDescriptor.tag(tag.id, space: selectedSpace))
-                                updateBackHandler(); updateInfoPanelContext()
-                            } label: {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    AlbumCoverView(thumbnail: tag.thumbnail, repository: model.repository, collection: PhotoCollectionDescriptor.library(selectedSpace), placeholderSymbol: "tag")
-                                    Text(tag.name.isEmpty ? "Unnamed" : tag.name).font(.headline).lineLimit(1)
-                                    Text("\(tag.itemCount) items").font(.caption).foregroundStyle(.secondary)
-                                }
-                            }.buttonStyle(.plain)
-                        }
-                    }
-                }
-            }.contentMargins(.top, topInset + 24).contentMargins(.horizontal, 24)
-        } else if let tagsError {
-            ContentUnavailableView { Label("Tags unavailable", systemImage: "tag") } description: { Text(tagsError) } actions: { Button("Try Again") { Task { await model.reload() } } }
-        } else { ProgressView("Loading tags…") }
+        } else if let error = indexErrors[kind] {
+            ContentUnavailableView { Label("\(style.title) unavailable", systemImage: style.symbol) } description: { Text(error) } actions: { Button("Try Again") { Task { await model.reload() } } }
+        } else { ProgressView("Loading \(style.title.lowercased())…") }
     }
 
     private struct FolderLoadKey: Hashable {
@@ -883,12 +752,8 @@ struct AppShellView: View {
             model.installBackHandler(closeViewer)
         } else if selectedDestination == .personalLibrary && showsFolders && !folderPath.isEmpty {
             model.installBackHandler(folderBack)
-        } else if selectedDestination == .people && openedPersonID != nil {
-            model.installBackHandler(closePerson)
-        } else if selectedDestination == .subjects && openedSubjectID != nil {
-            model.installBackHandler(closeSubject)
-        } else if selectedDestination == .tags && openedTagID != nil {
-            model.installBackHandler(closeTag)
+        } else if openedIndexEntryID != nil {
+            model.installBackHandler(closeIndexEntry)
         } else if isAlbumBrowser {
             model.installBackHandler(closeAlbum)
         } else if isMapFilterBrowser {
@@ -1072,9 +937,9 @@ struct AppShellView: View {
     }
 
     private var collectionBackAction: (String, () -> Void)? {
-        if selectedDestination == .people && openedPersonID != nil { return ("Back to People", closePerson) }
-        if selectedDestination == .subjects && openedSubjectID != nil { return ("Back to Subjects", closeSubject) }
-        if selectedDestination == .tags && openedTagID != nil { return ("Back to Tags", closeTag) }
+        if let kind = selectedDestination.indexKind, openedIndexEntryID != nil {
+            return ("Back to \(IndexOverviewStyle(kind).title)", closeIndexEntry)
+        }
         if isAlbumBrowser { return ("Back to Albums", closeAlbum) }
         if isMapFilterBrowser { return ("Back to Map", closeMapFilter) }
         return nil
@@ -1101,15 +966,12 @@ struct AppShellView: View {
             if selectedDestination == .personalLibrary && showsFolders {
                 ToolbarItem(placement: .principal) { Text(folderDirectory?.folder.displayName ?? "Folders").font(.headline).lineLimit(1) }
                 .sharedBackgroundVisibility(.hidden)
-            } else if selectedDestination == .people {
-                ToolbarItem(placement: .principal) { Text(people?.first(where: { $0.id == openedPersonID })?.name ?? "Person").font(.headline).lineLimit(1) }
-                    .sharedBackgroundVisibility(.hidden)
-            } else if selectedDestination == .subjects {
-                ToolbarItem(placement: .principal) { Text(subjects?.first(where: { $0.id == openedSubjectID })?.name ?? "Subject").font(.headline).lineLimit(1) }
-                    .sharedBackgroundVisibility(.hidden)
-            } else if selectedDestination == .tags {
-                ToolbarItem(placement: .principal) { Text(tags?.first(where: { $0.id == openedTagID })?.name ?? "Tag").font(.headline).lineLimit(1) }
-                    .sharedBackgroundVisibility(.hidden)
+            } else if let kind = selectedDestination.indexKind {
+                ToolbarItem(placement: .principal) {
+                    Text(indexEntries[kind]?.first(where: { $0.id == openedIndexEntryID })?.name ?? IndexOverviewStyle(kind).singular)
+                        .font(.headline).lineLimit(1)
+                }
+                .sharedBackgroundVisibility(.hidden)
             } else if isAlbumBrowser {
                 ToolbarItem(placement: .principal) {
                     Text(sourceCollection.flatMap { model.albumName(for: $0) } ?? "Album")
@@ -1141,4 +1003,20 @@ struct AppShellView: View {
             }
     }
 
+}
+
+/// Presentation for the People, Subjects and Tags overviews.
+private struct IndexOverviewStyle {
+    let title: String
+    let singular: String
+    let symbol: String
+    let coverSymbol: String
+
+    init(_ kind: CollectionIndexKind) {
+        switch kind {
+        case .person: (title, singular, symbol, coverSymbol) = ("People", "Person", "person.2", "person.crop.square")
+        case .subject: (title, singular, symbol, coverSymbol) = ("Subjects", "Subject", "square.grid.2x2", "square.grid.2x2")
+        case .tag: (title, singular, symbol, coverSymbol) = ("Tags", "Tag", "tag", "tag")
+        }
+    }
 }

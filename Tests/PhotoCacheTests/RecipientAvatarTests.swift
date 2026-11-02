@@ -3,7 +3,7 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-private actor AvatarTransport: PhotosTransport {
+private actor AvatarTransport: TestPhotosTransport {
     var calls = 0
     var photos = 0
     func userProfiles(ids: [Int64]) async throws -> [PhotosUserProfile] {

@@ -4,7 +4,7 @@ import PhotoCache
 import SynologyAPI
 @testable import SynoTimelineApp
 
-private actor MetadataResetAppTransport: PhotosTransport {
+private actor MetadataResetAppTransport: TestPhotosTransport {
     let snapshot: TimelineSnapshot
 
     init(snapshot: TimelineSnapshot) { self.snapshot = snapshot }

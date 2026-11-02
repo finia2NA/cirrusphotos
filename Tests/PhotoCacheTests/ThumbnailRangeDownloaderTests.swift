@@ -3,7 +3,7 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-private actor RangeTransport: PhotosTransport {
+private actor RangeTransport: TestPhotosTransport {
     var pages: [Int: [PhotoItem]] = [:]
     var blockThumbnails = false
     var thumbnailCalls = 0
@@ -53,10 +53,10 @@ private actor RangeTransport: PhotosTransport {
         return CollectionBatchResult(items: rows, profile: fields)
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
         thumbnailCalls += 1
         if blockThumbnails { try await Task.sleep(for: .seconds(30)) }
-        return ThumbnailResponse(data: Data([UInt8(truncatingIfNeeded: descriptor.unitID)]),
+        return MediaResponse(data: Data([UInt8(truncatingIfNeeded: descriptor.unitID)]),
                                  etag: "test", lastModified: nil)
     }
 }

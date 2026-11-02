@@ -194,7 +194,7 @@ extension CachedPhotosRepository {
             try Task.checkCancellation()
             try await connect()
             let prior = try? await store.getThumbnail(identity)
-            func request(etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+            func request(etag: String?, lastModified: String?) async throws -> MediaResponse {
                 if collection.isSessionDerived {
                     throw SynologyAPIError.unsupported("Collection access is unavailable.")
                 }

@@ -368,7 +368,7 @@ final class SelectionInfoResolverTests: XCTestCase {
     }
 }
 
-actor InfoResolverMockTransport: PhotosTransport {
+actor InfoResolverMockTransport: TestPhotosTransport {
     private var snapshot = TimelineSnapshot(sections: [])
     func setSnapshot(_ value: TimelineSnapshot) { snapshot = value }
     private var pages: [Int64: [PhotoItem]] = [:]
@@ -414,12 +414,12 @@ actor InfoResolverMockTransport: PhotosTransport {
     }
 
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
         throw TestFailure("Unexpected thumbnail request")
     }
 
     func fullImage(_ resource: FullImageResource, etag: String?,
-                   lastModified: String?) async throws -> FullImageResponse {
+                   lastModified: String?) async throws -> MediaResponse {
         throw TestFailure("Unexpected original-image request")
     }
 }

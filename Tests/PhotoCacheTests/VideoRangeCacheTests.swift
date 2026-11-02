@@ -106,7 +106,7 @@ final class VideoRangeCacheTests: XCTestCase {
     }
 }
 
-private actor VideoRangeTestTransport: PhotosTransport {
+private actor VideoRangeTestTransport: TestPhotosTransport {
     let totalLength: Int64
     private var ranges: [ClosedRange<Int64>] = []
 
@@ -136,7 +136,7 @@ private actor VideoDataCollector {
     func append(_ value: Data) { data.append(value) }
 }
 
-private actor BlockingVideoTransport: PhotosTransport {
+private actor BlockingVideoTransport: TestPhotosTransport {
     private var continuation: CheckedContinuation<Void, Never>?
     private var released = false
 

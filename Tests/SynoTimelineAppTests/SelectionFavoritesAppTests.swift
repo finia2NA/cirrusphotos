@@ -60,7 +60,10 @@ final class SelectionFavoritesAppTests: XCTestCase {
 
         // 2. Six items (all non-favorites -> 6 affected)
         let transport6 = AppMockTransport()
-        let repo6 = try makeRepository(transport: transport6, root: root)
+        // A separate cache: two repositories never share one cache directory.
+        let root6 = temporaryTestRoot("FiveVsSix-6")
+        defer { try? FileManager.default.removeItem(at: root6) }
+        let repo6 = try makeRepository(transport: transport6, root: root6)
         await transport6.setTimeline(snapshot)
         let sixItems = (0..<6).map { makeItem(id: Int64($0), isFavorite: false) }
         await transport6.setPage(sixItems, offset: 0)
@@ -306,7 +309,7 @@ private struct AppFavoriteFailure: LocalizedError {
     var errorDescription: String? { "Favorite write failed for testing." }
 }
 
-actor AppMockTransport: PhotosTransport {
+actor AppMockTransport: TestPhotosTransport {
     private var timeline = TimelineSnapshot(sections: [])
     private var pages: [Int: [PhotoItem]] = [:]
     private(set) var setFavoriteCalls: [(itemIDs: [Int64], favorite: Bool)] = []
@@ -345,11 +348,11 @@ actor AppMockTransport: PhotosTransport {
         if favoriteFailure { throw AppFavoriteFailure() }
     }
 
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
-        ThumbnailResponse(data: Data([1]), etag: nil, lastModified: nil)
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
+        MediaResponse(data: Data([1]), etag: nil, lastModified: nil)
     }
 
-    func fullImage(_ resource: FullImageResource, etag: String?, lastModified: String?) async throws -> FullImageResponse {
-        FullImageResponse(data: Data([2]), etag: nil, lastModified: nil)
+    func fullImage(_ resource: FullImageResource, etag: String?, lastModified: String?) async throws -> MediaResponse {
+        MediaResponse(data: Data([2]), etag: nil, lastModified: nil)
     }
 }

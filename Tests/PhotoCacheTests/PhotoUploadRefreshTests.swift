@@ -3,7 +3,7 @@ import XCTest
 @testable import SynologyAPI
 @testable import PhotoCache
 
-private actor UploadRefreshTransport: PhotosTransport {
+private actor UploadRefreshTransport: TestPhotosTransport {
     var catalogCalls = 0
     var shouldFail = false
     func setFailure(_ value: Bool) { shouldFail = value }
@@ -19,7 +19,7 @@ private actor UploadRefreshTransport: PhotosTransport {
     func calls() -> Int { catalogCalls }
 }
 
-private actor AlbumUploadTransport: PhotosTransport {
+private actor AlbumUploadTransport: TestPhotosTransport {
     var uploads = 0
     var owner: Int64 = 1
     var albumReads = 0

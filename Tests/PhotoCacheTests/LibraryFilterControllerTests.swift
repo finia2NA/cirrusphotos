@@ -478,7 +478,7 @@ private actor FilterEventBox {
     func latestCatalog() -> [String] { events.last?.catalog.cameras ?? [] }
 }
 
-private actor ScannerTransport: PhotosTransport {
+private actor ScannerTransport: TestPhotosTransport {
     let snapshot: TimelineSnapshot
     let pages: [Int: [PhotoItem]]
     let persistentFailures: Set<Int>

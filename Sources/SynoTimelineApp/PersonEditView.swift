@@ -4,25 +4,25 @@ import SynologyAPI
 
 struct PersonEditRequest: Identifiable {
     let id = UUID()
-    let person: PersonSummary
+    let person: CollectionIndexEntry
     let space: PhotoSpace
 }
 
 struct PersonEditView: View {
     @Environment(\.dismiss) private var dismiss
     let request: PersonEditRequest
-    let people: [PersonSummary]
+    let people: [CollectionIndexEntry]
     let repository: CachedPhotosRepository?
     let onFinish: () -> Void
     @State private var name: String
-    @State private var target: PersonSummary?
+    @State private var target: CollectionIndexEntry?
     @State private var hasEdited: Bool
-    @State private var remoteSuggestions: [PersonSummary] = []
+    @State private var remoteSuggestions: [CollectionIndexEntry] = []
     @State private var working = false
     @State private var error: String?
     @State private var confirming = false
 
-    init(request: PersonEditRequest, people: [PersonSummary], repository: CachedPhotosRepository?, onFinish: @escaping () -> Void) {
+    init(request: PersonEditRequest, people: [CollectionIndexEntry], repository: CachedPhotosRepository?, onFinish: @escaping () -> Void) {
         self.request = request
         self.people = people
         self.repository = repository
@@ -38,7 +38,7 @@ struct PersonEditView: View {
     private var suggestionQuery: String {
         hasEdited && target == nil && !working && error == nil ? query : ""
     }
-    private var suggestions: [PersonSummary] {
+    private var suggestions: [CollectionIndexEntry] {
         guard hasEdited, target == nil, !working, error == nil else { return [] }
         let cached = people.filter {
             $0.id != request.person.id && (query.isEmpty || $0.name.localizedStandardContains(query))
@@ -133,7 +133,7 @@ struct PersonEditView: View {
         }
     }
 
-    private func personCover(_ person: PersonSummary) -> some View {
+    private func personCover(_ person: CollectionIndexEntry) -> some View {
         AlbumCoverView(thumbnail: person.thumbnail, repository: repository,
                        collection: .library(request.space), cornerRadius: 5,
                        placeholderFont: .body, placeholderSymbol: "person.crop.square", maxPixel: 96)
@@ -141,7 +141,7 @@ struct PersonEditView: View {
             .accessibilityHidden(true)
     }
 
-    private func displayName(_ person: PersonSummary) -> String { person.name.isEmpty ? "Unnamed" : person.name }
+    private func displayName(_ person: CollectionIndexEntry) -> String { person.name.isEmpty ? "Unnamed" : person.name }
 
     private func submit() {
         guard let repository, valid else { return }

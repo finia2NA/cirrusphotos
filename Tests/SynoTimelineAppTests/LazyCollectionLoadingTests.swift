@@ -4,7 +4,7 @@ import PhotoCache
 import SynologyAPI
 @testable import SynoTimelineApp
 
-private actor LazyCollectionTransport: PhotosTransport {
+private actor LazyCollectionTransport: TestPhotosTransport {
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
         try CollectionDayCatalog(days: [CollectionDayCount(day: CaptureDay(year: 2024, month: 1, day: 1), count: 1)], completeness: .complete)
     }

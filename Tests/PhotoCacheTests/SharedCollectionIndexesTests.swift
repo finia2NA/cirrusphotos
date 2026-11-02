@@ -3,7 +3,7 @@ import SynologyAPI
 import XCTest
 @testable import PhotoCache
 
-private actor SharedIndexTransport: PhotosTransport {
+private actor SharedIndexTransport: TestPhotosTransport {
     var offline = false
     var blocked = false
     var waiting: [CheckedContinuation<Void, Never>] = []
@@ -13,11 +13,12 @@ private actor SharedIndexTransport: PhotosTransport {
     var peopleCalls: [PhotoSpace: Int] = [:]
     func setOffline() { offline = true }
     func diffVersion() async throws -> DiffCursor { diffCalls += 1; throw SynologyAPIError.api(103) }
-    func people(space: PhotoSpace) async throws -> [PersonSummary] {
+    func collectionIndex(_ kind: CollectionIndexKind, space: PhotoSpace) async throws -> [CollectionIndexEntry] {
+        guard kind == .person else { throw UnexpectedTransportCall("collectionIndex") }
         peopleCalls[space, default: 0] += 1
         if offline { throw SynologyAPIError.transport("offline") }
         if blocked { await withCheckedContinuation { waiting.append($0) } }
-        return [try JSONDecoder().decode(PersonSummary.self, from: Data("{\"id\":1,\"name\":\"\(space.rawValue)\",\"item_count\":1}".utf8))]
+        return [try CollectionIndexEntry.decoder(for: .person).decode(CollectionIndexEntry.self, from: Data("{\"id\":1,\"name\":\"\(space.rawValue)\",\"item_count\":1}".utf8))]
     }
     func folder(id: Int64, space: PhotoSpace) async throws -> FolderSummary {
         if offline { throw SynologyAPIError.transport("offline") }
@@ -27,7 +28,7 @@ private actor SharedIndexTransport: PhotosTransport {
 }
 
 extension CachedPhotosRepository {
-    fileprivate func peopleSubscriberCount(_ space: PhotoSpace) -> Int { metadata.peopleJob[space]?.subscribers.count ?? 0 }
+    fileprivate func peopleSubscriberCount(_ space: PhotoSpace) -> Int { metadata.collectionIndexJobs[CollectionIndexJobKey(kind: .person, space: space)]?.subscribers.count ?? 0 }
 }
 
 final class SharedCollectionIndexesTests: XCTestCase {
@@ -37,12 +38,12 @@ final class SharedCollectionIndexesTests: XCTestCase {
         let transport = SharedIndexTransport()
         await transport.blockPeople()
         let repository = try CachedPhotosRepository(credentials: .init(username: "fixture", password: "unused"), cacheRoot: root, transport: transport)
-        let first = Task { for await _ in await repository.people(space: .shared) {} }
+        let first = Task { for await _ in await repository.collectionIndex(.person, space: .shared) {} }
         let started = await waitUntil { await transport.peopleCalls[.shared] == 1 }
         XCTAssertTrue(started)
-        let second = Task { () -> [PersonSummary]? in
-            var result: [PersonSummary]?
-            for await event in await repository.people(space: .shared) {
+        let second = Task { () -> [CollectionIndexEntry]? in
+            var result: [CollectionIndexEntry]?
+            for await event in await repository.collectionIndex(.person, space: .shared) {
                 if case .value(let people, true) = event { result = people }
             }
             return result
@@ -92,13 +93,13 @@ final class SharedCollectionIndexesTests: XCTestCase {
         let credentials = SynologyCredentials(username: "fixture", password: "unused")
         let repository = try CachedPhotosRepository(credentials: credentials, cacheRoot: root, transport: transport)
         // Shared discovery must not join the Personal Space reconciliation job.
-        for await _ in await repository.people(space: .shared) {}
+        for await _ in await repository.collectionIndex(.person, space: .shared) {}
         for await _ in await repository.folderDirectory(id: 0, space: .shared) {}
         let diffBeforePersonal = await transport.diffCalls
         XCTAssertEqual(diffBeforePersonal, 0)
         for space in PhotoSpace.allCases {
             var name: String?
-            for await event in await repository.people(space: space) {
+            for await event in await repository.collectionIndex(.person, space: space) {
                 if case .value(let list, true) = event { name = list.first?.name }
             }
             XCTAssertEqual(name, space.rawValue)
@@ -110,7 +111,7 @@ final class SharedCollectionIndexesTests: XCTestCase {
         let reopened = try CachedPhotosRepository(credentials: credentials, cacheRoot: root, transport: transport)
         for space in PhotoSpace.allCases {
             var cached: String?; var failed = false
-            for await event in await reopened.people(space: space) {
+            for await event in await reopened.collectionIndex(.person, space: space) {
                 if case .value(let list, false) = event { cached = list.first?.name }
                 if case .failure = event { failed = true }
             }

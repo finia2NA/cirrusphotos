@@ -274,7 +274,7 @@ private actor AuditValues {
     }
 }
 
-private actor AuditBlockedTransport: PhotosTransport {
+private actor AuditBlockedTransport: TestPhotosTransport {
     let snapshot: TimelineSnapshot
     let values: [PhotoItem]
     var started = false

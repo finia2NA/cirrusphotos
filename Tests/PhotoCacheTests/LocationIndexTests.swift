@@ -4,7 +4,7 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-private actor InventoryTransport: PhotosTransport {
+private actor InventoryTransport: TestPhotosTransport {
     let items: [PhotoItem]
     let catalogCount: Int
     let supported: Bool

@@ -148,7 +148,7 @@ final class TimelineSectionLoadModelTests: XCTestCase {
     }
 }
 
-private actor LoadModelTransport: PhotosTransport {
+private actor LoadModelTransport: TestPhotosTransport {
     let snapshot: TimelineSnapshot
     let item: PhotoItem
     let delay: Duration

@@ -105,14 +105,14 @@ final class MetadataStoreTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(admission.revision, sharedAdmission.revision)
         XCTAssertEqual(admission.resetEpoch, sharedAdmission.resetEpoch)
         do {
-            try await store.storeMetadataPeople([], namespace: shared, currentRun: "run", admission: admission)
+            try await store.storeMetadataCollectionIndex(.person, [], namespace: shared, currentRun: "run", admission: admission)
             XCTFail("A token from another namespace must not authorize this write")
         } catch MetadataAdmissionError.superseded { }
         do {
             try await store.applyMetadataFavoriteValues([1: true], namespace: shared, currentRun: "run", admission: admission)
             XCTFail("Mutation patches must also reject tokens from another namespace")
         } catch MetadataAdmissionError.superseded { }
-        let cached = try await store.metadataPeople(shared)
+        let cached = try await store.metadataCollectionIndex(.person, namespace: shared)
         XCTAssertNil(cached)
     }
 

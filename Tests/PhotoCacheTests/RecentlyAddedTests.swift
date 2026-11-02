@@ -3,7 +3,7 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-private actor RecentTransport: PhotosTransport {
+private actor RecentTransport: TestPhotosTransport {
     let offline: Bool
     let items: [PhotoItem]
     init(offline: Bool = false) throws {

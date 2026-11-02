@@ -3,7 +3,7 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-private actor SharedMediaTransport: PhotosTransport {
+private actor SharedMediaTransport: TestPhotosTransport {
     var favorites: [PhotoSpace: Bool] = [:]
     var orientations: [PhotoSpace: Int] = [:]
     var originalScopes: [PhotoContentScope] = []
@@ -20,12 +20,12 @@ private actor SharedMediaTransport: PhotosTransport {
         CollectionBatchResult(items: [try photo(try XCTUnwrap(request.collection.space))], profile: fields)
     }
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] { [try photo(space)] }
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
-        ThumbnailResponse(data: Data(space.rawValue.utf8), etag: nil, lastModified: nil)
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
+        MediaResponse(data: Data(space.rawValue.utf8), etag: nil, lastModified: nil)
     }
-    func fullImage(_ resource: FullImageResource, etag: String?, lastModified: String?) async throws -> FullImageResponse {
+    func fullImage(_ resource: FullImageResource, etag: String?, lastModified: String?) async throws -> MediaResponse {
         originalScopes.append(resource.scope)
-        return FullImageResponse(data: Data(resource.scope.cacheComponent.utf8), etag: nil, lastModified: nil)
+        return MediaResponse(data: Data(resource.scope.cacheComponent.utf8), etag: nil, lastModified: nil)
     }
     func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws { writes.append(space); favorites[space] = favorite }
     func rotate(itemIDs: [Int64], direction: PhotoRotationDirection, space: PhotoSpace) async throws { writes.append(space); orientations[space] = 6 }

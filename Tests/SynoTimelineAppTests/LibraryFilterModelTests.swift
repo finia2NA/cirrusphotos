@@ -154,7 +154,7 @@ final class LibraryFilterModelTests: XCTestCase {
     }
 }
 
-private actor FilterModelTransport: PhotosTransport {
+private actor FilterModelTransport: TestPhotosTransport {
     let snapshot: TimelineSnapshot
     let pages: [Int: [PhotoItem]]
     let delay: Duration

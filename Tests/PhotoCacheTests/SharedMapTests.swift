@@ -3,7 +3,7 @@ import SynologyAPI
 import XCTest
 @testable import PhotoCache
 
-private actor SharedMapTransport: PhotosTransport {
+private actor SharedMapTransport: TestPhotosTransport {
     var offline = false
     var blockBatch = false
     var waiting: [CheckedContinuation<Void, Never>] = []
@@ -40,9 +40,9 @@ private actor SharedMapTransport: PhotosTransport {
         return CollectionBatchResult(items: duplicate ? [rows[0], rows[0]] : rows, profile: fields)
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace,
-                   etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                   etag: String?, lastModified: String?) async throws -> MediaResponse {
         thumbnailSpaces.append(space)
-        return ThumbnailResponse(data: Data("fixture-thumbnail".utf8), etag: nil, lastModified: nil)
+        return MediaResponse(data: Data("fixture-thumbnail".utf8), etag: nil, lastModified: nil)
     }
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] {
         detailSpaces.append(space)

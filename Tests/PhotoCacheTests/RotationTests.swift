@@ -554,7 +554,7 @@ final class RotationTests: XCTestCase {
     }
 }
 
-private actor RotationTransport: PhotosTransport {
+private actor RotationTransport: TestPhotosTransport {
     let thumbnailData: Data
     let thumbnails: [ThumbnailSize: Data]
     let originalData: Data
@@ -621,8 +621,8 @@ private actor RotationTransport: PhotosTransport {
     }
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] { [currentItem] }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?,
-                   lastModified: String?) async throws -> ThumbnailResponse {
-        ThumbnailResponse(data: thumbnails[size], etag: nil, lastModified: nil)
+                   lastModified: String?) async throws -> MediaResponse {
+        MediaResponse(data: thumbnails[size], etag: nil, lastModified: nil)
     }
     func setRegenerating(itemIDs: [Int64], space: PhotoSpace) async throws -> [RegeneratingThumbnailUnit] {
         thumbnailOperationSpaces.append(space)
@@ -653,13 +653,13 @@ private actor RotationTransport: PhotosTransport {
         progress(TransferProgress(completedBytes: 100, totalBytes: 100))
     }
     func fullImage(_ resource: FullImageResource, etag: String?,
-                   lastModified: String?) async throws -> FullImageResponse {
-        FullImageResponse(data: originalData, etag: nil, lastModified: nil)
+                   lastModified: String?) async throws -> MediaResponse {
+        MediaResponse(data: originalData, etag: nil, lastModified: nil)
     }
     func fullImage(
         _ resource: FullImageResource, etag: String?, lastModified: String?,
         progress: @escaping @Sendable (TransferProgress) -> Void
-    ) async throws -> FullImageResponse {
+    ) async throws -> MediaResponse {
         progress(TransferProgress(completedBytes: 2_500_000, totalBytes: 5_000_000))
         let response = try await fullImage(resource, etag: etag, lastModified: lastModified)
         progress(TransferProgress(completedBytes: 5_000_000, totalBytes: 5_000_000))

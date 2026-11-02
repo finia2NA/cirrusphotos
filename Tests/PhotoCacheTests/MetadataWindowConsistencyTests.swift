@@ -3,7 +3,7 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-private actor WindowMetadataTransport: PhotosTransport {
+private actor WindowMetadataTransport: TestPhotosTransport {
     var edited = false
     let day = try! CaptureDay(year: 2024, month: 1, day: 1)
     var pendingChange = false
@@ -28,7 +28,7 @@ private actor WindowMetadataTransport: PhotosTransport {
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] { try ids.map(photo) }
     func batchCount() -> Int { batches }
 }
-private struct WindowNoNetworkTransport: PhotosTransport {}
+private struct WindowNoNetworkTransport: TestPhotosTransport {}
 final class MetadataWindowConsistencyTests: XCTestCase, @unchecked Sendable {
     func testSameCountSourceChangeRetiresVerifiedWindowDespiteUnchangedFingerprint() async throws {
         let root = temporaryTestRoot("window-source"); defer { try? FileManager.default.removeItem(at: root) }

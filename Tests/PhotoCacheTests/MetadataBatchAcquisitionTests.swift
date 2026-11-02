@@ -3,7 +3,7 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-actor BatchedMetadataTransport: PhotosTransport {
+actor BatchedMetadataTransport: TestPhotosTransport {
     let catalog: CollectionDayCatalog
     let rows: [PhotoItem]
     let delay: Duration

@@ -78,29 +78,36 @@ struct UploadsToolbarControl: View {
     }
 }
 
-/// Accept concrete Finder file URLs, never in-process selection or album drags.
+/// A Finder upload destination. Accepts concrete file URLs, never in-process
+/// selection or album drags, and refreshes the library when the upload finishes.
+@MainActor
+struct PhotoUploadDrop {
+    let destination: PhotoUploadDestination
+    let repository: CachedPhotosRepository
+    let finished: @MainActor () async -> Void
+
+    func operation(for sender: NSDraggingInfo) -> NSDragOperation {
+        !PhotoUploadManager.shared.active && !PhotoUploadManager.fileURLs(sender).isEmpty ? .copy : []
+    }
+
+    func perform(_ sender: NSDraggingInfo) -> Bool {
+        PhotoUploadManager.shared.start(PhotoUploadManager.fileURLs(sender), repository: repository,
+                                        destination: destination, finished: finished)
+    }
+}
+
 struct FileUploadTarget: NSViewRepresentable {
-    let destination: PhotoUploadDestination?
-    @ObservedObject var model: LibraryModel
+    let upload: PhotoUploadDrop?
     func makeNSView(context: Context) -> Target { Target() }
-    func updateNSView(_ view: Target, context: Context) { view.destination = destination; view.model = model }
+    func updateNSView(_ view: Target, context: Context) { view.upload = upload }
     @MainActor final class Target: NSView {
-        var destination: PhotoUploadDestination?
-        weak var model: LibraryModel?
+        var upload: PhotoUploadDrop?
         override init(frame: NSRect) { super.init(frame: frame); registerForDraggedTypes([.fileURL]) }
         required init?(coder: NSCoder) { fatalError() }
-        private func urls(_ sender: NSDraggingInfo) -> [URL] {
-            PhotoUploadManager.fileURLs(sender)
-        }
-        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-            destination != nil && model?.repository != nil && !PhotoUploadManager.shared.active && !urls(sender).isEmpty ? .copy : []
-        }
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { upload?.operation(for: sender) ?? [] }
         override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
         override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { !draggingEntered(sender).isEmpty }
-        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-            guard let destination, let model, let repository = model.repository else { return false }
-            return PhotoUploadManager.shared.start(urls(sender), repository: repository, destination: destination) { [weak model] in await model?.reload() }
-        }
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool { upload?.perform(sender) ?? false }
         override func mouseDown(with event: NSEvent) { nextResponder?.mouseDown(with: event) }
     }
 }

@@ -11,21 +11,21 @@ final class NavigationRestorationTests: XCTestCase {
         let store = NavigationRestorationStore(defaults: defaults)
         for space in PhotoSpace.allCases {
             store.selectSpace(space)
-            _ = store.preparePerson(namespace: "account")
-            _ = store.prepareSubject(namespace: "account")
-            _ = store.prepareTag(namespace: "account")
+            _ = store.prepareIndexEntry(.person, namespace: "account")
+            _ = store.prepareIndexEntry(.subject, namespace: "account")
+            _ = store.prepareIndexEntry(.tag, namespace: "account")
             _ = store.prepareFolders(namespace: "account")
             let id: Int64 = space == .personal ? 1 : 2
-            store.setOpenedPerson(id); store.setOpenedSubject(id); store.setOpenedTag(id)
+            store.setOpenedIndexEntry(.person, id: id); store.setOpenedIndexEntry(.subject, id: id); store.setOpenedIndexEntry(.tag, id: id)
             store.setFolders(shown: true, path: [id])
         }
         let reopened = NavigationRestorationStore(defaults: defaults)
         for space in PhotoSpace.allCases {
             reopened.selectSpace(space)
             let id: Int64 = space == .personal ? 1 : 2
-            XCTAssertEqual(reopened.preparePerson(namespace: "account"), id)
-            XCTAssertEqual(reopened.prepareSubject(namespace: "account"), id)
-            XCTAssertEqual(reopened.prepareTag(namespace: "account"), id)
+            XCTAssertEqual(reopened.prepareIndexEntry(.person, namespace: "account"), id)
+            XCTAssertEqual(reopened.prepareIndexEntry(.subject, namespace: "account"), id)
+            XCTAssertEqual(reopened.prepareIndexEntry(.tag, namespace: "account"), id)
             XCTAssertEqual(reopened.prepareFolders(namespace: "account"), [id])
         }
     }
@@ -36,19 +36,19 @@ final class NavigationRestorationTests: XCTestCase {
         let store = NavigationRestorationStore(defaults: defaults)
         _ = store.prepareFolders(namespace: "first")
         store.setFolders(shown: true, path: [1])
-        store.setOpenedPerson(4)
+        store.setOpenedIndexEntry(.person, id: 4)
         store.selectSpace(.shared)
         _ = store.prepareFolders(namespace: "first")
         store.setFolders(shown: false, path: [2])
-        store.setOpenedPerson(5)
+        store.setOpenedIndexEntry(.person, id: 5)
         store.selectSpace(.personal)
         XCTAssertTrue(store.showsFolders)
         XCTAssertEqual(store.folderPath, [1])
-        XCTAssertNil(store.preparePerson(namespace: "second"))
+        XCTAssertNil(store.prepareIndexEntry(.person, namespace: "second"))
         XCTAssertTrue(store.folderPath.isEmpty)
         store.selectSpace(.shared)
         XCTAssertFalse(store.showsFolders)
-        XCTAssertEqual(store.preparePerson(namespace: "first"), 5)
+        XCTAssertEqual(store.prepareIndexEntry(.person, namespace: "first"), 5)
         XCTAssertEqual(store.folderPath, [2])
     }
 

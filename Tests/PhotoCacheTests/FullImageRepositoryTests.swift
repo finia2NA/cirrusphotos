@@ -3,7 +3,7 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-private actor FullImageTransport: PhotosTransport {
+private actor FullImageTransport: TestPhotosTransport {
     var shouldFail = false
     var shouldBlock = false
     var responseData = Data([1, 2, 3])
@@ -30,7 +30,7 @@ private actor FullImageTransport: PhotosTransport {
         await withCheckedContinuation { callWaiters[unitID, default: []].append($0) }
     }
     func fullImage(_ resource: FullImageResource,
-                   etag: String?, lastModified: String?) async throws -> FullImageResponse {
+                   etag: String?, lastModified: String?) async throws -> MediaResponse {
         calls.append(resource.unitID)
         for waiter in callWaiters.removeValue(forKey: resource.unitID) ?? [] { waiter.resume() }
         validators.append((etag, lastModified))
@@ -44,9 +44,9 @@ private actor FullImageTransport: PhotosTransport {
             throw CancellationError()
         }
         if returnNotModified {
-            return FullImageResponse(data: nil, etag: responseETag, lastModified: nil)
+            return MediaResponse(data: nil, etag: responseETag, lastModified: nil)
         }
-        return FullImageResponse(data: responseData, etag: responseETag, lastModified: nil)
+        return MediaResponse(data: responseData, etag: responseETag, lastModified: nil)
     }
 }
 

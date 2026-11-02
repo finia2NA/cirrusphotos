@@ -14,6 +14,15 @@ struct PhotoTimelineRestorationAnchor: Codable, Equatable {
 /// switch away from it.
 enum LibraryDestination: String, Codable, Hashable, Sendable, CaseIterable {
     case personalLibrary, favorites, recentlyAdded, albums, map, people, subjects, tags
+
+    var indexKind: CollectionIndexKind? {
+        switch self {
+        case .people: .person
+        case .subjects: .subject
+        case .tags: .tag
+        default: nil
+        }
+    }
 }
 
 enum SidebarSelection: Codable, Hashable {
@@ -27,15 +36,13 @@ enum SidebarSelection: Codable, Hashable {
 
 struct RestorableSpaceNavigation: Codable, Equatable {
     var namespace: String?
-    var openedPersonID: Int64?
-    var openedSubjectID: Int64?
-    var openedTagID: Int64?
+    var openedIndexEntries: [CollectionIndexKind: Int64] = [:]
     var showsFolders = false
     var folderPath: [Int64] = []
 }
 
 struct RestorableAppNavigationState: Codable, Equatable {
-    static let currentVersion = 9
+    static let currentVersion = 10
 
     var version = currentVersion
     var sidebarSelection: SidebarSelection = .destination(.personalLibrary)
@@ -101,21 +108,13 @@ final class NavigationRestorationStore: ObservableObject {
     func setFolders(shown: Bool, path: [Int64]) {
         updateSpaceNavigation { $0.showsFolders = shown; $0.folderPath = path }
     }
-    func preparePerson(namespace: String) -> Int64? {
+    func prepareIndexEntry(_ kind: CollectionIndexKind, namespace: String) -> Int64? {
         prepareSpace(namespace: namespace)
-        return spaceNavigation.openedPersonID
+        return spaceNavigation.openedIndexEntries[kind]
     }
-    func setOpenedPerson(_ id: Int64?) { updateSpaceNavigation { $0.openedPersonID = id } }
-    func prepareSubject(namespace: String) -> Int64? {
-        prepareSpace(namespace: namespace)
-        return spaceNavigation.openedSubjectID
+    func setOpenedIndexEntry(_ kind: CollectionIndexKind, id: Int64?) {
+        updateSpaceNavigation { $0.openedIndexEntries[kind] = id }
     }
-    func setOpenedSubject(_ id: Int64?) { updateSpaceNavigation { $0.openedSubjectID = id } }
-    func prepareTag(namespace: String) -> Int64? {
-        prepareSpace(namespace: namespace)
-        return spaceNavigation.openedTagID
-    }
-    func setOpenedTag(_ id: Int64?) { updateSpaceNavigation { $0.openedTagID = id } }
 
     var openedAlbum: PhotoCollectionDescriptor? {
         state.openedAlbum

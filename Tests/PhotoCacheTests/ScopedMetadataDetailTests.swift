@@ -3,7 +3,7 @@ import SynologyAPI
 import XCTest
 @testable import PhotoCache
 
-private actor DetailJobTransport: PhotosTransport {
+private actor DetailJobTransport: TestPhotosTransport {
     var calls: [PhotoContentScope: Int] = [:]
     var pending: [CheckedContinuation<Void, Never>] = []
     var blocked = true

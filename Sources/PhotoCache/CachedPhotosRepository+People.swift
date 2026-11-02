@@ -2,16 +2,7 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
-    public func people(space: PhotoSpace) -> AsyncStream<ResourceEvent<[PersonSummary]>> {
-        metadataIndex(key: space, space: space, name: "People", jobs: \.peopleJob,
-            cached: { try await $0.metadataPeople($1) },
-            fetch: { try await $0.people(space: space) },
-            persist: { try await $0.storeMetadataPeople($2, namespace: $1, currentRun: $3, admission: $4) })
-    }
-}
-
-extension CachedPhotosRepository {
-    public func suggestPeople(prefix: String, space: PhotoSpace) async throws -> [PersonSummary] {
+    public func suggestPeople(prefix: String, space: PhotoSpace) async throws -> [CollectionIndexEntry] {
         guard !prefix.isEmpty, !metadata.peopleMutationSpaces.contains(space) else { return [] }
         let epoch = metadata.peopleEpoch[space, default: 0]
         try await connect()
@@ -51,7 +42,7 @@ extension CachedPhotosRepository {
         try await initializeMetadataEngine()
         try await connect()
         try await reconcileMetadataSource(for: .library(space))
-        let current = try await client.people(space: space)
+        let current = try await client.collectionIndex(.person, space: space)
         guard current.contains(where: { $0.id == targetID }), sourceID.map({ id in current.contains(where: { $0.id == id }) }) ?? true else {
             throw SynologyAPIError.unsupported("The selected people have changed. Refresh People and try again.")
         }
@@ -77,7 +68,7 @@ extension CachedPhotosRepository {
 
     private func invalidatePeopleMutation(space: PhotoSpace, collections: [PhotoCollectionDescriptor]) async throws {
         metadata.peopleEpoch[space, default: 0] &+= 1
-        metadata.peopleJob.removeValue(forKey: space)?.task.cancel()
+        metadata.collectionIndexJobs.removeValue(forKey: CollectionIndexJobKey(kind: .person, space: space))?.task.cancel()
         for collection in collections {
             metadata.mutationEpochs[collection, default: 0] &+= 1
             metadata.timelineJobs.removeValue(forKey: collection)?.task.cancel()
@@ -93,7 +84,7 @@ extension CachedPhotosRepository {
         }
         let namespace = metadataNamespace(for: space)
         let admission = try await store.metadataAdmission(namespace)
-        try await store.invalidateMetadataPeople(namespace, admission: admission)
+        try await store.invalidateMetadataCollectionIndex(.person, namespace: namespace, admission: admission)
         for collection in collections {
             let admission = try await store.metadataAdmission(namespace)
             try await store.invalidateMetadataCollection(CollectionKey(namespace: namespace, collection: collection), admission: admission)
@@ -105,8 +96,8 @@ extension CachedPhotosRepository {
         try await invalidatePeopleMutation(space: space, collections: collections)
         metadata.peopleMutationSpaces.remove(space)
         metadata.peopleMutationCollections.subtract(collections)
-        var verified: [PersonSummary]?
-        for await event in people(space: space) {
+        var verified: [CollectionIndexEntry]?
+        for await event in collectionIndex(.person, space: space) {
             if case .value(let list, true) = event { verified = list }
         }
         guard let verified, verified.contains(where: { $0.id == targetID && $0.name == name }),

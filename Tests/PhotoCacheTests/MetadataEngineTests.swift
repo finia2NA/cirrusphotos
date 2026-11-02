@@ -3,7 +3,7 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-private actor EngineTransport: PhotosTransport {
+private actor EngineTransport: TestPhotosTransport {
     var versionCalls = 0
     var changeCalls = 0
     var mode: Mode

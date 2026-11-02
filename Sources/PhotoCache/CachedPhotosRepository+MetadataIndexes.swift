@@ -5,7 +5,7 @@ extension CachedPhotosRepository {
     /// Finite index/directory reads share admission, cached delivery and subscriber
     /// ownership. Each caller retains its typed storage and NAS fetch contract.
     func metadataIndex<Key: Hashable & Sendable, Value: Sendable>(
-        key: Key, space: PhotoSpace, name: String,
+        key: Key, space: PhotoSpace, name: String, guardsPeopleMutations: Bool = false,
         jobs: (WritableKeyPath<MetadataEngineState, [Key: SharedJob<Value>]> & Sendable),
         cached: @escaping @Sendable (DiskCache, MetadataNamespace) async throws -> (Value, String?)?,
         fetch: @escaping @Sendable (any PhotosTransport) async throws -> Value,
@@ -23,8 +23,8 @@ extension CachedPhotosRepository {
                     let validation = "\(runID):\(epoch):\(name)"
                     let previous = try await cached(store, namespace)
                     guard !Task.isCancelled, epoch == metadata.admissionEpoch, !metadata.resetInProgress else { continuation.finish(); return }
-                    let writing = name == "People" && metadata.peopleMutationSpaces.contains(space)
-                    guard name != "People" || peopleEpoch == metadata.peopleEpoch[space, default: 0] else { continuation.finish(); return }
+                    let writing = guardsPeopleMutations && metadata.peopleMutationSpaces.contains(space)
+                    guard !guardsPeopleMutations || peopleEpoch == metadata.peopleEpoch[space, default: 0] else { continuation.finish(); return }
                     if let previous { continuation.yield(.value(previous.0, verified: !writing && previous.1 == validation)) }
                     if writing || previous?.1 == validation { continuation.finish(); return }
                     let task: Task<Value, Error>
@@ -48,7 +48,7 @@ extension CachedPhotosRepository {
                         metadata[keyPath: jobs][key] = SharedJob(id: id, task: task, subscribers: [subscriber])
                     }
                     let value = try await task.value
-                    guard !Task.isCancelled, epoch == metadata.admissionEpoch, (name != "People" || (peopleEpoch == metadata.peopleEpoch[space, default: 0] && !metadata.peopleMutationSpaces.contains(space))) else { continuation.finish(); return }
+                    guard !Task.isCancelled, epoch == metadata.admissionEpoch, (!guardsPeopleMutations || (peopleEpoch == metadata.peopleEpoch[space, default: 0] && !metadata.peopleMutationSpaces.contains(space))) else { continuation.finish(); return }
                     continuation.yield(.value(value, verified: true))
                 } catch {
                     if !Task.isCancelled && !(error is CancellationError) { continuation.yield(.failure("\(name): \(error.localizedDescription)")) }

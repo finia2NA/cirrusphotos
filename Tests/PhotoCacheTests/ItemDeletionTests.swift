@@ -3,7 +3,7 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-private actor DeletionTransport: PhotosTransport {
+private actor DeletionTransport: TestPhotosTransport {
     private var existing: [Int64]
     private let refuses: Bool
     private let failsWrite: Bool

@@ -3,7 +3,7 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-fileprivate actor ViewerTransport: PhotosTransport {
+fileprivate actor ViewerTransport: TestPhotosTransport {
     var pages: [Int: [PhotoItem]] = [:]
     var blockedPages: Set<Int> = []
     var releasedPages: Set<Int> = []
@@ -81,7 +81,7 @@ fileprivate actor ViewerTransport: PhotosTransport {
         return CollectionBatchResult(items: rows, profile: fields)
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
         thumbnailCalls.append(descriptor.unitID)
         thumbnailRequests.append((descriptor.unitID, size))
         if failImages { throw TestFailure("Offline") }
@@ -94,11 +94,11 @@ fileprivate actor ViewerTransport: PhotosTransport {
             cancelledThumbnails.insert(descriptor.unitID)
             throw CancellationError()
         }
-        return ThumbnailResponse(data: Data([UInt8(truncatingIfNeeded: descriptor.unitID), 0x54]),
+        return MediaResponse(data: Data([UInt8(truncatingIfNeeded: descriptor.unitID), 0x54]),
                                  etag: "thumb-\(descriptor.unitID)", lastModified: nil)
     }
     func fullImage(_ resource: FullImageResource,
-                   etag: String?, lastModified: String?) async throws -> FullImageResponse {
+                   etag: String?, lastModified: String?) async throws -> MediaResponse {
         fullImageCalls.append(resource.unitID)
         fullImageKeys.append(resource.cacheKey)
         if failImages { throw TestFailure("Offline") }
@@ -114,7 +114,7 @@ fileprivate actor ViewerTransport: PhotosTransport {
             cancelledFullImages.insert(resource.unitID)
             throw CancellationError()
         }
-        return FullImageResponse(data: Data([UInt8(truncatingIfNeeded: resource.unitID), 0x46]),
+        return MediaResponse(data: Data([UInt8(truncatingIfNeeded: resource.unitID), 0x46]),
                                  etag: "full-\(resource.unitID)", lastModified: nil)
     }
 }

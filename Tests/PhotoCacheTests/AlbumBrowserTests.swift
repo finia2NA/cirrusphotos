@@ -3,7 +3,7 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-private actor AlbumFakeTransport: PhotosTransport {
+private actor AlbumFakeTransport: TestPhotosTransport {
     var folderCatalogCalls: [Int64] = []
     var folderFailure = false
     func setFolderFailure() { folderFailure = true }
@@ -212,12 +212,12 @@ private actor AlbumFakeTransport: PhotosTransport {
     }
 
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
         throw TestFailure("Unexpected thumbnail request")
     }
 
     func fullImage(_ resource: FullImageResource,
-                   etag: String?, lastModified: String?) async throws -> FullImageResponse {
+                   etag: String?, lastModified: String?) async throws -> MediaResponse {
         throw TestFailure("Unexpected original-image request")
     }
 }

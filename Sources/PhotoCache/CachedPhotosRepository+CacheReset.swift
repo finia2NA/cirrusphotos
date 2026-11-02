@@ -112,12 +112,8 @@ extension CachedPhotosRepository {
         metadata.collectionPageObservers.removeAll()
         for job in metadata.timelineJobs.values { job.task.cancel() }
         for job in metadata.pageJobs.values { job.task.cancel() }
-        metadata.peopleJob.values.forEach { $0.task.cancel() }
-        metadata.peopleJob.removeAll()
-        metadata.subjectsJob.values.forEach { $0.task.cancel() }
-        metadata.subjectsJob.removeAll()
-        metadata.tagsJob.values.forEach { $0.task.cancel() }
-        metadata.tagsJob.removeAll()
+        metadata.collectionIndexJobs.values.forEach { $0.task.cancel() }
+        metadata.collectionIndexJobs.removeAll()
         metadata.folderJobs.values.forEach { $0.task.cancel() }
         metadata.folderJobs.removeAll()
         metadata.albumListJob?.task.cancel()

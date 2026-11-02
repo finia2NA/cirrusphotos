@@ -3,7 +3,7 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-fileprivate actor FakeTransport: PhotosTransport {
+fileprivate actor FakeTransport: TestPhotosTransport {
     var loginBlocked = false
     var itemBlocked = false
     var loginFailure: String?

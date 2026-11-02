@@ -3,14 +3,15 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-private actor TagsCacheTransport: PhotosTransport {
+private actor TagsCacheTransport: TestPhotosTransport {
     var offline = false
     var calls = 0
     func setOffline() { offline = true }
-    func tags(space: PhotoSpace) async throws -> [TagSummary] {
+    func collectionIndex(_ kind: CollectionIndexKind, space: PhotoSpace) async throws -> [CollectionIndexEntry] {
+        guard kind == .tag else { throw UnexpectedTransportCall("collectionIndex") }
         calls += 1
         if offline { throw TestFailure("Offline") }
-        return [try JSONDecoder().decode(TagSummary.self, from: Data(#"{"id":123,"name":"A","item_count":4,"additional":{"thumbnail":{"unit_id":123,"cache_key":"face","m":"ready"}}}"#.utf8))]
+        return [try CollectionIndexEntry.decoder(for: .tag).decode(CollectionIndexEntry.self, from: Data(#"{"id":123,"name":"A","item_count":4,"additional":{"thumbnail":{"unit_id":123,"cache_key":"face","m":"ready"}}}"#.utf8))]
     }
 }
 
@@ -22,16 +23,16 @@ final class TagsCacheTests: XCTestCase {
         let credentials = SynologyCredentials(username: "fixture", password: "fixture")
         let first = try CachedPhotosRepository(credentials: credentials, cacheRoot: root, transport: transport)
         var verified = false
-        for await event in await first.tags(space: .personal) { if case .value(let list, true) = event { verified = list.map(\.id) == [123] } }
+        for await event in await first.collectionIndex(.tag, space: .personal) { if case .value(let list, true) = event { verified = list.map(\.id) == [123] } }
         XCTAssertTrue(verified)
-        for await _ in await first.tags(space: .personal) {}
+        for await _ in await first.collectionIndex(.tag, space: .personal) {}
         let count = await transport.calls
         XCTAssertEqual(count, 1)
         let offline = TagsCacheTransport()
         await offline.setOffline()
         let second = try CachedPhotosRepository(credentials: credentials, cacheRoot: root, transport: offline)
         var cached = false; var failed = false
-        for await event in await second.tags(space: .personal) {
+        for await event in await second.collectionIndex(.tag, space: .personal) {
             switch event {
             case .value(let list, false): cached = list.map(\.id) == [123]
             case .failure: failed = true

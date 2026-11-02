@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 import XCTest
 @testable import SynoTimelineApp
 
-private actor PresentationTransport: PhotosTransport {
+private actor PresentationTransport: TestPhotosTransport {
     let preview: Data
     private var previews: [Int64: Data] = [:]
     private var releasedThumbnails: Set<Int64> = [1]
@@ -33,19 +33,19 @@ private actor PresentationTransport: PhotosTransport {
         return []
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
         while !releasedThumbnails.contains(descriptor.unitID) {
             try await Task.sleep(for: .milliseconds(2))
         }
-        return ThumbnailResponse(data: previews[descriptor.unitID] ?? preview, etag: nil, lastModified: nil)
+        return MediaResponse(data: previews[descriptor.unitID] ?? preview, etag: nil, lastModified: nil)
     }
     func fullImage(_ resource: FullImageResource,
-                   etag: String?, lastModified: String?) async throws -> FullImageResponse {
-        FullImageResponse(data: Data("unsupported original".utf8), etag: nil, lastModified: nil)
+                   etag: String?, lastModified: String?) async throws -> MediaResponse {
+        MediaResponse(data: Data("unsupported original".utf8), etag: nil, lastModified: nil)
     }
 }
 
-private actor ProgressivePresentationTransport: PhotosTransport {
+private actor ProgressivePresentationTransport: TestPhotosTransport {
     let configuredThumbnail: Data
     let preview: Data
     let original: Data
@@ -65,20 +65,20 @@ private actor ProgressivePresentationTransport: PhotosTransport {
     func releasePreview() { previewReleased = true }
     func releaseOriginal() { originalReleased = true }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
         thumbnailSizes.append(size)
         if size == .xl {
             while !previewReleased { try await Task.sleep(for: .milliseconds(2)) }
-            return ThumbnailResponse(data: preview, etag: nil, lastModified: nil)
+            return MediaResponse(data: preview, etag: nil, lastModified: nil)
         }
         while !configuredReleased { try await Task.sleep(for: .milliseconds(2)) }
-        return ThumbnailResponse(data: configuredThumbnail, etag: nil, lastModified: nil)
+        return MediaResponse(data: configuredThumbnail, etag: nil, lastModified: nil)
     }
     func fullImage(_ resource: FullImageResource,
-                   etag: String?, lastModified: String?) async throws -> FullImageResponse {
+                   etag: String?, lastModified: String?) async throws -> MediaResponse {
         fullCalls += 1
         while !originalReleased { try await Task.sleep(for: .milliseconds(2)) }
-        return FullImageResponse(data: original, etag: nil, lastModified: nil)
+        return MediaResponse(data: original, etag: nil, lastModified: nil)
     }
 }
 

@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import UniformTypeIdentifiers
 import ImageIO
 import SynologyAPI
 
@@ -98,6 +99,38 @@ enum ThumbnailOrientationMatcher {
             throw ThumbnailOrientationMatchError.disagreement(winners)
         }
         return ThumbnailOrientationMatch(clockwiseQuarterTurns: winner, scoresBySize: allScores)
+    }
+
+    /// Rotates the three downloaded renditions into the files the converter upload expects.
+    static func rotatedFiles(_ downloaded: [ThumbnailSize: Data], clockwiseQuarterTurns: Int) throws -> ConvertedThumbnailFiles {
+        ConvertedThumbnailFiles(
+            sm: try rotateJPEG(downloaded[.sm], clockwiseQuarterTurns: clockwiseQuarterTurns),
+            m: try rotateJPEG(downloaded[.m], clockwiseQuarterTurns: clockwiseQuarterTurns),
+            xl: try rotateJPEG(downloaded[.xl], clockwiseQuarterTurns: clockwiseQuarterTurns)
+        )
+    }
+
+    private static func rotateJPEG(_ data: Data?, clockwiseQuarterTurns: Int) throws -> Data {
+        guard let data, let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let pixelWidth = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let pixelHeight = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+              pixelWidth > 0, pixelHeight > 0,
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: max(pixelWidth, pixelHeight),
+              ] as CFDictionary) else {
+            throw SynologyAPIError.invalidResponse
+        }
+        let rotated = try rotate(image, clockwiseQuarterTurns: clockwiseQuarterTurns)
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(output, UTType.jpeg.identifier as CFString, 1, nil) else {
+            throw SynologyAPIError.invalidResponse
+        }
+        CGImageDestinationAddImage(destination, rotated, [kCGImageDestinationLossyCompressionQuality: 0.92] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { throw SynologyAPIError.invalidResponse }
+        return output as Data
     }
 
     static func rotate(_ image: CGImage, clockwiseQuarterTurns: Int) throws -> CGImage {

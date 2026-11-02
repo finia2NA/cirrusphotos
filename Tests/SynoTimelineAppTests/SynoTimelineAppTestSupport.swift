@@ -1,5 +1,6 @@
 import Foundation
 import SynologyAPI
+@_exported import TransportTestSupport
 
 func temporaryTestRoot(_ prefix: String) -> URL {
     FileManager.default.temporaryDirectory
@@ -17,68 +18,6 @@ func waitUntil(
         try? await Task.sleep(for: interval)
     }
     return false
-}
-
-private struct UnexpectedTransportCall: Error {}
-
-extension PhotosTransport {
-    func login(credentials: SynologyCredentials) async throws {}
-
-    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
-        throw UnexpectedTransportCall()
-    }
-
-    func albums() async throws -> [AlbumSummary] {
-        throw UnexpectedTransportCall()
-    }
-
-    func readAlbumCatalogBatch(albumID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry] {
-        throw UnexpectedTransportCall()
-    }
-
-    func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
-        let section = fixtureSection(request)
-        let collection = request.collection
-
-        throw UnexpectedTransportCall()
-    }
-
-    func readPersonalInventoryBatch(offset: Int, limit: Int) async throws -> [PhotoItem] {
-        throw UnexpectedTransportCall()
-    }
-
-    func diffVersion() async throws -> DiffCursor {
-        throw SynologyAPIError.api(103)
-    }
-
-    func changes(since cursor: DiffCursor) async throws -> PhotoDiff {
-        throw UnexpectedTransportCall()
-    }
-
-
-    func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws {
-        throw UnexpectedTransportCall()
-    }
-
-    func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] { throw UnexpectedTransportCall() }
-    func rotate(itemIDs: [Int64], direction: PhotoRotationDirection, space: PhotoSpace) async throws { throw UnexpectedTransportCall() }
-
-    func thumbnail(
-        _ descriptor: ThumbnailInfo,
-        size: ThumbnailSize,
-        space: PhotoSpace, etag: String?,
-        lastModified: String?
-    ) async throws -> ThumbnailResponse {
-        throw UnexpectedTransportCall()
-    }
-
-    func fullImage(
-        _ resource: FullImageResource,
-        etag: String?,
-        lastModified: String?
-    ) async throws -> FullImageResponse {
-        throw UnexpectedTransportCall()
-    }
 }
 
 func fixtureDayCatalog(_ snapshot: TimelineSnapshot, initial: Bool) throws -> CollectionDayCatalog {

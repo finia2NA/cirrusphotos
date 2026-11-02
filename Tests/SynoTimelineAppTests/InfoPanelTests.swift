@@ -409,7 +409,7 @@ final class InfoPanelTests: XCTestCase {
     }
 }
 
-actor InfoPanelMockTransport: PhotosTransport {
+actor InfoPanelMockTransport: TestPhotosTransport {
     private var pages: [Int64: [PhotoItem]] = [:]
     private var itemCalls = 0
     private var cancellations = 0

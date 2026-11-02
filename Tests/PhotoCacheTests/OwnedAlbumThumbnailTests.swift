@@ -3,7 +3,7 @@ import SynologyAPI
 import XCTest
 @testable import PhotoCache
 
-private actor OwnedAlbumThumbnailTransport: PhotosTransport {
+private actor OwnedAlbumThumbnailTransport: TestPhotosTransport {
     var albums: [Int64] = []
     var personalCount = 0
     var detailAlbums: [Int64] = []
@@ -12,13 +12,13 @@ private actor OwnedAlbumThumbnailTransport: PhotosTransport {
         return try ids.map { try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":\($0),\"time\":100,\"type\":\"photo\"}".utf8)) }
     }
     func albumThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, albumID: Int64,
-                        etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                        etag: String?, lastModified: String?) async throws -> MediaResponse {
         albums.append(albumID)
-        return ThumbnailResponse(data: Data("album".utf8), etag: nil, lastModified: nil)
+        return MediaResponse(data: Data("album".utf8), etag: nil, lastModified: nil)
     }
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
         personalCount += 1
-        return ThumbnailResponse(data: Data("personal".utf8), etag: nil, lastModified: nil)
+        return MediaResponse(data: Data("personal".utf8), etag: nil, lastModified: nil)
     }
 }
 

@@ -3,12 +3,12 @@ import SynologyAPI
 import XCTest
 @testable import PhotoCache
 
-private actor ScopedWarmingTransport: PhotosTransport {
+private actor ScopedWarmingTransport: TestPhotosTransport {
     var spaces: [PhotoSpace] = []
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace,
-                   etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                   etag: String?, lastModified: String?) async throws -> MediaResponse {
         spaces.append(space)
-        return ThumbnailResponse(data: Data("fixture-thumbnail".utf8), etag: nil, lastModified: nil)
+        return MediaResponse(data: Data("fixture-thumbnail".utf8), etag: nil, lastModified: nil)
     }
 }
 

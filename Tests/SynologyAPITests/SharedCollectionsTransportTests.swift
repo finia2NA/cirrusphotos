@@ -10,9 +10,9 @@ final class SharedCollectionsTransportTests: XCTestCase {
         defer { session.invalidateAndCancel() }
         let client = SynologyClient(baseURL: URL(string: "https://example.test")!, session: session)
         try await client.login(credentials: .init(username: "fixture", password: "fixture"))
-        _ = try await client.people(space: .shared)
-        _ = try await client.subjects(space: .shared)
-        _ = try await client.tags(space: .shared)
+        _ = try await client.collectionIndex(.person, space: .shared)
+        _ = try await client.collectionIndex(.subject, space: .shared)
+        _ = try await client.collectionIndex(.tag, space: .shared)
         let root = try await client.folder(id: 0, space: .shared)
         XCTAssertEqual(root.id, 7)
         _ = try await client.folders(parentID: root.id, space: .shared)

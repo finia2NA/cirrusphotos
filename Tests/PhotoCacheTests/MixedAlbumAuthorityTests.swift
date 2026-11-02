@@ -24,7 +24,7 @@ final class MixedAlbumAuthorityTests: XCTestCase {
     }
 }
 
-private actor RestrictedAlbumTransport: PhotosTransport {
+private actor RestrictedAlbumTransport: TestPhotosTransport {
     let member: PhotoItem
     var writes = 0
     init(member: PhotoItem) { self.member = member }

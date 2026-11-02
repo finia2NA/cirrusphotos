@@ -24,3 +24,16 @@ public struct PhotoSelectionSnapshot: Sendable {
         self.knownItemIDsByOrdinal = knownItemIDsByOrdinal
     }
 }
+
+extension PhotoSelectionSnapshot {
+    /// Maps items resolved in selected-ordinal order to their timeline sections.
+    func sectionsByItemID(_ items: [PhotoItem]) -> [Int64: TimelineSection] {
+        let index = LibraryIndex(snapshot: timeline)
+        var sections: [Int64: TimelineSection] = [:]
+        for (ordinal, item) in zip(selectedOrdinals, items) {
+            guard let location = index.location(forOrdinal: ordinal) else { continue }
+            sections[item.id] = index.sections[location.sectionIndex]
+        }
+        return sections
+    }
+}

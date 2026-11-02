@@ -462,11 +462,11 @@ private final class OriginalCloseDelegate: NSObject, NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool { closeChecks += 1; return true }
 }
 
-private actor EditingMockTransport: PhotosTransport {
+private actor EditingMockTransport: TestPhotosTransport {
     private(set) var downloadedIDs: [Int64] = []
     private(set) var kind: PhotoDownloadKind?
-    func fullImage(_ resource: FullImageResource, etag: String?, lastModified: String?) async throws -> FullImageResponse {
-        FullImageResponse(data: Data("raw-image".utf8), etag: nil, lastModified: nil)
+    func fullImage(_ resource: FullImageResource, etag: String?, lastModified: String?) async throws -> MediaResponse {
+        MediaResponse(data: Data("raw-image".utf8), etag: nil, lastModified: nil)
     }
     func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind,
                         space: PhotoSpace, progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
@@ -480,7 +480,7 @@ private actor EditingMockTransport: PhotosTransport {
     }
 }
 
-private actor AlbumDownloadMockTransport: PhotosTransport {
+private actor AlbumDownloadMockTransport: TestPhotosTransport {
     let origin: PhotoSpace
     var downloadedSpace: PhotoSpace?
     init(origin: PhotoSpace = .personal) { self.origin = origin }

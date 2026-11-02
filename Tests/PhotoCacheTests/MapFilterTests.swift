@@ -3,7 +3,7 @@ import XCTest
 import SynologyAPI
 @testable import PhotoCache
 
-private actor CanonicalFilterTransport: PhotosTransport {
+private actor CanonicalFilterTransport: TestPhotosTransport {
     var rows: [Int64: PhotoItem]
     var blocked = false
     var released = false

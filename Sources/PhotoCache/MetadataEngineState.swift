@@ -50,9 +50,7 @@ struct MetadataEngineState {
     var peopleMutationSpaces: Set<PhotoSpace> = []
     var peopleMutationCollections: Set<PhotoCollectionDescriptor> = []
     var peopleEpoch: [PhotoSpace: UInt64] = [:]
-    var peopleJob: [PhotoSpace: SharedJob<[PersonSummary]>] = [:]
-    var subjectsJob: [PhotoSpace: SharedJob<[SubjectSummary]>] = [:]
-    var tagsJob: [PhotoSpace: SharedJob<[TagSummary]>] = [:]
+    var collectionIndexJobs: [CollectionIndexJobKey: SharedJob<[CollectionIndexEntry]>] = [:]
     var folderJobs: [PhotoCollectionDescriptor: SharedJob<FolderDirectory>] = [:]
     var albumListJob: SharedJob<[AlbumSummary]>?
     var albumListLatest: [AlbumSummary]?
@@ -73,7 +71,7 @@ struct MetadataEngineState {
     var hasDemand: Bool {
         reconciliation != nil || !detailJobs.isEmpty || !pendingPages.isEmpty || !activePages.isEmpty ||
             !directSubscribers.isEmpty || !initialSubscribers.isEmpty || !timelineJobs.isEmpty || !pageJobs.isEmpty ||
-            albumListJob != nil || !peopleJob.isEmpty || !subjectsJob.isEmpty || !tagsJob.isEmpty || !folderJobs.isEmpty || locationIndexWork != nil || sharedLocations.job != nil
+            albumListJob != nil || !collectionIndexJobs.isEmpty || !folderJobs.isEmpty || locationIndexWork != nil || sharedLocations.job != nil
     }
     mutating func clearSourceWork() {
         initialized = false; reconciled = false; sourceUnavailable = false; revision = 0

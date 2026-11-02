@@ -3,7 +3,7 @@ import SynologyAPI
 import XCTest
 @testable import PhotoCache
 
-private actor SharedTimelineTransport: PhotosTransport {
+private actor SharedTimelineTransport: TestPhotosTransport {
     var offline = false
     var diffCalls = 0
     var catalogs: [PhotoCollectionDescriptor] = []
@@ -27,9 +27,9 @@ private actor SharedTimelineTransport: PhotosTransport {
         return CollectionBatchResult(items: [item], profile: fields)
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace,
-                   etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                   etag: String?, lastModified: String?) async throws -> MediaResponse {
         thumbnailSpaces.append(space)
-        return ThumbnailResponse(data: Data(space.rawValue.utf8), etag: nil, lastModified: nil)
+        return MediaResponse(data: Data(space.rawValue.utf8), etag: nil, lastModified: nil)
     }
     var section: TimelineSection {
         TimelineSection(offset: 0, limit: 1, list: [TimelineDay(year: 2024, month: 1, day: 1, itemCount: 1)])

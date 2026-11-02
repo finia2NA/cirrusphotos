@@ -604,13 +604,8 @@ final class LibraryModel: ObservableObject {
 
     private func resolveRotation(_ snapshot: BrowserCommandSnapshot,
                                  repository: CachedPhotosRepository) async -> SelectionRotationAction? {
-        guard snapshot.active, let timeline = snapshots[snapshot.collection] else { return nil }
-        return await SelectionRotationResolver(repository: repository).resolve(
-            collection: snapshot.collection, snapshot: timeline,
-            selectedOrdinals: snapshot.selectedOrdinals,
-            knownItemIDsByOrdinal: snapshot.knownItemIDsByOrdinal,
-            expectedTimelineFingerprint: snapshot.indexFingerprint
-        )
+        guard snapshot.active, let selection = snapshot.captureSelection(timeline: snapshots[snapshot.collection]) else { return nil }
+        return await SelectionRotationResolver(repository: repository).resolve(selection)
     }
 
     // MARK: - Selection Favorites
@@ -640,17 +635,10 @@ final class LibraryModel: ObservableObject {
             browserFavoriteBusy = false
             updateBrowserFavoriteAvailability()
         }
-        guard let timelineSnapshot = snapshots[snapshot.collection] else { return }
+        guard let selection = snapshot.captureSelection(timeline: snapshots[snapshot.collection]) else { return }
         let selectedEntireCollection = !snapshot.selectedOrdinals.isEmpty &&
-            snapshot.selectedOrdinals.count == LibraryIndex(snapshot: timelineSnapshot).totalCount
-        let resolver = SelectionFavoriteResolver(repository: repository)
-        guard let action = await resolver.resolve(
-            collection: snapshot.collection,
-            snapshot: timelineSnapshot,
-            selectedOrdinals: snapshot.selectedOrdinals,
-            knownItemIDsByOrdinal: snapshot.knownItemIDsByOrdinal,
-            expectedTimelineFingerprint: snapshot.indexFingerprint
-        ) else {
+            snapshot.selectedOrdinals.count == LibraryIndex(snapshot: selection.timeline).totalCount
+        guard let action = await SelectionFavoriteResolver(repository: repository).resolve(selection) else {
             browserFavoriteFailure = "The selected photos could not be verified. Try again."
             return
         }

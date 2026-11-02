@@ -38,4 +38,4 @@ final class PhotoPageSnapshotTests: XCTestCase {
 
 }
 
-private struct SparseNoNetworkTransport: PhotosTransport {}
+private struct SparseNoNetworkTransport: TestPhotosTransport {}

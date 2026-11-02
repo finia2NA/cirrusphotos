@@ -36,7 +36,7 @@ final class IncomingAlbumIsolationTests: XCTestCase {
     }
 }
 
-private actor IncomingFixtureTransport: PhotosTransport {
+private actor IncomingFixtureTransport: TestPhotosTransport {
     var upload = true
     var download = true
     var downloadCalls = 0
