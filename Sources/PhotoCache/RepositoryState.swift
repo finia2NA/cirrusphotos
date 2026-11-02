@@ -36,6 +36,8 @@ struct RepositoryAuthenticationState {
 
 enum MetadataResetScope: Sendable {
     case metadata
+    /// Keeps cached rows and supersedes in-memory metadata state, e.g. after deletions.
+    case invalidation
     case all
 }
 

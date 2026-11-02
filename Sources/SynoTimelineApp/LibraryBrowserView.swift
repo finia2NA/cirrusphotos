@@ -319,6 +319,9 @@ struct LibraryBrowserView: View {
                                              onDownload: { selection, kind, choose in
                                                  library.downloadSelection(selection, kind: kind, choose: choose)
                                              },
+                                             onDelete: { selection in
+                                                 library.beginItemDeletion(captured: selection)
+                                             },
                                              onEdit: { selection, application in
                                                  library.editSelection(selection, application: application)
                                              },
@@ -773,6 +776,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let onOpenPhoto: (PhotoViewerOpenRequest) -> Void
     let onAlbumMenu: (NSMenu, BrowserCommandSnapshot) -> Void
     let onDownload: (BrowserCommandSnapshot, PhotoDownloadKind, Bool) -> Void
+    let onDelete: (BrowserCommandSnapshot) -> Void
     let onEdit: (BrowserCommandSnapshot, URL) -> Void
     let onSelectionStateChanged: (BrowserSelectionState) -> Void
     let onCommandStateChanged: (BrowserCommandSnapshot, ((BrowserSelectionCommand) -> Void)?) -> Void
@@ -882,6 +886,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var onOpenPhoto: ((PhotoViewerOpenRequest) -> Void)?
         private var onAlbumMenu: ((NSMenu, BrowserCommandSnapshot) -> Void)?
         private var onDownload: ((BrowserCommandSnapshot, PhotoDownloadKind, Bool) -> Void)?
+        private var onDelete: ((BrowserCommandSnapshot) -> Void)?
         private var onEdit: ((BrowserCommandSnapshot, URL) -> Void)?
         private var onSelectionStateChanged: ((BrowserSelectionState) -> Void)?
         private var onCommandStateChanged: ((BrowserCommandSnapshot, ((BrowserSelectionCommand) -> Void)?) -> Void)?
@@ -930,6 +935,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             onOpenPhoto = input.onOpenPhoto
             onAlbumMenu = input.onAlbumMenu
             onDownload = input.onDownload
+            onDelete = input.onDelete
             onEdit = input.onEdit
             onSelectionStateChanged = input.onSelectionStateChanged
             onCommandStateChanged = input.onCommandStateChanged
@@ -1490,6 +1496,10 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
                 }
             }
             if allowsPersonalActions { onAlbumMenu?(menu, snapshot) }
+            if allowsFileDrag, let onDelete {
+                if !menu.items.isEmpty { menu.addItem(.separator()) }
+                menu.addItem(PhotoDownloadMenuItem(title: "Delete…") { onDelete(snapshot) })
+            }
             return menu.items.isEmpty ? nil : menu
         }
 

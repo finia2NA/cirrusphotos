@@ -753,6 +753,30 @@ extension DiskCache {
         }
     }
 
+    /// Deleted items leave the namespace's indexes and every cached collection,
+    /// summary and day page is revalidated before reuse. Unlike a Diff
+    /// application this keeps the cursor and does not require a tombstone.
+    public func invalidateMetadataAfterDeletion(namespace: MetadataNamespace, deletedIDs: [Int64],
+                                                admission: MetadataStoreAdmission) throws {
+        try metadataTransaction {
+            try admitLifetime(admission, namespace: namespace)
+            for table in ["item_index", "item_details"] {
+                for id in Set(deletedIDs) {
+                    let statement = try prepare("DELETE FROM \(table) WHERE namespace=? AND item_id=?")
+                    bind(namespace.key, at: 1, in: statement); sqlite3_bind_int64(statement, 2, id); try metadataStep(statement)
+                }
+            }
+            for table in ["collection_state", "album_summaries", "people_summaries", "subject_summaries",
+                          "tag_summaries", "folder_directories"] {
+                let statement = try prepare("UPDATE \(table) SET validated_run=NULL WHERE namespace=?")
+                bind(namespace.key, at: 1, in: statement); try metadataStep(statement)
+            }
+            let days = try prepare("UPDATE collection_days SET membership_generation=membership_generation+1 WHERE namespace=?")
+            bind(namespace.key, at: 1, in: days); try metadataStep(days)
+            try advanceMetadataLocalRevision(namespace)
+        }
+    }
+
     public func applyMetadataFavoriteValues(_ values: [Int64: Bool], namespace: MetadataNamespace,
                                             currentRun: String, admission: MetadataStoreAdmission) throws {
         try metadataTransaction {

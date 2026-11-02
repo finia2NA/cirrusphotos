@@ -759,6 +759,42 @@ public actor SynologyClient: PhotosTransport {
         guard response.success else { throw SynologyAPIError.api(response.error?.code ?? -1) }
     }
 
+    /// Submits a library deletion and waits for the background task to finish.
+    /// Task `done` only means the NAS processed the request: unknown IDs and IDs
+    /// from the other space also finish with `error` 0, so callers must verify
+    /// absence themselves. Both spaces share `SYNO.Foto.BackgroundTask.Info`.
+    public func deleteItems(_ itemIDs: [Int64], space: PhotoSpace) async throws {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        guard !itemIDs.isEmpty else { return }
+        let api = space == .shared ? "SYNO.FotoTeam.BackgroundTask.File" : "SYNO.Foto.BackgroundTask.File"
+        let submission: APIEnvelope<BackgroundTaskSubmission> = try await post(
+            path: "/webapi/entry.cgi/" + api,
+            parameters: ["api": api, "version": "1", "method": "delete",
+                         "item_id": Self.idArray(itemIDs), "folder_id": "[]", "_sid": sid],
+            authenticated: true
+        )
+        guard submission.success, let task = submission.data?.taskInfo else {
+            throw SynologyAPIError.api(submission.error?.code ?? -1)
+        }
+        for attempt in 0..<Self.deletionStatusPolls {
+            if attempt > 0 { try await Task.sleep(for: .milliseconds(500)) }
+            let status: APIEnvelope<BackgroundTaskList> = try await post(
+                path: "/webapi/entry.cgi/SYNO.Foto.BackgroundTask.Info",
+                parameters: ["api": "SYNO.Foto.BackgroundTask.Info", "version": "1", "method": "get_status",
+                             "id": Self.idArray([task.id]), "_sid": sid],
+                authenticated: true
+            )
+            guard status.success, let current = status.data?.list.first(where: { $0.id == task.id }) else {
+                throw SynologyAPIError.api(status.error?.code ?? -1)
+            }
+            guard current.error == 0 else { throw SynologyAPIError.unsupported("The server reported an error while deleting.") }
+            if current.status == "done" { return }
+        }
+        throw SynologyAPIError.unsupported("The server has not finished deleting yet.")
+    }
+
+    private static let deletionStatusPolls = 60
+
     public func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] {
         guard let sid else { throw SynologyAPIError.api(119) }
         guard !ids.isEmpty, ids.count <= 1_000 else {

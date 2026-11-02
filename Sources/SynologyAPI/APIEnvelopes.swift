@@ -32,6 +32,21 @@ struct DiscardedJSON: Decodable {
 struct AlbumListData: Decodable { let list: [AlbumSummary] }
 struct EmptyData: Decodable {}
 
+/// `SYNO.Foto.BackgroundTask.File` / `.Info` task record. `completion` counts
+/// requested IDs, so it never proves which items were deleted.
+struct BackgroundTaskInfo: Decodable {
+    let id: Int64
+    let status: String
+    let error: Int
+}
+
+struct BackgroundTaskSubmission: Decodable {
+    let taskInfo: BackgroundTaskInfo
+    enum CodingKeys: String, CodingKey { case taskInfo = "task_info" }
+}
+
+struct BackgroundTaskList: Decodable { let list: [BackgroundTaskInfo] }
+
 struct ItemSetData: Decodable {
     let errorList: [ItemSetError]
     enum CodingKeys: String, CodingKey { case errorList = "error_list" }

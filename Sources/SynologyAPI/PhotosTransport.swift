@@ -205,6 +205,7 @@ public protocol PhotosTransport: Sendable {
                           receive: @escaping @Sendable (VideoRangeEvent) async throws -> Void) async throws
     func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws
     func rotate(itemIDs: [Int64], direction: PhotoRotationDirection, space: PhotoSpace) async throws
+    func deleteItems(_ itemIDs: [Int64], space: PhotoSpace) async throws
     func livePhotoMotion(itemID: Int64, space: PhotoSpace) async throws -> VideoPlaybackResource?
     func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, space: PhotoSpace,
                         progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse
@@ -220,6 +221,9 @@ public extension PhotosTransport {
     }
     func rotate(itemIDs: [Int64], direction: PhotoRotationDirection, space: PhotoSpace) async throws {
         throw SynologyAPIError.unsupported("Photo rotation is unavailable.")
+    }
+    func deleteItems(_ itemIDs: [Int64], space: PhotoSpace) async throws {
+        throw SynologyAPIError.unsupported("Photo deletion is unavailable.")
     }
     func livePhotoMotion(itemID: Int64, space: PhotoSpace) async throws -> VideoPlaybackResource? {
         throw SynologyAPIError.unsupported("Live Photo motion is unavailable.")

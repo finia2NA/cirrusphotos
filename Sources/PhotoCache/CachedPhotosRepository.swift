@@ -24,6 +24,7 @@ public actor CachedPhotosRepository {
     var incomingAccess: [PhotoCollectionDescriptor: IncomingAlbum] = [:]
     var avatars: [AvatarIdentity: Data] = [:]
     var photoUploadInProgress = false
+    var itemDeletionInProgress = false
     var avatarTasks: [AvatarIdentity: AvatarWork] = [:]
 
     public init(credentials: SynologyCredentials, baseURL: URL = SynologyClient.defaultBaseURL,

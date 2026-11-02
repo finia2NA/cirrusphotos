@@ -291,6 +291,12 @@ public actor DiskCache {
     /// is intentionally never rolled back, so pre-reset writers stay invalid even
     /// when the transaction fails.
     @discardableResult
+    /// Supersedes admitted metadata work without discarding cached rows.
+    public func advanceMetadataGeneration() -> Int {
+        metadataGeneration += 1
+        return metadataGeneration
+    }
+
     public func clearMetadata() throws -> Int {
         metadataGeneration += 1
         guard sqlite3_exec(db, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK else {

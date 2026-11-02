@@ -22,10 +22,16 @@ extension CachedPhotosRepository {
         _ = try await resetCache(scope: .all)
     }
 
+    /// Publishes a cache-reset revision for in-memory state without deleting
+    /// stored metadata. Callers invalidate the affected stored rows first.
+    func supersedeMetadataState() async throws {
+        _ = try await resetCache(scope: .invalidation)
+    }
+
     private func resetCache(scope: MetadataResetScope) async throws -> UInt64 {
         if let existing = metadata.resetJob {
             let revision = try await existing.task.value
-            if scope == .metadata || existing.scope == .all { return revision }
+            if scope != .all || existing.scope == .all { return revision }
             // A whole-cache reset requested during a metadata-only reset runs after it.
         }
 
@@ -46,7 +52,7 @@ extension CachedPhotosRepository {
         metadata.resetInProgress = true
         metadata.admissionEpoch &+= 1
 
-        if scope == .metadata {
+        if scope != .all {
             // Existing transfers have already been admitted. Let them finish even
             // when UI invalidation removes their last subscriber.
             imageWork.thumbnailFinishWithoutSubscribers.formUnion(imageWork.thumbnailJobs.keys)
@@ -73,6 +79,8 @@ extension CachedPhotosRepository {
             switch scope {
             case .metadata:
                 diskRevision = try await store.clearMetadata()
+            case .invalidation:
+                diskRevision = await store.advanceMetadataGeneration()
             case .all:
                 try await store.clear()
                 diskRevision = await store.currentMetadataGeneration()

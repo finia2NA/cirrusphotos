@@ -303,6 +303,17 @@ struct AppShellView: View {
         .sheet(item: $model.albumOperation) { operation in
             AlbumOperationView(model: model, operation: operation)
         }
+        .sheet(item: $model.itemDeletion) { deletion in
+            ItemDeletionView(model: model, deletion: deletion)
+        }
+        .alert("Delete Failed", isPresented: Binding(
+            get: { model.itemDeletionError != nil },
+            set: { if !$0 { model.itemDeletionError = nil } }
+        )) {
+            Button("OK") { model.itemDeletionError = nil }
+        } message: {
+            Text(model.itemDeletionError ?? "The items could not be deleted.")
+        }
         .alert("Album Update Failed", isPresented: Binding(
             get: { model.albumOperationError != nil },
             set: { if !$0 { model.albumOperationError = nil } }

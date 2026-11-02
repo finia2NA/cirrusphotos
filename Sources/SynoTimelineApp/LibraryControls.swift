@@ -400,6 +400,10 @@ struct LibraryCommands: Commands {
                 Button("Remove from Album…") { model.beginAlbumOperation(.remove) }
             }
             Divider()
+            Button("Delete…") { model.beginItemDeletion() }
+                .keyboardShortcut(.delete, modifiers: [.command])
+                .disabled(!model.canDeleteSelection)
+            Divider()
             Button("Toggle Favorite") { model.toggleSelectionFavorite() }
                 .keyboardShortcut(".", modifiers: [])
                 .disabled(!model.canToggleFavorite)

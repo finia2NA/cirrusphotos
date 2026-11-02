@@ -1,5 +1,16 @@
 # Synology Photos timeline and thumbnail API
 
+## Item deletion
+
+Captures `docs/captures/deleting.har` and `deleting2.har` (single and paired deletion in both spaces) were extended by `phototest` (Personal Space) and real-account (Shared Space) probes on 2026-11-02 using disposable items.
+
+- Request: `POST /webapi/entry.cgi/SYNO.Foto.BackgroundTask.File` (Personal) or `SYNO.FotoTeam.BackgroundTask.File` (Shared), `version=1`, `method=delete`, `item_id=[<IDs>]`, `folder_id=[]`. The response is `data.task_info` with `id`, `status: "waiting"`, `error: 0` and `total`.
+- Status: `SYNO.Foto.BackgroundTask.Info` v1 `get_status` with `id=[<task id>]` returns the task with `status: "done"` roughly one second after submission in every probe (1, 2, 3 and 5 items, both spaces). There is no `SYNO.FotoTeam.BackgroundTask.Info`; the Personal API reports both spaces' tasks. `list_user_task` was empty throughout, including while a task was `waiting`, and `Info get` returned error 103.
+- `done` is not proof of deletion. `completion` equals the number of requested IDs and `error` stays 0 for already-deleted IDs, nonexistent IDs, mixes of real and nonexistent IDs, and for a Shared Space item sent to the Personal `delete` API. In the last case the item remained present. Only a direct `Browse.Item get` or Diff tombstone shows what was removed; an omitted ID in `get` is ambiguous on its own, so pair it with the task having finished.
+- Personal Space `Diff` v1 reported each deleted item exactly once under `item.delete`. A Live Photo (type `live`) produced one tombstone, for the still's ID, and both the HEIC and MOV files left the library. Photo, video and Live Photo batches work in one request. Deleting an album member removed it from the album and decreased the album's `item_count` and cover; `NormalAlbum delete_item` only removes membership and leaves the item in the library.
+- On `phototest` the deleted files moved to the share-level `#recycle` (`/Volumes/homes/phototest/#recycle/Photos/…`), preserving folder structure. This is the DSM recycle bin of the shared folder, not a Photos trash. Shared Space recycle behavior was not verified.
+- Not captured: restricted-permission deletion, mixed-album deletion across spaces, and deletion of very large batches.
+
 ## Personal Space favorites
 
 The viewer and Favorites album captures in `docs/captures/favorites.har` and `favoritesAlbum.har` show that Personal Space item lists include `additional.favorite: true` for favorited items and omit the field for other items. The existing item-list request already asks for `favorite` in its `additional` array. The Favorites album filters normal `Browse.Timeline.get` and `Browse.Item.list` requests with `favorite_only=true`. The capture does not establish that `get_init_timeline` accepts this filter, so the client uses full `get` for Favorites.
