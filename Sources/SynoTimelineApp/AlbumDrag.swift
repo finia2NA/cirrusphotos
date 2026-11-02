@@ -88,12 +88,13 @@ struct AlbumMembershipTarget: NSViewRepresentable {
         var collection: PhotoCollectionDescriptor = .album(0)
         weak var model: LibraryModel?
         private var active = false { didSet { needsDisplay = true } }
-        override init(frame: NSRect) { super.init(frame: frame); registerForDraggedTypes([SelectionDragRegistry.type]) }
+        override init(frame: NSRect) { super.init(frame: frame); registerForDraggedTypes([SelectionDragRegistry.type, .fileURL]) }
         required init?(coder: NSCoder) { fatalError() }
         private func value(_ sender: NSDraggingInfo) -> String? { sender.draggingPasteboard.string(forType: SelectionDragRegistry.type) }
         private func valid(_ sender: NSDraggingInfo) -> Bool {
             guard let model, let namespace = model.repository?.namespace, model.albumOperation == nil,
                   model.albums.contains(where: { $0.collection == collection && (!$0.isIncoming || $0.recipientCanUpload) }) else { return false }
+            if collection.albumID != nil, !PhotoUploadManager.shared.active, !PhotoUploadManager.fileURLs(sender).isEmpty { return true }
             return SelectionDragRegistry.lookup(value(sender), namespace: namespace) != nil
         }
         override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { active = valid(sender); return active ? .copy : [] }
@@ -102,7 +103,13 @@ struct AlbumMembershipTarget: NSViewRepresentable {
         override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { valid(sender) }
         override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
             defer { active = false }
-            guard valid(sender), let model, let namespace = model.repository?.namespace,
+            guard valid(sender), let model, let repository = model.repository else { return false }
+            let urls = PhotoUploadManager.fileURLs(sender)
+            if let albumID = collection.albumID, !urls.isEmpty {
+                return PhotoUploadManager.shared.start(urls, repository: repository, destination: .album(albumID)) { [weak model] in await model?.reload() }
+            }
+            let namespace = repository.namespace
+            guard
                   let entry = SelectionDragRegistry.take(value(sender), namespace: namespace) else { return false }
             return model.addCapturedSelection(entry.selection, sourceAlbumID: entry.sourceAlbumID, to: collection)
         }

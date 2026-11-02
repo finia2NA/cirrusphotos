@@ -116,7 +116,7 @@ extension CachedPhotosRepository {
         }
     }
 
-    private func performAlbumMutation<Value: Sendable>(albumID: Int64?, selection: ResolvedPhotoSelection? = nil, destinationAuthority: PhotoSelectionAuthority? = nil, destinationProofs: [SelectionMembershipProof] = [], deleting: Bool = false, operation: @escaping @Sendable (isolated CachedPhotosRepository) async throws -> Value) async throws -> Value {
+    func performAlbumMutation<Value: Sendable>(albumID: Int64?, selection: ResolvedPhotoSelection? = nil, destinationAuthority: PhotoSelectionAuthority? = nil, destinationProofs: [SelectionMembershipProof] = [], deleting: Bool = false, operation: @escaping @Sendable (isolated CachedPhotosRepository) async throws -> Value) async throws -> Value {
         guard !metadata.albumMutationInProgress else {
             throw SynologyAPIError.unsupported("Another album change is in progress. Try again.")
         }

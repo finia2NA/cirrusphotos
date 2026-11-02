@@ -214,6 +214,13 @@ struct LibraryBrowserView: View {
     }
 
     private var isAlbum: Bool { library.sourceAlbumID(for: collection) != nil || library.isIncomingCollection(collection) }
+    private var uploadDestination: PhotoUploadDestination? {
+        switch collection {
+        case .library(let space): return .timeline(space)
+        case .album(let id): return .album(id)
+        default: return nil
+        }
+    }
     private var browserHeader: BrowserHeaderConfiguration? { customHeader ?? albumHeader }
     private var shouldHideEmptyCollectionState: Bool {
         hidesEmptyCollectionState && !collection.isLibraryFilter &&
@@ -289,6 +296,8 @@ struct LibraryBrowserView: View {
                                              filterMembership: library.filterMembership(for: collection),
                                              filterAuthority: library.filterAuthority(for: collection),
                                              collection: collection,
+                                             uploadDestination: uploadDestination,
+                                             uploadModel: library,
                                              revision: library.snapshotRevision(for: collection),
                                              retryRevision: library.retryRevision,
                                              repository: repository, allowNetwork: library.timelineVerified(for: collection),
@@ -368,6 +377,7 @@ struct LibraryBrowserView: View {
                 AlbumSharingSheet(albumID: albumID, repository: repository)
             }
         }
+        .background(FileUploadTarget(destination: uploadDestination, model: library))
         .background(Color(nsColor: .textBackgroundColor))
         .onChange(of: library.snapshotRevision(for: collection)) { _, _ in
             guard let timeline = library.snapshot(for: collection)?.timeline,
@@ -579,6 +589,24 @@ struct LibraryFilterEdgeDemandGeometry {
 
 /// Owns timeline scrolling and tracks whether its document or an accessibility item has focus.
 final class TimelineScrollView: NSScrollView {
+    var uploadDestination: PhotoUploadDestination?
+    weak var uploadModel: LibraryModel?
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        registerForDraggedTypes([.fileURL])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard uploadDestination != nil, uploadModel?.repository != nil, !PhotoUploadManager.shared.active,
+              !PhotoUploadManager.fileURLs(sender).isEmpty else { return [] }
+        return .copy
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { !draggingEntered(sender).isEmpty }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let destination = uploadDestination, let model = uploadModel, let repository = model.repository else { return false }
+        return PhotoUploadManager.shared.start(PhotoUploadManager.fileURLs(sender), repository: repository, destination: destination) { [weak model] in await model?.reload() }
+    }
     var focusChanged: ((Bool) -> Void)?
     var userScroll: ((LibraryFilterScanDirection, UInt64) -> Void)?
     weak var keyboardResponder: NSView?
@@ -725,6 +753,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let filterMembership: [[Int64]]?
     let filterAuthority: [[Bool]]?
     let collection: PhotoCollectionDescriptor
+    let uploadDestination: PhotoUploadDestination?
+    let uploadModel: LibraryModel
     let revision: Int
     let retryRevision: Int
     let repository: CachedPhotosRepository
@@ -755,6 +785,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = TimelineScrollView()
+        scroll.uploadDestination = uploadDestination
+        scroll.uploadModel = uploadModel
         scroll.hasVerticalScroller = false
         scroll.drawsBackground = true
         scroll.backgroundColor = .textBackgroundColor
@@ -800,6 +832,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
+        if let scroll = nsView as? TimelineScrollView { scroll.uploadDestination = uploadDestination; scroll.uploadModel = uploadModel }
         context.coordinator.configure(self)
     }
 

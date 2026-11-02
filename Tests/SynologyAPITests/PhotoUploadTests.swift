@@ -1,0 +1,68 @@
+import Foundation
+import XCTest
+@testable import SynologyAPI
+
+final class PhotoUploadTests: XCTestCase {
+    func testCapturedTimelineAndAlbumUploads() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [UploadFixtureProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let client = SynologyClient(baseURL: URL(string: "https://example.test")!, session: session)
+        try await client.login(credentials: .init(username: "fixture", password: "fixture"))
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        try Data([1, 2, 3, 4]).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let shared = try await client.uploadPhoto(at: url, destination: .timeline(.shared), progress: { _ in })
+        XCTAssertEqual(shared.action, "new")
+        let album = try await client.uploadPhoto(at: url, destination: .album(77), progress: { _ in })
+        XCTAssertEqual(album.action, "ignore")
+        XCTAssertEqual(album.id, 11)
+        XCTAssertEqual(album.unitID, 12)
+    }
+}
+
+private final class UploadFixtureProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+    override func startLoading() {
+        let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let api = query.first(where: { $0.name == "api" })?.value
+        let json: String
+        if api == nil {
+            json = #"{"success":true,"data":{"sid":"fixture"}}"#
+        } else {
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(query.first(where: { $0.name == "version" })?.value, "8")
+            XCTAssertTrue(request.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("multipart/form-data; boundary=") == true)
+            var body = request.httpBody ?? Data()
+            if let stream = request.httpBodyStream {
+                stream.open(); defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    body.append(contentsOf: buffer.prefix(count))
+                }
+            }
+            let text = String(decoding: body, as: UTF8.self)
+            XCTAssertTrue(text.contains("name=\"file\""))
+            XCTAssertTrue(text.contains("name=\"duplicate\"\r\n\r\n\"ignore\""))
+            XCTAssertTrue(text.contains("name=\"folder\"\r\n\r\n[\"PhotoLibrary\"]"))
+            if api == "SYNO.FotoTeam.Upload.Item" {
+                XCTAssertTrue(text.contains("name=\"uploadDestination\"\r\n\r\n\"timeline\""))
+                json = #"{"success":true,"data":{"action":"new","id":11,"unit_id":12}}"#
+            } else {
+                XCTAssertEqual(api, "SYNO.Foto.Upload.Item")
+                XCTAssertTrue(text.contains("name=\"album_id\"\r\n\r\n77"))
+                XCTAssertFalse(text.contains("name=\"uploadDestination\""))
+                json = #"{"success":true,"data":{"action":"ignore","id":11,"unit_id":12}}"#
+            }
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(json.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+}

@@ -1013,6 +1013,7 @@ struct AppShellView: View {
             }
         }
 
+        ToolbarItem(placement: .primaryAction) { UploadsToolbarControl() }
         ToolbarItem(placement: .primaryAction) { DownloadsToolbarControl() }
         ToolbarItem(placement: .primaryAction) {
             ConnectionToolbarItem()

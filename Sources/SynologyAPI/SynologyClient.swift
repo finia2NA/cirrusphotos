@@ -1,5 +1,6 @@
 import Foundation
 import ImageIO
+import UniformTypeIdentifiers
 
 private final class UploadTransferDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private let progress: @Sendable (TransferProgress) -> Void
@@ -38,6 +39,84 @@ public actor SynologyClient: PhotosTransport {
     private let session: URLSession
     private var sid: String?
     private var synoToken: String?
+
+    public func uploadPhoto(at url: URL, destination: PhotoUploadDestination,
+                            progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoUploadResult {
+        guard let sid else { throw SynologyAPIError.api(119) }
+        let name = url.lastPathComponent
+        guard !name.isEmpty, !name.contains("\r"), !name.contains("\n"), !name.contains("\"") else {
+            throw SynologyAPIError.unsupported("This filename cannot be uploaded.")
+        }
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .contentTypeKey])
+        guard values.isRegularFile == true, values.contentType?.conforms(to: .image) == true else {
+            throw SynologyAPIError.unsupported("Only local image files can be uploaded.")
+        }
+        let api: String
+        let target: (String, String)
+        switch destination {
+        case .timeline(let space):
+            api = space == .personal ? "SYNO.Foto.Upload.Item" : "SYNO.FotoTeam.Upload.Item"
+            target = ("uploadDestination", "\"timeline\"")
+        case .album(let id):
+            guard id > 0 else { throw SynologyAPIError.invalidResponse }
+            api = "SYNO.Foto.Upload.Item"
+            target = ("album_id", String(id))
+        }
+        let boundary = "SynoTimeline-\(UUID().uuidString)"
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        guard FileManager.default.createFile(atPath: temporary.path, contents: nil) else { throw SynologyAPIError.invalidResponse }
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let mime = values.contentType?.preferredMIMEType ?? "application/octet-stream"
+        let modified = Int64((values.contentModificationDate ?? Date()).timeIntervalSince1970)
+        let preparation = Task.detached(priority: .utility) {
+          let output = try FileHandle(forWritingTo: temporary)
+          do {
+            func write(_ text: String) throws { try output.write(contentsOf: Data(text.utf8)) }
+            func field(_ key: String, _ value: String) throws {
+                try write("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(key)\"\r\n\r\n\(value)\r\n")
+            }
+            try field("api", api); try field("method", "upload"); try field("version", "8")
+            try write("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(name)\"\r\nContent-Type: \(mime)\r\n\r\n")
+            let input = try FileHandle(forReadingFrom: url)
+            defer { try? input.close() }
+            while let chunk = try input.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+                try Task.checkCancellation()
+                try output.write(contentsOf: chunk)
+            }
+            try write("\r\n")
+            try field(target.0, target.1)
+            try field("duplicate", "\"ignore\"")
+            let encodedName = String(data: try JSONEncoder().encode(name), encoding: .utf8)!
+            try field("name", encodedName)
+            try field("mtime", String(modified))
+            try field("folder", "[\"PhotoLibrary\"]")
+            try write("--\(boundary)--\r\n")
+            try output.close()
+          } catch {
+            try? output.close()
+            throw error
+          }
+        }
+        try await withTaskCancellationHandler { try await preparation.value } onCancel: { preparation.cancel() }
+        try Task.checkCancellation()
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+        components.path = "/webapi/entry.cgi/\(api)"
+        components.queryItems = [URLQueryItem(name: "api", value: api), URLQueryItem(name: "method", value: "upload"), URLQueryItem(name: "version", value: "8")]
+        guard let requestURL = components.url else { throw SynologyAPIError.invalidResponse }
+        var request = URLRequest(url: requestURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 120
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
+        if let synoToken { request.setValue(synoToken, forHTTPHeaderField: "X-SYNO-TOKEN") }
+        let (data, response) = try await session.upload(for: request, fromFile: temporary, delegate: UploadTransferDelegate(progress: progress))
+        guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else { throw SynologyAPIError.http(http.statusCode) }
+        let envelope = try JSONDecoder().decode(APIEnvelope<PhotoUploadResult>.self, from: data)
+        guard envelope.success else { throw SynologyAPIError.api(envelope.error?.code ?? -1) }
+        guard let result = envelope.data, ["new", "ignore"].contains(result.action), result.id > 0, result.unitID > 0 else { throw SynologyAPIError.invalidResponse }
+        return result
+    }
 
     public init(baseURL: URL = defaultBaseURL) {
         self.baseURL = baseURL

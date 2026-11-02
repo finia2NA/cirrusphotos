@@ -123,7 +123,20 @@ public struct PhotoDownloadResponse: Sendable {
     }
 }
 
+public enum PhotoUploadDestination: Sendable {
+    case timeline(PhotoSpace)
+    case album(Int64)
+}
+
+public struct PhotoUploadResult: Sendable, Decodable {
+    public let action: String
+    public let id: Int64
+    public let unitID: Int64
+    enum CodingKeys: String, CodingKey { case action, id; case unitID = "unit_id" }
+}
+
 public protocol PhotosTransport: Sendable {
+    func uploadPhoto(at url: URL, destination: PhotoUploadDestination, progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoUploadResult
     func people(space: PhotoSpace) async throws -> [PersonSummary]
     func suggestPeople(prefix: String, space: PhotoSpace) async throws -> [PersonSummary]
     func renamePerson(id: Int64, name: String, space: PhotoSpace) async throws -> PersonSummary
@@ -199,6 +212,9 @@ public protocol PhotosTransport: Sendable {
 }
 
 public extension PhotosTransport {
+    func uploadPhoto(at url: URL, destination: PhotoUploadDestination, progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoUploadResult {
+        throw SynologyAPIError.unsupported("Photo uploads are unavailable.")
+    }
     func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws {
         throw SynologyAPIError.unsupported("Favorite changes are unavailable.")
     }

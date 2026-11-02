@@ -422,14 +422,15 @@ func addEditMenu(to menu: NSMenu, filename: String?, onChoose: @escaping (URL) -
 
 @MainActor
 func confirmStoppingDownloads() -> Bool {
-    guard PhotoDownloadManager.shared.hasActiveJobs else { return true }
+    guard PhotoDownloadManager.shared.hasActiveJobs || PhotoUploadManager.shared.active else { return true }
     let alert = NSAlert()
-    alert.messageText = "Downloads Are Running"
-    alert.informativeText = "Closing the app will cancel the active downloads."
-    alert.addButton(withTitle: "Close and Cancel Downloads")
+    alert.messageText = "Transfers Are Running"
+    alert.informativeText = "Closing the app will cancel active uploads and downloads. Check upload destinations before retrying."
+    alert.addButton(withTitle: "Close and Cancel Transfers")
     alert.addButton(withTitle: "Keep Open")
     guard alert.runModal() == .alertFirstButtonReturn else { return false }
     PhotoDownloadManager.shared.cancelAll()
+    PhotoUploadManager.shared.cancel()
     return true
 }
 

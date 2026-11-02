@@ -23,6 +23,7 @@ public actor CachedPhotosRepository {
     var itemMutations = RepositoryItemMutationState()
     var incomingAccess: [PhotoCollectionDescriptor: IncomingAlbum] = [:]
     var avatars: [AvatarIdentity: Data] = [:]
+    var photoUploadInProgress = false
     var avatarTasks: [AvatarIdentity: AvatarWork] = [:]
 
     public init(credentials: SynologyCredentials, baseURL: URL = SynologyClient.defaultBaseURL,
