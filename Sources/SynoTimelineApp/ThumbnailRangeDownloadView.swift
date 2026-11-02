@@ -26,7 +26,7 @@ struct ThumbnailRangeDownloadView: View {
         }
     }
     private var timelinesVerified: Bool {
-        library.timelineVerified && (!includesSharedSpace || library.timelineVerified(for: .library(.shared)))
+        library.timelineVerified(for: .library(.personal)) && (!includesSharedSpace || library.timelineVerified(for: .library(.shared)))
     }
     private struct TimelineKey: Equatable {
         let includesSharedSpace: Bool

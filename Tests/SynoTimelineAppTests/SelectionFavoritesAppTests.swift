@@ -246,7 +246,7 @@ final class SelectionFavoritesAppTests: XCTestCase {
         let owner = UUID()
         var selected = IndexSet()
         selected.insert(1)
-        model.installBrowserCommands(owner: owner, active: true, canOpen: true, canToggleFavorite: true, selectedOrdinals: selected)
+        model.installBrowserCommands(owner: owner, active: true, canOpen: true, canToggleFavorite: true, collection: .library(.personal), selectedOrdinals: selected)
         XCTAssertFalse(model.canToggleFavorite)
 
         // Without an active viewer, the viewer favorite command is never enabled

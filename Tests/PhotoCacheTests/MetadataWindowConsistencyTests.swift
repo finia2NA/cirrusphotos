@@ -35,7 +35,7 @@ final class MetadataWindowConsistencyTests: XCTestCase, @unchecked Sendable {
         let transport = WindowMetadataTransport()
         let repository = try CachedPhotosRepository(credentials: .init(username: "window", password: "unused"), cacheRoot: root, transport: transport)
         let snapshot = try await repository.verifiedTimelineSnapshot(collection: .library(.personal))
-        let window = LibraryPageWindow(repository: repository)
+        let window = LibraryPageWindow(repository: repository, collection: .library(.personal))
         let events = await window.events()
         let observer = Task { for await _ in events {} }
         await window.update(snapshot: snapshot, allowNetwork: true, visible: [0], prefetch: [])
@@ -61,7 +61,7 @@ final class MetadataWindowConsistencyTests: XCTestCase, @unchecked Sendable {
         let old = TimelineSection(offset: 0, limit: 1, list: [.init(year: 2024, month: 1, day: 1, itemCount: 1)])
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"time\":\(day.startTime),\"type\":\"photo\"}".utf8))
         try await seedMetadataPage([photo], section: old, repository: repository, validatedRun: repository.runID)
-        let window = LibraryPageWindow(repository: repository)
+        let window = LibraryPageWindow(repository: repository, collection: .library(.personal))
         await window.update(snapshot: .init(sections: [old]), allowNetwork: false, visible: [0], prefetch: [])
         let loaded = await waitUntil { await window.retainedPages().count == 1 }
         XCTAssertTrue(loaded)

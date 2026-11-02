@@ -162,10 +162,6 @@ final class LibraryModel: ObservableObject {
         self.presentationNamespace = repository?.namespace
     }
 
-    var snapshot: TimelineSnapshot? { snapshot(for: .library(.personal)) }
-    var snapshotRevision: Int { snapshotRevision(for: .library(.personal)) }
-    var timelineVerified: Bool { timelineVerified(for: .library(.personal)) }
-    var error: String? { error(for: .library(.personal)) }
 
     func snapshot(for collection: PhotoCollectionDescriptor) -> TimelineSnapshot? { snapshots[collection] }
     func snapshotRevision(for collection: PhotoCollectionDescriptor) -> Int { snapshotRevisions[collection, default: 0] }
@@ -409,7 +405,7 @@ final class LibraryModel: ObservableObject {
         active: Bool,
         canOpen: Bool,
         canToggleFavorite: Bool = false,
-        collection: PhotoCollectionDescriptor = .library(.personal),
+        collection: PhotoCollectionDescriptor,
         selectedOrdinals: IndexSet = IndexSet(),
         handler: ((BrowserSelectionCommand) -> Void)? = nil
     ) {
@@ -496,7 +492,7 @@ final class LibraryModel: ObservableObject {
     func editSelection(_ selection: BrowserCommandSnapshot, application: URL) {
         guard allowsPersonalActions(in: selection.collection), let repository, let timeline = selection.timeline else { return }
         PhotoDownloadManager.shared.edit(repository: repository, snapshot: timeline, selection: selection,
-                                        item: nil, applicationURL: application)
+                                        item: nil, collection: selection.collection, applicationURL: application)
     }
 
     func editViewerItem(_ item: PhotoItem, repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor, application: URL) {

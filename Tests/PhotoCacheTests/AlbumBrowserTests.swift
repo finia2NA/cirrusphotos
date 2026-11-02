@@ -573,7 +573,7 @@ final class AlbumBrowserTests: XCTestCase {
                 _ = try await repository.store.storeMetadataDetails(photos, namespace: namespace, currentRun: repository.runID,
                     admission: repository.store.metadataAdmission(namespace))
                 let records = try await repository.store.metadataCachedLocations(namespace)
-                let locations = await repository.acceptLocationRecords(records)
+                let locations = await repository.acceptLocationRecords(records, space: .personal)
                 let map = try await repository.registerMapFilter(itemIDs: [1, 2], locationRevision: locations.revision)
                 underlying = map.descriptor; timeline = map.snapshot
             } else {
@@ -809,7 +809,7 @@ final class AlbumBrowserTests: XCTestCase {
         let firstTransport = AlbumFakeTransport()
         let first = try makeRepository(root: root, transport: firstTransport)
         var verified = false
-        for await event in await first.folderDirectory(id: 0) {
+        for await event in await first.folderDirectory(id: 0, space: .personal) {
             if case .value(let directory, true) = event { verified = directory.children.map(\.id) == [3] }
         }
         XCTAssertTrue(verified)
@@ -817,7 +817,7 @@ final class AlbumBrowserTests: XCTestCase {
         await offline.setFolderFailure()
         let second = try makeRepository(root: root, transport: offline)
         var cached = false; var failed = false
-        for await event in await second.folderDirectory(id: 0) {
+        for await event in await second.folderDirectory(id: 0, space: .personal) {
             switch event {
             case .value(let directory, false): cached = directory.children.map(\.id) == [3]
             case .failure: failed = true

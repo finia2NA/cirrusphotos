@@ -153,7 +153,7 @@ final class PhotoViewerNavigationTests: PhotoViewerSessionTestCase {
         let items = try [item(1), item(2), item(3), item(4)]
         let transport = ViewerTransport()
         await transport.configure(pages: [0: Array(items[0...1]), 2: Array(items[2...3])])
-        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
                                          index: LibraryIndex(snapshot: snapshot()),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: items[0], page: Array(items[0...1]),
@@ -182,7 +182,7 @@ final class PhotoViewerNavigationTests: PhotoViewerSessionTestCase {
         let items = try [item(1), item(2), item(3), item(4)]
         let transport = ViewerTransport()
         await transport.configure(pages: [0: Array(items[0...1]), 2: Array(items[2...3])])
-        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
                                          index: LibraryIndex(snapshot: snapshot()),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: items[0], page: Array(items[0...1]),
@@ -211,7 +211,7 @@ final class PhotoViewerNavigationTests: PhotoViewerSessionTestCase {
         let transport = ViewerTransport()
         await transport.configure(pages: [0: Array(items[0...1]), 2: Array(items[2...3])],
                                   blockedPages: [2], blockedFullImages: [2, 4])
-        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
                                          index: LibraryIndex(snapshot: snapshot()),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: items[0], page: Array(items[0...1]),
@@ -244,7 +244,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         let transport = ViewerTransport()
         await transport.configure(pages: [0: Array(items[0...1]), 2: Array(items[2...3])],
                                   blockedFullImages: [2, 1, 3])
-        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
                                          index: LibraryIndex(snapshot: snapshot()),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1,
                                                                item: items[1], page: Array(items[0...1]),
@@ -291,7 +291,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         let transport = ViewerTransport()
         await transport.configure(pages: [0: Array(items[0...1]), 2: Array(items[2...3])],
                                   blockedFullImages: [2])
-        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
                                          index: LibraryIndex(snapshot: snapshot()),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1,
                                                                item: items[1], page: Array(items[0...1]),
@@ -316,7 +316,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         await transport.configure(pages: [0: Array(items[0...1]), 2: Array(items[2...3])],
                                   blockedFullImages: [2])
         let repository = try repository(root: cacheRoot, transport: transport)
-        let session = PhotoViewerSession(repository: repository,
+        let session = PhotoViewerSession(repository: repository, collection: .library(.personal),
                                          index: LibraryIndex(snapshot: snapshot()),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1,
                                                                item: items[1], page: Array(items[0...1]),
@@ -355,7 +355,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         let descriptor = try XCTUnwrap(items[1].additional?.thumbnail)
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
         let entry = try await repository.store.get(
-            CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .xl)
+            CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .xl, collection: .library(.personal))
         )
         XCTAssertEqual(entry?.kind, .previewThumbnail)
         await session.close()
@@ -370,14 +370,14 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         try await repository.setConfiguredThumbnailSize(.xl)
         let descriptor = try XCTUnwrap(selected.additional?.thumbnail)
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let medium = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .m)
+        let medium = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .m, collection: .library(.personal))
         try await repository.store.put(medium.key, kind: .thumbnail, data: Data([0xAA]),
                                        validatedRun: "older-run", thumbnail: medium)
         let oneSection = TimelineSnapshot(sections: [
             TimelineSection(offset: 0, limit: 1,
                             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         ])
-        let session = PhotoViewerSession(repository: repository,
+        let session = PhotoViewerSession(repository: repository, collection: .library(.personal),
             index: LibraryIndex(snapshot: oneSection),
             seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0, item: selected,
                                   page: [selected], pageVerified: true),
@@ -400,7 +400,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         let items = try [item(1), item(2), item(3), item(4)]
         let transport = ViewerTransport()
         await transport.configure(pages: [0: Array(items[0...1]), 2: Array(items[2...3])])
-        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
                                          index: LibraryIndex(snapshot: snapshot()),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: items[0], page: Array(items[0...1]),
@@ -439,7 +439,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         let xlTransport = ViewerTransport()
         await xlTransport.configure(pages: [0: [selected]])
         let xlRepository = try repository(root: xlRoot, transport: xlTransport)
-        let xlSession = PhotoViewerSession(repository: xlRepository,
+        let xlSession = PhotoViewerSession(repository: xlRepository, collection: .library(.personal),
             index: LibraryIndex(snapshot: oneSection),
             seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0, item: selected,
                                   page: [selected], pageVerified: true),
@@ -450,7 +450,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         let xlDescriptor = try XCTUnwrap(selected.additional?.thumbnail)
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
         let xlEntry = try await xlRepository.store.get(
-            CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: xlDescriptor, size: .xl)
+            CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: xlDescriptor, size: .xl, collection: .library(.personal))
         )
         XCTAssertEqual(xlEntry?.kind, .thumbnail)
         await xlSession.close()
@@ -458,7 +458,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         let offRoot = root(); defer { try? FileManager.default.removeItem(at: offRoot) }
         let offTransport = ViewerTransport()
         await offTransport.configure(pages: [0: [selected]])
-        let offSession = PhotoViewerSession(repository: try repository(root: offRoot, transport: offTransport),
+        let offSession = PhotoViewerSession(repository: try repository(root: offRoot, transport: offTransport), collection: .library(.personal),
             index: LibraryIndex(snapshot: oneSection),
             seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0, item: selected,
                                   page: [selected], pageVerified: true),
@@ -479,7 +479,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         await transport.configure(pages: [0: [selected]], failedFullImages: [9])
         let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 1,
             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])])
-        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
             index: LibraryIndex(snapshot: snapshot),
             seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0, item: selected,
                                   page: [selected], pageVerified: true),
@@ -504,7 +504,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
                                   blockedThumbnails: [1, 3])
         let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 3,
             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 3)])])
-        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
             index: LibraryIndex(snapshot: snapshot),
             seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1, item: items[1],
                                   page: items, pageVerified: true),
@@ -544,7 +544,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         let transport = ViewerTransport()
         await transport.configure(pages: [0: Array(items[0...1]), 2: Array(items[2...3])],
                                   blockedPages: [2], blockedFullImages: [2])
-        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
                                          index: LibraryIndex(snapshot: snapshot()),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: items[0], page: Array(items[0...1]),
@@ -572,7 +572,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         await transport.configure(pages: [0: items])
         let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 3,
             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 3)])])
-        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
                                          index: LibraryIndex(snapshot: snapshot),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1,
                                                                item: items[1], page: items,
@@ -601,7 +601,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         await transport.configure(pages: [0: items], blockedFullImages: [3])
         let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 5,
             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 5)])])
-        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
             index: LibraryIndex(snapshot: snapshot),
             seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 2, item: items[2],
                                   page: items, pageVerified: true),
@@ -626,11 +626,11 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         let repository = try repository(root: cacheRoot, transport: transport)
         for neighbor in [items[1], items[2]] {
             let descriptor = try XCTUnwrap(neighbor.additional?.thumbnail)
-            for await _ in await repository.thumbnail(descriptor, size: .xl, allowNetwork: true) {}
+            for await _ in await repository.thumbnail(descriptor, size: .xl, allowNetwork: true, collection: .library(.personal)) {}
         }
         let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 3,
             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 3)])])
-        let session = PhotoViewerSession(repository: repository,
+        let session = PhotoViewerSession(repository: repository, collection: .library(.personal),
                                          index: LibraryIndex(snapshot: snapshot),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: items[0], page: items,
@@ -654,10 +654,10 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         await transport.configure(pages: [0: items])
         let repository = try repository(root: cacheRoot, transport: transport)
         let descriptor = try XCTUnwrap(items[1].additional?.thumbnail)
-        for await _ in await repository.thumbnail(descriptor, size: .xl, allowNetwork: true) {}
+        for await _ in await repository.thumbnail(descriptor, size: .xl, allowNetwork: true, collection: .library(.personal)) {}
         let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 2,
             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 2)])])
-        let session = PhotoViewerSession(repository: repository,
+        let session = PhotoViewerSession(repository: repository, collection: .library(.personal),
                                          index: LibraryIndex(snapshot: snapshot),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: items[0], page: items,
@@ -681,7 +681,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         await warmingTransport.configure(pages: [0: [selected]])
         let warmingRepository = try repository(root: cacheRoot, transport: warmingTransport)
         for await _ in await warmingRepository.thumbnail(try XCTUnwrap(selected.additional?.thumbnail),
-                                                          size: .xl, allowNetwork: true) {}
+                                                          size: .xl, allowNetwork: true, collection: .library(.personal)) {}
         for await _ in await warmingRepository.fullImage(try XCTUnwrap(selected.fullImageResource(in: .space(.personal)))) {}
 
         let offlineTransport = ViewerTransport()
@@ -691,7 +691,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
             TimelineSection(offset: 0, limit: 1,
                             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         ])
-        let session = PhotoViewerSession(repository: offlineRepository,
+        let session = PhotoViewerSession(repository: offlineRepository, collection: .library(.personal),
                                          index: LibraryIndex(snapshot: oneSection),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: selected, page: [selected],
@@ -724,7 +724,7 @@ final class PhotoViewerMetadataValidationTests: PhotoViewerSessionTestCase {
             TimelineSection(offset: 0, limit: 1,
                             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         ])
-        let session = PhotoViewerSession(repository: repository,
+        let session = PhotoViewerSession(repository: repository, collection: .library(.personal),
                                          index: LibraryIndex(snapshot: oneSection),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: old, page: [old], pageVerified: false),
@@ -752,7 +752,7 @@ final class PhotoViewerMetadataValidationTests: PhotoViewerSessionTestCase {
             TimelineSection(offset: 0, limit: 2,
                             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 2)])
         ])
-        let shifted = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let shifted = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
                                          index: LibraryIndex(snapshot: twoItems),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1,
                                                                item: selected, page: [other, selected],
@@ -769,7 +769,7 @@ final class PhotoViewerMetadataValidationTests: PhotoViewerSessionTestCase {
         let removedRoot = root(); defer { try? FileManager.default.removeItem(at: removedRoot) }
         let removedTransport = ViewerTransport()
         await removedTransport.configure(pages: [0: [other]])
-        let removed = PhotoViewerSession(repository: try repository(root: removedRoot, transport: removedTransport),
+        let removed = PhotoViewerSession(repository: try repository(root: removedRoot, transport: removedTransport), collection: .library(.personal),
                                          index: LibraryIndex(snapshot: TimelineSnapshot(sections: [
                                             TimelineSection(offset: 0, limit: 1,
                                                 list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
@@ -798,12 +798,12 @@ final class PhotoViewerMetadataValidationTests: PhotoViewerSessionTestCase {
         let transport = ViewerTransport()
         await transport.configure(pages: [0: [current]], blockedPages: [0])
         let repository = try repository(root: cacheRoot, transport: transport)
-        for await _ in await repository.timeline() {}
+        for await _ in await repository.timeline(collection: .library(.personal)) {}
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let pageKey = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor))
+        let pageKey = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor, collection: .library(.personal)))
         try await seedMetadataPage([stale], section: descriptor, repository: repository)
 
-        let session = PhotoViewerSession(repository: repository,
+        let session = PhotoViewerSession(repository: repository, collection: .library(.personal),
                                          index: LibraryIndex(snapshot: snapshot),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: current, pageVerified: true),
@@ -839,13 +839,13 @@ final class PhotoViewerMetadataValidationTests: PhotoViewerSessionTestCase {
         let repository = try repository(root: cacheRoot, transport: transport)
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
         let neighborPageKey = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: namespace,
-                                                          section: snapshot.sections[1]))
+                                                          section: snapshot.sections[1], collection: .library(.personal)))
         try await seedMetadataPage(Array(items[2...3]), section: snapshot.sections[1], repository: repository)
         let neighborResource = try XCTUnwrap(items[2].fullImageResource(in: .space(.personal)))
         try await repository.store.put(CacheKey.fullImage(namespace: namespace, resource: neighborResource),
                                        kind: .fullImage, data: Data([3, 0x46]), validatedRun: nil)
 
-        let session = PhotoViewerSession(repository: repository,
+        let session = PhotoViewerSession(repository: repository, collection: .library(.personal),
                                          index: LibraryIndex(snapshot: snapshot),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1,
                                                                item: items[1], page: Array(items[0...1]),
@@ -878,7 +878,7 @@ final class PhotoViewerMetadataValidationTests: PhotoViewerSessionTestCase {
             TimelineSection(offset: 0, limit: 1,
                             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         ])
-        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
                                          index: LibraryIndex(snapshot: oneSection),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: selected, page: [selected],
@@ -909,7 +909,7 @@ extension PhotoViewerAssetLifecycleTests {
             TimelineSection(offset: 0, limit: 1,
                             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         ])
-        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
                                          index: LibraryIndex(snapshot: snapshot),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: selected, page: [selected],
@@ -937,7 +937,7 @@ extension PhotoViewerAssetLifecycleTests {
             TimelineSection(offset: 0, limit: 1,
                             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         ])
-        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
                                          index: LibraryIndex(snapshot: snapshot),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: selected, page: [selected],
@@ -967,7 +967,7 @@ extension PhotoViewerAssetLifecycleTests {
             TimelineSection(offset: 0, limit: 1,
                             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         ])
-        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
                                          index: LibraryIndex(snapshot: oneSection),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: video, page: [video], pageVerified: true),
@@ -994,7 +994,7 @@ extension PhotoViewerAssetLifecycleTests {
             TimelineSection(offset: 0, limit: 1,
                             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         ])
-        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
                                          index: LibraryIndex(snapshot: oneSection),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: livePhoto, page: [livePhoto],
@@ -1022,13 +1022,13 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         let transport = ViewerTransport()
         await transport.configure(pages: [0: [first, second]])
         let repo = try repository(root: cacheRoot, transport: transport)
-        for await _ in await repo.page(section) {}
-        let window = LibraryPageWindow(repository: repo)
+        for await _ in await repo.page(section, collection: .library(.personal)) {}
+        let window = LibraryPageWindow(repository: repo, collection: .library(.personal))
         await window.update(snapshot: TimelineSnapshot(sections: [section]), allowNetwork: true,
                             visible: [0], prefetch: [])
         let pageLoaded = await waitUntil { await window.retainedPages().first?.items.count == 2 }
         XCTAssertTrue(pageLoaded)
-        let session = PhotoViewerSession(repository: repo,
+        let session = PhotoViewerSession(repository: repo, collection: .library(.personal),
                                          index: LibraryIndex(snapshot: TimelineSnapshot(sections: [section])),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: first, page: [first, second],
@@ -1042,7 +1042,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         let badgeUpdated = await waitUntil { await window.retainedPages().first?.items.first?.isFavorite == true }
         XCTAssertTrue(badgeUpdated)
         let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(server: server, account: credentials.username),
-                                              section: section))
+                                              section: section, collection: .library(.personal)))
         let stored = try await repo.store.metadataPage(try DayPageAddress(section: section, collection: .library(.personal)), namespace: repo.personalMetadataNamespace, currentRun: repo.runID)?.completeItems ?? []
         XCTAssertTrue(stored[0].isFavorite)
         await session.toggleFavorite()
@@ -1063,7 +1063,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         await transport.configure(pages: [0: [first]])
         await transport.setFavoriteFailure(true)
         let repo = try repository(root: cacheRoot, transport: transport)
-        let session = PhotoViewerSession(repository: repo,
+        let session = PhotoViewerSession(repository: repo, collection: .library(.personal),
                                          index: LibraryIndex(snapshot: TimelineSnapshot(sections: [section])),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: first, page: [first], pageVerified: true),
@@ -1084,8 +1084,8 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         let transport = ViewerTransport()
         let repo = try repository(root: cacheRoot, transport: transport)
 
-        try await repo.setFavorite(itemID: 51, in: section, to: true)
-        var changes = await repo.favoriteChanges().makeAsyncIterator()
+        try await repo.setFavorite(itemID: 51, in: section, collection: .library(.personal), to: true)
+        var changes = await repo.favoriteChanges(space: .personal).makeAsyncIterator()
         let replayed = await changes.next()
 
         XCTAssertEqual(replayed?.values[51], true)
@@ -1100,13 +1100,13 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         await transport.configure(pages: [0: [first]])
         await transport.setFavoriteBlocked(true)
         let repo = try repository(root: cacheRoot, transport: transport)
-        for await _ in await repo.page(section) {}
-        let window = LibraryPageWindow(repository: repo)
+        for await _ in await repo.page(section, collection: .library(.personal)) {}
+        let window = LibraryPageWindow(repository: repo, collection: .library(.personal))
         await window.update(snapshot: TimelineSnapshot(sections: [section]), allowNetwork: true,
                             visible: [0], prefetch: [])
         let pageLoaded = await waitUntil { await window.retainedPages().first?.items.count == 1 }
         XCTAssertTrue(pageLoaded)
-        let session = PhotoViewerSession(repository: repo,
+        let session = PhotoViewerSession(repository: repo, collection: .library(.personal),
                                          index: LibraryIndex(snapshot: TimelineSnapshot(sections: [section])),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: first, page: [first],
@@ -1136,7 +1136,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         XCTAssertTrue(timelineUpdated)
         let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(server: server,
                                                                            account: credentials.username),
-                                              section: section))
+                                              section: section, collection: .library(.personal)))
         let store = await repo.store
         let cached = try await store.metadataPage(try DayPageAddress(section: section, collection: .library(.personal)), namespace: repo.personalMetadataNamespace, currentRun: repo.runID)
         XCTAssertEqual(cached?.slots.first?.item?.isFavorite, true)
@@ -1153,7 +1153,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         await transport.configure(pages: [0: [first, second]])
         await transport.setFavoriteBlocked(true)
         let repo = try repository(root: cacheRoot, transport: transport)
-        let session = PhotoViewerSession(repository: repo,
+        let session = PhotoViewerSession(repository: repo, collection: .library(.personal),
                                          index: LibraryIndex(snapshot: TimelineSnapshot(sections: [section])),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: first, page: [first, second],

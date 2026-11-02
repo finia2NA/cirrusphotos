@@ -157,7 +157,7 @@ final class PhotoDownloadDestinationTests: XCTestCase {
             XCTAssertEqual(app, application)
             opened = file
         })
-        manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo, applicationURL: application)
+        manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo, collection: .library(.personal), applicationURL: application)
         let finished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
         XCTAssertTrue(finished)
         let file = try XCTUnwrap(opened)
@@ -183,7 +183,7 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         for await _ in await repository.fullImage(resource) {}
         var opened: URL?
         let manager = PhotoDownloadManager(editDirectoryProvider: { directory }, editorOpener: { file, _ in opened = file })
-        manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo,
+        manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo, collection: .library(.personal),
                      applicationURL: URL(fileURLWithPath: "/Applications/Editor.app"))
         let finished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
         XCTAssertTrue(finished)
@@ -210,11 +210,11 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.heic\",\"time\":1,\"type\":\"photo\",\"live_type\":\"live\",\"additional\":{\"thumbnail\":{\"unit_id\":1,\"cache_key\":\"v1\"}}}".utf8))
         let resource = try XCTUnwrap(photo.fullImageResource(in: .space(.personal)))
         for await _ in await repository.fullImage(resource) {}
-        let download = try await repository.cachedOriginalForDownload(photo)
+        let download = try await repository.cachedOriginalForDownload(photo, collection: .library(.personal))
         XCTAssertNil(download)
         var opened: URL?
         let manager = PhotoDownloadManager(editDirectoryProvider: { directory }, editorOpener: { file, _ in opened = file })
-        manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo,
+        manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo, collection: .library(.personal),
                      applicationURL: URL(fileURLWithPath: "/Applications/Editor.app"))
         let finished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
         XCTAssertTrue(finished)
@@ -236,7 +236,7 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.heic\",\"time\":1,\"type\":\"photo\",\"live_type\":\"live\",\"additional\":{\"thumbnail\":{\"unit_id\":1,\"cache_key\":\"v1\"}}}".utf8))
         var opened: URL?
         let manager = PhotoDownloadManager(editDirectoryProvider: { directory }, editorOpener: { file, _ in opened = file })
-        manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo,
+        manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo, collection: .library(.personal),
                      applicationURL: URL(fileURLWithPath: "/Applications/Editor.app"))
         let finished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
         XCTAssertTrue(finished)
@@ -284,7 +284,7 @@ final class PhotoDownloadDestinationTests: XCTestCase {
                                                      budget: 100_000_000, cacheRoot: root.appendingPathComponent("cache"), transport: EditingMockTransport())
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.dng\",\"time\":1,\"type\":\"photo\"}".utf8))
         let manager = PhotoDownloadManager(editDirectoryProvider: { directory }, editorOpener: { _, _ in throw URLError(.cannotOpenFile) })
-        manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo,
+        manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo, collection: .library(.personal),
                      applicationURL: URL(fileURLWithPath: "/Applications/Editor.app"))
         let finished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
         XCTAssertTrue(finished)

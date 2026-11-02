@@ -2,7 +2,7 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
-    public func people(space: PhotoSpace = .personal) -> AsyncStream<ResourceEvent<[PersonSummary]>> {
+    public func people(space: PhotoSpace) -> AsyncStream<ResourceEvent<[PersonSummary]>> {
         metadataIndex(key: space, space: space, name: "People", jobs: \.peopleJob,
             cached: { try await $0.metadataPeople($1) },
             fetch: { try await $0.people(space: space) },

@@ -127,7 +127,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         let source = PhotoViewerSourceAnchor()
         let seedImage = try XCTUnwrap(NSImage(data: preview))
         source.update(itemID: 1, image: seedImage)
-        let viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+        let viewer = PhotoViewerPresentation(repository: repository, collection: .library(.personal), index: LibraryIndex(snapshot: snapshot),
             request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                 item: items[0], page: items, pageVerified: true), source: source),
             thumbnailSize: .m, allowNetwork: true, snapshotRevision: 1)
@@ -165,7 +165,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
             list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 2)])])
         let source = PhotoViewerSourceAnchor()
         source.update(itemID: 1, image: try XCTUnwrap(NSImage(data: firstPreview)))
-        let viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+        let viewer = PhotoViewerPresentation(repository: repository, collection: .library(.personal), index: LibraryIndex(snapshot: snapshot),
             request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                 item: items[0], page: items, pageVerified: true), source: source),
             thumbnailSize: .m, allowNetwork: true, snapshotRevision: 1)
@@ -210,7 +210,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         let items = try [item(1), item(2)]
         let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 2,
             list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 2)])])
-        let viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+        let viewer = PhotoViewerPresentation(repository: repository, collection: .library(.personal), index: LibraryIndex(snapshot: snapshot),
             request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                 item: items[0], page: items, pageVerified: true), source: PhotoViewerSourceAnchor()),
             thumbnailSize: .m, loadsLargePreviews: true, allowNetwork: true, snapshotRevision: 1)
@@ -249,7 +249,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
             list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 2)])])
         let source = PhotoViewerSourceAnchor()
         source.update(itemID: 1, image: try XCTUnwrap(NSImage(data: firstPreview)))
-        let viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+        let viewer = PhotoViewerPresentation(repository: repository, collection: .library(.personal), index: LibraryIndex(snapshot: snapshot),
             request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                 item: items[0], page: items, pageVerified: true), source: source),
             thumbnailSize: .m, allowNetwork: true, snapshotRevision: 1)
@@ -284,7 +284,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         let selected = try item(1)
         let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 1,
             list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)])])
-        let viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+        let viewer = PhotoViewerPresentation(repository: repository, collection: .library(.personal), index: LibraryIndex(snapshot: snapshot),
             request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                 item: selected, page: [selected], pageVerified: true), source: PhotoViewerSourceAnchor()),
             thumbnailSize: .m, loadsLargePreviews: true,
@@ -332,7 +332,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         let selected = try item(1)
         let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 1,
             list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)])])
-        let viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+        let viewer = PhotoViewerPresentation(repository: repository, collection: .library(.personal), index: LibraryIndex(snapshot: snapshot),
             request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                 item: selected, page: [selected], pageVerified: true), source: PhotoViewerSourceAnchor()),
             thumbnailSize: .m, loadsLargePreviews: true,
@@ -368,7 +368,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         let selected = try item(1)
         let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 1,
             list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)])])
-        let viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+        let viewer = PhotoViewerPresentation(repository: repository, collection: .library(.personal), index: LibraryIndex(snapshot: snapshot),
             request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                 item: selected, page: [selected], pageVerified: true), source: PhotoViewerSourceAnchor()),
             thumbnailSize: .m, loadsLargePreviews: true,
@@ -421,7 +421,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         let favored = try item(7, favorite: true)
         let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 1,
             list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)])])
-        let viewer = PhotoViewerPresentation(repository: repository, index: LibraryIndex(snapshot: snapshot),
+        let viewer = PhotoViewerPresentation(repository: repository, collection: .library(.personal), index: LibraryIndex(snapshot: snapshot),
             request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                 item: favored, page: [favored], pageVerified: true), source: PhotoViewerSourceAnchor()),
             thumbnailSize: .m, allowNetwork: true, snapshotRevision: 1)
@@ -487,7 +487,7 @@ final class LibraryModelTests: PhotoViewerPresentationTestCase {
         let section = TimelineSection(offset: 0, limit: 1,
             list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)])
 
-        try await repository.setFavorite(itemID: 77, item: try item(77), in: section, to: true)
+        try await repository.setFavorite(itemID: 77, item: try item(77), in: section, collection: .library(.personal), to: true)
         let refreshed = await waitUntil {
             model.snapshotRevision(for: .favorites(.personal)) > browserRevision
         }

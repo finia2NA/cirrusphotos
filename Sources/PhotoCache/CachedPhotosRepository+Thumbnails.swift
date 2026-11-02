@@ -9,7 +9,7 @@ extension CachedPhotosRepository {
 
     /// Provisional metadata can request cached bytes with allowNetwork=false.
     public func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, allowNetwork: Bool,
-                          collection: PhotoCollectionDescriptor = .library(.personal),
+                          collection: PhotoCollectionDescriptor,
                           priority: RequestPriority = .visible,
                           cachePurpose: ThumbnailCachePurpose = .library) -> AsyncStream<ResourceEvent<Data>> {
         let scope = thumbnailCollection(for: collection)
@@ -60,7 +60,7 @@ extension CachedPhotosRepository {
     /// configured size. Alternate sizes are never fetched or treated as exact completion.
     public func thumbnailWithFallback(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                                       allowNetwork: Bool,
-                                      collection: PhotoCollectionDescriptor = .library(.personal),
+                                      collection: PhotoCollectionDescriptor,
                                       priority: RequestPriority = .visible) -> AsyncStream<ResourceEvent<ThumbnailRenditionValue>> {
         let scope = thumbnailCollection(for: collection)
         let producer = StreamProducer()
@@ -128,15 +128,15 @@ extension CachedPhotosRepository {
 
     /// Resolves one thumbnail through the normal shared cache pipeline without retaining bytes.
     /// Bulk callers must use `.prefetch` so visible browsing can move ahead in the gate.
-    public func cacheThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
+    public func cacheThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, collection: PhotoCollectionDescriptor,
                                priority: RequestPriority = .prefetch) async throws -> ThumbnailCacheOutcome {
-        try await cacheThumbnailMeasurement(descriptor, size: size, priority: priority).outcome
+        try await cacheThumbnailMeasurement(descriptor, size: size, collection: collection, priority: priority).outcome
     }
 
     /// Resolves one thumbnail while reporting bytes transferred in a successful image response.
     /// Conditional 304 responses and current-run cache hits report zero downloaded bytes.
     public func cacheThumbnailMeasurement(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                                          collection: PhotoCollectionDescriptor = .library(.personal),
+                                          collection: PhotoCollectionDescriptor,
                                           priority: RequestPriority = .prefetch,
                                           validateCached: Bool = true) async throws -> ThumbnailCacheMeasurement {
         try Task.checkCancellation()

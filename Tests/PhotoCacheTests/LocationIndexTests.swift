@@ -50,7 +50,7 @@ final class LocationIndexTests: XCTestCase, @unchecked Sendable {
     }
     private func events(_ repository: CachedPhotosRepository) async -> [LocationIndexEvent] {
         var result: [LocationIndexEvent] = []
-        for await event in await repository.locationIndex() { result.append(event) }
+        for await event in await repository.locationIndex(space: .personal) { result.append(event) }
         return result
     }
     private func completed(_ events: [LocationIndexEvent]) -> [PhotoLocationRecord]? {

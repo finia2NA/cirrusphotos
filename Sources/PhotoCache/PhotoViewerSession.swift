@@ -41,7 +41,7 @@ public actor PhotoViewerSession {
 
     var observers: [UUID: AsyncStream<PhotoViewerState>.Continuation] = [:]
 
-    public init(repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor = .library(.personal),
+    public init(repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor,
                 index: LibraryIndex,
                 seed: PhotoViewerSeed, thumbnailSize: ThumbnailSize = .xl,
                 loadsLargePreviews: Bool = false,

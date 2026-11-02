@@ -72,8 +72,8 @@ final class LibraryFilterModelTests: XCTestCase {
         await library.load()
 
         let filter = LibraryFilterModel()
-        filter.configure(library: library)
-        for await _ in await repository.page(sections[0]) {}
+        filter.configure(library: library, source: .library(.personal))
+        for await _ in await repository.page(sections[0], collection: .library(.personal)) {}
         let ingested = await waitUntil { filter.progress.verified == 1 }
         XCTAssertTrue(ingested)
         filter.draft.mediaKinds = [.video]
@@ -137,18 +137,18 @@ final class LibraryFilterModelTests: XCTestCase {
         let library = LibraryModel(repository: repository)
         await library.load()
         let filter = LibraryFilterModel()
-        filter.configure(library: library)
-        for await _ in await repository.page(section) {}
+        filter.configure(library: library, source: .library(.personal))
+        for await _ in await repository.page(section, collection: .library(.personal)) {}
         let first = await waitUntil { filter.progress.verified == 1 }
         XCTAssertTrue(first)
 
         await library.clearMetadataCache()
-        let reset = await waitUntil { library.metadataInvalidationRevision > 0 && library.timelineVerified }
+        let reset = await waitUntil { library.metadataInvalidationRevision > 0 && library.timelineVerified(for: .library(.personal)) }
         XCTAssertTrue(reset)
-        filter.configure(library: library)
+        filter.configure(library: library, source: .library(.personal))
         let empty = await waitUntil { filter.progress.indexed == 0 }
         XCTAssertTrue(empty)
-        for await _ in await repository.page(section) {}
+        for await _ in await repository.page(section, collection: .library(.personal)) {}
         let refreshed = await waitUntil { filter.progress.verified == 1 }
         XCTAssertTrue(refreshed)
     }

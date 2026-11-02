@@ -36,7 +36,7 @@ final class MapFilterTests: XCTestCase, @unchecked Sendable {
         let run = current ? await repository.runID : "previous-run"
         _ = try await repository.store.storeMetadataDetails(items, namespace: namespace, currentRun: run, admission: repository.store.metadataAdmission(namespace))
         let records = try await repository.store.metadataCachedLocations(namespace)
-        let value = await repository.acceptLocationRecords(records)
+        let value = await repository.acceptLocationRecords(records, space: .personal)
         return try await repository.registerMapFilter(itemIDs: items.map(\.id), locationRevision: value.revision)
     }
     private func pages(_ repository: CachedPhotosRepository, registration: MapFilterRegistration,
@@ -115,7 +115,7 @@ final class MapFilterTests: XCTestCase, @unchecked Sendable {
         let transport = CanonicalFilterTransport([photo])
         let repository = try repository(root: root, transport: transport)
         let first = try await register(repository, items: [photo])
-        let value = await repository.acceptLocationRecords(try await repository.store.metadataCachedLocations(repository.personalMetadataNamespace))
+        let value = await repository.acceptLocationRecords(try await repository.store.metadataCachedLocations(repository.personalMetadataNamespace), space: .personal)
         let second = try await repository.registerMapFilter(itemIDs: [1], locationRevision: value.revision)
         try await repository.store.evictMetadataDetails(namespace: repository.personalMetadataNamespace, itemIDs: [1])
         await transport.block()
@@ -135,7 +135,7 @@ final class MapFilterTests: XCTestCase, @unchecked Sendable {
         let photo = try item(1)
         let repository = try repository(root: root, transport: CanonicalFilterTransport([photo]))
         let registration = try await register(repository, items: [photo], current: true)
-        _ = await repository.acceptLocationRecords([])
+        _ = await repository.acceptLocationRecords([], space: .personal)
         let invalid = await pages(repository, registration: registration, allowNetwork: false)
         XCTAssertTrue(invalid.isEmpty)
         try await repository.clearMetadataCache()
@@ -191,7 +191,7 @@ final class MapFilterTests: XCTestCase, @unchecked Sendable {
         let next = PhotoSelectionSnapshot(collection: first.descriptor, timeline: first.snapshot,
             timelineFingerprint: LibraryIndex(snapshot: first.snapshot).fingerprint,
             selectedOrdinals: IndexSet(integer: 0), knownItemIDsByOrdinal: [:], authority: current)
-        _ = await repository.acceptLocationRecords([])
+        _ = await repository.acceptLocationRecords([], space: .personal)
         let invalid = await SelectionItemResolver(repository: repository).resolve(next)
         XCTAssertNil(invalid)
         await controller.shutdown()

@@ -18,7 +18,7 @@ extension CachedPhotosRepository {
     /// Creates a disposable copy of a cached original for a single still photo.
     /// Live Photo downloads may represent more than the cached still, so they use
     /// the server's item-download endpoint instead.
-    public func cachedOriginalForDownload(_ item: PhotoItem, includeLivePhoto: Bool = false, collection: PhotoCollectionDescriptor = .library(.personal)) async throws -> PhotoDownloadResponse? {
+    public func cachedOriginalForDownload(_ item: PhotoItem, includeLivePhoto: Bool = false, collection: PhotoCollectionDescriptor) async throws -> PhotoDownloadResponse? {
         let source = mediaCollection(for: collection)
         guard source.incomingAlbumIdentity == nil, !source.isSessionDerived else { return nil }
         guard (item.mediaKind == .photo || (includeLivePhoto && item.mediaKind == .livePhoto)),
@@ -27,7 +27,7 @@ extension CachedPhotosRepository {
     }
 
     /// Editing a Live Photo needs its still, not the ZIP returned by item download.
-    public func livePhotoStillForEditing(_ item: PhotoItem, collection: PhotoCollectionDescriptor = .library(.personal),
+    public func livePhotoStillForEditing(_ item: PhotoItem, collection: PhotoCollectionDescriptor,
         progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse? {
         let source = mediaCollection(for: collection)
         guard source.incomingAlbumIdentity == nil, !source.isSessionDerived,
@@ -60,11 +60,6 @@ extension CachedPhotosRepository {
         return nil
     }
 
-    public func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind,
-                               progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
-        try await connect()
-        return try await client.downloadPhotos(itemIDs: itemIDs, kind: kind, space: .personal, progress: progress)
-    }
     /// Incoming IDs are only meaningful in their album's scope. Refresh the grant
     /// immediately before transfer and never reuse personal-space originals.
     public func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, collection: PhotoCollectionDescriptor,

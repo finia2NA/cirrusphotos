@@ -2,7 +2,7 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
-    public func livePhotoMotion(itemID: Int64, space: PhotoSpace = .personal) async throws -> VideoPlaybackResource? {
+    public func livePhotoMotion(itemID: Int64, space: PhotoSpace) async throws -> VideoPlaybackResource? {
         try await connect()
         defer { cancelIdleLogin() }
         return try await client.livePhotoMotion(itemID: itemID, space: space)

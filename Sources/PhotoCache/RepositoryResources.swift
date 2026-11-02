@@ -18,7 +18,7 @@ public struct FavoriteChange: Sendable {
     public let sourceSection: TimelineSection?
     public let sourceCollection: PhotoCollectionDescriptor
 
-    public init(values: [Int64: Bool], sourceSection: TimelineSection? = nil, sourceCollection: PhotoCollectionDescriptor = .library(.personal)) {
+    public init(values: [Int64: Bool], sourceSection: TimelineSection? = nil, sourceCollection: PhotoCollectionDescriptor) {
         self.values = values
         self.sourceSection = sourceSection
         self.sourceCollection = sourceCollection

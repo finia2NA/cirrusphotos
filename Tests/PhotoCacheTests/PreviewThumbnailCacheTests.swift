@@ -79,12 +79,12 @@ final class PreviewThumbnailCacheTests: XCTestCase {
                                                      cacheRoot: cacheRoot, transport: transport)
         let descriptor = try descriptor()
         let preview = Task {
-            await consumePreviewStream(repository.thumbnail(descriptor, size: .xl, allowNetwork: true,
+            await consumePreviewStream(repository.thumbnail(descriptor, size: .xl, allowNetwork: true, collection: .library(.personal),
                                                             cachePurpose: .viewerPreview))
         }
         while await transport.thumbnailCalls == 0 { try await Task.sleep(for: .milliseconds(2)) }
         let ordinary = Task {
-            await consumePreviewStream(repository.thumbnail(descriptor, size: .xl, allowNetwork: true,
+            await consumePreviewStream(repository.thumbnail(descriptor, size: .xl, allowNetwork: true, collection: .library(.personal),
                                                             cachePurpose: .library))
         }
         await transport.releaseThumbnail()
@@ -96,14 +96,14 @@ final class PreviewThumbnailCacheTests: XCTestCase {
         XCTAssertEqual(joinedCalls, 1)
 
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let key = CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .xl)
+        let key = CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .xl, collection: .library(.personal))
         let cachedEntry = try await repository.store.get(key)
         let entry = try XCTUnwrap(cachedEntry)
         XCTAssertEqual(entry.kind, .thumbnail)
         XCTAssertTrue(FileManager.default.fileExists(atPath:
             cacheRoot.appendingPathComponent("images/\(key).img").path))
 
-        _ = await consumePreviewStream(repository.thumbnail(descriptor, size: .xl, allowNetwork: true,
+        _ = await consumePreviewStream(repository.thumbnail(descriptor, size: .xl, allowNetwork: true, collection: .library(.personal),
                                                             cachePurpose: .viewerPreview))
         let finalCalls = await transport.thumbnailCalls
         let finalKind = try await repository.store.get(key)?.kind

@@ -26,7 +26,7 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         try await seed(repository)
         let values = AuditValues()
         let reading = Task { [section] in
-            for await event in await repository.page(section) {
+            for await event in await repository.page(section, collection: .library(.personal)) {
                 if case .value(let items, _) = event { let items = items.completeItems ?? []; await values.add(items) }
             }
         }
@@ -43,13 +43,13 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = AuditBlockedTransport(snapshot: .init(sections: [section]), items: [try photo()])
         let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw", otpSecret: "unused"), cacheRoot: root, transport: transport)
-        for await _ in await repository.timeline() {}
+        for await _ in await repository.timeline(collection: .library(.personal)) {}
         try await seed(repository)
         let descriptor = PhotoCollectionDescriptor.libraryFilter(UUID(), scope: .space(.personal))
         try await repository.registerLibraryFilter(.init(descriptor: descriptor,
             snapshot: .init(sections: [section]), referencesBySection: [[
                 .init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: 1)
-            ]], filter: LibraryFilter(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: .init(sections: [section])).fingerprint))
+            ]], filter: LibraryFilter(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: .init(sections: [section])).fingerprint, sourceCollection: .library(.personal)))
         let values = AuditValues()
         let reading = Task { [section] in
             for await event in await repository.page(section, collection: descriptor) {
@@ -94,7 +94,7 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         let snapshot = TimelineSnapshot(sections: [section])
         let transport = AuditBlockedTransport(snapshot: snapshot, items: [try photo()])
         let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw", otpSecret: "unused"), cacheRoot: root, transport: transport)
-        let controller = LibraryFilterController(repository: repository, snapshot: snapshot)
+        let controller = LibraryFilterController(repository: repository, snapshot: snapshot, sourceCollection: .library(.personal))
         await controller.indexCachedPages()
         // Direct store seeding bypasses repository page notifications.
         try await seed(repository)
@@ -102,7 +102,7 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         await controller.indexCachedPages(reconcile: true)
         let registration = await controller.currentEvent().registration
         XCTAssertEqual(registration?.referencesBySection.flatMap { $0 }.map(\.itemID), [1])
-        let freshController = LibraryFilterController(repository: repository, snapshot: snapshot)
+        let freshController = LibraryFilterController(repository: repository, snapshot: snapshot, sourceCollection: .library(.personal))
         _ = await freshController.apply(LibraryFilter(cameras: ["Audit Camera"]))
         await freshController.indexCachedPages()
         let fresh = await freshController.currentEvent().registration
@@ -117,14 +117,14 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         let snapshot = TimelineSnapshot(sections: [section])
         let transport = AuditBlockedTransport(snapshot: snapshot, items: [try photo()])
         let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw", otpSecret: "unused"), cacheRoot: root, transport: transport)
-        let controller = LibraryFilterController(repository: repository, snapshot: snapshot)
+        let controller = LibraryFilterController(repository: repository, snapshot: snapshot, sourceCollection: .library(.personal))
         _ = await controller.apply(LibraryFilter(cameras: ["Audit Camera"]))
         let values = AuditFilterEvents()
         let observation = Task {
             for await event in await controller.observe() { await values.record(event) }
         }
         await transport.release()
-        for await _ in await repository.page(section) {}
+        for await _ in await repository.page(section, collection: .library(.personal)) {}
         let updated = await waitUntil { await values.ids == [1] }
         XCTAssertTrue(updated)
         await controller.shutdown()
@@ -142,13 +142,13 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         let snapshot = TimelineSnapshot(sections: [daySection])
         let transport = AuditBlockedTransport(snapshot: snapshot, items: [missing, try photo()])
         let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw"), cacheRoot: root, transport: transport)
-        for await _ in await repository.timeline() {}
+        for await _ in await repository.timeline(collection: .library(.personal)) {}
         try await seedMetadataPage([missing, photo()], section: daySection, repository: repository)
         try await repository.store.evictMetadataDetails(namespace: repository.personalMetadataNamespace, itemIDs: [99])
         let descriptor = PhotoCollectionDescriptor.libraryFilter(UUID(), scope: .space(.personal))
         try await repository.registerLibraryFilter(.init(descriptor: descriptor, snapshot: snapshot, referencesBySection: [[
             .init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: 99), .init(sourceSectionIndex: 0, sourcePageOffset: 1, itemID: 1)
-        ]], filter: .init(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: snapshot).fingerprint))
+        ]], filter: .init(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: snapshot).fingerprint, sourceCollection: .library(.personal)))
         var iterator = await repository.page(daySection, collection: descriptor).makeAsyncIterator()
         guard case .value(let cached, false) = await iterator.next() else { return XCTFail("Missing sparse cached page") }
         XCTAssertEqual(cached.slots.map(\.itemID), [99, 1])
@@ -163,13 +163,13 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = AuditBlockedTransport(snapshot: .init(sections: [section]), items: [], failAfterRelease: true)
         let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw", otpSecret: "unused"), cacheRoot: root, transport: transport)
-        for await _ in await repository.timeline() {}
+        for await _ in await repository.timeline(collection: .library(.personal)) {}
         try await seed(repository)
         let descriptor = PhotoCollectionDescriptor.libraryFilter(UUID(), scope: .space(.personal))
         try await repository.registerLibraryFilter(.init(descriptor: descriptor,
             snapshot: .init(sections: [section]), referencesBySection: [[
                 .init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: 1)
-            ]], filter: LibraryFilter(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: .init(sections: [section])).fingerprint))
+            ]], filter: LibraryFilter(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: .init(sections: [section])).fingerprint, sourceCollection: .library(.personal)))
         await transport.release()
         var latest: [Int64] = []
         var sawFailure = false
@@ -198,13 +198,13 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = AuditBlockedTransport(snapshot: .init(sections: [section]), items: [try photo()])
         let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw", otpSecret: "unused"), cacheRoot: root, transport: transport)
-        for await _ in await repository.timeline() {}
+        for await _ in await repository.timeline(collection: .library(.personal)) {}
         try await seed(repository)
         let descriptor = PhotoCollectionDescriptor.libraryFilter(UUID(), scope: .space(.personal))
         try await repository.registerLibraryFilter(.init(descriptor: descriptor,
             snapshot: .init(sections: [section]), referencesBySection: [[
                 .init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: 1)
-            ]], filter: LibraryFilter(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: .init(sections: [section])).fingerprint))
+            ]], filter: LibraryFilter(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: .init(sections: [section])).fingerprint, sourceCollection: .library(.personal)))
         let values = AuditValues()
         let reading = Task { [section] in
             for await event in await repository.page(section, collection: descriptor) {
@@ -261,7 +261,7 @@ private extension CachedPhotosRepository {
     }
     func publishCollectionPagesForTests(_ sections: [TimelineSection]) {
         for section in sections {
-            if let key = CacheKey.page(scope: .space(.personal), namespace: namespace, section: section) { publishCollectionPage(key: key) }
+            if let key = CacheKey.page(scope: .space(.personal), namespace: namespace, section: section, collection: .library(.personal)) { publishCollectionPage(key: key) }
         }
     }
 }

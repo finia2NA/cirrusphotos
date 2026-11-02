@@ -402,7 +402,7 @@ final class SelectionFavoritesTests: XCTestCase {
 
         // Launch an in-flight favorite on ID 42
         let task1 = Task {
-            try await repo.setFavorite(itemID: 42, in: sec, to: true)
+            try await repo.setFavorite(itemID: 42, in: sec, collection: .library(.personal), to: true)
         }
         let blocked = await waitUntil { await transport.setFavoriteCalls.count == 1 }
         XCTAssertTrue(blocked)
@@ -592,7 +592,7 @@ final class SelectionFavoritesTests: XCTestCase {
             collection: .library(.personal)
         )
 
-        var changes = await repo.favoriteChanges().makeAsyncIterator()
+        var changes = await repo.favoriteChanges(space: .personal).makeAsyncIterator()
         do {
             try await repo.setFavoritesBatch(action: action)
             XCTFail("Expected failure")
@@ -632,7 +632,7 @@ final class SelectionFavoritesTests: XCTestCase {
             collection: .library(.personal)
         )
 
-        var changes = await repo.favoriteChanges().makeAsyncIterator()
+        var changes = await repo.favoriteChanges(space: .personal).makeAsyncIterator()
         do {
             try await repo.setFavoritesBatch(action: action)
             XCTFail("Expected partial failure")

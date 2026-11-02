@@ -8,7 +8,7 @@ enum MetadataDetailFreshness: Sendable { case currentRun, fresh }
 extension CachedPhotosRepository {
     /// One full-detail lane shared by every collection and derived consumer.
     /// Membership remains separate; these rows never authorize collection order.
-    func resolveMetadataItems(_ ids: [Int64], priority: RequestPriority, collection: PhotoCollectionDescriptor = .library(.personal), freshness: MetadataDetailFreshness = .currentRun) async throws -> [PhotoItem] {
+    func resolveMetadataItems(_ ids: [Int64], priority: RequestPriority, collection: PhotoCollectionDescriptor, freshness: MetadataDetailFreshness = .currentRun) async throws -> [PhotoItem] {
         let source = mediaCollection(for: collection)
         guard !source.isSessionDerived else { throw SynologyAPIError.unsupported("The source collection is no longer available.") }
         let scopedNamespace = metadataNamespace(for: source)

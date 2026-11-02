@@ -14,4 +14,6 @@ Historical plans are preserved in closed GitHub issues. They may describe supers
 - [Browser and viewer correctness](https://github.com/finia2NA/syno/issues/41)
 - [Square thumbnails](https://github.com/finia2NA/syno/issues/38#issuecomment-6479123480)
 - [Repository structure cleanup (superseded and implemented)](https://github.com/finia2NA/syno/issues/57)
+- [Albums and sharing](https://github.com/finia2NA/syno/issues/58) through [#67](https://github.com/finia2NA/syno/issues/67)
+- [Folder browsing](https://github.com/finia2NA/syno/issues/14)
 - [AirPlay investigation](https://github.com/finia2NA/syno/issues/18#issuecomment-6478636860) — closed without implementation.

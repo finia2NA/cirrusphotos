@@ -269,14 +269,14 @@ struct ConnectionToolbarItem: View {
                 switch library.authenticationStatus {
                 case .notStarted:
                     Image(systemName: "circle.dotted")
-                    Text(library.error == nil ? "Opening library…" : "Library unavailable")
+                    Text(library.error(for: .library(.personal)) == nil ? "Opening library…" : "Library unavailable")
                 case .loggingIn:
                     ProgressView().controlSize(.mini)
                     Text("Logging in…")
                 case .signedIn:
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                    Text(library.error == nil ? "Connected" : "Metadata unavailable")
-                        .help(library.error ?? "Signed in")
+                    Text(library.error(for: .library(.personal)) == nil ? "Connected" : "Metadata unavailable")
+                        .help(library.error(for: .library(.personal)) ?? "Signed in")
                 case .failed(let message):
                     Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
                     Text("Login failed").help(message)
@@ -284,7 +284,7 @@ struct ConnectionToolbarItem: View {
             }
             .foregroundStyle(.secondary)
 
-            if library.authenticationStatus != .signedIn || library.error != nil {
+            if library.authenticationStatus != .signedIn || library.error(for: .library(.personal)) != nil {
                 Button("Retry") { Task { await library.reload() } }
                     .controlSize(.small)
                     .disabled(library.isLoading)
@@ -418,8 +418,8 @@ struct LibraryCommands: Commands {
             .keyboardShortcut("i", modifiers: [.command])
             Divider()
             Button("Download Thumbnails…") { openWindow(id: "thumbnail-download") }
-                .disabled(model.snapshot?.timeline.days.isEmpty != false || model.repository == nil ||
-                          !model.timelineVerified)
+                .disabled(model.snapshot(for: .library(.personal))?.timeline.days.isEmpty != false || model.repository == nil ||
+                          !model.timelineVerified(for: .library(.personal)))
             Divider()
             Button("Load All Timeline Sections") {
                 if timelineSectionLoad.prepare() {

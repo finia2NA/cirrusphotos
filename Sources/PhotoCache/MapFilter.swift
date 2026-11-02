@@ -125,7 +125,7 @@ extension CachedPhotosRepository {
                     let cached = try await store.metadataDetails(scopedNamespace, ids: ids, currentRun: runID)
                     guard current() else { continuation.finish(); return }
                     let initial = snapshot(cached)
-                    if !cached.isEmpty { continuation.yield(.value(applyingFavoriteOverrides(initial), verified: initial.verified)) }
+                    if !cached.isEmpty { continuation.yield(.value(applyingFavoriteOverrides(initial, collection: source), verified: initial.verified)) }
                     guard allowNetwork && !initial.verified else { continuation.finish(); return }
                     try await connect()
                     try await reconcileMetadataSource(for: source)
@@ -133,7 +133,7 @@ extension CachedPhotosRepository {
                     _ = try await resolveMetadataItems(ids, priority: priority, collection: source)
                     guard current() else { continuation.finish(); return }
                     let result = snapshot(try await store.metadataDetails(scopedNamespace, ids: ids, currentRun: runID))
-                    continuation.yield(.value(applyingFavoriteOverrides(result), verified: result.verified))
+                    continuation.yield(.value(applyingFavoriteOverrides(result, collection: source), verified: result.verified))
                 } catch {
                     if !Task.isCancelled { continuation.yield(.failure(error.localizedDescription)) }
                 }
@@ -143,7 +143,7 @@ extension CachedPhotosRepository {
         }
     }
 
-    func invalidateMapFiltersForLocationChange(space: PhotoSpace = .personal) {
+    func invalidateMapFiltersForLocationChange(space: PhotoSpace) {
         let descriptors = metadata.mapFilters.filter { $0.value.space == space }.map { PhotoCollectionDescriptor.mapFilter($0.key, space: $0.value.space) }
         for descriptor in descriptors {
             removeMapFilter(descriptor)

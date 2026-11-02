@@ -264,8 +264,8 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         let repository = try repository(root: root, transport: transport)
         var refreshes = await repository.timelineRefreshes(collection: .favorites(.personal)).makeAsyncIterator()
 
-        async let first: Void = repository.setFavorite(itemID: 81, in: descriptor, to: true)
-        async let second: Void = repository.setFavorite(itemID: 82, in: descriptor, to: true)
+        async let first: Void = repository.setFavorite(itemID: 81, in: descriptor, collection: .library(.personal), to: true)
+        async let second: Void = repository.setFavorite(itemID: 82, in: descriptor, collection: .library(.personal), to: true)
         _ = try await (first, second)
         guard case .value = await refreshes.next() else {
             return XCTFail("Missing coalesced authoritative refresh")
@@ -288,7 +288,7 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         let repository = try repository(root: root, transport: transport)
         for await _ in await repository.timeline(collection: .favorites(.personal)) {}
         for await _ in await repository.page(descriptor, collection: .favorites(.personal)) {}
-        var favoriteChanges = await repository.favoriteChanges().makeAsyncIterator()
+        var favoriteChanges = await repository.favoriteChanges(space: .personal).makeAsyncIterator()
 
         let mutation = Task {
             try await repository.setFavorite(itemID: photo.id, item: photo, in: descriptor,
@@ -333,7 +333,7 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         }
         await transport.waitForItemStart()
 
-        try await repository.setFavorite(itemID: photo.id, in: descriptor, to: false)
+        try await repository.setFavorite(itemID: photo.id, in: descriptor, collection: .library(.personal), to: false)
         await transport.configure(itemBlocked: true, items: [],
                                   timelineSnapshot: TimelineSnapshot(sections: []))
         await transport.releaseItems()
@@ -358,7 +358,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         let descriptor = section(1)
         try await seed([try item(1)], section: descriptor, repository: repository)
 
-        var offline = await repository.page(descriptor, allowNetwork: false).makeAsyncIterator()
+        var offline = await repository.page(descriptor, collection: .library(.personal), allowNetwork: false).makeAsyncIterator()
         if case .value(let items, let verified) = await offline.next() { let items = items.completeItems ?? [];
             XCTAssertEqual(items.map(\.id), [1]); XCTAssertFalse(verified)
         } else { XCTFail("Missing offline cache") }
@@ -367,7 +367,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         let loginCalls = await fake.loginCalls
         XCTAssertEqual(loginCalls, 0)
 
-        let stream = await repository.page(descriptor)
+        let stream = await repository.page(descriptor, collection: .library(.personal))
         var iterator = stream.makeAsyncIterator()
         if case .value(let items, let verified) = await iterator.next() { let items = items.completeItems ?? [];
             XCTAssertEqual(items.map(\.id), [1]); XCTAssertFalse(verified)
@@ -388,7 +388,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         let repository = try repository(root: root, transport: fake)
         let descriptor = section(1, limit: 2, count: 2)
         try await seed([try item(1), try item(2)], section: descriptor, repository: repository)
-        var iterator = await repository.page(descriptor).makeAsyncIterator()
+        var iterator = await repository.page(descriptor, collection: .library(.personal)).makeAsyncIterator()
         if case .value(let cached, false) = await iterator.next() { XCTAssertEqual(cached.slots.map(\.itemID), [1, 2]) }
         else { XCTFail("Missing old page") }
         if case .value(let current, true) = await iterator.next() { XCTAssertEqual(current.slots.map(\.itemID), [7, 8]) }
@@ -405,8 +405,8 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         await fake.configure(itemBlocked: true, items: [try item(9)])
         let repository = try repository(root: root, transport: fake)
         let descriptor = section(1)
-        let first = await repository.page(descriptor)
-        let second = await repository.page(descriptor)
+        let first = await repository.page(descriptor, collection: .library(.personal))
+        let second = await repository.page(descriptor, collection: .library(.personal))
         let firstTask = Task { for await _ in first {} }
         let secondTask = Task { () -> [Int64] in
             for await event in second {
@@ -429,7 +429,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         let fake = FakeTransport()
         await fake.configure(loginBlocked: true, items: [try item(5)])
         let repository = try repository(root: root, transport: fake)
-        let first = await repository.page(section(1))
+        let first = await repository.page(section(1), collection: .library(.personal))
         let second = await repository.page(section(1), collection: .favorites(.personal))
         let firstTask = Task { for await _ in first {} }
         let secondTask = Task { () -> [Int64] in
@@ -444,7 +444,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         await fake.releaseLogin()
         let secondResult = await secondTask.value
         XCTAssertEqual(secondResult, [5])
-        var third = await repository.page(section(1), useCachedPages: false).makeAsyncIterator()
+        var third = await repository.page(section(1), collection: .library(.personal), useCachedPages: false).makeAsyncIterator()
         if case .value(let items, true) = await third.next() { let items = items.completeItems ?? []; XCTAssertEqual(items.map(\.id), [5]) }
         else { XCTFail("Later demand did not load") }
         let loginCalls = await fake.loginCalls
@@ -458,7 +458,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         let repository = try repository(root: root, transport: fake)
         let descriptor = section(1)
         let result = Task { () -> [Int64] in
-            for await event in await repository.page(descriptor) {
+            for await event in await repository.page(descriptor, collection: .library(.personal)) {
                 if case .value(let items, true) = event { let items = items.completeItems ?? []; return items.map(\.id) }
             }
             return []
@@ -470,7 +470,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         let live = await result.value
         XCTAssertTrue(live.isEmpty, "A pre-reset metadata result must not paint after invalidation")
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor))
+        let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor, collection: .library(.personal)))
         let cached = try await repository.store.get(key)
         XCTAssertNil(cached)
     }
@@ -483,7 +483,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         for (offset, descriptor) in sections.enumerated() {
             try await seed([try item(offset + 1)], section: descriptor, repository: repository)
         }
-        let window = LibraryPageWindow(repository: repository, maximumPages: 2)
+        let window = LibraryPageWindow(repository: repository, collection: .library(.personal), maximumPages: 2)
         let snapshot = TimelineSnapshot(sections: sections)
         let index = LibraryIndex(snapshot: snapshot)
         await window.update(index: index, allowNetwork: false, visible: [0], prefetch: [1, 2])
@@ -514,7 +514,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         for (offset, descriptor) in sections.enumerated() {
             try await seed([try item(offset + 1)], section: descriptor, repository: repository)
         }
-        let window = LibraryPageWindow(repository: repository, maximumPages: 2)
+        let window = LibraryPageWindow(repository: repository, collection: .library(.personal), maximumPages: 2)
         let index = LibraryIndex(snapshot: TimelineSnapshot(sections: sections))
         await window.update(index: index, allowNetwork: false, visible: [0, 1, 2], prefetch: [3])
         let loaded = await waitUntil { await window.retainedPages().map(\.sectionIndex) == [0, 1, 2] }
@@ -529,7 +529,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         let repository = try repository(root: root, transport: fake)
         let descriptor = section(1)
         try await seed([try item(8)], section: descriptor, repository: repository)
-        let window = LibraryPageWindow(repository: repository)
+        let window = LibraryPageWindow(repository: repository, collection: .library(.personal))
         let index = LibraryIndex(snapshot: TimelineSnapshot(sections: [descriptor]))
         var events = await window.events().makeAsyncIterator()
         await window.update(index: index, allowNetwork: true, visible: [0], prefetch: [])
@@ -583,7 +583,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         var firstStatus = await repository.authentication().makeAsyncIterator()
         let initialStatus = await firstStatus.next()
         XCTAssertEqual(initialStatus, .notStarted)
-        var timeline = await repository.timeline().makeAsyncIterator()
+        var timeline = await repository.timeline(collection: .library(.personal)).makeAsyncIterator()
         if case .value(let cached, false) = await timeline.next() {
             XCTAssertEqual(cached.sections, snapshot.sections)
         } else { XCTFail("Cached full index did not arrive before login") }
@@ -591,7 +591,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         XCTAssertTrue(loginStarted)
         let loggingIn = await firstStatus.next()
         XCTAssertEqual(loggingIn, .loggingIn)
-        var page = await repository.page(snapshot.sections[0], allowNetwork: false).makeAsyncIterator()
+        var page = await repository.page(snapshot.sections[0], collection: .library(.personal), allowNetwork: false).makeAsyncIterator()
         if case .value(let items, false) = await page.next() { let items = items.completeItems ?? []; XCTAssertEqual(items.map(\.id), [12]) }
         else { XCTFail("Cached page unavailable during login") }
 
@@ -605,7 +605,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         XCTAssertEqual(replayed, failed)
 
         for _ in 0..<3 {
-            for await _ in await repository.page(snapshot.sections[0]) {}
+            for await _ in await repository.page(snapshot.sections[0], collection: .library(.personal)) {}
         }
         let failedAttemptCalls = await fake.loginCalls
         XCTAssertEqual(failedAttemptCalls, 1)
@@ -615,7 +615,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         let resetStatus = await firstStatus.next()
         XCTAssertEqual(resetStatus, .notStarted)
         let retry = Task { () -> TimelineSnapshot? in
-            for await event in await repository.timeline() {
+            for await event in await repository.timeline(collection: .library(.personal)) {
                 if case .value(let current, true) = event { return current }
             }
             return nil
@@ -643,7 +643,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         await fake.configure(timelineFailure: "Timeline unavailable", timelineSnapshot: snapshot)
         let repository = try repository(root: root, transport: fake)
         try await seedTimeline(snapshot, repository: repository)
-        var timeline = await repository.timeline().makeAsyncIterator()
+        var timeline = await repository.timeline(collection: .library(.personal)).makeAsyncIterator()
         if case .value(_, false) = await timeline.next() {} else { XCTFail("Missing cached timeline") }
         if case .failure(let message) = await timeline.next() {
             XCTAssertTrue(message.contains("Timeline unavailable"))
@@ -652,7 +652,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         let authenticated = await status.next()
         XCTAssertEqual(authenticated, .signedIn)
         await fake.configure(items: [try item(21)], timelineSnapshot: snapshot)
-        for await event in await repository.page(snapshot.sections[0]) {
+        for await event in await repository.page(snapshot.sections[0], collection: .library(.personal)) {
             if case .value(let items, true) = event { let items = items.completeItems ?? []; XCTAssertEqual(items.map(\.id), [21]) }
         }
         let loginCalls = await fake.loginCalls

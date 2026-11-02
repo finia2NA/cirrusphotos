@@ -23,7 +23,7 @@ public struct LocationIndexRevision: Sendable, Equatable, Hashable {
     let rawValue: UInt64
     let space: PhotoSpace
 
-    init(_ rawValue: UInt64, space: PhotoSpace = .personal) { self.rawValue = rawValue; self.space = space }
+    init(_ rawValue: UInt64, space: PhotoSpace) { self.rawValue = rawValue; self.space = space }
 }
 
 public struct LocationIndexValue: Sendable, Equatable {
@@ -43,7 +43,7 @@ extension CachedPhotosRepository {
     static let locationScanPageLimit = 1000
     static let locationScanPageCap = 2048
 
-    public func locationIndexChanges(space: PhotoSpace = .personal) -> AsyncStream<LocationIndexEvent> {
+    public func locationIndexChanges(space: PhotoSpace) -> AsyncStream<LocationIndexEvent> {
         if space == .shared { return sharedLocationIndexChanges() }
         let id = UUID()
         return AsyncStream(bufferingPolicy: .bufferingNewest(2)) { continuation in
@@ -75,7 +75,7 @@ extension CachedPhotosRepository {
         metadata.locationProjectionLoaded = true
         guard metadata.locationRecords != byID || metadata.lastPublishedInventoryVerified != verified else { return }
         metadata.lastPublishedInventoryVerified = verified
-        let value = acceptLocationRecords(records)
+        let value = acceptLocationRecords(records, space: .personal)
         for observer in metadata.locationProjectionObservers.values { observer.yield(.completed(value, verified: verified)) }
     }
 
@@ -98,7 +98,7 @@ extension CachedPhotosRepository {
         }
         if changed {
             metadata.locationRevision &+= 1
-            invalidateMapFiltersForLocationChange()
+            invalidateMapFiltersForLocationChange(space: .personal)
         }
         if changed || coverageChanged { scheduleLocationProjectionPublication() }
     }
@@ -119,13 +119,13 @@ extension CachedPhotosRepository {
             let records = metadata.locationRecords.values.sorted { $0.time > $1.time || ($0.time == $1.time && $0.id < $1.id) }
             let verified = state.inventoryComplete && (metadata.inventoryCurrent || (metadata.reconciled && !metadata.sourceUnavailable))
             metadata.lastPublishedInventoryVerified = verified
-            let value = LocationIndexValue(records: records, revision: LocationIndexRevision(metadata.locationRevision))
+            let value = LocationIndexValue(records: records, revision: LocationIndexRevision(metadata.locationRevision, space: .personal))
             for observer in metadata.locationProjectionObservers.values { observer.yield(.completed(value, verified: verified)) }
         }
     }
 
     /// Map is a projection of the common all-item inventory. It owns no source cursor.
-    public func locationIndex(space: PhotoSpace = .personal) -> AsyncStream<LocationIndexEvent> {
+    public func locationIndex(space: PhotoSpace) -> AsyncStream<LocationIndexEvent> {
         if space == .shared { return sharedLocationIndex() }
         let subscriber = UUID()
         let producer = StreamProducer()
@@ -137,7 +137,7 @@ extension CachedPhotosRepository {
                     let epoch = metadata.admissionEpoch
                     let cached = try await store.metadataCachedLocations(personalMetadataNamespace)
                     guard epoch == metadata.admissionEpoch, !metadata.resetInProgress, !Task.isCancelled else { throw CancellationError() }
-                    if !cached.isEmpty { continuation.yield(.cached(acceptLocationRecords(cached))) }
+                    if !cached.isEmpty { continuation.yield(.cached(acceptLocationRecords(cached, space: .personal))) }
                     try await connect()
                     try await reconcileMetadataSource()
                     let projection = try await store.metadataLocationProjection(personalMetadataNamespace, currentOnly: true)
@@ -145,13 +145,13 @@ extension CachedPhotosRepository {
                     if (metadata.inventoryCurrent && state.inventoryComplete) || (metadata.reconciled && !metadata.sourceUnavailable && state.inventoryComplete) {
                         let records = projection.records
                         guard epoch == metadata.admissionEpoch, !metadata.resetInProgress, !Task.isCancelled else { throw CancellationError() }
-                        continuation.yield(.completed(acceptLocationRecords(records), verified: true))
+                        continuation.yield(.completed(acceptLocationRecords(records, space: .personal), verified: true))
                     } else {
                         _ = try await verifiedTimelineSnapshot(collection: .library(.personal))
                         let task = registerLocationIndexScan(subscriber: subscriber)
                         let records = try await task.value
                         guard epoch == metadata.admissionEpoch, !metadata.resetInProgress, !Task.isCancelled else { throw CancellationError() }
-                        continuation.yield(.completed(acceptLocationRecords(records), verified: true))
+                        continuation.yield(.completed(acceptLocationRecords(records, space: .personal), verified: true))
                     }
                 } catch {
                     if !Task.isCancelled { continuation.yield(.failure(error.localizedDescription)) }
@@ -197,7 +197,7 @@ extension CachedPhotosRepository {
         metadata.locationIndexWork?.subscribers.remove(id)
     }
 
-    func acceptLocationRecords(_ records: [PhotoLocationRecord], space: PhotoSpace = .personal) -> LocationIndexValue {
+    func acceptLocationRecords(_ records: [PhotoLocationRecord], space: PhotoSpace) -> LocationIndexValue {
         if space == .personal { metadata.locationProjectionLoaded = true }
         let previous = space == .shared ? metadata.sharedLocations.records : metadata.locationRecords
         let next = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })

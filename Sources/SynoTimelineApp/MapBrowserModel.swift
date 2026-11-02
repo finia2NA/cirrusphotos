@@ -38,7 +38,7 @@ final class MapBrowserModel: ObservableObject {
 
     /// Subscribes to the shared location index once. Later calls are ignored unless
     /// `retry()` reset the subscription after a failure.
-    func start(repository: CachedPhotosRepository?, space: PhotoSpace = .personal) {
+    func start(repository: CachedPhotosRepository?, space: PhotoSpace) {
         if self.space != space {
             stopObservingProjection()
             invalidateMetadata(restart: false)

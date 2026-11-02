@@ -9,7 +9,7 @@ struct MapBrowserView: View {
     @ObservedObject var model: MapBrowserModel
     @EnvironmentObject private var library: LibraryModel
     var contentTopInset: CGFloat = 0
-    var space: PhotoSpace = .personal
+    var space: PhotoSpace
     let onOpenPhoto: (Int64) -> Void
     let onOpenGroup: ([Int64]) -> Void
 

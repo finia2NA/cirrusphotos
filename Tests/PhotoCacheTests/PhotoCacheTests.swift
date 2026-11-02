@@ -93,9 +93,9 @@ final class PhotoCacheTests: XCTestCase {
         let section = TimelineSection(offset: 0, limit: 250,
             list: [TimelineDay(year: 2024, month: 3, day: 1, itemCount: 501)])
         let changed = TimelineSection(offset: 250, limit: 250, list: section.list)
-        XCTAssertNotEqual(CacheKey.page(scope: .space(.personal), namespace: alice, section: section),
-                          CacheKey.page(scope: .space(.personal), namespace: alice, section: changed))
-        XCTAssertNotEqual(CacheKey.page(scope: .space(.personal), namespace: alice, section: section), CacheKey.page(scope: .space(.personal), namespace: bob, section: section))
+        XCTAssertNotEqual(CacheKey.page(scope: .space(.personal), namespace: alice, section: section, collection: .library(.personal)),
+                          CacheKey.page(scope: .space(.personal), namespace: alice, section: changed, collection: .library(.personal)))
+        XCTAssertNotEqual(CacheKey.page(scope: .space(.personal), namespace: alice, section: section, collection: .library(.personal)), CacheKey.page(scope: .space(.personal), namespace: bob, section: section, collection: .library(.personal)))
         let original = FullImageResource(scope: .space(.personal), unitID: 42, cacheKey: "revision-1", filename: "one.jpg")
         let renamed = FullImageResource(scope: .space(.personal), unitID: 42, cacheKey: "revision-1", filename: "renamed.jpg")
         let revised = FullImageResource(scope: .space(.personal), unitID: 42, cacheKey: "revision-2", filename: "one.jpg")
@@ -205,7 +205,7 @@ final class PhotoCacheTests: XCTestCase {
         let first = try CachedPhotosRepository(credentials: credentials, cacheRoot: root)
         var full: TimelineSnapshot?
         var timelineValues = 0
-        for await event in await first.timeline() {
+        for await event in await first.timeline(collection: .library(.personal)) {
             if case .value = event { timelineValues += 1 }
             if case .value(let snapshot, let verified) = event, verified { full = snapshot }
             if case .failure(let message) = event { XCTFail("Timeline: \(message) after \(timelineValues) values") }
@@ -213,14 +213,14 @@ final class PhotoCacheTests: XCTestCase {
         let timeline = try XCTUnwrap(full)
         XCTAssertGreaterThan(timeline.sections.count, 207)
         var page: [PhotoItem] = []
-        for await event in await first.page(timeline.sections[207]) {
+        for await event in await first.page(timeline.sections[207], collection: .library(.personal)) {
             if case .value(let items, let verified) = event, verified { let items = items.completeItems ?? []; page = items }
             if case .failure(let message) = event { XCTFail(message) }
         }
         XCTAssertEqual(page.count, timeline.sections[207].limit)
         let imageInfo = try XCTUnwrap(page.compactMap { $0.additional?.thumbnail }.first(where: { $0.isReady(.sm) }))
         var imageBytes = 0
-        for await event in await first.thumbnail(imageInfo, size: .sm, allowNetwork: true) {
+        for await event in await first.thumbnail(imageInfo, size: .sm, allowNetwork: true, collection: .library(.personal)) {
             if case .value(let data, let verified) = event, verified { imageBytes = data.count }
             if case .failure(let message) = event { XCTFail(message) }
         }
@@ -228,7 +228,7 @@ final class PhotoCacheTests: XCTestCase {
         let second = try CachedPhotosRepository(credentials: credentials, cacheRoot: root)
         var firstWasCached = false
         var laterWasValidated = false
-        for await event in await second.timeline() {
+        for await event in await second.timeline(collection: .library(.personal)) {
             if case .value(_, let verified) = event, !firstWasCached { firstWasCached = !verified }
             if case .value(_, let verified) = event, verified { laterWasValidated = true }
             if case .failure(let message) = event { XCTFail(message) }

@@ -54,7 +54,7 @@ public struct LibraryFilterRegistration: Sendable {
     public let filter: LibraryFilter
     public let revision: UInt64
     public let sourceFingerprint: String
-    public var sourceCollection: PhotoCollectionDescriptor = .library(.personal)
+    public let sourceCollection: PhotoCollectionDescriptor
 }
 
 public struct LibraryFilterControllerEvent: Sendable {
@@ -112,7 +112,7 @@ public actor LibraryFilterController {
     private var failureMessages: [Int: String] = [:]
     private var failureCachePolicies: [Int: Bool] = [:]
 
-    public init(repository: CachedPhotosRepository, snapshot: TimelineSnapshot, sourceCollection: PhotoCollectionDescriptor = .library(.personal)) {
+    public init(repository: CachedPhotosRepository, snapshot: TimelineSnapshot, sourceCollection: PhotoCollectionDescriptor) {
         self.repository = repository
         self.sourceCollection = sourceCollection
         sourceSnapshot = snapshot

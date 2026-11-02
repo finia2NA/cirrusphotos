@@ -22,16 +22,16 @@ final class PeopleCacheTests: XCTestCase {
         let credentials = SynologyCredentials(username: "fixture", password: "fixture")
         let first = try CachedPhotosRepository(credentials: credentials, cacheRoot: root, transport: transport)
         var verified = false
-        for await event in await first.people() { if case .value(let list, true) = event { verified = list.map(\.id) == [123] } }
+        for await event in await first.people(space: .personal) { if case .value(let list, true) = event { verified = list.map(\.id) == [123] } }
         XCTAssertTrue(verified)
-        for await _ in await first.people() {}
+        for await _ in await first.people(space: .personal) {}
         let count = await transport.calls
         XCTAssertEqual(count, 1)
         let offline = PeopleCacheTransport()
         await offline.setOffline()
         let second = try CachedPhotosRepository(credentials: credentials, cacheRoot: root, transport: offline)
         var cached = false; var failed = false
-        for await event in await second.people() {
+        for await event in await second.people(space: .personal) {
             switch event {
             case .value(let list, false): cached = list.map(\.id) == [123]
             case .failure: failed = true

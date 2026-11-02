@@ -80,7 +80,7 @@ final class SharedTimelineTests: XCTestCase, @unchecked Sendable {
         let filteredObservation = await repository.observeMetadataChanges(collection: registration.descriptor)
         let pageObservation = await repository.observeCollectionPages(collection: .library(.shared), sections: [section])
         await repository.publishMetadataInvalidation()
-        await repository.publishDerivedPageChanges(ids: [1])
+        await repository.publishDerivedPageChanges(ids: [1], space: .personal)
         let filterInvalidation = await repository.takeMetadataChanges(filteredObservation.id)
         let pageInvalidation = await repository.takeCollectionPageChanges(pageObservation.id)
         XCTAssertNil(filterInvalidation)

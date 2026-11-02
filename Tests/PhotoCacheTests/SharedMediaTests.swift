@@ -75,7 +75,7 @@ final class SharedMediaTests: XCTestCase, @unchecked Sendable {
         let timeline = try CollectionDayPager.snapshot(catalog: CollectionDayCatalog(sections: [section], completeness: .complete))
         let sharedViewer = PhotoViewerSession(repository: repository, collection: .library(.shared), index: LibraryIndex(snapshot: timeline),
             seed: .init(sectionIndex: 0, pageOffset: 0, item: photo, page: [photo], pageVerified: true), allowNetwork: false)
-        let personalViewer = PhotoViewerSession(repository: repository, index: LibraryIndex(snapshot: timeline),
+        let personalViewer = PhotoViewerSession(repository: repository, collection: .library(.personal), index: LibraryIndex(snapshot: timeline),
             seed: .init(sectionIndex: 0, pageOffset: 0, item: photo, page: [photo], pageVerified: true), allowNetwork: false)
         _ = await sharedViewer.state()
         _ = await personalViewer.state()

@@ -57,7 +57,7 @@ final class RotationTests: XCTestCase {
                                              collection: .library(.personal), itemsByID: [1: original])
         let store = await repository.store
         let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
-            server: SynologyClient.defaultBaseURL, account: "rotation"), section: section))
+            server: SynologyClient.defaultBaseURL, account: "rotation"), section: section, collection: .library(.personal)))
         try await seedMetadataPage([original], section: section, repository: repository)
         try await repository.rotate(action, direction: .clockwise)
         let calls = await transport.rotateCalls
@@ -80,7 +80,7 @@ final class RotationTests: XCTestCase {
                                              collection: .library(.personal), itemsByID: [2: original])
         let store = await repository.store
         let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
-            server: SynologyClient.defaultBaseURL, account: "rotation"), section: section))
+            server: SynologyClient.defaultBaseURL, account: "rotation"), section: section, collection: .library(.personal)))
         try await seedMetadataPage([original], section: section, repository: repository)
         do {
             try await repository.rotate(action, direction: .clockwise)
@@ -108,7 +108,7 @@ final class RotationTests: XCTestCase {
 
         let store = await repository.store
         let sourceKey = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
-            server: SynologyClient.defaultBaseURL, account: "rotation"), section: sourceSection))
+            server: SynologyClient.defaultBaseURL, account: "rotation"), section: sourceSection, collection: .library(.personal)))
         try await seedMetadataPage([original], section: sourceSection, repository: repository)
 
         let built = DayGroupedTimelineBuilder.build(entries: [.init(id: original.id, time: original.time)])
@@ -116,7 +116,7 @@ final class RotationTests: XCTestCase {
         let registration = LibraryFilterRegistration(
             descriptor: descriptor, snapshot: built.snapshot,
             referencesBySection: [[.init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: original.id)]],
-            filter: LibraryFilter(mediaKinds: [.photo]), revision: 1, sourceFingerprint: LibraryIndex(snapshot: .init(sections: [sourceSection])).fingerprint)
+            filter: LibraryFilter(mediaKinds: [.photo]), revision: 1, sourceFingerprint: LibraryIndex(snapshot: .init(sections: [sourceSection])).fingerprint, sourceCollection: .library(.personal))
         try await repository.registerLibraryFilter(registration)
         let filteredSection = try XCTUnwrap(built.snapshot.sections.first)
         let action = SelectionRotationAction(itemIDs: [original.id],
@@ -199,7 +199,7 @@ final class RotationTests: XCTestCase {
                                              collection: .library(.personal), itemsByID: [11: original])
         let store = await repository.store
         let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
-            server: SynologyClient.defaultBaseURL, account: "rotation"), section: section))
+            server: SynologyClient.defaultBaseURL, account: "rotation"), section: section, collection: .library(.personal)))
         try await seedMetadataPage([original], section: section, repository: repository)
         var final: ThumbnailRotationProgress?
         for await progress in await repository.rotateThumbnails(action, direction: .clockwise) { final = progress }
@@ -226,7 +226,7 @@ final class RotationTests: XCTestCase {
                                              collection: .library(.personal), itemsByID: [12: original])
         let store = await repository.store
         let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
-            server: SynologyClient.defaultBaseURL, account: "rotation"), section: section))
+            server: SynologyClient.defaultBaseURL, account: "rotation"), section: section, collection: .library(.personal)))
         try await seedMetadataPage([original], section: section, repository: repository)
         for await _ in await repository.rotateThumbnails(action, direction: .clockwise) {}
         let restored = await transport.restoredUnits

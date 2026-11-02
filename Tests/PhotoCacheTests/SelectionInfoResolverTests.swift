@@ -86,13 +86,11 @@ final class SelectionInfoResolverTests: XCTestCase {
         let allItems = await SelectionItemResolver(repository: repository).resolve(selection)
         XCTAssertEqual(allItems?.map(\.id), [1, 2, 3])
         let resolver = SelectionDownloadResolver(repository: repository)
-        let result = await resolver.resolve(collection: .library(.personal), snapshot: snapshot,
-                                            selectedOrdinals: IndexSet(integersIn: 0...2),
-                                            knownItemIDsByOrdinal: [0: 1])
+        let result = await resolver.resolve(selection)
         XCTAssertEqual(result?.map(\.id), [1, 3])
-        let changed = await resolver.resolve(collection: .library(.personal), snapshot: snapshot,
-                                             selectedOrdinals: IndexSet(integer: 0),
-                                             knownItemIDsByOrdinal: [0: 999])
+        let changed = await resolver.resolve(PhotoSelectionSnapshot(collection: .library(.personal), timeline: snapshot,
+            timelineFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
+            selectedOrdinals: IndexSet(integer: 0), knownItemIDsByOrdinal: [0: 999]))
         XCTAssertNil(changed)
     }
 

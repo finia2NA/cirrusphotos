@@ -23,7 +23,7 @@ extension CachedPhotosRepository {
         )
     }
 
-    public func timeline(collection: PhotoCollectionDescriptor = .library(.personal)) -> AsyncStream<ResourceEvent<TimelineSnapshot>> {
+    public func timeline(collection: PhotoCollectionDescriptor) -> AsyncStream<ResourceEvent<TimelineSnapshot>> {
         let subscriber = UUID()
         let producer = StreamProducer()
         return AsyncStream(bufferingPolicy: .bufferingNewest(3)) { continuation in
@@ -73,7 +73,7 @@ extension CachedPhotosRepository {
         }
     }
 
-    public func page(_ section: TimelineSection, collection: PhotoCollectionDescriptor = .library(.personal),
+    public func page(_ section: TimelineSection, collection: PhotoCollectionDescriptor,
                      useCachedPages: Bool = true, allowNetwork: Bool = true,
                      priority: RequestPriority = .visible) -> AsyncStream<ResourceEvent<PhotoPageSnapshot>> {
         if collection.isMapFilter { return mapFilterPage(section, collection: collection, allowNetwork: allowNetwork, priority: priority) }
@@ -122,7 +122,7 @@ extension CachedPhotosRepository {
         }
     }
 
-    func applyingFavoriteOverrides(_ page: PhotoPageSnapshot, collection: PhotoCollectionDescriptor = .library(.personal)) -> PhotoPageSnapshot {
+    func applyingFavoriteOverrides(_ page: PhotoPageSnapshot, collection: PhotoCollectionDescriptor) -> PhotoPageSnapshot {
         let source = mediaCollection(for: collection)
         guard let space = source.space, !source.isSessionDerived else { return page }
         let favorites = favoriteState(for: space)
@@ -169,7 +169,7 @@ extension CachedPhotosRepository {
     }
 
     public func promotePage(_ section: TimelineSection,
-                            collection: PhotoCollectionDescriptor = .library(.personal)) async {
+                            collection: PhotoCollectionDescriptor) async {
         guard let key = CacheKey.page(scope: collection.contentScope, namespace: namespace, section: section, collection: collection) else { return }
         if collection.isLibraryFilter {
             promoteLibraryFilterSources(section, collection: collection)

@@ -12,7 +12,7 @@ final class PhotoIdentityTests: XCTestCase, @unchecked Sendable {
     func testIdenticalIDsAndMediaRevisionsRemainIsolatedByAuthority() throws {
         XCTAssertEqual(Set(scopes.map { PhotoItemIdentity(scope: $0, itemID: 42) }).count, scopes.count)
         let thumbnail = ThumbnailInfo(unitID: 99, cacheKey: "same", sm: "ready")
-        let thumbnails = scopes.map { CacheKey.thumbnailIdentity(scope: $0, namespace: "account", descriptor: thumbnail, size: .sm) }
+        let thumbnails = scopes.map { CacheKey.thumbnailIdentity(scope: $0, namespace: "account", descriptor: thumbnail, size: .sm, collection: .library(.personal)) }
         XCTAssertEqual(Set(thumbnails.map(\.key)).count, scopes.count)
         XCTAssertEqual(Set(thumbnails.map(\.family)).count, scopes.count)
         let originals = scopes.map { CacheKey.fullImage(namespace: "account", resource: FullImageResource(scope: $0, unitID: 99, cacheKey: "same")) }
@@ -21,7 +21,7 @@ final class PhotoIdentityTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(Set(videos).count, scopes.count)
         let day = try CaptureDay(year: 2024, month: 1, day: 1)
         let section = try CollectionDayPager.snapshot(catalog: CollectionDayCatalog(days: [.init(day: day, count: 1)], completeness: .complete)).sections[0]
-        let pages = scopes.map { CacheKey.page(scope: $0, namespace: "account", section: section) }
+        let pages = scopes.map { CacheKey.page(scope: $0, namespace: "account", section: section, collection: .library(.personal)) }
         XCTAssertEqual(Set(pages).count, scopes.count)
     }
 

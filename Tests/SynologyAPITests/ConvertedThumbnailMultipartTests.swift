@@ -9,7 +9,7 @@ final class ConvertedThumbnailMultipartTests: XCTestCase {
             sm: Data([0x01, 0x02]), m: Data([0x03]), xl: Data([0x04, 0x05, 0x06])
         )
         let body = SynologyClient.convertedThumbnailMultipartBody(
-            boundary: boundary, unitID: 238_228, files: files
+            boundary: boundary, unitID: 238_228, files: files, space: .personal
         )
         let text = try XCTUnwrap(String(data: body, encoding: .isoLatin1))
 

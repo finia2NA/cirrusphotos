@@ -7,7 +7,7 @@ public struct FolderDirectory: Codable, Sendable {
 }
 
 extension CachedPhotosRepository {
-    public func folderDirectory(id: Int64, space: PhotoSpace = .personal) -> AsyncStream<ResourceEvent<FolderDirectory>> {
+    public func folderDirectory(id: Int64, space: PhotoSpace) -> AsyncStream<ResourceEvent<FolderDirectory>> {
         metadataIndex(key: PhotoCollectionDescriptor.folder(id, space: space), space: space, name: "Folders", jobs: \.folderJobs,
             cached: { try await $0.metadataFolderDirectory($1, id: id) },
             fetch: { client in

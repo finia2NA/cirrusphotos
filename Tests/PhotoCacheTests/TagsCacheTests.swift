@@ -22,16 +22,16 @@ final class TagsCacheTests: XCTestCase {
         let credentials = SynologyCredentials(username: "fixture", password: "fixture")
         let first = try CachedPhotosRepository(credentials: credentials, cacheRoot: root, transport: transport)
         var verified = false
-        for await event in await first.tags() { if case .value(let list, true) = event { verified = list.map(\.id) == [123] } }
+        for await event in await first.tags(space: .personal) { if case .value(let list, true) = event { verified = list.map(\.id) == [123] } }
         XCTAssertTrue(verified)
-        for await _ in await first.tags() {}
+        for await _ in await first.tags(space: .personal) {}
         let count = await transport.calls
         XCTAssertEqual(count, 1)
         let offline = TagsCacheTransport()
         await offline.setOffline()
         let second = try CachedPhotosRepository(credentials: credentials, cacheRoot: root, transport: offline)
         var cached = false; var failed = false
-        for await event in await second.tags() {
+        for await event in await second.tags(space: .personal) {
             switch event {
             case .value(let list, false): cached = list.map(\.id) == [123]
             case .failure: failed = true

@@ -59,13 +59,13 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
         try await repository.setConfiguredThumbnailSize(.m)
         let descriptor = try descriptor()
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let small = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm)
+        let small = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm, collection: .library(.personal))
         try await repository.store.put(small.key, kind: .thumbnail, data: Data("cached-sm".utf8),
                                        validatedRun: "older-run", thumbnail: small)
 
         var values: [ThumbnailRenditionValue] = []
         for await event in await repository.thumbnailWithFallback(descriptor, size: .m,
-                                                                   allowNetwork: true) {
+                                                                   allowNetwork: true, collection: .library(.personal)) {
             if case .value(let value, _) = event { values.append(value) }
         }
 
@@ -83,13 +83,13 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
         try await repository.setConfiguredThumbnailSize(.m)
         let descriptor = try descriptor(medium: "pending")
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let small = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm)
+        let small = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm, collection: .library(.personal))
         try await repository.store.put(small.key, kind: .thumbnail, data: Data("cached-sm".utf8),
                                        validatedRun: "older-run", thumbnail: small)
 
         var values: [ThumbnailRenditionValue] = []
         for await event in await repository.thumbnailWithFallback(descriptor, size: .m,
-                                                                   allowNetwork: true) {
+                                                                   allowNetwork: true, collection: .library(.personal)) {
             if case .value(let value, _) = event { values.append(value) }
         }
         let requestedSizes = await transport.requestedSizes
@@ -104,13 +104,13 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
         let repository = try repository(root: root, transport: transport)
         let descriptor = try descriptor()
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let small = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm)
+        let small = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm, collection: .library(.personal))
         try await repository.store.put(small.key, kind: .thumbnail, data: Data("cached-sm".utf8),
                                        validatedRun: "older-run", thumbnail: small)
 
         var firstValues: [ThumbnailRenditionValue] = []
         var failed = false
-        for await event in await repository.thumbnailWithFallback(descriptor, size: .m, allowNetwork: true) {
+        for await event in await repository.thumbnailWithFallback(descriptor, size: .m, allowNetwork: true, collection: .library(.personal)) {
             switch event {
             case .value(let value, _): firstValues.append(value)
             case .failure: failed = true
@@ -120,7 +120,7 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
         XCTAssertEqual(firstValues.map(\.size), [.sm])
 
         var retriedValues: [ThumbnailRenditionValue] = []
-        for await event in await repository.thumbnailWithFallback(descriptor, size: .m, allowNetwork: true) {
+        for await event in await repository.thumbnailWithFallback(descriptor, size: .m, allowNetwork: true, collection: .library(.personal)) {
             if case .value(let value, _) = event { retriedValues.append(value) }
         }
         XCTAssertEqual(retriedValues.map(\.size), [.sm, .m])
@@ -135,12 +135,12 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
         try await repository.setConfiguredThumbnailSize(.m)
         let descriptor = try descriptor()
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let small = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm)
+        let small = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm, collection: .library(.personal))
         try await repository.store.put(small.key, kind: .thumbnail, data: Data("cached-sm".utf8),
                                        validatedRun: "older-run", thumbnail: small)
 
-        let first = try await repository.cacheThumbnail(descriptor, size: .m)
-        let second = try await repository.cacheThumbnail(descriptor, size: .m)
+        let first = try await repository.cacheThumbnail(descriptor, size: .m, collection: .library(.personal))
+        let second = try await repository.cacheThumbnail(descriptor, size: .m, collection: .library(.personal))
         let requestedSizes = await transport.requestedSizes
         XCTAssertEqual(first, .fetched)
         XCTAssertEqual(second, .reused)

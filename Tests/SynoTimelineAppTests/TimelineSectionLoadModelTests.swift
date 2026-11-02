@@ -33,7 +33,7 @@ final class TimelineSectionLoadModelTests: XCTestCase {
         let library = LibraryModel(repository: repository)
         await library.load()
         let filter = LibraryFilterModel()
-        filter.configure(library: library)
+        filter.configure(library: library, source: .library(.personal))
         let coordinator = TimelineSectionLoadModel()
         coordinator.configure(library: library, filter: filter)
         return (library, filter, coordinator, transport, root)

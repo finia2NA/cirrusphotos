@@ -127,7 +127,7 @@ final class PhotoDownloadManager: ObservableObject {
     }
 
     func edit(repository: CachedPhotosRepository, snapshot: TimelineSnapshot?, selection: BrowserCommandSnapshot?,
-              item: PhotoItem?, collection: PhotoCollectionDescriptor = .library(.personal), applicationURL: URL) {
+              item: PhotoItem?, collection: PhotoCollectionDescriptor, applicationURL: URL) {
         let capturedSelection = selection?.captureSelection(timeline: snapshot)
         let id = UUID()
         jobs.insert(PhotoDownloadJob(id: id, name: item?.filename ?? "Preparing photo…", progress: nil,

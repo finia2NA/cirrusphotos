@@ -4,7 +4,7 @@ import SynologyAPI
 extension CachedPhotosRepository {
     func favoriteState(for space: PhotoSpace) -> RepositoryFavoriteState { space == .shared ? sharedFavorites : favorites }
 
-    public func favoriteChanges(space: PhotoSpace = .personal) -> AsyncStream<FavoriteChange> {
+    public func favoriteChanges(space: PhotoSpace) -> AsyncStream<FavoriteChange> {
         let id = UUID()
         let favorites = favoriteState(for: space)
         return AsyncStream(bufferingPolicy: .unbounded) { continuation in
@@ -22,7 +22,7 @@ extension CachedPhotosRepository {
     /// does not fork into a separate pipeline.
     public func setFavorite(itemID: Int64, item: PhotoItem? = nil,
                             in section: TimelineSection,
-                            collection: PhotoCollectionDescriptor = .library(.personal),
+                            collection: PhotoCollectionDescriptor,
                             to favorite: Bool) async throws {
         var itemsByID: [Int64: PhotoItem] = [:]
         if let item {
@@ -200,7 +200,7 @@ extension CachedPhotosRepository {
         return details[itemID]?.item
     }
 
-    func scheduleFavoritesRefresh(space: PhotoSpace = .personal) {
+    func scheduleFavoritesRefresh(space: PhotoSpace) {
         let favorites = favoriteState(for: space)
         let collection: PhotoCollectionDescriptor = space == .shared ? .favorites(.shared) : .favorites(.personal)
         favorites.refreshTask?.cancel()

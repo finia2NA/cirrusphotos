@@ -31,6 +31,8 @@ public enum CacheBudget {
 }
 
 public actor DiskCache {
+    /// Bumping this discards media files too. Metadata-only format changes bump
+    /// `metadataFormatVersion`, which keeps downloaded media.
     private static let schemaVersion = 4
     private let root: URL
     private let images: URL
@@ -62,7 +64,7 @@ public actor DiskCache {
         if db == nil {
             guard sqlite3_open(path, &db) == SQLITE_OK else { throw CacheError.storage }
         }
-        guard sqlite3_exec(db, "PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS entries (key TEXT PRIMARY KEY, kind INTEGER NOT NULL, payload BLOB, file TEXT, cost INTEGER NOT NULL, accessed REAL NOT NULL, validated_run TEXT, etag TEXT, last_modified TEXT, digest TEXT, retention_class TEXT, retention_rank INTEGER, thumbnail_family TEXT, thumbnail_size TEXT, row_revision INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS entries_retention ON entries(retention_rank,accessed); CREATE INDEX IF NOT EXISTS entries_thumbnail_family ON entries(thumbnail_family,thumbnail_size);", nil, nil, nil) == SQLITE_OK else {
+        guard sqlite3_exec(db, "PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS entries (key TEXT PRIMARY KEY, kind INTEGER NOT NULL, file TEXT, cost INTEGER NOT NULL, accessed REAL NOT NULL, validated_run TEXT, etag TEXT, last_modified TEXT, digest TEXT, retention_class TEXT, retention_rank INTEGER, thumbnail_family TEXT, thumbnail_size TEXT, row_revision INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS entries_retention ON entries(retention_rank,accessed); CREATE INDEX IF NOT EXISTS entries_thumbnail_family ON entries(thumbnail_family,thumbnail_size);", nil, nil, nil) == SQLITE_OK else {
             throw CacheError.storage
         }
         if needsSchema {
@@ -79,7 +81,7 @@ public actor DiskCache {
         guard sqlite3_step(version) == SQLITE_ROW,
               sqlite3_column_int(version, 0) == schemaVersion else { return false }
         var entries: OpaquePointer?
-        let query = "SELECT key,kind,payload,file,cost,accessed,validated_run,etag,last_modified,digest,retention_class,retention_rank,thumbnail_family,thumbnail_size,row_revision FROM entries LIMIT 0"
+        let query = "SELECT key,kind,file,cost,accessed,validated_run,etag,last_modified,digest,retention_class,retention_rank,thumbnail_family,thumbnail_size,row_revision FROM entries LIMIT 0"
         guard sqlite3_prepare_v2(db, query, -1, &entries, nil) == SQLITE_OK else { return false }
         sqlite3_finalize(entries)
         return true
@@ -96,37 +98,28 @@ public actor DiskCache {
     deinit { sqlite3_close(db) }
 
     public func get(_ key: String) throws -> CacheEntry? {
-        let sql = "SELECT payload,file,etag,last_modified,validated_run,digest,kind,row_revision FROM entries WHERE key=?"
+        let sql = "SELECT file,etag,last_modified,validated_run,digest,kind,row_revision FROM entries WHERE key=?"
         let statement = try prepare(sql)
         defer { sqlite3_finalize(statement) }
         bind(key, at: 1, in: statement)
         guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
-        let filename = columnString(statement, 1)
-        let data: Data
-        if let filename {
-            let url = images.appendingPathComponent(filename)
-            guard let loaded = try? Data(contentsOf: url) else {
-                try? remove(key)
-                return nil
-            }
-            data = loaded
-        } else {
-            let count = Int(sqlite3_column_bytes(statement, 0))
-            guard count > 0, let bytes = sqlite3_column_blob(statement, 0) else { return nil }
-            data = Data(bytes: bytes, count: count)
-        }
-        if let expected = columnString(statement, 5), expected != digest(data) {
+        guard let filename = columnString(statement, 0),
+              let data = try? Data(contentsOf: images.appendingPathComponent(filename)) else {
             try? remove(key)
             return nil
         }
-        guard let kind = CacheKind(rawValue: Int(sqlite3_column_int(statement, 6))) else {
+        if let expected = columnString(statement, 4), expected != digest(data) {
             try? remove(key)
             return nil
         }
-        let revision = sqlite3_column_int64(statement, 7)
-        let result = CacheEntry(data: data, kind: kind, etag: columnString(statement, 2),
-                                lastModified: columnString(statement, 3),
-                                validatedRun: columnString(statement, 4), revision: revision)
+        guard let kind = CacheKind(rawValue: Int(sqlite3_column_int(statement, 5))) else {
+            try? remove(key)
+            return nil
+        }
+        let revision = sqlite3_column_int64(statement, 6)
+        let result = CacheEntry(data: data, kind: kind, etag: columnString(statement, 1),
+                                lastModified: columnString(statement, 2),
+                                validatedRun: columnString(statement, 3), revision: revision)
         let touch = try prepare("UPDATE entries SET accessed=? WHERE key=?")
         defer { sqlite3_finalize(touch) }
         sqlite3_bind_double(touch, 1, Date().timeIntervalSince1970)
@@ -183,24 +176,20 @@ public actor DiskCache {
         } else {
             storedKind = kind
         }
-        let filename: String?
-        switch storedKind {
-        case .previewThumbnail, .thumbnail, .fullImage: filename = key + ".img"
-        case .videoSegment: filename = key + ".video"
-        default: filename = nil
+        let filename = switch storedKind {
+        case .previewThumbnail, .thumbnail, .fullImage: key + ".img"
+        case .videoSegment: key + ".video"
         }
-        if let filename {
-            try data.write(to: images.appendingPathComponent(filename), options: .atomic)
-        }
+        try data.write(to: images.appendingPathComponent(filename), options: .atomic)
         let retention = try identity.map { try retentionClass(for: $0) }
             ?? CachePriorityPolicy.defaultClass(for: storedKind)
         let statement = try prepare("""
             INSERT INTO entries
-                (key,kind,payload,file,cost,accessed,validated_run,etag,last_modified,digest,
+                (key,kind,file,cost,accessed,validated_run,etag,last_modified,digest,
                  retention_class,retention_rank,thumbnail_family,thumbnail_size,row_revision)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)
             ON CONFLICT(key) DO UPDATE SET
-                kind=excluded.kind, payload=excluded.payload, file=excluded.file,
+                kind=excluded.kind, file=excluded.file,
                 cost=excluded.cost, accessed=excluded.accessed,
                 validated_run=excluded.validated_run, etag=excluded.etag,
                 last_modified=excluded.last_modified, digest=excluded.digest,
@@ -213,19 +202,17 @@ public actor DiskCache {
         defer { sqlite3_finalize(statement) }
         bind(key, at: 1, in: statement)
         sqlite3_bind_int(statement, 2, Int32(storedKind.rawValue))
-        if filename == nil { _ = data.withUnsafeBytes { sqlite3_bind_blob(statement, 3, $0.baseAddress, Int32(data.count), sqliteTransient) } }
-        else { sqlite3_bind_null(statement, 3) }
-        bind(filename, at: 4, in: statement)
-        sqlite3_bind_int64(statement, 5, Int64(data.count))
-        sqlite3_bind_double(statement, 6, Date().timeIntervalSince1970)
-        bind(validatedRun, at: 7, in: statement)
-        bind(etag, at: 8, in: statement)
-        bind(lastModified, at: 9, in: statement)
-        bind(digest(data), at: 10, in: statement)
-        bind(retention.rawValue, at: 11, in: statement)
-        sqlite3_bind_int(statement, 12, Int32(CachePriorityPolicy.evictionRank(for: retention)))
-        bind(identity?.family, at: 13, in: statement)
-        bind(identity?.size.rawValue, at: 14, in: statement)
+        bind(filename, at: 3, in: statement)
+        sqlite3_bind_int64(statement, 4, Int64(data.count))
+        sqlite3_bind_double(statement, 5, Date().timeIntervalSince1970)
+        bind(validatedRun, at: 6, in: statement)
+        bind(etag, at: 7, in: statement)
+        bind(lastModified, at: 8, in: statement)
+        bind(digest(data), at: 9, in: statement)
+        bind(retention.rawValue, at: 10, in: statement)
+        sqlite3_bind_int(statement, 11, Int32(CachePriorityPolicy.evictionRank(for: retention)))
+        bind(identity?.family, at: 12, in: statement)
+        bind(identity?.size.rawValue, at: 13, in: statement)
         guard sqlite3_step(statement) == SQLITE_DONE else { throw CacheError.storage }
         if let identity { try reclassifyThumbnailFamily(identity.family) }
         try trim()

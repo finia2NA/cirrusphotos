@@ -105,7 +105,7 @@ final class ThumbnailRangeDownloaderTests: XCTestCase {
         XCTAssertEqual(range.dayIDs(in: snapshot), ["2024-04-03", "2024-04-02"])
 
         let downloader = ThumbnailRangeDownloader(repository: try repository(transport: transport, root: root))
-        let first = await downloader.download(snapshot: snapshot, range: range, size: .m) { _ in }
+        let first = await downloader.download(snapshot: snapshot, range: range, size: .m, collection: .library(.personal)) { _ in }
         XCTAssertEqual(first.estimated, 5)
         XCTAssertEqual(first.processed, 5)
         XCTAssertEqual(first.fetched, 4)
@@ -125,7 +125,7 @@ final class ThumbnailRangeDownloaderTests: XCTestCase {
         // indexed exact files without issuing conditional requests for all of them.
         let secondDownloader = ThumbnailRangeDownloader(
             repository: try repository(transport: transport, root: root))
-        let second = await secondDownloader.download(snapshot: snapshot, range: range, size: .m) { _ in }
+        let second = await secondDownloader.download(snapshot: snapshot, range: range, size: .m, collection: .library(.personal)) { _ in }
         XCTAssertEqual(second.estimated, 5)
         XCTAssertEqual(second.processed, 5)
         XCTAssertEqual(second.fetched, 0)
@@ -176,7 +176,7 @@ final class ThumbnailRangeDownloaderTests: XCTestCase {
         let downloader = ThumbnailRangeDownloader(repository: try repository(transport: transport, root: root),
                                                   workerCount: 2)
         let task = Task {
-            await downloader.download(snapshot: snapshot, range: ThumbnailDateRange(0, 0), size: .m) { _ in }
+            await downloader.download(snapshot: snapshot, range: ThumbnailDateRange(0, 0), size: .m, collection: .library(.personal)) { _ in }
         }
         for _ in 0..<200 {
             if await transport.thumbnailCalls > 0 { break }
@@ -203,7 +203,7 @@ final class ThumbnailRangeDownloaderTests: XCTestCase {
         let repository = try repository(transport: transport, root: root)
         let downloader = ThumbnailRangeDownloader(repository: repository)
         let task = Task {
-            await downloader.download(snapshot: snapshot, range: ThumbnailDateRange(0, 0), size: .m) { _ in }
+            await downloader.download(snapshot: snapshot, range: ThumbnailDateRange(0, 0), size: .m, collection: .library(.personal)) { _ in }
         }
         await transport.waitUntilPageRequested()
 

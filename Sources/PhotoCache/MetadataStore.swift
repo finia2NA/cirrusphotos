@@ -59,9 +59,8 @@ extension DiskCache {
             sqlite3_finalize(statement)
             if version != Self.metadataFormatVersion {
                 for table in Self.normalizedTables { try metadataSQL("DROP TABLE IF EXISTS \(table)") }
+                // Media records are unchanged. Superseded metadata is never decoded.
                 try metadataSQL("DELETE FROM metadata_format; INSERT INTO metadata_format VALUES (\(Self.metadataFormatVersion))")
-                // Media record values are unchanged. Superseded metadata is never decoded.
-                try metadataSQL("DELETE FROM entries WHERE kind IN (3,4,5,6)")
             }
             try metadataSQL("""
             CREATE TABLE IF NOT EXISTS metadata_state (

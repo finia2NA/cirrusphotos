@@ -121,7 +121,7 @@ final class SharedMapTests: XCTestCase, @unchecked Sendable {
         let observationSource = await repository.metadataObservationSource(for: pin.descriptor)
         XCTAssertEqual(observationSource, .library(.shared))
         let observation = await repository.observeCollectionPages(collection: pin.descriptor, sections: Set(pin.snapshot.sections))
-        await repository.publishDerivedPageChanges(ids: [1])
+        await repository.publishDerivedPageChanges(ids: [1], space: .personal)
         await repository.publishMetadataInvalidation(collection: .library(.personal))
         let changes = await repository.takeCollectionPageChanges(observation.id)
         XCTAssertTrue(changes.isEmpty)
@@ -144,7 +144,7 @@ final class SharedMapTests: XCTestCase, @unchecked Sendable {
         // The same numeric ID in Personal Space must not replace Shared records
         // or invalidate the existing Shared pin.
         _ = await repository.acceptLocationRecords([PhotoLocationRecord(id: 1, time: 1704067200,
-            coordinate: .init(latitude: -10, longitude: -20), thumbnail: nil)])
+            coordinate: .init(latitude: -10, longitude: -20), thumbnail: nil)], space: .personal)
         let authority = await repository.selectionAuthority(collection: pin.descriptor, snapshot: pin.snapshot)
         XCTAssertNotNil(authority)
         let controller = LibraryFilterController(repository: repository, snapshot: pin.snapshot, sourceCollection: pin.descriptor)

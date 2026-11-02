@@ -175,7 +175,7 @@ public actor SynologyClient: PhotosTransport {
     public func downloadIncomingPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, reference: String,
                                        progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
         guard !reference.isEmpty else { throw SynologyAPIError.invalidResponse }
-        return try await downloadPhotos(itemIDs: itemIDs, kind: kind, reference: reference, progress: progress)
+        return try await downloadPhotos(itemIDs: itemIDs, kind: kind, reference: reference, space: .personal, progress: progress)
     }
 
     public func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, space: PhotoSpace,
@@ -183,7 +183,7 @@ public actor SynologyClient: PhotosTransport {
         try await downloadPhotos(itemIDs: itemIDs, kind: kind, reference: nil, space: space, progress: progress)
     }
 
-    private func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, reference: String?, space: PhotoSpace = .personal,
+    private func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, reference: String?, space: PhotoSpace,
                                 progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
         guard let sid else { throw SynologyAPIError.api(119) }
         guard !itemIDs.isEmpty else { throw SynologyAPIError.invalidResponse }
@@ -989,7 +989,7 @@ public actor SynologyClient: PhotosTransport {
     }
 
     static func convertedThumbnailMultipartBody(
-        boundary: String, unitID: Int64, files: ConvertedThumbnailFiles, space: PhotoSpace = .personal
+        boundary: String, unitID: Int64, files: ConvertedThumbnailFiles, space: PhotoSpace
     ) -> Data {
         var body = Data()
         func append(_ string: String) { body.append(Data(string.utf8)) }
@@ -1030,7 +1030,7 @@ public actor SynologyClient: PhotosTransport {
         // Keep the album authority on both endpoint candidates. A successful image
         // establishes only this scoped rendition, never canonical item origin.
         do {
-            return try await thumbnail(descriptor, size: size, albumID: albumID, reference: nil, etag: etag, lastModified: lastModified)
+            return try await thumbnail(descriptor, size: size, albumID: albumID, reference: nil, space: .personal, etag: etag, lastModified: lastModified)
         } catch {
             try Task.checkCancellation()
             return try await thumbnail(descriptor, size: size, albumID: albumID, reference: nil, space: .shared, etag: nil, lastModified: nil)
@@ -1040,10 +1040,10 @@ public actor SynologyClient: PhotosTransport {
     public func incomingThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, reference: String,
                                   etag: String? = nil, lastModified: String? = nil) async throws -> ThumbnailResponse {
         guard !reference.isEmpty else { throw SynologyAPIError.invalidResponse }
-        return try await thumbnail(descriptor, size: size, albumID: nil, reference: reference, etag: etag, lastModified: lastModified)
+        return try await thumbnail(descriptor, size: size, albumID: nil, reference: reference, space: .personal, etag: etag, lastModified: lastModified)
     }
 
-    private func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, albumID: Int64?, reference: String?, space: PhotoSpace = .personal,
+    private func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, albumID: Int64?, reference: String?, space: PhotoSpace,
                            etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         guard let sid else { throw SynologyAPIError.api(119) }
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!

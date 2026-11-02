@@ -58,6 +58,6 @@ final class IncomingThumbnailTests: XCTestCase {
         XCTAssertNotEqual(CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm, collection: first),
                           CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm, collection: second))
         XCTAssertNotEqual(CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm, collection: first),
-                          CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm))
+                          CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm, collection: .library(.personal)))
     }
 }

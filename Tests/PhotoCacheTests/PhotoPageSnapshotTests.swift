@@ -21,7 +21,7 @@ final class PhotoPageSnapshotTests: XCTestCase {
         let other = try JSONDecoder().decode(PhotoItem.self, from: Data(#"{"id":3,"time":1704067200,"type":"photo"}"#.utf8))
         let repository = try CachedPhotosRepository(credentials: .init(username: "sparse", password: "unused"), cacheRoot: root, transport: SparseNoNetworkTransport())
         let snapshot = TimelineSnapshot(sections: [.init(offset: 0, limit: 3, list: [.init(year: 2024, month: 1, day: 1, itemCount: 3)])])
-        let session = PhotoViewerSession(repository: repository, index: LibraryIndex(snapshot: snapshot), seed: .init(sectionIndex: 0, pageOffset: 0, item: selected, pageVerified: true), allowNetwork: false)
+        let session = PhotoViewerSession(repository: repository, collection: .library(.personal), index: LibraryIndex(snapshot: snapshot), seed: .init(sectionIndex: 0, pageOffset: 0, item: selected, pageVerified: true), allowNetwork: false)
         let page = ViewerMetadataWindow.PageEntry(slots: [.init(itemID: 1, item: nil, verified: false), .init(itemID: 3, item: other, verified: true), .init(itemID: 2, item: selected, verified: true)], verified: false, membershipVerified: true)
         await session.applyCurrentPage(page, at: .init(sectionIndex: 0, pageOffset: 0, ordinal: 0))
         let current = await session.state()

@@ -19,7 +19,7 @@ struct VideoConfiguration {
 struct LivePhotoConfiguration {
     let repository: CachedPhotosRepository
     let itemID: Int64
-    var space: PhotoSpace = .personal
+    var space: PhotoSpace
     let generation: UInt64
     let isMuted: Bool
 }

@@ -44,7 +44,7 @@ final class PhotoViewerPresentation: ObservableObject {
     private var hasDisplayedFullImage = false
     private var adoptedNeighborPreview = false
 
-    init(repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor = .library(.personal),
+    init(repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor,
          index: LibraryIndex, request: PhotoViewerOpenRequest,
          thumbnailSize: ThumbnailSize, loadsLargePreviews: Bool = false,
          videoQuality: VideoQualityPreference = .automatic,
