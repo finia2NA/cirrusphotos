@@ -6,12 +6,27 @@ import SynologyAPI
 private actor PersonMutationTransport: PhotosTransport {
     var sharedName = "Original"
     var failAfterWrite = false
+    var sourcePresent = true
+    var refreshedCollections: [PhotoCollectionDescriptor] = []
     func setFailAfterWrite() { failAfterWrite = true }
     private func person(_ name: String) throws -> PersonSummary {
         try JSONDecoder().decode(PersonSummary.self, from: Data("{\"id\":1,\"name\":\"\(name)\",\"item_count\":1}".utf8))
     }
     func people(space: PhotoSpace) async throws -> [PersonSummary] {
-        [try person(space == .shared ? sharedName : "Personal")]
+        var result = [try person(space == .shared ? sharedName : "Personal")]
+        if space == .shared && sourcePresent {
+            result.append(try JSONDecoder().decode(PersonSummary.self, from: Data(#"{"id":2,"name":"Source","item_count":1}"#.utf8)))
+        }
+        return result
+    }
+    func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
+        refreshedCollections.append(collection)
+        return try CollectionDayCatalog(days: [], completeness: .complete)
+    }
+    func mergePerson(sourceID: Int64, targetID: Int64, name: String, space: PhotoSpace) async throws -> PersonSummary {
+        sourcePresent = false
+        sharedName = name
+        return try person(name)
     }
     func renamePerson(id: Int64, name: String, space: PhotoSpace) async throws -> PersonSummary {
         sharedName = name
@@ -33,6 +48,20 @@ final class PersonMutationTests: XCTestCase {
         for await event in await repository.people(space: .personal) { if case .value(let list, true) = event { personal = list.first?.name } }
         XCTAssertEqual(shared, "Updated")
         XCTAssertEqual(personal, "Personal")
+    }
+
+    func testMergeRefreshesPeopleAndTargetTimeline() async throws {
+        let root = temporaryTestRoot("person-merge")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = PersonMutationTransport()
+        let repository = try CachedPhotosRepository(credentials: .init(username: "fixture", password: "unused"), cacheRoot: root, transport: transport)
+        for await _ in await repository.people(space: .shared) {}
+        try await repository.mergePerson(sourceID: 2, targetID: 1, name: "Combined", space: .shared)
+        var ids: [Int64] = []
+        for await event in await repository.people(space: .shared) { if case .value(let list, true) = event { ids = list.map(\.id) } }
+        XCTAssertEqual(ids, [1])
+        let collections = await transport.refreshedCollections
+        XCTAssertTrue(collections.contains(.person(1, space: .shared)))
     }
 
     func testUncertainWriteStillReconcilesIndex() async throws {
