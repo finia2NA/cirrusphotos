@@ -4,7 +4,7 @@ import SynologyAPI
 // Actor-isolated metadata coordination; task identities remain owned by the session.
 extension PhotoViewerSession {
     func invalidateMetadataPages(_ change: MetadataCollectionInvalidation) {
-        guard !closed, !(collection == .favorites && playlist.hasEntries) else { return }
+        guard !closed, !(collection.favoriteOnly && playlist.hasEntries) else { return }
         var affectedCurrent = false
         for position in index.sections.indices {
             guard let raw = index.sections[position].list.first,
@@ -24,7 +24,8 @@ extension PhotoViewerSession {
     }
 
     func applyItemChanges(_ change: PhotoItemChange) {
-        guard supportsPersonalMedia else { return }
+        guard supportsItemActions, change.scope == mediaContentScope else { return }
+        if !change.favoriteValues.isEmpty { applyFavorites(change.favoriteValues) }
         for (section, page) in metadata.pages {
             let updated = page.slots.map { slot in
                 PhotoItemSlot(itemID: slot.itemID, item: change.items[slot.itemID].map { replacement in
@@ -39,7 +40,7 @@ extension PhotoViewerSession {
         currentIdentity = Self.identity(of: updated)
         if change.quarterTurns[id] == nil {
             generation &+= 1
-            images.resetSelection(keeping: replacement.fullImageResource)
+            images.resetSelection(keeping: replacement.fullImageResource(in: mediaContentScope))
             startAssetsForCurrentMetadata()
         }
         publish()
@@ -64,7 +65,7 @@ extension PhotoViewerSession {
         let revision = retryRevision
         let repository = repository
         let priority: RequestPriority = visible ? .visible : .prefetch
-        if collection == .favorites, playlist.hasEntries, network {
+        if collection.favoriteOnly, playlist.hasEntries, network {
             let plan = playlist.plan(for: descriptor)
             let playlistRevision = playlistRevision
             let task = Task { [weak self] in
@@ -170,7 +171,7 @@ extension PhotoViewerSession {
             generation &+= 1
             currentItem = item
             currentIdentity = identity
-            images.resetSelection(keeping: item.fullImageResource)
+            images.resetSelection(keeping: item.fullImageResource(in: mediaContentScope))
         } else {
             currentItem = item
         }

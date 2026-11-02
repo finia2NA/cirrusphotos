@@ -13,8 +13,8 @@ final class PhotoItemTests: XCTestCase {
         """
         let group = try XCTUnwrap(JSONDecoder().decode(LivePhotoUnitData.self, from: Data(json.utf8)).list.first)
         XCTAssertEqual(group.itemID, 12)
-        XCTAssertNil(group.unit[0].playbackResource())
-        let motion = try XCTUnwrap(group.unit[1].playbackResource())
+        XCTAssertNil(group.unit[0].playbackResource(scope: .space(.personal)))
+        let motion = try XCTUnwrap(group.unit[1].playbackResource(scope: .space(.personal)))
         XCTAssertEqual(motion.unitID, 22)
         XCTAssertEqual(motion.cacheKey, "motion")
         XCTAssertEqual(motion.variant, .converted(.high))
@@ -25,7 +25,7 @@ final class PhotoItemTests: XCTestCase {
             """
             {"live_type":"video","additional":{"thumbnail":{"unit_id":22,"cache_key":"motion"},"video_convert":[]}}
             """.utf8))
-        XCTAssertNil(member.playbackResource())
+        XCTAssertNil(member.playbackResource(scope: .space(.personal)))
     }
 
     func testMediaKindPreservesUnknownAndRecognizesObservedLiveShapes() throws {
@@ -46,10 +46,10 @@ final class PhotoItemTests: XCTestCase {
         """.utf8))
         XCTAssertEqual(item.additional?.videoConvert?.count, 2)
         XCTAssertEqual(item.additional?.videoConvert?.first?.metadata.duration, 5)
-        XCTAssertEqual(item.videoPlaybackResource(preference: .medium)?.variant, .converted(.low))
-        XCTAssertEqual(item.videoPlaybackResource(preference: .high)?.variant, .converted(.high))
-        XCTAssertEqual(item.videoPlaybackResource(preference: .mobile)?.variant, .converted(.low))
-        XCTAssertEqual(item.videoPlaybackResource(preference: .original)?.variant, .original)
+        XCTAssertEqual(item.videoPlaybackResource(scope: .space(.personal), preference: .medium)?.variant, .converted(.low))
+        XCTAssertEqual(item.videoPlaybackResource(scope: .space(.personal), preference: .high)?.variant, .converted(.high))
+        XCTAssertEqual(item.videoPlaybackResource(scope: .space(.personal), preference: .mobile)?.variant, .converted(.low))
+        XCTAssertEqual(item.videoPlaybackResource(scope: .space(.personal), preference: .original)?.variant, .original)
         XCTAssertEqual(VideoQualityPreference(rawValue: "mobile"), .mobile)
     }
 
@@ -64,7 +64,7 @@ final class PhotoItemTests: XCTestCase {
         let item = try JSONDecoder().decode(PhotoItem.self, from: Data("""
         {"id":42,"time":1700000000,"type":"video","additional":{"thumbnail":{"unit_id":52,"cache_key":"revision"},"video_convert":[],"video_meta":{"duration":8000}}}
         """.utf8))
-        XCTAssertEqual(item.videoPlaybackResource(preference: .automatic)?.variant, .original)
+        XCTAssertEqual(item.videoPlaybackResource(scope: .space(.personal), preference: .automatic)?.variant, .original)
     }
 
     func testOptimisticQuarterTurnSwapsResolutionAndMapsOrientation() throws {
@@ -131,7 +131,7 @@ final class PhotoItemTests: XCTestCase {
         {"id":7,"filename":"IMG_0007.HEIC","time":1700000000,"type":"photo","additional":{"thumbnail":{"unit_id":17,"cache_key":"17_revision","sm":"ready"}}}
         """.utf8))
         XCTAssertEqual(item.filename, "IMG_0007.HEIC")
-        let resource = try XCTUnwrap(item.fullImageResource)
+        let resource = try XCTUnwrap(item.fullImageResource(in: .space(.personal)))
         XCTAssertEqual(resource.unitID, 17)
         XCTAssertEqual(resource.cacheKey, "17_revision")
         XCTAssertEqual(resource.filename, "IMG_0007.HEIC")
@@ -145,7 +145,7 @@ final class PhotoItemTests: XCTestCase {
         XCTAssertEqual(item.liveType, "photo")
         XCTAssertTrue(item.hasDisplayableStillImage)
         XCTAssertFalse(item.isVideo)
-        let resource = try XCTUnwrap(item.fullImageResource)
+        let resource = try XCTUnwrap(item.fullImageResource(in: .space(.personal)))
         XCTAssertEqual(resource.unitID, 22)
         XCTAssertEqual(resource.filename, "IMG_0012.HEIC")
 
@@ -162,7 +162,7 @@ final class PhotoItemTests: XCTestCase {
         XCTAssertEqual(item.liveType, "live")
         XCTAssertTrue(item.hasDisplayableStillImage)
         XCTAssertFalse(item.isVideo)
-        let resource = try XCTUnwrap(item.fullImageResource)
+        let resource = try XCTUnwrap(item.fullImageResource(in: .space(.personal)))
         XCTAssertEqual(resource.unitID, 24)
         XCTAssertEqual(resource.cacheKey, "24_revision")
         XCTAssertEqual(resource.filename, "IMG_0014.HEIC")
@@ -175,7 +175,7 @@ final class PhotoItemTests: XCTestCase {
 
         XCTAssertTrue(item.isVideo)
         XCTAssertFalse(item.hasDisplayableStillImage)
-        XCTAssertNil(item.fullImageResource)
+        XCTAssertNil(item.fullImageResource(in: .space(.personal)))
     }
 
     func testVideoDurationDecodesFromNumericAndStringMetadata() throws {

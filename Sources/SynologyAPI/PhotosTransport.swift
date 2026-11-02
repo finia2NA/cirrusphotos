@@ -102,6 +102,12 @@ public struct PhotoDownloadResponse: Sendable {
 }
 
 public protocol PhotosTransport: Sendable {
+    func people(space: PhotoSpace) async throws -> [PersonSummary]
+    func subjects(space: PhotoSpace) async throws -> [SubjectSummary]
+    func tags(space: PhotoSpace) async throws -> [TagSummary]
+    func folder(id: Int64, space: PhotoSpace) async throws -> FolderSummary
+    func folders(parentID: Int64, space: PhotoSpace) async throws -> [FolderSummary]
+    func readFolderCatalogBatch(folderID: Int64, offset: Int, limit: Int, space: PhotoSpace) async throws -> [DayTimelineEntry]
     func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind,
                         progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse
     func downloadIncomingPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, reference: String,
@@ -148,6 +154,8 @@ public protocol PhotosTransport: Sendable {
     func changes(since cursor: DiffCursor) async throws -> PhotoDiff
 
     func setFavorite(itemIDs: [Int64], favorite: Bool) async throws
+    func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem]
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse
     func items(ids: [Int64]) async throws -> [PhotoItem]
     func rotate(itemIDs: [Int64], direction: PhotoRotationDirection) async throws
     func setRegenerating(itemIDs: [Int64]) async throws -> [RegeneratingThumbnailUnit]
@@ -168,9 +176,66 @@ public protocol PhotosTransport: Sendable {
     func livePhotoMotion(itemID: Int64) async throws -> VideoPlaybackResource?
     func videoRange(_ resource: VideoPlaybackResource,
                     range: ClosedRange<Int64>) async throws -> VideoRangeResponse
+    func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws
+    func rotate(itemIDs: [Int64], direction: PhotoRotationDirection, space: PhotoSpace) async throws
+    func livePhotoMotion(itemID: Int64, space: PhotoSpace) async throws -> VideoPlaybackResource?
+    func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, space: PhotoSpace,
+                        progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse
+
 }
 
 public extension PhotosTransport {
+    func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws {
+        guard space == .personal else { throw SynologyAPIError.unsupported("Shared Space favorites unavailable.") }
+        try await setFavorite(itemIDs: itemIDs, favorite: favorite)
+    }
+    func rotate(itemIDs: [Int64], direction: PhotoRotationDirection, space: PhotoSpace) async throws {
+        guard space == .personal else { throw SynologyAPIError.unsupported("Shared Space rotation unavailable.") }
+        try await rotate(itemIDs: itemIDs, direction: direction)
+    }
+    func livePhotoMotion(itemID: Int64, space: PhotoSpace) async throws -> VideoPlaybackResource? {
+        guard space == .personal else { throw SynologyAPIError.unsupported("Shared Space motion unavailable.") }
+        return try await livePhotoMotion(itemID: itemID)
+    }
+    func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, space: PhotoSpace,
+                        progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
+        guard space == .personal else { throw SynologyAPIError.unsupported("Shared Space downloads unavailable.") }
+        return try await downloadPhotos(itemIDs: itemIDs, kind: kind, progress: progress)
+    }
+
+    func people(space: PhotoSpace) async throws -> [PersonSummary] {
+        guard space == .personal else { throw SynologyAPIError.unsupported("Shared Space people unavailable.") }
+        return try await people()
+    }
+    func subjects(space: PhotoSpace) async throws -> [SubjectSummary] {
+        guard space == .personal else { throw SynologyAPIError.unsupported("Shared Space subjects unavailable.") }
+        return try await subjects()
+    }
+    func tags(space: PhotoSpace) async throws -> [TagSummary] {
+        guard space == .personal else { throw SynologyAPIError.unsupported("Shared Space tags unavailable.") }
+        return try await tags()
+    }
+    func folder(id: Int64, space: PhotoSpace) async throws -> FolderSummary {
+        guard space == .personal else { throw SynologyAPIError.unsupported("Shared Space folder unavailable.") }
+        return try await folder(id: id)
+    }
+    func folders(parentID: Int64, space: PhotoSpace) async throws -> [FolderSummary] {
+        guard space == .personal else { throw SynologyAPIError.unsupported("Shared Space folders unavailable.") }
+        return try await folders(parentID: parentID)
+    }
+    func readFolderCatalogBatch(folderID: Int64, offset: Int, limit: Int, space: PhotoSpace) async throws -> [DayTimelineEntry] {
+        guard space == .personal else { throw SynologyAPIError.unsupported("Shared Space readFolderCatalogBatch unavailable.") }
+        return try await readFolderCatalogBatch(folderID: folderID, offset: offset, limit: limit)
+    }
+    func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] {
+        guard space == .personal else { throw SynologyAPIError.unsupported("Shared Space item lookup is unavailable.") }
+        return try await items(ids: ids)
+    }
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+        guard space == .personal else { throw SynologyAPIError.unsupported("Shared Space thumbnails are unavailable.") }
+        return try await thumbnail(descriptor, size: size, etag: etag, lastModified: lastModified)
+    }
+
     func incomingAlbums() async throws -> [IncomingAlbum] { throw SynologyAPIError.unsupported("Incoming albums are unavailable.") }
     func readIncomingAlbumCatalogBatch(reference: String, offset: Int, limit: Int) async throws -> [DayTimelineEntry] { throw SynologyAPIError.unsupported("Incoming albums are unavailable.") }
     func readIncomingCollectionBatch(_ request: CollectionPageRequest, reference: String, fields: ItemFieldProfile) async throws -> CollectionBatchResult { throw SynologyAPIError.unsupported("Incoming albums are unavailable.") }

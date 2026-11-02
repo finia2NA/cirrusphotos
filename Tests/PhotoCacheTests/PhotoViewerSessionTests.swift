@@ -355,7 +355,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         let descriptor = try XCTUnwrap(items[1].additional?.thumbnail)
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
         let entry = try await repository.store.get(
-            CacheKey.thumbnail(namespace: namespace, descriptor: descriptor, size: .xl)
+            CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .xl)
         )
         XCTAssertEqual(entry?.kind, .previewThumbnail)
         await session.close()
@@ -370,7 +370,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         try await repository.setConfiguredThumbnailSize(.xl)
         let descriptor = try XCTUnwrap(selected.additional?.thumbnail)
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let medium = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: .m)
+        let medium = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .m)
         try await repository.store.put(medium.key, kind: .thumbnail, data: Data([0xAA]),
                                        validatedRun: "older-run", thumbnail: medium)
         let oneSection = TimelineSnapshot(sections: [
@@ -450,7 +450,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         let xlDescriptor = try XCTUnwrap(selected.additional?.thumbnail)
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
         let xlEntry = try await xlRepository.store.get(
-            CacheKey.thumbnail(namespace: namespace, descriptor: xlDescriptor, size: .xl)
+            CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: xlDescriptor, size: .xl)
         )
         XCTAssertEqual(xlEntry?.kind, .thumbnail)
         await xlSession.close()
@@ -682,7 +682,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         let warmingRepository = try repository(root: cacheRoot, transport: warmingTransport)
         for await _ in await warmingRepository.thumbnail(try XCTUnwrap(selected.additional?.thumbnail),
                                                           size: .xl, allowNetwork: true) {}
-        for await _ in await warmingRepository.fullImage(try XCTUnwrap(selected.fullImageResource)) {}
+        for await _ in await warmingRepository.fullImage(try XCTUnwrap(selected.fullImageResource(in: .space(.personal)))) {}
 
         let offlineTransport = ViewerTransport()
         await offlineTransport.configure(pages: [0: [selected]], failImages: true)
@@ -800,7 +800,7 @@ final class PhotoViewerMetadataValidationTests: PhotoViewerSessionTestCase {
         let repository = try repository(root: cacheRoot, transport: transport)
         for await _ in await repository.timeline() {}
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let pageKey = try XCTUnwrap(CacheKey.page(namespace: namespace, section: descriptor))
+        let pageKey = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor))
         try await seedMetadataPage([stale], section: descriptor, repository: repository)
 
         let session = PhotoViewerSession(repository: repository,
@@ -838,10 +838,10 @@ final class PhotoViewerMetadataValidationTests: PhotoViewerSessionTestCase {
                                   blockedPages: [2])
         let repository = try repository(root: cacheRoot, transport: transport)
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let neighborPageKey = try XCTUnwrap(CacheKey.page(namespace: namespace,
+        let neighborPageKey = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: namespace,
                                                           section: snapshot.sections[1]))
         try await seedMetadataPage(Array(items[2...3]), section: snapshot.sections[1], repository: repository)
-        let neighborResource = try XCTUnwrap(items[2].fullImageResource)
+        let neighborResource = try XCTUnwrap(items[2].fullImageResource(in: .space(.personal)))
         try await repository.store.put(CacheKey.fullImage(namespace: namespace, resource: neighborResource),
                                        kind: .fullImage, data: Data([3, 0x46]), validatedRun: nil)
 
@@ -1041,7 +1041,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         XCTAssertEqual(writes.count, 1)
         let badgeUpdated = await waitUntil { await window.retainedPages().first?.items.first?.isFavorite == true }
         XCTAssertTrue(badgeUpdated)
-        let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(server: server, account: credentials.username),
+        let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(server: server, account: credentials.username),
                                               section: section))
         let stored = try await repo.store.metadataPage(try DayPageAddress(section: section, collection: .personalLibrary), namespace: repo.metadataNamespace, currentRun: repo.runID)?.completeItems ?? []
         XCTAssertTrue(stored[0].isFavorite)
@@ -1134,7 +1134,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
             await window.retainedPages().first?.items.first?.isFavorite == true
         }
         XCTAssertTrue(timelineUpdated)
-        let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(server: server,
+        let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(server: server,
                                                                            account: credentials.username),
                                               section: section))
         let store = await repo.store

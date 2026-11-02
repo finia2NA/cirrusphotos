@@ -6,8 +6,8 @@ extension CachedPhotosRepository {
     /// Membership remains separate; these rows never authorize collection order.
     func resolveMetadataItems(_ ids: [Int64], priority: RequestPriority, collection: PhotoCollectionDescriptor = .personalLibrary) async throws -> [PhotoItem] {
         let source = collection.albumID != nil ? collection : mediaCollection(for: collection)
-        guard !source.isLibraryFilter else { throw SynologyAPIError.unsupported("The source collection is no longer available.") }
-        if source.incomingAlbumIdentity != nil || source.albumID != nil {
+        guard !source.isSessionDerived else { throw SynologyAPIError.unsupported("The source collection is no longer available.") }
+        if source.incomingAlbumIdentity != nil || source.albumID != nil || source.space == .shared {
             guard ids.count <= 2000, Set(ids).count == ids.count else { throw CollectionCatalogError.exceedsLimit }
             let scopedNamespace = metadataNamespace(for: source)
             let admission = try await store.metadataAdmission(scopedNamespace)
@@ -15,6 +15,7 @@ extension CachedPhotosRepository {
             for start in stride(from: 0, to: ids.count, by: MetadataReadPlanner.lookupBatchSize) {
                 let chunk = Array(ids[start..<min(start + MetadataReadPlanner.lookupBatchSize, ids.count)])
                 let batch = try await metadataReadRequest(priority: priority) {
+                    if source.space == .shared { return try await client.items(ids: chunk, space: .shared) }
                     if let albumID = source.albumID { return try await client.albumItems(ids: chunk, albumID: albumID) }
                     guard let reference = incomingReference(for: source) else { throw SynologyAPIError.unsupported("Shared album access is unavailable.") }
                     return try await client.incomingItems(ids: chunk, reference: reference)
@@ -23,6 +24,10 @@ extension CachedPhotosRepository {
             }
             guard items.count == ids.count, Set(items.map(\.id)) == Set(ids) else { throw CollectionCatalogError.invalidCoverage }
             _ = try await store.storeMetadataDetails(items, namespace: scopedNamespace, currentRun: runID, admission: admission)
+            if source.space == .shared {
+                await publishSharedLocationItemChanges(items)
+                publishDerivedPageChanges(ids: Set(ids), space: .shared)
+            }
             return items
         }
         guard ids.count <= 2000, Set(ids).count == ids.count else { throw CollectionCatalogError.exceedsLimit }
@@ -59,7 +64,7 @@ extension CachedPhotosRepository {
                     if let references = try? await store.metadataCollectionReferences(metadataNamespace, collection: source, ids: chunk) {
                         guard epoch == metadata.admissionEpoch, !metadata.resetInProgress else { throw MetadataAdmissionError.superseded }
                         for section in references {
-                            if let key = CacheKey.page(namespace: namespace, section: section, collection: source) { publishCollectionPage(key: key) }
+                            if let key = CacheKey.page(scope: .space(.personal), namespace: namespace, section: section, collection: source) { publishCollectionPage(key: key) }
                         }
                     }
                 }

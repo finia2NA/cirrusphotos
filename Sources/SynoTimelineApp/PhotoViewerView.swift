@@ -61,14 +61,14 @@ struct PhotoViewerView: View {
                                 }
                               },
                               livePhotoConfiguration: viewer.state.flatMap { state in
-                                guard !viewer.isIncoming, let item = state.item, item.mediaKind == .livePhoto,
+                                guard !viewer.isIncoming, state.contentScope.space != nil, let item = state.item, item.mediaKind == .livePhoto,
                                       state.metadataVerified, state.allowNetwork,
                                       viewer.isDisplayingFullResolution,
                                       item.additional?.orientation == item.additional?.orientationOriginal else { return nil }
-                                return LivePhotoConfiguration(repository: viewer.repository, itemID: item.id,
+                                return LivePhotoConfiguration(repository: viewer.repository, itemID: item.id, space: state.contentScope.space ?? viewer.collection.space,
                                                               generation: state.selection.generation, isMuted: videoMuted)
                               },
-                              showsLivePhotoIndicator: !viewer.isIncoming && viewer.state?.item?.mediaKind == .livePhoto,
+                              showsLivePhotoIndicator: !viewer.isIncoming && viewer.state?.contentScope.space != nil && viewer.state?.item?.mediaKind == .livePhoto,
                               controller: viewer.canvasController,
                               onPrevious: viewer.navigatePrevious,
                               onNext: viewer.navigateNext,
@@ -86,12 +86,12 @@ struct PhotoViewerView: View {
                                 let menu = item.hasDisplayableStillImage && library.canDownload(in: viewer.collection) ? photoDownloadMenu { kind, choose in
                                     library.downloadViewerItem(item, repository: repository, collection: viewer.collection, kind: kind, choose: choose)
                                 } : NSMenu()
-                                if !viewer.isIncoming && item.hasDisplayableStillImage {
+                                if library.allowsPersonalActions(in: viewer.collection) && item.hasDisplayableStillImage {
                                     addEditMenu(to: menu, filename: item.filename) { application in
-                                        library.editViewerItem(item, repository: repository, application: application)
+                                        library.editViewerItem(item, repository: repository, collection: viewer.collection, application: application)
                                     }
                                 }
-                                if !viewer.isIncoming, let timeline = library.snapshot(for: viewer.collection),
+                                if library.allowsPersonalActions(in: viewer.collection), let timeline = library.snapshot(for: viewer.collection),
                                    LibraryIndex(snapshot: timeline).fingerprint == viewer.index.fingerprint,
                                    let authority = library.selectionAuthority(for: viewer.collection) {
                                     let ordinal = state.desiredLocation.ordinal

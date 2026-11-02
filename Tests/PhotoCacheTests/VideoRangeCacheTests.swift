@@ -38,11 +38,11 @@ final class VideoRangeCacheTests: XCTestCase {
 
     func testVideoCacheKeysIsolateQualityRevisionAndSegment() {
         let namespace = "account"
-        let high = VideoPlaybackResource(unitID: 7, cacheKey: "r1", filename: nil,
+        let high = VideoPlaybackResource(scope: .space(.personal), unitID: 7, cacheKey: "r1", filename: nil,
                                          variant: .converted(.high))
-        let medium = VideoPlaybackResource(unitID: 7, cacheKey: "r1", filename: nil,
+        let medium = VideoPlaybackResource(scope: .space(.personal), unitID: 7, cacheKey: "r1", filename: nil,
                                            variant: .converted(.medium))
-        let revised = VideoPlaybackResource(unitID: 7, cacheKey: "r2", filename: nil,
+        let revised = VideoPlaybackResource(scope: .space(.personal), unitID: 7, cacheKey: "r2", filename: nil,
                                             variant: .converted(.high))
         XCTAssertNotEqual(CacheKey.videoSegment(namespace: namespace, resource: high, index: 0),
                           CacheKey.videoSegment(namespace: namespace, resource: medium, index: 0))
@@ -63,7 +63,7 @@ final class VideoRangeCacheTests: XCTestCase {
             cacheRoot: root,
             transport: transport
         )
-        let resource = VideoPlaybackResource(unitID: 9, cacheKey: "revision", filename: "clip.mp4",
+        let resource = VideoPlaybackResource(scope: .space(.personal), unitID: 9, cacheKey: "revision", filename: "clip.mp4",
                                              variant: .converted(.medium))
         let offset = CachedPhotosRepository.videoSegmentSize - 2
         let first = try await repository.videoData(resource, offset: offset, length: 6)

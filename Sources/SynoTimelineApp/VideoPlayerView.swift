@@ -19,6 +19,7 @@ struct VideoConfiguration {
 struct LivePhotoConfiguration {
     let repository: CachedPhotosRepository
     let itemID: Int64
+    var space: PhotoSpace = .personal
     let generation: UInt64
     let isMuted: Bool
 }
@@ -49,6 +50,7 @@ final class VideoPlayerContainerView: NSView {
     private var itemStatusObservation: NSKeyValueObservation?
     private var endObserver: NSObjectProtocol?
     private var identity: String?
+    private var fallbackRequestIdentity: String?
     private var onMuteChanged: (Bool) -> Void = { _ in }
 
     override init(frame frameRect: NSRect) {
@@ -91,11 +93,12 @@ final class VideoPlayerContainerView: NSView {
                    isMuted: Bool = false, onMuteChanged: @escaping (Bool) -> Void = { _ in }) {
         posterView.image = poster
         self.onMuteChanged = onMuteChanged
-        let nextIdentity = "\(generation)|\(resource.unitID)|\(resource.cacheKey)|\(resource.variant.cacheComponent)|\(allowNetwork)"
-        if identity == nextIdentity {
+        let nextIdentity = "\(resource.scope.cacheComponent)|\(generation)|\(resource.unitID)|\(resource.cacheKey)|\(resource.variant.cacheComponent)|\(allowNetwork)"
+        if identity == nextIdentity || fallbackRequestIdentity == nextIdentity {
             if player?.isMuted != isMuted { player?.isMuted = isMuted }
             return
         }
+        fallbackRequestIdentity = nil
         stop()
         identity = nextIdentity
         SynologyDiagnostics.videoPlayer.info(
@@ -142,7 +145,14 @@ final class VideoPlayerContainerView: NSView {
                 Task { @MainActor [weak self, weak player] in
                     guard let self, let player, self.player === player else { return }
                     self.loader?.cancelAll()
-                    self.onPlaybackFinished?()
+                    if !self.isMotionPlayback, case .converted = resource.variant {
+                        let original = VideoPlaybackResource(scope: resource.scope, unitID: resource.unitID,
+                            cacheKey: resource.cacheKey, filename: resource.filename, variant: .original, itemID: resource.itemID)
+                        self.configure(repository: repository, resource: original, generation: generation,
+                                       allowNetwork: allowNetwork, poster: poster, isMuted: player.isMuted,
+                                       onMuteChanged: self.onMuteChanged)
+                        self.fallbackRequestIdentity = nextIdentity
+                    } else { self.onPlaybackFinished?() }
                 }
             @unknown default:
                 SynologyDiagnostics.videoPlayer.error(

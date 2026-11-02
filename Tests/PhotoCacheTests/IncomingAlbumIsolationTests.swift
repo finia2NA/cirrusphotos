@@ -58,8 +58,10 @@ private actor IncomingFixtureTransport: PhotosTransport {
         return offset == 0 ? [.init(id: 1, time: time), .init(id: 2, time: time)] : []
     }
     func makeItem(_ name: String, id: Int = 1) throws -> PhotoItem {
-        try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":\(id),\"filename\":\"\(name)\",\"time\":\(time),\"type\":\"photo\"}".utf8))
+        try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":\(id),\"filename\":\"\(name)\",\"time\":\(time),\"type\":\"photo\",\"additional\":{\"thumbnail\":{\"unit_id\":\(id),\"cache_key\":\"fixture\"}}}".utf8))
     }
+    func albumItems(ids: [Int64], albumID: Int64) async throws -> [PhotoItem] { try ids.map { try makeItem("personal", id: Int($0)) } }
+    func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] { space == .personal ? try ids.map { try makeItem("personal", id: Int($0)) } : [] }
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
         try fixtureBatch([makeItem("personal")], request: request, fields: fields)
     }

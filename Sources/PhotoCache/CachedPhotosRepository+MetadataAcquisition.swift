@@ -20,7 +20,7 @@ extension CachedPhotosRepository {
                     if let albumID = collection.albumID {
                         return try await client.readAlbumCatalogBatch(albumID: albumID, offset: page * 1000, limit: 1000)
                     }
-                    return try await client.readFolderCatalogBatch(folderID: collection.folderID!, offset: page * 1000, limit: 1000)
+                    return try await client.readFolderCatalogBatch(folderID: collection.folderID!, offset: page * 1000, limit: 1000, space: collection.space)
                 }
                 guard batch.count <= 1000 else { throw CollectionCatalogError.invalidCoverage }
                 for entry in batch {
@@ -68,7 +68,7 @@ extension CachedPhotosRepository {
                   mutationEpoch == metadata.mutationEpochs[collection, default: 0] else { throw MetadataAdmissionError.superseded }
             let committed = try await store.metadataState(metadataNamespace(for: collection))
             guard epoch == metadata.admissionEpoch, metadata.collectionRecoveries[collection]?.id == id else { throw MetadataAdmissionError.superseded }
-            if collection.incomingAlbumIdentity == nil { metadata.revision = committed.revision }
+            if collection.contentScope == .space(.personal) { metadata.revision = committed.revision }
             metadata.timelineJobs.removeValue(forKey: collection)?.task.cancel()
             publishMetadataInvalidation(collection: collection)
             return try await verifiedTimelineSnapshot(collection: collection)

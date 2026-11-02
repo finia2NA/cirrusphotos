@@ -3,11 +3,15 @@ import SwiftUI
 struct TimelineSectionLoadView: View {
     @EnvironmentObject private var model: TimelineSectionLoadModel
     @State private var useCachedPages = false
+    @AppStorage("warmingIncludesSharedSpace") private var includesSharedSpace = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Load Timeline Sections").font(.title2.weight(.semibold))
-            if let title = model.targetTitle { Text(title).foregroundStyle(.secondary) }
+            if model.targetTitle != nil {
+                Text(includesSharedSpace ? "Personal and Shared Library, Favorites, and All Albums" : "Personal Library, Favorites, and All Albums")
+                    .foregroundStyle(.secondary)
+            }
             ProgressView(value: Double(model.progress.processed), total: Double(max(1, model.progress.total)))
             Text("\(model.progress.processed) of \(model.progress.total) sections")
             if let matches = model.progress.matchCount { Text("\(matches) matching items") }
@@ -21,6 +25,8 @@ struct TimelineSectionLoadView: View {
                 ScrollView { VStack(alignment: .leading) { ForEach(model.progress.failures, id: \.self) { Text($0).font(.caption) } } }
                     .frame(maxHeight: 120)
             }
+            Toggle("Include Shared Space", isOn: $includesSharedSpace)
+                .disabled(model.progress.state == .running)
             Toggle("Use Cached Pages", isOn: $useCachedPages)
                 .disabled(model.progress.state == .running)
             if model.progress.state != .finished || model.progress.failed > 0 {
@@ -33,7 +39,7 @@ struct TimelineSectionLoadView: View {
                             Button("Retry Failed") { model.retryFailed() }
                                 .disabled(model.staleTimelineMessage != nil)
                         }
-                        Button("Start") { model.start(useCachedPages: useCachedPages) }
+                        Button("Start") { model.start(useCachedPages: useCachedPages, includeSharedSpace: includesSharedSpace) }
                             .disabled(model.staleTimelineMessage != nil)
                     }
                 }

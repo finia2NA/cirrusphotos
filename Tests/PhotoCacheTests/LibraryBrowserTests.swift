@@ -139,10 +139,10 @@ final class LibraryIndexAndCacheIdentityTests: LibraryBrowserTestCase {
         let descriptor = section(3)
         XCTAssertEqual(PhotoCollectionDescriptor.personalLibrary.rawValue, "personal",
                        "Collection refactoring must preserve the existing Personal Library cache keys")
-        XCTAssertNotEqual(CacheKey.page(namespace: namespace, section: section(1), collection: .personalLibrary),
-                          CacheKey.page(namespace: namespace, section: section(1), collection: .favorites))
-        XCTAssertNotEqual(CacheKey.page(namespace: namespace, section: descriptor, collection: .personalLibrary),
-                          CacheKey.page(namespace: namespace, section: descriptor, collection: .favorites))
+        XCTAssertNotEqual(CacheKey.page(scope: .space(.personal), namespace: namespace, section: section(1), collection: .personalLibrary),
+                          CacheKey.page(scope: .space(.personal), namespace: namespace, section: section(1), collection: .favorites))
+        XCTAssertNotEqual(CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor, collection: .personalLibrary),
+                          CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor, collection: .favorites))
     }
 }
 
@@ -470,7 +470,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         let live = await result.value
         XCTAssertTrue(live.isEmpty, "A pre-reset metadata result must not paint after invalidation")
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let key = try XCTUnwrap(CacheKey.page(namespace: namespace, section: descriptor))
+        let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor))
         let cached = try await repository.store.get(key)
         XCTAssertNil(cached)
     }

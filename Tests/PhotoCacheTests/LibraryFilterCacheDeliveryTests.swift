@@ -261,7 +261,7 @@ private extension CachedPhotosRepository {
     }
     func publishCollectionPagesForTests(_ sections: [TimelineSection]) {
         for section in sections {
-            if let key = CacheKey.page(namespace: namespace, section: section) { publishCollectionPage(key: key) }
+            if let key = CacheKey.page(scope: .space(.personal), namespace: namespace, section: section) { publishCollectionPage(key: key) }
         }
     }
 }

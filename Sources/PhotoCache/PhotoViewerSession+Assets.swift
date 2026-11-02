@@ -4,7 +4,7 @@ import SynologyAPI
 // Actor-isolated assets coordination; task identities remain owned by the session.
 extension PhotoViewerSession {
     func restartCurrentAssets() {
-        images.restartCurrent(keeping: currentItem?.fullImageResource)
+        images.restartCurrent(keeping: currentItem?.fullImageResource(in: mediaContentScope))
         startAssetsForCurrentMetadata()
     }
 
@@ -31,9 +31,12 @@ extension PhotoViewerSession {
         }
 
         let resource: FullImageResource?
-        if !supportsPersonalMedia {
+        if !supportsSpaceMedia && mediaScope?.albumID == nil {
             resource = nil
             images.fullImageStatus = .unsupported("Full-size media is unavailable for this shared album.")
+        } else if item.isVideo && !supportsSpaceMedia {
+            resource = nil
+            images.fullImageStatus = .unsupported("Video playback is unavailable in this album.")
         } else if item.isVideo {
             images.fullImageStatus = .idle
             resource = nil
@@ -44,7 +47,7 @@ extension PhotoViewerSession {
                 .sorted { $0.rank < $1.rank }
                 .map(\.rawValue)
                 .joined(separator: ",")
-            if let playback = item.videoPlaybackResource(preference: requestedPreference) {
+            if let playback = item.videoPlaybackResource(scope: mediaContentScope, preference: requestedPreference) {
                 let target = requestedPreference.targetQuality?.rawValue ?? "original"
                 let chosen = playback.variant.cacheComponent
                 let reason: String
@@ -71,7 +74,7 @@ extension PhotoViewerSession {
                     "Video quality unavailable item_id=\(item.id, privacy: .public) settings=\(requestedPreference.rawValue, privacy: .public) target=\(requestedPreference.targetQuality?.rawValue ?? "original", privacy: .public) chosen=none reason=missing_playback_identity advertised=\(knownQualities, privacy: .public) has_thumbnail=\(descriptor != nil, privacy: .public)"
                 )
             }
-        } else if let available = item.fullImageResource {
+        } else if let available = item.fullImageResource(in: mediaContentScope) {
             resource = available
             SynologyDiagnostics.viewer.debug(
                 "Full-size resource admitted item_id=\(item.id, privacy: .public) unit_id=\(available.unitID, privacy: .public) network_allowed=\(network, privacy: .public)"
@@ -270,7 +273,7 @@ extension PhotoViewerSession {
                                     resource: FullImageResource) {
         guard !closed, images.fullAttempt == attempt, generation == expectedGeneration,
               currentItem?.id == itemID,
-              currentItem?.fullImageResource.map(Self.resourceKey) == Self.resourceKey(resource) else { return }
+              currentItem?.fullImageResource(in: mediaContentScope).map(Self.resourceKey) == Self.resourceKey(resource) else { return }
         switch event {
         case .value(let data, let verified):
             SynologyDiagnostics.viewer.info(
@@ -305,7 +308,7 @@ extension PhotoViewerSession {
             let needsNetworkValidation = allowNetwork && metadataVerified &&
                 !images.fullTaskAllowsNetwork && !waitingForEnhancements
             images.fullTaskAllowsNetwork = false
-            if needsNetworkValidation, let resource = currentItem?.fullImageResource {
+            if needsNetworkValidation, let resource = currentItem?.fullImageResource(in: mediaContentScope) {
                 startFullImage(resource: resource, allowNetwork: true)
             }
         }

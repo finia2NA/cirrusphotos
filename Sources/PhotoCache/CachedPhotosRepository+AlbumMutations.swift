@@ -51,6 +51,11 @@ extension CachedPhotosRepository {
 
     /// Compare against a verified destination before adding, including videos.
     public func addMissingItems(_ selection: ResolvedPhotoSelection, toAlbum id: Int64) async throws {
+        let source = mediaCollection(for: selection.authority.originatingCollection)
+        let sourceSpace = source.albumID != nil ? try await albumItemSpace(itemIDs: selection.items.map(\.id), collection: source) : source.contentScope.space
+        guard sourceSpace == .personal, source.incomingAlbumIdentity == nil else {
+            throw SynologyAPIError.unsupported("Only verified Personal Space items can be added to albums.")
+        }
         let collection = PhotoCollectionDescriptor.album(id)
         let timeline = try await verifiedTimelineSnapshot(collection: collection)
         let index = LibraryIndex(snapshot: timeline)
@@ -67,7 +72,14 @@ extension CachedPhotosRepository {
             }
             destination = resolved
         }
-        let existing = Set(destination?.items.map(\.id) ?? [])
+        var existing = Set(destination?.items.map(\.id) ?? [])
+        let overlapping = existing.intersection(selection.items.map(\.id))
+        if !overlapping.isEmpty {
+            // A numeric member ID in a mixed album cannot skip an add from a
+            // different space. Resolve the overlapping destination identities.
+            let destinationSpace = try await albumItemSpace(itemIDs: Array(overlapping).sorted(), collection: collection)
+            if destinationSpace != .personal { existing.subtract(overlapping) }
+        }
         let missing = selection.items.map(\.id).filter { !existing.contains($0) }
         guard !missing.isEmpty else {
             guard await verifySelectionFences(selection.authority, proofs: selection.proofs,
@@ -107,7 +119,9 @@ extension CachedPhotosRepository {
         let admission = try await store.metadataAdmission(metadataNamespace)
         try await store.invalidateMetadataAlbumSummaries(metadataNamespace, admission: admission)
         if let selection {
-            guard mediaCollection(for: selection.authority.originatingCollection) == .personalLibrary,
+            let source = mediaCollection(for: selection.authority.originatingCollection)
+            let space = source.albumID != nil ? try await albumItemSpace(itemIDs: selection.items.map(\.id), collection: source) : source.contentScope.space
+            guard space == .personal, source.incomingAlbumIdentity == nil,
                   !selection.items.isEmpty,
                   await verifySelectionFence(selection.authority, proofs: selection.proofs) else {
                 throw SynologyAPIError.unsupported("The selected items could not be verified. Try again.")
@@ -172,8 +186,9 @@ extension CachedPhotosRepository {
         invalidateAlbumMutationMemory(albumID: albumID)
         if let albumID {
             let collection = PhotoCollectionDescriptor.album(albumID)
-            let admission = try await store.metadataAdmission(metadataNamespace)
-            try await store.invalidateMetadataCollection(CollectionKey(namespace: metadataNamespace, collection: collection), admission: admission)
+            let scopedNamespace = metadataNamespace(for: collection)
+            let admission = try await store.metadataAdmission(scopedNamespace)
+            try await store.invalidateMetadataCollection(CollectionKey(namespace: scopedNamespace, collection: collection), admission: admission)
             publishMetadataInvalidation(collection: collection)
         }
         let admission = try await store.metadataAdmission(metadataNamespace)

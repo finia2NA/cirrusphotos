@@ -322,18 +322,18 @@ struct LibraryCommands: Commands {
                 Label("Rotate Thumbnail Previews Left…", systemImage: "rotate.left")
                     .labelStyle(.titleAndIcon)
             }
-            .disabled(!model.canRotate || model.thumbnailRotationProgress != nil)
+            .disabled(!model.canRotateThumbnails || model.thumbnailRotationProgress != nil)
             Button { model.rotateThumbnailPreviews(.clockwise) } label: {
                 Label("Rotate Thumbnail Previews Right…", systemImage: "rotate.right")
                     .labelStyle(.titleAndIcon)
             }
-            .disabled(!model.canRotate || model.thumbnailRotationProgress != nil)
+            .disabled(!model.canRotateThumbnails || model.thumbnailRotationProgress != nil)
             Divider()
             Button { model.fixThumbnailRotations() } label: {
                 Label("Fix Thumbnail Rotations…", systemImage: "wand.and.stars")
                     .labelStyle(.titleAndIcon)
             }
-            .disabled(!model.canRotate || model.thumbnailRotationProgress != nil)
+            .disabled(!model.canRotateThumbnails || model.thumbnailRotationProgress != nil)
         }
         CommandGroup(after: .toolbar) {
             Toggle("Show Filmstrip", isOn: $model.showsFilmstrip)

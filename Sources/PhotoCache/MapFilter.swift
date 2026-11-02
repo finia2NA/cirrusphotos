@@ -27,13 +27,16 @@ extension CachedPhotosRepository {
     /// collection, and registers its dependencies inside the repository.
     public func registerMapFilter(itemIDs: [Int64],
                                   locationRevision: LocationIndexRevision) throws -> MapFilterRegistration {
-        guard locationRevision.rawValue == metadata.locationRevision else {
+        let space = locationRevision.space
+        let revision = space == .shared ? metadata.sharedLocations.revision : metadata.locationRevision
+        let locationRecords = space == .shared ? metadata.sharedLocations.records : metadata.locationRecords
+        guard locationRevision.rawValue == revision else {
             throw SynologyAPIError.unsupported("The map changed before this location opened. Try again.")
         }
         guard Set(itemIDs).count == itemIDs.count else {
             throw SynologyAPIError.unsupported("The selected map photos contain duplicate IDs.")
         }
-        let records = itemIDs.compactMap { metadata.locationRecords[$0] }
+        let records = itemIDs.compactMap { locationRecords[$0] }
         guard records.count == itemIDs.count else {
             throw SynologyAPIError.unsupported("Some selected map photos are no longer available.")
         }
@@ -44,7 +47,7 @@ extension CachedPhotosRepository {
         )
         try storeMapFilter(descriptor, snapshot: built.snapshot,
                               itemIDsBySection: built.itemIDsBySection,
-                              locationRevision: locationRevision.rawValue)
+                              locationRevision: locationRevision.rawValue, space: space)
         return MapFilterRegistration(descriptor: descriptor, snapshot: built.snapshot,
                                      authority: selectionAuthority(collection: descriptor, snapshot: built.snapshot)!)
     }
@@ -52,7 +55,7 @@ extension CachedPhotosRepository {
     private func storeMapFilter(_ descriptor: PhotoCollectionDescriptor,
                            snapshot: TimelineSnapshot,
                            itemIDsBySection: [[Int64]],
-                           locationRevision: UInt64) throws {
+                           locationRevision: UInt64, space: PhotoSpace) throws {
         guard let filterID = descriptor.mapFilterID else {
             throw SynologyAPIError.unsupported("A map filter collection descriptor is required.")
         }
@@ -65,7 +68,7 @@ extension CachedPhotosRepository {
         }
         guard !metadata.resetInProgress else { throw MetadataAdmissionError.resetInProgress }
         installSelectionRetention(descriptor)
-        metadata.mapFilters[filterID] = MapFilterState(registrationID: UUID(),
+        metadata.mapFilters[filterID] = MapFilterState(space: space, registrationID: UUID(),
                                                        metadataEpoch: metadata.admissionEpoch,
                                                        locationRevision: locationRevision,
                                                        snapshot: snapshot,
@@ -103,6 +106,8 @@ extension CachedPhotosRepository {
                     try await initializeMetadataEngine()
                     guard let filterID = collection.mapFilterID, let state = metadata.mapFilters[filterID],
                           let ids = state.idsBySection[section] else { throw SynologyAPIError.unsupported("This location filter is no longer available.") }
+                    let source = PhotoCollectionDescriptor.personalLibrary.inSpace(state.space)
+                    let scopedNamespace = metadataNamespace(for: source)
                     let address = try DayPageAddress(section: section, collection: collection)
                     func current() -> Bool {
                         guard !Task.isCancelled, metadata.admissionEpoch == state.metadataEpoch,
@@ -117,17 +122,17 @@ extension CachedPhotosRepository {
                         return PhotoPageSnapshot(address: address, membershipRevision: state.locationRevision,
                                                  membershipVerified: true, slots: slots)
                     }
-                    let cached = try await store.metadataDetails(metadataNamespace, ids: ids, currentRun: runID)
+                    let cached = try await store.metadataDetails(scopedNamespace, ids: ids, currentRun: runID)
                     guard current() else { continuation.finish(); return }
                     let initial = snapshot(cached)
                     if !cached.isEmpty { continuation.yield(.value(applyingFavoriteOverrides(initial), verified: initial.verified)) }
                     guard allowNetwork && !initial.verified else { continuation.finish(); return }
                     try await connect()
-                    try await reconcileMetadataSource()
+                    try await reconcileMetadataSource(for: source)
                     guard current() else { continuation.finish(); return }
-                    _ = try await resolveMetadataItems(ids, priority: priority)
+                    _ = try await resolveMetadataItems(ids, priority: priority, collection: source)
                     guard current() else { continuation.finish(); return }
-                    let result = snapshot(try await store.metadataDetails(metadataNamespace, ids: ids, currentRun: runID))
+                    let result = snapshot(try await store.metadataDetails(scopedNamespace, ids: ids, currentRun: runID))
                     continuation.yield(.value(applyingFavoriteOverrides(result), verified: result.verified))
                 } catch {
                     if !Task.isCancelled { continuation.yield(.failure(error.localizedDescription)) }
@@ -138,8 +143,8 @@ extension CachedPhotosRepository {
         }
     }
 
-    func invalidateMapFiltersForLocationChange() {
-        let descriptors = metadata.mapFilters.keys.map(PhotoCollectionDescriptor.mapFilter)
+    func invalidateMapFiltersForLocationChange(space: PhotoSpace = .personal) {
+        let descriptors = metadata.mapFilters.filter { $0.value.space == space }.keys.map(PhotoCollectionDescriptor.mapFilter)
         for descriptor in descriptors {
             removeMapFilter(descriptor)
             for observer in metadata.mapFilterInvalidationObservers.values {

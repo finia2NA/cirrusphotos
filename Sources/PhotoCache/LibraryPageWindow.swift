@@ -255,8 +255,10 @@ public actor LibraryPageWindow {
     private func observeFavoritesIfNeeded() {
         guard favoriteTask == nil else { return }
         let repository = repository
-        favoriteTask = Task { [weak self] in
-            for await change in await repository.favoriteChanges() {
+        favoriteTask = Task { [weak self, collection] in
+            let scope = await repository.mediaCollection(for: collection).contentScope
+            guard scope.space != nil else { return }
+            for await change in await repository.favoriteChanges(space: scope.space!) {
                 guard !Task.isCancelled else { return }
                 await self?.receiveFavorite(change)
             }
@@ -266,9 +268,11 @@ public actor LibraryPageWindow {
     private func observeItemMutationsIfNeeded() {
         guard itemMutationTask == nil else { return }
         let repository = repository
-        itemMutationTask = Task { [weak self] in
+        itemMutationTask = Task { [weak self, collection] in
+            let scope = await repository.mediaCollection(for: collection).contentScope
             for await change in await repository.photoItemChanges() {
                 guard !Task.isCancelled else { return }
+                guard change.scope == scope else { continue }
                 await self?.receiveItems(change)
             }
         }
@@ -301,6 +305,7 @@ public actor LibraryPageWindow {
     }
 
     private func receiveItems(_ change: PhotoItemChange) {
+        if !change.favoriteValues.isEmpty { receiveFavorite(FavoriteChange(values: change.favoriteValues, sourceCollection: collection)) }
         guard let fingerprint else { return }
         for (section, page) in pages {
             var modified = false

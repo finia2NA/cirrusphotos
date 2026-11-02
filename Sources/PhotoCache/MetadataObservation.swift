@@ -16,9 +16,9 @@ struct MetadataCollectionObserver {
 extension CachedPhotosRepository {
     func metadataObservationSource(for collection: PhotoCollectionDescriptor) -> PhotoCollectionDescriptor {
         if let id = collection.libraryFilterID, let state = metadata.libraryFilters[id] {
-            return state.registration.sourceCollection.isMapFilter ? .personalLibrary : state.registration.sourceCollection
+            return state.registration.sourceCollection.isMapFilter ? mediaCollection(for: state.registration.sourceCollection) : state.registration.sourceCollection
         }
-        return collection.isMapFilter ? .personalLibrary : collection
+        return collection.isMapFilter ? mediaCollection(for: collection) : collection
     }
 
     func observeMetadataChanges(collection: PhotoCollectionDescriptor) -> MetadataCollectionObservation {
@@ -41,15 +41,17 @@ extension CachedPhotosRepository {
     func publishMetadataInvalidation(collection: PhotoCollectionDescriptor? = nil, days: Set<CaptureDay>? = nil) {
         for id in Array(metadata.collectionObservers.keys) {
             guard var observer = metadata.collectionObservers[id], collection == nil || observer.collection == collection else { continue }
+            if collection == nil && metadataNamespace(for: observer.collection) != metadataNamespace { continue }
             if let days { observer.days.formUnion(days) } else { observer.allDays = true; observer.days.removeAll() }
             metadata.collectionObservers[id] = observer
             observer.continuation.yield(())
         }
         let sources = Set(metadata.collectionPageObservers.values.map(\.collection))
-        for source in sources where collection == nil || collection == source || (source.isMapFilter && collection == .personalLibrary) {
+        for source in sources where collection == nil || collection == source || (source.isMapFilter && collection == mediaCollection(for: source)) {
+            if collection == nil && metadataNamespace(for: source) != metadataNamespace { continue }
             for section in metadata.latestTimelines[source]?.sections ?? [] {
                 if let raw = section.list.first, let day = try? CaptureDay(year: raw.year, month: raw.month, day: raw.day),
-                   days == nil || days!.contains(day), let key = CacheKey.page(namespace: namespace, section: section, collection: source) {
+                   days == nil || days!.contains(day), let key = CacheKey.page(scope: source.contentScope, namespace: namespace, section: section, collection: source) {
                     publishCollectionPage(key: key)
                 }
             }

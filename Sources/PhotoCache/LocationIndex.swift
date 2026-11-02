@@ -21,8 +21,9 @@ public struct PhotoLocationRecord: Codable, Sendable, Equatable {
 /// only return it when registering a derived Map collection.
 public struct LocationIndexRevision: Sendable, Equatable, Hashable {
     let rawValue: UInt64
+    let space: PhotoSpace
 
-    init(_ rawValue: UInt64) { self.rawValue = rawValue }
+    init(_ rawValue: UInt64, space: PhotoSpace = .personal) { self.rawValue = rawValue; self.space = space }
 }
 
 public struct LocationIndexValue: Sendable, Equatable {
@@ -42,7 +43,8 @@ extension CachedPhotosRepository {
     static let locationScanPageLimit = 1000
     static let locationScanPageCap = 2048
 
-    public func locationIndexChanges() -> AsyncStream<LocationIndexEvent> {
+    public func locationIndexChanges(space: PhotoSpace = .personal) -> AsyncStream<LocationIndexEvent> {
+        if space == .shared { return sharedLocationIndexChanges() }
         let id = UUID()
         return AsyncStream(bufferingPolicy: .bufferingNewest(2)) { continuation in
             metadata.locationProjectionObservers[id] = continuation
@@ -123,7 +125,8 @@ extension CachedPhotosRepository {
     }
 
     /// Map is a projection of the common all-item inventory. It owns no source cursor.
-    public func locationIndex() -> AsyncStream<LocationIndexEvent> {
+    public func locationIndex(space: PhotoSpace = .personal) -> AsyncStream<LocationIndexEvent> {
+        if space == .shared { return sharedLocationIndex() }
         let subscriber = UUID()
         let producer = StreamProducer()
         return AsyncStream(bufferingPolicy: .bufferingNewest(4)) { continuation in

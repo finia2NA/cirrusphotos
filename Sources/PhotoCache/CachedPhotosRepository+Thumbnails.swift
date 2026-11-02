@@ -4,13 +4,7 @@ import SynologyAPI
 extension CachedPhotosRepository {
     /// Preserve album authority for thumbnail requests, including filtered album views.
     private func thumbnailCollection(for collection: PhotoCollectionDescriptor) -> PhotoCollectionDescriptor {
-        var source = collection
-        var seen: Set<PhotoCollectionDescriptor> = []
-        while let filterID = source.libraryFilterID {
-            guard seen.insert(source).inserted, let state = metadata.libraryFilters[filterID] else { return source }
-            source = state.registration.sourceCollection
-        }
-        return source.albumID != nil || source.incomingAlbumIdentity != nil ? source : .personalLibrary
+        mediaCollection(for: collection)
     }
 
     /// Provisional metadata can request cached bytes with allowNetwork=false.
@@ -23,7 +17,12 @@ extension CachedPhotosRepository {
         let producer = StreamProducer()
         return AsyncStream(bufferingPolicy: .bufferingNewest(3)) { continuation in
             producer.task = Task {
-                let identity = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: size, collection: scope)
+                guard !scope.isSessionDerived else {
+                    continuation.yield(.failure("The source collection is no longer available."))
+                    continuation.finish()
+                    return
+                }
+                let identity = CacheKey.thumbnailIdentity(scope: scope.contentScope, namespace: namespace, descriptor: descriptor, size: size, collection: scope)
                 let key = identity.key
                 let cached = try? await store.getThumbnail(identity)
                 guard !Task.isCancelled else { continuation.finish(); return }
@@ -52,7 +51,7 @@ extension CachedPhotosRepository {
             }
             continuation.onTermination = { @Sendable _ in
                 producer.task?.cancel()
-                Task { await self.releaseImage(key: CacheKey.thumbnail(namespace: self.namespace, descriptor: descriptor, size: size, collection: scope), subscriber: subscriber) }
+                Task { await self.releaseImage(key: CacheKey.thumbnail(scope: scope.contentScope, namespace: self.namespace, descriptor: descriptor, size: size, collection: scope), subscriber: subscriber) }
             }
         }
     }
@@ -67,7 +66,12 @@ extension CachedPhotosRepository {
         let producer = StreamProducer()
         return AsyncStream(bufferingPolicy: .bufferingNewest(4)) { continuation in
             producer.task = Task {
-                let exact = CacheKey.thumbnailIdentity(namespace: namespace,
+                guard !scope.isSessionDerived else {
+                    continuation.yield(.failure("The source collection is no longer available."))
+                    continuation.finish()
+                    return
+                }
+                let exact = CacheKey.thumbnailIdentity(scope: scope.contentScope, namespace: namespace,
                                                        descriptor: descriptor, size: size, collection: scope)
                 let exactCached = try? await store.getThumbnail(exact)
                 guard !Task.isCancelled else { continuation.finish(); return }
@@ -107,7 +111,7 @@ extension CachedPhotosRepository {
     private func bestCachedFallback(_ descriptor: ThumbnailInfo,
                                     target: ThumbnailSize, collection: PhotoCollectionDescriptor) async -> (entry: CacheEntry, size: ThumbnailSize)? {
         for candidate in Self.fallbackSizes(for: target) {
-            let identity = CacheKey.thumbnailIdentity(namespace: namespace,
+            let identity = CacheKey.thumbnailIdentity(scope: collection.contentScope, namespace: namespace,
                                                       descriptor: descriptor, size: candidate, collection: collection)
             if let entry = try? await store.getThumbnail(identity) { return (entry, candidate) }
         }
@@ -132,10 +136,13 @@ extension CachedPhotosRepository {
     /// Resolves one thumbnail while reporting bytes transferred in a successful image response.
     /// Conditional 304 responses and current-run cache hits report zero downloaded bytes.
     public func cacheThumbnailMeasurement(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
+                                          collection: PhotoCollectionDescriptor = .personalLibrary,
                                           priority: RequestPriority = .prefetch,
                                           validateCached: Bool = true) async throws -> ThumbnailCacheMeasurement {
         try Task.checkCancellation()
-        let identity = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: size)
+        let source = thumbnailCollection(for: collection)
+        guard !source.isSessionDerived else { throw SynologyAPIError.unsupported("The source collection is no longer available.") }
+        let identity = CacheKey.thumbnailIdentity(scope: source.contentScope, namespace: namespace, descriptor: descriptor, size: size, collection: source)
         let key = identity.key
         if !validateCached, (try? await store.hasThumbnail(identity)) == true {
             try? await store.promotePreviewThumbnail(key)
@@ -147,7 +154,7 @@ extension CachedPhotosRepository {
         }
         try Task.checkCancellation()
         let subscriber = UUID()
-        let task = registerImage(descriptor, size: size, key: key, collection: .personalLibrary,
+        let task = registerImage(descriptor, size: size, key: key, collection: source,
                                  subscriber: subscriber, priority: priority,
                                  cachePurpose: .library)
         return try await withTaskCancellationHandler {
@@ -178,7 +185,7 @@ extension CachedPhotosRepository {
             return job.task
         }
         let id = UUID()
-        let identity = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: size, collection: collection)
+        let identity = CacheKey.thumbnailIdentity(scope: collection.contentScope, namespace: namespace, descriptor: descriptor, size: size, collection: collection)
         let task = Task<ImageResolution, Error> {
             defer { finishImageJob(key: key, id: id) }
             let generation = await store.currentGeneration()
@@ -188,7 +195,7 @@ extension CachedPhotosRepository {
             try await connect()
             let prior = try? await store.getThumbnail(identity)
             func request(etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
-                if collection.isLibraryFilter {
+                if collection.isSessionDerived {
                     throw SynologyAPIError.unsupported("Collection access is unavailable.")
                 }
                 if collection.incomingAlbumIdentity != nil {
@@ -201,7 +208,7 @@ extension CachedPhotosRepository {
                 if let albumID = collection.albumID {
                     return try await client.albumThumbnail(descriptor, size: size, albumID: albumID, etag: etag, lastModified: lastModified)
                 }
-                return try await client.thumbnail(descriptor, size: size, etag: etag, lastModified: lastModified)
+                return try await client.thumbnail(descriptor, size: size, space: collection.space, etag: etag, lastModified: lastModified)
             }
             var response = try await request(etag: prior?.etag, lastModified: prior?.lastModified)
             if response.notModified && prior == nil {

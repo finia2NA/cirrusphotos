@@ -47,6 +47,7 @@ struct MetadataResetJob {
 
 /// Session-only state behind one `.mapFilter` collection.
 struct MapFilterState {
+    let space: PhotoSpace
     /// Distinguishes a registration from a later filter that happens to reuse the
     /// same descriptor. Suspended page assembly must never publish into the latter.
     let registrationID: UUID
@@ -76,7 +77,7 @@ struct RepositoryImageWork {
     var hasDemand: Bool { !thumbnailJobs.isEmpty || !fullImageJobs.isEmpty || !videoSegmentJobs.isEmpty }
 }
 
-struct RepositoryFavoriteState {
+final class RepositoryFavoriteState {
     var observers: [UUID: AsyncStream<FavoriteChange>.Continuation] = [:]
     var overrides: [Int64: Bool] = [:]
     var pendingIDs: Set<Int64> = []
@@ -91,7 +92,7 @@ struct RepositoryFavoriteState {
         }
     }
 
-    mutating func publish(values: [Int64: Bool], section: TimelineSection? = nil, collection: PhotoCollectionDescriptor = .personalLibrary) {
+    func publish(values: [Int64: Bool], section: TimelineSection? = nil, collection: PhotoCollectionDescriptor = .personalLibrary) {
         for (itemID, favorite) in values {
             overrides[itemID] = favorite
         }
@@ -103,7 +104,7 @@ struct RepositoryFavoriteState {
 
 struct RepositoryItemMutationState {
     var observers: [UUID: AsyncStream<PhotoItemChange>.Continuation] = [:]
-    var pendingIDs: Set<Int64> = []
+    var pendingIDs: Set<PhotoItemIdentity> = []
 
     func publish(_ change: PhotoItemChange) {
         for observer in observers.values { observer.yield(change) }

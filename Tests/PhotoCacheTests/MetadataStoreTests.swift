@@ -5,7 +5,7 @@ import SynologyAPI
 @testable import PhotoCache
 
 final class MetadataStoreTests: XCTestCase, @unchecked Sendable {
-    private let namespace = MetadataNamespace(account: "fixture-account")
+    private let namespace = MetadataNamespace(account: "fixture-account", scope: .space(.personal))
     private func item(_ id: Int64, day: CaptureDay) throws -> PhotoItem {
         try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":\(id),\"time\":\(day.startTime),\"type\":\"photo\",\"filename\":\"fixture.jpg\",\"additional\":{\"favorite\":true}}".utf8))
     }
@@ -108,7 +108,7 @@ final class MetadataStoreTests: XCTestCase, @unchecked Sendable {
         let (store, root) = try await open()
         defer { try? FileManager.default.removeItem(at: root) }
         let page = try await seed(store)
-        let missing = try await store.metadataPage(page.address, namespace: .init(account: "other"), currentRun: "run")
+        let missing = try await store.metadataPage(page.address, namespace: .init(account: "other", scope: .space(.personal)), currentRun: "run")
         XCTAssertNil(missing)
     }
     func testSourceCursorAndDayInvalidationAreAtomicAndEmptyCannotReviveResetRows() async throws {

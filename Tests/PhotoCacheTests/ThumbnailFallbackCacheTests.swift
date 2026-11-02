@@ -59,7 +59,7 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
         try await repository.setConfiguredThumbnailSize(.m)
         let descriptor = try descriptor()
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let small = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: .sm)
+        let small = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm)
         try await repository.store.put(small.key, kind: .thumbnail, data: Data("cached-sm".utf8),
                                        validatedRun: "older-run", thumbnail: small)
 
@@ -83,7 +83,7 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
         try await repository.setConfiguredThumbnailSize(.m)
         let descriptor = try descriptor(medium: "pending")
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let small = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: .sm)
+        let small = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm)
         try await repository.store.put(small.key, kind: .thumbnail, data: Data("cached-sm".utf8),
                                        validatedRun: "older-run", thumbnail: small)
 
@@ -104,7 +104,7 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
         let repository = try repository(root: root, transport: transport)
         let descriptor = try descriptor()
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let small = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: .sm)
+        let small = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm)
         try await repository.store.put(small.key, kind: .thumbnail, data: Data("cached-sm".utf8),
                                        validatedRun: "older-run", thumbnail: small)
 
@@ -135,7 +135,7 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
         try await repository.setConfiguredThumbnailSize(.m)
         let descriptor = try descriptor()
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let small = CacheKey.thumbnailIdentity(namespace: namespace, descriptor: descriptor, size: .sm)
+        let small = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm)
         try await repository.store.put(small.key, kind: .thumbnail, data: Data("cached-sm".utf8),
                                        validatedRun: "older-run", thumbnail: small)
 

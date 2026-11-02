@@ -28,6 +28,8 @@ public enum PhotoMediaKind: Hashable, Sendable {
 
 public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
     public let id: Int64
+    /// Retained as evidence, not treated as a universal space discriminator.
+    public let ownerUserID: Int64?
     public let filename: String?
     /// Capture-local wall-clock components encoded by Synology as epoch-shaped seconds.
     /// Format with a GMT calendar/time zone; converting through the computer's current
@@ -46,6 +48,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id, filename, time, type, filesize, additional
+        case ownerUserID = "owner_user_id"
         case indexedTime = "indexed_time"
         case liveType = "live_type"
     }
@@ -282,7 +285,13 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
 
-    public var fullImageResource: FullImageResource? { FullImageResource(self) }
+    public func identity(in scope: PhotoContentScope) -> PhotoItemIdentity {
+        PhotoItemIdentity(scope: scope, itemID: id)
+    }
+
+    public func fullImageResource(in scope: PhotoContentScope) -> FullImageResource? {
+        FullImageResource(self, scope: scope)
+    }
 
     /// Live Photos use the normal original-photo path for their still image.
     /// Cirrus has returned both `photo` and `live` for `live_type`.
@@ -292,7 +301,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
 
     public var isVideo: Bool { type == "video" }
 
-    public func videoPlaybackResource(preference: VideoQualityPreference) -> VideoPlaybackResource? {
+    public func videoPlaybackResource(scope: PhotoContentScope, preference: VideoQualityPreference) -> VideoPlaybackResource? {
         guard isVideo, let thumbnail = additional?.thumbnail else { return nil }
         let variant: VideoPlaybackVariant
         if preference == .original {
@@ -306,8 +315,8 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
                 variant = .original
             }
         }
-        return VideoPlaybackResource(unitID: thumbnail.unitID, cacheKey: thumbnail.cacheKey,
-                                     filename: filename, variant: variant)
+        return VideoPlaybackResource(scope: scope, unitID: thumbnail.unitID, cacheKey: thumbnail.cacheKey,
+                                     filename: filename, variant: variant, itemID: id)
     }
 
     /// Additional clockwise quarter turns required after ImageIO has applied the
@@ -406,12 +415,16 @@ public enum VideoPlaybackVariant: Hashable, Codable, Sendable {
 }
 
 public struct VideoPlaybackResource: Hashable, Codable, Sendable {
+    public let itemID: Int64?
+    public let scope: PhotoContentScope
     public let unitID: Int64
     public let cacheKey: String
     public let filename: String?
     public let variant: VideoPlaybackVariant
 
-    public init(unitID: Int64, cacheKey: String, filename: String?, variant: VideoPlaybackVariant) {
+    public init(scope: PhotoContentScope, unitID: Int64, cacheKey: String, filename: String?, variant: VideoPlaybackVariant, itemID: Int64? = nil) {
+        self.itemID = itemID
+        self.scope = scope
         self.unitID = unitID
         self.cacheKey = cacheKey
         self.filename = filename
@@ -421,20 +434,22 @@ public struct VideoPlaybackResource: Hashable, Codable, Sendable {
 
 /// The stable server identity and revision used to request and cache an original image.
 public struct FullImageResource: Hashable, Sendable {
+    public let scope: PhotoContentScope
     public let unitID: Int64
     public let cacheKey: String
     public let filename: String?
 
-    public init(unitID: Int64, cacheKey: String, filename: String? = nil) {
+    public init(scope: PhotoContentScope, unitID: Int64, cacheKey: String, filename: String? = nil) {
+        self.scope = scope
         self.unitID = unitID
         self.cacheKey = cacheKey
         self.filename = filename
     }
 
-    public init?(_ item: PhotoItem) {
+    public init?(_ item: PhotoItem, scope: PhotoContentScope) {
         guard item.hasDisplayableStillImage,
               let thumbnail = item.additional?.thumbnail else { return nil }
-        self.init(unitID: thumbnail.unitID, cacheKey: thumbnail.cacheKey, filename: item.filename)
+        self.init(scope: scope, unitID: thumbnail.unitID, cacheKey: thumbnail.cacheKey, filename: item.filename)
     }
 }
 
@@ -575,6 +590,12 @@ public struct ExifInfo: Codable, Sendable, Equatable {
 /// A server-side item collection that shares the Photos timeline/item APIs.
 public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable {
     case personalLibrary
+    case sharedLibrary
+    case sharedFavorites
+    case sharedFolder(Int64)
+    case sharedPerson(Int64)
+    case sharedSubject(Int64)
+    case sharedTag(Int64)
     case favorites
     case recentlyAdded
     /// A Personal Space album, identified by its Synology album id.
@@ -596,6 +617,12 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
     public var rawValue: String {
         switch self {
         case .personalLibrary: "personal"
+        case .sharedLibrary: "shared"
+        case .sharedFavorites: "shared:favorites"
+        case .sharedFolder(let id): "shared:folder:\(id)"
+        case .sharedPerson(let id): "shared:person:\(id)"
+        case .sharedSubject(let id): "shared:subject:\(id)"
+        case .sharedTag(let id): "shared:tag:\(id)"
         case .favorites: "favorites"
         case .recentlyAdded: "recently-added"
         case .album(let id): "album:\(id)"
@@ -609,6 +636,41 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
         }
     }
 
+    /// Albums keep their own authority; their members do not inherit the toolbar space.
+    public var space: PhotoSpace {
+        switch self {
+        case .sharedLibrary, .sharedFavorites, .sharedFolder, .sharedPerson, .sharedSubject, .sharedTag: .shared
+        default: .personal
+        }
+    }
+
+    public func inSpace(_ space: PhotoSpace) -> PhotoCollectionDescriptor {
+        let personal: PhotoCollectionDescriptor = switch self {
+        case .sharedLibrary: .personalLibrary
+        case .sharedFavorites: .favorites
+        case .sharedFolder(let id): .folder(id)
+        case .sharedPerson(let id): .person(id)
+        case .sharedSubject(let id): .subject(id)
+        case .sharedTag(let id): .tag(id)
+        default: self
+        }
+        guard space == .shared else { return personal }
+        switch personal {
+        case .personalLibrary: return .sharedLibrary
+        case .favorites: return .sharedFavorites
+        case .folder(let id): return .sharedFolder(id)
+        case .person(let id): return .sharedPerson(id)
+        case .subject(let id): return .sharedSubject(id)
+        case .tag(let id): return .sharedTag(id)
+        default: return personal
+        }
+    }
+    public var contentScope: PhotoContentScope {
+        if let albumID { return .album(albumID) }
+        if let incoming = incomingAlbumIdentity { return .incomingAlbum(ownerID: incoming.ownerID, albumID: incoming.albumID) }
+        return .space(space)
+    }
+
     public var albumID: Int64? {
         if case .album(let id) = self { return id }
         return nil
@@ -620,13 +682,14 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
     }
 
     public var folderID: Int64? {
+        if case .sharedFolder(let id) = self { return id }
         if case .folder(let id) = self { return id }
         return nil
     }
 
-    public var personID: Int64? { if case .person(let id) = self { return id }; return nil }
-    public var subjectID: Int64? { if case .subject(let id) = self { return id }; return nil }
-    public var tagID: Int64? { if case .tag(let id) = self { return id }; return nil }
+    public var personID: Int64? { if case .sharedPerson(let id) = self { return id }; if case .person(let id) = self { return id }; return nil }
+    public var subjectID: Int64? { if case .sharedSubject(let id) = self { return id }; if case .subject(let id) = self { return id }; return nil }
+    public var tagID: Int64? { if case .sharedTag(let id) = self { return id }; if case .tag(let id) = self { return id }; return nil }
 
     public var usesItemCatalog: Bool { albumID != nil || incomingAlbumIdentity != nil || folderID != nil }
 
@@ -650,7 +713,7 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
         return item.time
     }
 
-    public var favoriteOnly: Bool { self == .favorites }
+    public var favoriteOnly: Bool { self == .favorites || self == .sharedFavorites }
     public var supportsInitialTimeline: Bool { self == .personalLibrary }
 
     /// Albums are fetched lazily when opened and are never part of eager bootstrap loads.
@@ -658,8 +721,14 @@ public enum PhotoCollectionDescriptor: CaseIterable, Codable, Hashable, Sendable
     public static var allCases: [PhotoCollectionDescriptor] { [.personalLibrary, .favorites] }
 
     public init?(rawValue: String) {
+        if rawValue.hasPrefix("shared:") {
+            guard let personal = Self(rawValue: String(rawValue.dropFirst(7))),
+                  personal == .favorites || personal.folderID != nil || personal.personID != nil || personal.subjectID != nil || personal.tagID != nil else { return nil }
+            self = personal.inSpace(.shared); return
+        }
         switch rawValue {
         case "personal": self = .personalLibrary
+        case "shared": self = .sharedLibrary
         case "favorites": self = .favorites
         case "recently-added": self = .recentlyAdded
         default:

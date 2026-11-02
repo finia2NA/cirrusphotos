@@ -62,7 +62,7 @@ final class FullImageRepositoryTests: XCTestCase {
     }
 
     private func resource(_ id: Int64) -> FullImageResource {
-        FullImageResource(unitID: id, cacheKey: "revision-\(id)", filename: "\(id).jpg")
+        FullImageResource(scope: .space(.personal), unitID: id, cacheKey: "revision-\(id)", filename: "\(id).jpg")
     }
 
     private func consume(_ repository: CachedPhotosRepository, _ resource: FullImageResource,

@@ -96,7 +96,7 @@ final class PreviewThumbnailCacheTests: XCTestCase {
         XCTAssertEqual(joinedCalls, 1)
 
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let key = CacheKey.thumbnail(namespace: namespace, descriptor: descriptor, size: .xl)
+        let key = CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .xl)
         let cachedEntry = try await repository.store.get(key)
         let entry = try XCTUnwrap(cachedEntry)
         XCTAssertEqual(entry.kind, .thumbnail)

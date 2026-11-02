@@ -26,12 +26,16 @@ public struct FavoriteChange: Sendable {
 }
 
 public struct PhotoItemChange: Sendable {
+    public let scope: PhotoContentScope
     public let items: [Int64: PhotoItem]
     public let quarterTurns: [Int64: Int]
+    public let favoriteValues: [Int64: Bool]
 
-    public init(items: [Int64: PhotoItem], quarterTurns: [Int64: Int] = [:]) {
+    public init(items: [Int64: PhotoItem], quarterTurns: [Int64: Int] = [:], favoriteValues: [Int64: Bool] = [:], scope: PhotoContentScope = .space(.personal)) {
+        self.scope = scope
         self.items = items
         self.quarterTurns = quarterTurns
+        self.favoriteValues = favoriteValues
     }
 }
 

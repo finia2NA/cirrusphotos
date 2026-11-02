@@ -5,7 +5,7 @@ import SynologyAPI
 @testable import PhotoCache
 
 final class MetadataCacheResetTests: XCTestCase, @unchecked Sendable {
-    private let namespace = MetadataNamespace(account: "reset-account")
+    private let namespace = MetadataNamespace(account: "reset-account", scope: .space(.personal))
     private func open(_ root: URL) async throws -> DiskCache {
         let store = try DiskCache(root: root, budget: 10_000_000)
         try await store.initializeMetadataStore()

@@ -163,7 +163,9 @@ public actor PhotoViewerSession {
         started = true
         let repository = repository
         favoriteTask = Task { [weak self] in
-            for await change in await repository.favoriteChanges() {
+            let source = await repository.mediaCollection(for: self?.collection ?? .personalLibrary)
+            guard !source.isSessionDerived, source.contentScope.space != nil else { return }
+            for await change in await repository.favoriteChanges(space: source.space) {
                 guard !Task.isCancelled else { return }
                 await self?.applyFavorites(change.values)
             }
@@ -201,22 +203,26 @@ public actor PhotoViewerSession {
     }
 
     func setMediaScope(_ scope: PhotoCollectionDescriptor) {
-        guard !closed else { return }
+        guard !closed, !scope.isSessionDerived else { return }
         mediaScope = scope
         restartCurrentAssets()
         scheduleThumbnailNeighbors()
         publish()
     }
 
-    var supportsPersonalMedia: Bool {
+    var mediaContentScope: PhotoContentScope { (mediaScope ?? collection).contentScope }
+
+    var supportsItemActions: Bool { supportsSpaceMedia || mediaScope?.albumID != nil }
+
+    var supportsSpaceMedia: Bool {
         guard let mediaScope else { return false }
-        return mediaScope.incomingAlbumIdentity == nil && !mediaScope.isLibraryFilter
+        return mediaScope.contentScope.space != nil && !mediaScope.isLibraryFilter
     }
 
     func select(_ location: PhotoViewerLocation) {
         let targetResource = metadata.pages[location.sectionIndex]
             .flatMap { $0.slot(at: location.pageOffset)?.item }?
-            .fullImageResource
+            .fullImageResource(in: mediaContentScope)
         generation &+= 1
         desired = location
         currentItem = nil
@@ -237,6 +243,7 @@ public actor PhotoViewerSession {
     func makeState() -> PhotoViewerState {
         let currentItemID = currentItem?.id
         return PhotoViewerState(
+            contentScope: mediaContentScope,
             selection: PhotoViewerSelection(generation: generation, itemID: currentItem?.id),
             desiredLocation: desired,
             item: currentItem,
@@ -244,7 +251,7 @@ public actor PhotoViewerSession {
             thumbnailData: images.thumbnailData,
             thumbnailIsLargePreview: images.bestThumbnailTier == .largePreview,
             fullImageData: images.fullImageData,
-            videoResource: supportsPersonalMedia ? currentItem?.videoPlaybackResource(preference: videoQuality) : nil,
+            videoResource: supportsSpaceMedia ? currentItem?.videoPlaybackResource(scope: mediaContentScope, preference: videoQuality) : nil,
             metadataStatus: metadataStatus,
             thumbnailStatus: images.thumbnailStatus,
             fullImageStatus: images.fullImageStatus,
@@ -313,7 +320,7 @@ public actor PhotoViewerSession {
     }
 
     static func resourceKey(_ resource: FullImageResource) -> String {
-        "\(resource.unitID)|\(resource.cacheKey)"
+        "\(resource.scope.cacheComponent)|\(resource.unitID)|\(resource.cacheKey)"
     }
 
     static func thumbnailKey(_ descriptor: ThumbnailInfo, size: ThumbnailSize) -> String {

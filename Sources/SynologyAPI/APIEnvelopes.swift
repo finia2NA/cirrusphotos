@@ -65,10 +65,10 @@ struct LivePhotoUnitMember: Decodable {
     let additional: PhotoItem.Additional?
     enum CodingKeys: String, CodingKey { case liveType = "live_type", filename, additional }
 
-    func playbackResource() -> VideoPlaybackResource? {
+    func playbackResource(scope: PhotoContentScope) -> VideoPlaybackResource? {
         guard liveType == "video", let additional, let thumbnail = additional.thumbnail,
               let quality = VideoQuality.closest(to: .high, in: Set((additional.videoConvert ?? []).compactMap(\.knownQuality))) else { return nil }
-        return VideoPlaybackResource(unitID: thumbnail.unitID, cacheKey: thumbnail.cacheKey,
+        return VideoPlaybackResource(scope: scope, unitID: thumbnail.unitID, cacheKey: thumbnail.cacheKey,
                                      filename: filename, variant: .converted(quality))
     }
 }

@@ -20,7 +20,7 @@ extension CachedPhotosRepository {
         let id = UUID()
         let stream = AsyncStream<Void>(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let pairs = sections.compactMap { section in
-                CacheKey.page(namespace: namespace, section: section, collection: collection).map { ($0, section) }
+                CacheKey.page(scope: collection.contentScope, namespace: namespace, section: section, collection: collection).map { ($0, section) }
             }
             metadata.collectionPageObservers[id] = .init(
                 collection: collection, sectionsByKey: Dictionary(uniqueKeysWithValues: pairs), continuation: continuation)
@@ -41,11 +41,11 @@ extension CachedPhotosRepository {
         metadata.collectionPageObservers.removeValue(forKey: id)?.continuation.finish()
     }
 
-    func publishDerivedPageChanges(ids: Set<Int64>) {
+    func publishDerivedPageChanges(ids: Set<Int64>, space: PhotoSpace = .personal) {
         for observer in Array(metadata.collectionPageObservers.values) where observer.collection.isMapFilter {
-            guard let id = observer.collection.mapFilterID, let map = metadata.mapFilters[id] else { continue }
+            guard let id = observer.collection.mapFilterID, let map = metadata.mapFilters[id], map.space == space else { continue }
             for (section, members) in map.idsBySection where members.contains(where: { ids.contains($0) }) {
-                if let key = CacheKey.page(namespace: namespace, section: section, collection: observer.collection) {
+                if let key = CacheKey.page(scope: observer.collection.contentScope, namespace: namespace, section: section, collection: observer.collection) {
                     publishCollectionPage(key: key)
                 }
             }

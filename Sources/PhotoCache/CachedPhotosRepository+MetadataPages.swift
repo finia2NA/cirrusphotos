@@ -122,7 +122,8 @@ extension CachedPhotosRepository {
                                 try await store.storeMetadataPage(read, items: items, profile: result.profile,
                                                                   namespace: metadataNamespace(for: collection), currentRun: runID, admission: admission)
                             }
-                            if collection.incomingAlbumIdentity == nil { publishLocationItemChanges(result.items) }
+                            if collection.contentScope == .space(.personal) { publishLocationItemChanges(result.items) }
+                            else if collection.contentScope == .space(.shared) { await publishSharedLocationItemChanges(result.items) }
                             for read in batch.pages {
                                 guard let page = try await store.metadataPage(read.address, namespace: metadataNamespace(for: collection), currentRun: runID) else {
                                     throw CacheError.storage

@@ -152,7 +152,7 @@ extension PhotoViewerSession {
     }
 
     func scheduleLoadedNeighbors() {
-        guard !closed, supportsPersonalMedia, images.prefetchEnabledGeneration == generation else { return }
+        guard !closed, supportsSpaceMedia, images.prefetchEnabledGeneration == generation else { return }
         let locations = [-1, 1].compactMap { metadata.location(for: desired.ordinal + $0) }
         let desiredSections = Set(locations.map(\.sectionIndex) + [desired.sectionIndex])
         for section in desiredSections where metadata.pages[section] == nil || (allowNetwork && metadata.pages[section]?.verified == false) {
@@ -164,7 +164,7 @@ extension PhotoViewerSession {
         for location in locations {
             guard let page = metadata.pages[location.sectionIndex], page.slots.indices.contains(location.pageOffset) else { continue }
             guard let item = page.slot(at: location.pageOffset)?.item else { continue }
-            guard let resource = item.fullImageResource else { continue }
+            guard let resource = item.fullImageResource(in: mediaContentScope) else { continue }
             let key = Self.resourceKey(resource)
             wantedKeys.insert(key)
             let network = allowNetwork && page.verified
@@ -203,7 +203,7 @@ extension PhotoViewerSession {
         if images.fullAttempt == id {
             receiveCurrentFull(event, attempt: id, generation: generation,
                                itemID: currentItem?.id,
-                               resource: currentItem?.fullImageResource ?? FullImageResource(unitID: -1, cacheKey: ""))
+                               resource: currentItem?.fullImageResource(in: mediaContentScope) ?? FullImageResource(scope: mediaContentScope, unitID: -1, cacheKey: ""))
             return
         }
         guard var job = images.fullJobs[key], job.id == id else { return }

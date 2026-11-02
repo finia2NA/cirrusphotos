@@ -18,7 +18,8 @@ public actor CachedPhotosRepository {
     var authenticationState = RepositoryAuthenticationState()
     var metadata = MetadataEngineState()
     var imageWork = RepositoryImageWork()
-    var favorites = RepositoryFavoriteState()
+    let favorites = RepositoryFavoriteState()
+    let sharedFavorites = RepositoryFavoriteState()
     var itemMutations = RepositoryItemMutationState()
     var incomingAccess: [PhotoCollectionDescriptor: IncomingAlbum] = [:]
     var avatars: [AvatarIdentity: Data] = [:]

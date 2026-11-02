@@ -49,6 +49,13 @@ struct SelectionMembershipProof: Sendable {
 extension DiskCache {
     // This actor-isolated read has no suspension points: every selected page is
     // checked against one store state, including same-shaped replacements.
+    func verifySelectionMembershipGroups(_ groups: [([SelectionMembershipProof], MetadataNamespace)], currentRun: String) throws -> Bool {
+        for (proofs, namespace) in groups {
+            guard try verifySelectionMembership(proofs, namespace: namespace, currentRun: currentRun) else { return false }
+        }
+        return true
+    }
+
     func verifySelectionMembership(_ proofs: [SelectionMembershipProof], namespace: MetadataNamespace, currentRun: String) throws -> Bool {
         for proof in proofs {
             guard let page = try metadataPage(proof.address, namespace: namespace, currentRun: currentRun),
@@ -91,7 +98,10 @@ extension CachedPhotosRepository {
     func verifySelectionFences(_ first: PhotoSelectionAuthority, proofs: [SelectionMembershipProof],
                                _ second: PhotoSelectionAuthority, proofs otherProofs: [SelectionMembershipProof]) async -> Bool {
         guard selectionAuthorityIsCurrent(first), selectionAuthorityIsCurrent(second), !Task.isCancelled else { return false }
-        let valid = (try? await store.verifySelectionMembership(proofs + otherProofs, namespace: metadataNamespace, currentRun: runID)) == true
+        let valid = (try? await store.verifySelectionMembershipGroups([
+            (proofs, metadataNamespace(for: first.originatingCollection)),
+            (otherProofs, metadataNamespace(for: second.originatingCollection))
+        ], currentRun: runID)) == true
         return valid && !Task.isCancelled && selectionAuthorityIsCurrent(first) && selectionAuthorityIsCurrent(second)
     }
 

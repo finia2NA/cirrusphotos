@@ -93,12 +93,12 @@ final class PhotoCacheTests: XCTestCase {
         let section = TimelineSection(offset: 0, limit: 250,
             list: [TimelineDay(year: 2024, month: 3, day: 1, itemCount: 501)])
         let changed = TimelineSection(offset: 250, limit: 250, list: section.list)
-        XCTAssertNotEqual(CacheKey.page(namespace: alice, section: section),
-                          CacheKey.page(namespace: alice, section: changed))
-        XCTAssertNotEqual(CacheKey.page(namespace: alice, section: section), CacheKey.page(namespace: bob, section: section))
-        let original = FullImageResource(unitID: 42, cacheKey: "revision-1", filename: "one.jpg")
-        let renamed = FullImageResource(unitID: 42, cacheKey: "revision-1", filename: "renamed.jpg")
-        let revised = FullImageResource(unitID: 42, cacheKey: "revision-2", filename: "one.jpg")
+        XCTAssertNotEqual(CacheKey.page(scope: .space(.personal), namespace: alice, section: section),
+                          CacheKey.page(scope: .space(.personal), namespace: alice, section: changed))
+        XCTAssertNotEqual(CacheKey.page(scope: .space(.personal), namespace: alice, section: section), CacheKey.page(scope: .space(.personal), namespace: bob, section: section))
+        let original = FullImageResource(scope: .space(.personal), unitID: 42, cacheKey: "revision-1", filename: "one.jpg")
+        let renamed = FullImageResource(scope: .space(.personal), unitID: 42, cacheKey: "revision-1", filename: "renamed.jpg")
+        let revised = FullImageResource(scope: .space(.personal), unitID: 42, cacheKey: "revision-2", filename: "one.jpg")
         XCTAssertEqual(CacheKey.fullImage(namespace: alice, resource: original),
                        CacheKey.fullImage(namespace: alice, resource: renamed))
         XCTAssertNotEqual(CacheKey.fullImage(namespace: alice, resource: original),

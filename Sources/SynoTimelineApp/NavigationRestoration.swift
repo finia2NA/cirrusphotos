@@ -26,7 +26,7 @@ enum SidebarSelection: Codable, Hashable {
 }
 
 struct RestorableAppNavigationState: Codable, Equatable {
-    static let currentVersion = 6
+    static let currentVersion = 8
 
     var version = currentVersion
     var sidebarSelection: SidebarSelection = .destination(.personalLibrary)
@@ -37,6 +37,15 @@ struct RestorableAppNavigationState: Codable, Equatable {
     var subjectNamespace: String?
     var openedTagID: Int64?
     var tagNamespace: String?
+    var sharedPersonID: Int64?
+    var sharedPersonNamespace: String?
+    var sharedSubjectID: Int64?
+    var sharedSubjectNamespace: String?
+    var sharedTagID: Int64?
+    var sharedTagNamespace: String?
+    var sharedFolderPath: [Int64] = []
+    var sharedFolderNamespace: String?
+    var selectedSpace: PhotoSpace = .personal
     var showsFolders = false
     var folderPath: [Int64] = []
     var folderNamespace: String?
@@ -71,31 +80,63 @@ final class NavigationRestorationStore: ObservableObject {
 
     var sidebarSelection: SidebarSelection { state.sidebarSelection }
 
+    var selectedSpace: PhotoSpace { state.selectedSpace }
+    func selectSpace(_ space: PhotoSpace) { state.selectedSpace = space; save() }
+
     var showsFolders: Bool { state.showsFolders }
-    var folderPath: [Int64] { state.folderPath }
+    var folderPath: [Int64] { state.selectedSpace == .shared ? state.sharedFolderPath : state.folderPath }
     func prepareFolders(namespace: String) -> [Int64] {
+        if state.selectedSpace == .shared {
+            if state.sharedFolderNamespace != namespace { state.sharedFolderPath = []; state.sharedFolderNamespace = namespace; save() }
+            return state.sharedFolderPath
+        }
         if state.folderNamespace != namespace { state.folderPath = []; state.folderNamespace = namespace; save() }
         return state.folderPath
     }
-    func setFolders(shown: Bool, path: [Int64]) { state.showsFolders = shown; state.folderPath = path; save() }
+    func setFolders(shown: Bool, path: [Int64]) {
+        state.showsFolders = shown
+        if state.selectedSpace == .shared { state.sharedFolderPath = path } else { state.folderPath = path }
+        save()
+    }
 
     func preparePerson(namespace: String) -> Int64? {
+        if state.selectedSpace == .shared {
+            if state.sharedPersonNamespace != namespace { state.sharedPersonID = nil; state.sharedPersonNamespace = namespace; save() }
+            return state.sharedPersonID
+        }
         if state.personNamespace != namespace { state.openedPersonID = nil; state.personNamespace = namespace; save() }
         return state.openedPersonID
     }
-    func setOpenedPerson(_ id: Int64?) { state.openedPersonID = id; save() }
+    func setOpenedPerson(_ id: Int64?) {
+        if state.selectedSpace == .shared { state.sharedPersonID = id } else { state.openedPersonID = id }
+        save()
+    }
 
     func prepareSubject(namespace: String) -> Int64? {
+        if state.selectedSpace == .shared {
+            if state.sharedSubjectNamespace != namespace { state.sharedSubjectID = nil; state.sharedSubjectNamespace = namespace; save() }
+            return state.sharedSubjectID
+        }
         if state.subjectNamespace != namespace { state.openedSubjectID = nil; state.subjectNamespace = namespace; save() }
         return state.openedSubjectID
     }
-    func setOpenedSubject(_ id: Int64?) { state.openedSubjectID = id; save() }
+    func setOpenedSubject(_ id: Int64?) {
+        if state.selectedSpace == .shared { state.sharedSubjectID = id } else { state.openedSubjectID = id }
+        save()
+    }
 
     func prepareTag(namespace: String) -> Int64? {
+        if state.selectedSpace == .shared {
+            if state.sharedTagNamespace != namespace { state.sharedTagID = nil; state.sharedTagNamespace = namespace; save() }
+            return state.sharedTagID
+        }
         if state.tagNamespace != namespace { state.openedTagID = nil; state.tagNamespace = namespace; save() }
         return state.openedTagID
     }
-    func setOpenedTag(_ id: Int64?) { state.openedTagID = id; save() }
+    func setOpenedTag(_ id: Int64?) {
+        if state.selectedSpace == .shared { state.sharedTagID = id } else { state.openedTagID = id }
+        save()
+    }
 
     var openedAlbum: PhotoCollectionDescriptor? {
         state.openedAlbum

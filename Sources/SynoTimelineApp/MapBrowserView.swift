@@ -4,11 +4,12 @@ import SwiftUI
 import SynologyAPI
 import TimelineCore
 
-/// Full-screen Apple Map of every geotagged Personal Library photo.
+/// Full-screen Apple Map of geotagged photos in the selected space.
 struct MapBrowserView: View {
     @ObservedObject var model: MapBrowserModel
     @EnvironmentObject private var library: LibraryModel
     var contentTopInset: CGFloat = 0
+    var space: PhotoSpace = .personal
     let onOpenPhoto: (Int64) -> Void
     let onOpenGroup: ([Int64]) -> Void
 
@@ -21,7 +22,8 @@ struct MapBrowserView: View {
                     MapClusterPin(group: group,
                                   thumbnail: model.thumbnail(for: group.representative),
                                   repository: library.repository,
-                                  allowNetwork: library.timelineVerified(for: .personalLibrary)) {
+                                  collection: PhotoCollectionDescriptor.personalLibrary.inSpace(space),
+                                  allowNetwork: model.status == .ready) {
                         if group.isSingle {
                             onOpenPhoto(group.representative.id)
                         } else {
@@ -42,8 +44,8 @@ struct MapBrowserView: View {
             .overlay { overlays }
             .ignoresSafeArea(.container, edges: .top)
         }
-        .task(id: library.repository.map(ObjectIdentifier.init)) {
-            model.start(repository: library.repository)
+        .task(id: "\(library.repository.map(ObjectIdentifier.init).map(String.init(describing:)) ?? "none"):\(space.rawValue)") {
+            model.start(repository: library.repository, space: space)
         }
         .onDisappear { model.stopObservingProjection() }
     }
@@ -61,7 +63,7 @@ struct MapBrowserView: View {
 
             if model.records.isEmpty, model.status == .ready {
                 ContentUnavailableView("No located photos", systemImage: "mappin.slash",
-                                       description: Text("No photos in Personal Space have location data."))
+                                       description: Text("No photos in this space have location data."))
                     .padding(24)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
             }
@@ -115,13 +117,14 @@ private struct MapClusterPin: View {
     let group: MapClusterGroup
     let thumbnail: ThumbnailInfo?
     let repository: CachedPhotosRepository?
+    let collection: PhotoCollectionDescriptor
     let allowNetwork: Bool
     let onTap: () -> Void
     @State private var image: NSImage?
 
     private var identity: String {
         guard let thumbnail else { return "missing" }
-        return "\(thumbnail.unitID):\(thumbnail.cacheKey):\(allowNetwork)"
+        return "\(collection.rawValue):\(thumbnail.unitID):\(thumbnail.cacheKey):\(allowNetwork)"
     }
 
     private var clipShape: AnyShape {
@@ -183,7 +186,7 @@ private struct MapClusterPin: View {
         image = nil
         guard let thumbnail, let repository else { return }
         for await event in await repository.thumbnailWithFallback(
-            thumbnail, size: .sm, allowNetwork: allowNetwork, priority: .visible
+            thumbnail, size: .sm, allowNetwork: allowNetwork, collection: collection, priority: .visible
         ) {
             guard !Task.isCancelled else { return }
             guard case .value(let value, _) = event else { continue }

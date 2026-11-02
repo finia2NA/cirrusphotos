@@ -108,7 +108,7 @@ func seedMetadataPage(_ items: [PhotoItem], section: TimelineSection, repository
                       collection: PhotoCollectionDescriptor = .personalLibrary,
                       validatedRun: String? = nil) async throws {
     try await repository.initializeMetadataEngine()
-    let namespace = await repository.metadataNamespace
+    let namespace = await repository.metadataNamespace(for: collection)
     let store = await repository.store
     let key = CollectionKey(namespace: namespace, collection: collection)
     let address = try DayPageAddress(section: section, collection: collection)

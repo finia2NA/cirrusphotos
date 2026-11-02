@@ -465,7 +465,7 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
             budget: 100_000_000, cacheRoot: root, transport: AppMockTransport())
         let view = VideoPlayerContainerView()
         var muted = false
-        let first = VideoPlaybackResource(unitID: 1, cacheKey: "key", filename: "one.mp4", variant: .original)
+        let first = VideoPlaybackResource(scope: .space(.personal), unitID: 1, cacheKey: "key", filename: "one.mp4", variant: .original)
         view.configure(repository: repository, resource: first, generation: 1, allowNetwork: false,
                        poster: nil, isMuted: muted, onMuteChanged: { muted = $0 })
         let player = try XCTUnwrap(view.player)
@@ -473,7 +473,7 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         player.isMuted = true
         try await Task.sleep(for: .milliseconds(30))
         XCTAssertTrue(muted)
-        let second = VideoPlaybackResource(unitID: 2, cacheKey: "key2", filename: "two.mp4", variant: .original)
+        let second = VideoPlaybackResource(scope: .space(.personal), unitID: 2, cacheKey: "key2", filename: "two.mp4", variant: .original)
         view.configure(repository: repository, resource: second, generation: 2, allowNetwork: false,
                        poster: nil, isMuted: muted, onMuteChanged: { muted = $0 })
         XCTAssertTrue(try XCTUnwrap(view.player).isMuted)
@@ -495,7 +495,7 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         defer { window.contentView = nil; window.orderOut(nil) }
         let poster = try bitmapImage(width: 400, height: 300)
         canvas.setVideo(VideoConfiguration(repository: repository,
-            resource: VideoPlaybackResource(unitID: 1, cacheKey: "key", filename: "video.mp4", variant: .original),
+            resource: VideoPlaybackResource(scope: .space(.personal), unitID: 1, cacheKey: "key", filename: "video.mp4", variant: .original),
             generation: 1, allowNetwork: false, poster: poster))
         let video = try XCTUnwrap(canvas.subviews.first as? VideoPlayerContainerView)
         canvas.nextImage = try bitmapImage(width: 200, height: 100)
@@ -523,7 +523,7 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         let (canvas, window) = makeCanvas()
         defer { window.contentView = nil; window.orderOut(nil) }
         canvas.setVideo(VideoConfiguration(repository: repository,
-            resource: VideoPlaybackResource(unitID: 1, cacheKey: "key", filename: "video.mp4", variant: .original),
+            resource: VideoPlaybackResource(scope: .space(.personal), unitID: 1, cacheKey: "key", filename: "video.mp4", variant: .original),
             generation: 1, allowNetwork: false, poster: canvas.presentedImage))
         let video = try XCTUnwrap(canvas.subviews.first as? VideoPlayerContainerView)
         let videoLayer = try XCTUnwrap(video.layer)
@@ -893,6 +893,6 @@ private actor LivePhotoCanvasTransport: PhotosTransport {
     func livePhotoMotion(itemID: Int64) async throws -> VideoPlaybackResource? {
         // Ignore cancellation to exercise the canvas's stale-result fence.
         try? await Task.sleep(for: .milliseconds(150))
-        return VideoPlaybackResource(unitID: 2, cacheKey: "key", filename: "motion.mp4", variant: .converted(.high))
+        return VideoPlaybackResource(scope: .space(.personal), unitID: 2, cacheKey: "key", filename: "motion.mp4", variant: .converted(.high))
     }
 }

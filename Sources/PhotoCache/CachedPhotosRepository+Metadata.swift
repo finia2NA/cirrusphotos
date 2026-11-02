@@ -88,7 +88,7 @@ extension CachedPhotosRepository {
                     try await initializeMetadataEngine()
                     let address = try DayPageAddress(section: section, collection: collection)
                     defer { finishExpectedMetadataDemand(address) }
-                    guard let key = CacheKey.page(namespace: namespace, section: section, collection: collection) else { throw CollectionCatalogError.invalidAddress }
+                    guard let key = CacheKey.page(scope: collection.contentScope, namespace: namespace, section: section, collection: collection) else { throw CollectionCatalogError.invalidAddress }
                     let epoch = metadata.admissionEpoch
                     let mutationEpoch = metadata.mutationEpochs[collection, default: 0]
                     let cached = useCachedPages ? try await store.metadataPage(address, namespace: metadataNamespace(for: collection), currentRun: runID) : nil
@@ -100,14 +100,14 @@ extension CachedPhotosRepository {
                             visible = PhotoPageSnapshot(address: cached.address, membershipRevision: cached.membershipRevision,
                                 membershipVerified: false, slots: cached.slots.map { PhotoItemSlot(itemID: $0.itemID, item: $0.item, verified: false) })
                         } else { visible = cached }
-                        continuation.yield(.value((collection.incomingAlbumIdentity == nil ? applyingFavoriteOverrides(visible) : visible), verified: visible.verified))
+                        continuation.yield(.value(applyingFavoriteOverrides(visible, collection: collection), verified: visible.verified))
                     }
                     guard !mutationInProgress else { continuation.finish(); return }
                     guard allowNetwork && cached?.verified != true else { continuation.finish(); return }
                     let task = registerPage(section, collection: collection, key: key, subscriber: subscriber, priority: priority, forceMembership: !useCachedPages)
                     let current = try await task.value
                     guard !Task.isCancelled else { continuation.finish(); return }
-                    continuation.yield(.value((collection.incomingAlbumIdentity == nil ? applyingFavoriteOverrides(current) : current), verified: current.verified))
+                    continuation.yield(.value(applyingFavoriteOverrides(current, collection: collection), verified: current.verified))
                 } catch {
                     if !Task.isCancelled && !(error is CancellationError) && !(error is NetworkGateError && priority == .prefetch) {
                         continuation.yield(.failure(error.localizedDescription))
@@ -117,13 +117,16 @@ extension CachedPhotosRepository {
             }
             continuation.onTermination = { @Sendable _ in
                 producer.task?.cancel()
-                Task { await self.releasePage(key: CacheKey.page(namespace: self.namespace, section: section, collection: collection), subscriber: subscriber) }
+                Task { await self.releasePage(key: CacheKey.page(scope: collection.contentScope, namespace: self.namespace, section: section, collection: collection), subscriber: subscriber) }
             }
         }
     }
 
-    func applyingFavoriteOverrides(_ page: PhotoPageSnapshot) -> PhotoPageSnapshot {
-        PhotoPageSnapshot(address: page.address, membershipRevision: page.membershipRevision, membershipVerified: page.membershipVerified,
+    func applyingFavoriteOverrides(_ page: PhotoPageSnapshot, collection: PhotoCollectionDescriptor = .personalLibrary) -> PhotoPageSnapshot {
+        let source = mediaCollection(for: collection)
+        guard source.albumID == nil, source.incomingAlbumIdentity == nil, !source.isLibraryFilter else { return page }
+        let favorites = favoriteState(for: source.space)
+        return PhotoPageSnapshot(address: page.address, membershipRevision: page.membershipRevision, membershipVerified: page.membershipVerified,
                           slots: page.slots.map { slot in
                               let item = slot.item.map { item in favorites.overrides[item.id].map { item.withFavorite($0) } ?? item }
                               return PhotoItemSlot(itemID: slot.itemID, item: item, verified: slot.verified)
@@ -148,7 +151,9 @@ extension CachedPhotosRepository {
                                                 oldestDay: CaptureDay(year: oldest.year, month: oldest.month, day: oldest.day), offset: section.offset, limit: section.limit)
         let items = try await client.readCollectionBatch(request, fields: .fullPage).items
         guard await metadataTokenIsCurrent(token) else { throw CancellationError() }
-        return favorites.applyingOverrides(items)
+        let source = mediaCollection(for: collection)
+        guard source.contentScope.space != nil else { return items }
+        return favoriteState(for: source.space).applyingOverrides(items)
     }
 
     /// Emits authoritative metadata replacements caused by local mutations. Normal startup
@@ -165,7 +170,7 @@ extension CachedPhotosRepository {
 
     public func promotePage(_ section: TimelineSection,
                             collection: PhotoCollectionDescriptor = .personalLibrary) async {
-        guard let key = CacheKey.page(namespace: namespace, section: section, collection: collection) else { return }
+        guard let key = CacheKey.page(scope: collection.contentScope, namespace: namespace, section: section, collection: collection) else { return }
         if collection.isLibraryFilter {
             promoteLibraryFilterSources(section, collection: collection)
             return
@@ -190,7 +195,7 @@ extension CachedPhotosRepository {
         defer { metadata.initialSubscribers.remove(id); cancelIdleLogin() }
         let token = try await captureMetadataWorkToken(resource: .transient(collection), jobID: id, collection: collection)
         try await connect()
-        try await reconcileMetadataSource()
+        try await reconcileMetadataSource(for: collection)
         let catalog = try await acquireCollectionCatalog(collection, initial: true).catalog
         guard await metadataTokenIsCurrent(token) else { throw CancellationError() }
         return try CollectionDayPager.snapshot(catalog: catalog)
@@ -208,7 +213,7 @@ extension CachedPhotosRepository {
         let task = Task<TimelineSnapshot, Error> {
             let token = try await captureMetadataWorkToken(resource: .timeline(collection), jobID: id, collection: collection)
             try await connect()
-            try await reconcileMetadataSource()
+            try await reconcileMetadataSource(for: collection)
             let admission = try await store.metadataAdmission(metadataNamespace(for: collection))
             let acquired = try await acquireCollectionCatalog(collection)
             let catalog = acquired.catalog
@@ -252,10 +257,10 @@ extension CachedPhotosRepository {
         let task = Task<PhotoPageSnapshot, Error> {
             let token = try await captureMetadataWorkToken(resource: .page(key: key, collection: collection), jobID: id, collection: collection)
             try await connect()
-            try await reconcileMetadataSource()
+            try await reconcileMetadataSource(for: collection)
             _ = try await verifiedTimelineSnapshot(collection: collection)
             guard await metadataTokenIsCurrent(token) else { throw MetadataAdmissionError.superseded }
-            metadata.pageJobSourceRevisions[key] = metadata.revision
+            if collection.contentScope == .space(.personal) { metadata.pageJobSourceRevisions[key] = metadata.revision }
             var descriptor = section
             var result: PhotoPageSnapshot?
             for attempt in 0..<2 {

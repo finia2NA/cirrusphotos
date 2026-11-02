@@ -218,15 +218,16 @@ final class LibraryModel: ObservableObject {
     /// Resolves every persistent collection that participates in explicit metadata
     /// warming. Album discovery and unopened album timeline scans begin only after
     /// the user presses Start in the warming window.
-    func discoverTimelineWarmingTargets() async -> TimelineWarmingTargetDiscovery {
+    func discoverTimelineWarmingTargets(includeSharedSpace: Bool = false) async -> TimelineWarmingTargetDiscovery {
         guard repository != nil else {
             return .init(targets: [], failures: ["The photo repository is unavailable."])
         }
 
-        for collection in PhotoCollectionDescriptor.allCases {
+        let baseCollections: [PhotoCollectionDescriptor] = [.personalLibrary, .favorites] + (includeSharedSpace ? [.sharedLibrary, .sharedFavorites] : [])
+        for collection in baseCollections {
             startCollectionFetchIfNeeded(collection)
         }
-        for collection in PhotoCollectionDescriptor.allCases {
+        for collection in baseCollections {
             await collectionFetchTasks[collection]?.value
         }
 
@@ -240,7 +241,7 @@ final class LibraryModel: ObservableObject {
             await collectionFetchTasks[collection]?.value
         }
 
-        let persistentCollections = PhotoCollectionDescriptor.allCases + albumCollections
+        let persistentCollections = baseCollections + albumCollections
         var targets: [TimelineWarmingTarget] = []
         var failures: [String] = []
         for collection in persistentCollections {
@@ -248,9 +249,11 @@ final class LibraryModel: ObservableObject {
             let title: String
             switch collection {
             case .personalLibrary: title = "Personal Library"
+            case .sharedLibrary: title = "Shared Library"
             case .favorites: title = "Favorites"
+            case .sharedFavorites: title = "Shared Favorites"
             case .album(let id): title = albumName(for: collection) ?? "Album \(id)"
-            case .recentlyAdded, .incomingAlbum, .folder, .person, .subject, .tag, .mapFilter, .libraryFilter: continue
+            case .sharedFolder, .sharedPerson, .sharedSubject, .sharedTag, .recentlyAdded, .incomingAlbum, .folder, .person, .subject, .tag, .mapFilter, .libraryFilter: continue
             }
             if timelineVerified(for: collection), let snapshot = snapshot(for: collection) {
                 targets.append(.init(collection: collection, snapshot: snapshot,
@@ -277,8 +280,23 @@ final class LibraryModel: ObservableObject {
         (sessionSources[collection] ?? collection).incomingAlbumIdentity != nil
     }
 
+    func isSharedCollection(_ collection: PhotoCollectionDescriptor) -> Bool {
+        (sessionSources[collection] ?? collection).space == .shared
+    }
+
+    func allowsSpaceItemActions(in collection: PhotoCollectionDescriptor) -> Bool {
+        let source = sessionSources[collection] ?? collection
+        return source.incomingAlbumIdentity == nil && !source.isLibraryFilter
+    }
+
+    func allowsPersonalActions(in collection: PhotoCollectionDescriptor) -> Bool {
+        let source = sessionSources[collection] ?? collection
+        return source.space == .personal && source.incomingAlbumIdentity == nil
+    }
+
     func canDownload(in collection: PhotoCollectionDescriptor) -> Bool {
         let source = sessionSources[collection] ?? collection
+        if source.space == .shared { return true }
         return permitsAlbumDownloads(source: source, incomingVerified: incomingAlbumsVerified, albums: receivedIncomingAlbums)
     }
 
@@ -290,7 +308,7 @@ final class LibraryModel: ObservableObject {
                                    authority: PhotoSelectionAuthority? = nil, source: PhotoCollectionDescriptor? = nil,
                                    filterMembership: [[Int64]]? = nil, filterAuthority: [[Bool]]? = nil) {
         selectionAuthorities[collection] = authority
-        sessionSources[collection] = source
+        sessionSources[collection] = source.map { sessionSources[$0] ?? $0 }
         filterAuthorities[collection] = filterAuthority
         filterMemberships[collection] = filterMembership
         snapshots[collection] = snapshot
@@ -321,7 +339,8 @@ final class LibraryModel: ObservableObject {
             let registration = try await repository.registerMapFilter(
                 itemIDs: itemIDs, locationRevision: locationRevision
             )
-            registerSessionCollection(registration.descriptor, snapshot: registration.snapshot, authority: registration.authority)
+            let source = await repository.mediaCollection(for: registration.descriptor)
+            registerSessionCollection(registration.descriptor, snapshot: registration.snapshot, authority: registration.authority, source: source)
             return registration.descriptor
         } catch {
             collectionErrors[.personalLibrary] = error.localizedDescription
@@ -410,7 +429,7 @@ final class LibraryModel: ObservableObject {
     }
 
     private func updateBrowserFavoriteAvailability() {
-        let available = browserCommandsActive && !isIncomingCollection(browserCommandSnapshot.collection) &&
+        let available = browserCommandsActive && allowsSpaceItemActions(in: browserCommandSnapshot.collection) &&
             browserCommandSnapshot.canToggleFavorite &&
             !browserCommandSnapshot.selectedOrdinals.isEmpty &&
             pendingFavoriteConfirmation == nil &&
@@ -451,7 +470,7 @@ final class LibraryModel: ObservableObject {
     }
 
     func updateViewerCommands() {
-        canToggleViewerFavorite = activeViewer.map { !isIncomingCollection($0.collection) && $0.canToggleFavorite } ?? false
+        canToggleViewerFavorite = activeViewer.map { allowsSpaceItemActions(in: $0.collection) && $0.canToggleFavorite } ?? false
     }
 
     func toggleViewerFavorite() {
@@ -466,14 +485,14 @@ final class LibraryModel: ObservableObject {
     }
 
     func editSelection(_ selection: BrowserCommandSnapshot, application: URL) {
-        guard !isIncomingCollection(selection.collection), let repository, let timeline = selection.timeline else { return }
+        guard allowsPersonalActions(in: selection.collection), let repository, let timeline = selection.timeline else { return }
         PhotoDownloadManager.shared.edit(repository: repository, snapshot: timeline, selection: selection,
                                         item: nil, applicationURL: application)
     }
 
-    func editViewerItem(_ item: PhotoItem, repository: CachedPhotosRepository, application: URL) {
+    func editViewerItem(_ item: PhotoItem, repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor, application: URL) {
         PhotoDownloadManager.shared.edit(repository: repository, snapshot: nil, selection: nil,
-                                        item: item, applicationURL: application)
+                                        item: item, collection: collection, applicationURL: application)
     }
 
     func downloadViewerItem(_ item: PhotoItem, repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor,
@@ -482,8 +501,8 @@ final class LibraryModel: ObservableObject {
     }
 
     var canRotate: Bool {
-        if let activeViewer { return !isIncomingCollection(activeViewer.collection) && activeViewer.canRotate }
-        return browserCommandsActive && !isIncomingCollection(browserCommandSnapshot.collection) && !browserCommandSnapshot.selectedOrdinals.isEmpty &&
+        if let activeViewer { return allowsSpaceItemActions(in: activeViewer.collection) && activeViewer.canRotate }
+        return browserCommandsActive && allowsSpaceItemActions(in: browserCommandSnapshot.collection) && !browserCommandSnapshot.selectedOrdinals.isEmpty &&
             timelineVerified(for: browserCommandSnapshot.collection) && !rotationBusy
     }
 
@@ -509,8 +528,12 @@ final class LibraryModel: ObservableObject {
         }
     }
 
+    var canRotateThumbnails: Bool {
+        canRotate && allowsPersonalActions(in: activeViewer?.collection ?? browserCommandSnapshot.collection)
+    }
+
     func rotateThumbnailPreviews(_ direction: PhotoRotationDirection) {
-        guard thumbnailRotationTask == nil, let repository else { return }
+        guard canRotateThumbnails, thumbnailRotationTask == nil, let repository else { return }
         isFixingThumbnailRotations = false
         let snapshot = browserCommandSnapshot
         thumbnailRotationProgress = .init(completedItems: 0, totalItems: 0, itemID: nil, stage: .preparing)
@@ -534,6 +557,7 @@ final class LibraryModel: ObservableObject {
     }
 
     func fixThumbnailRotations() {
+        guard canRotateThumbnails else { return }
         guard thumbnailRotationTask == nil, let repository else { return }
         isFixingThumbnailRotations = true
         let snapshot = browserCommandSnapshot
@@ -675,7 +699,7 @@ final class LibraryModel: ObservableObject {
     }
 
     var canManageAlbumSelection: Bool {
-        browserCommandsActive && !isIncomingCollection(browserCommandSnapshot.collection) && !browserCommandSnapshot.selectedOrdinals.isEmpty &&
+        browserCommandsActive && allowsPersonalActions(in: browserCommandSnapshot.collection) && !browserCommandSnapshot.selectedOrdinals.isEmpty &&
         browserCommandSnapshot.timeline != nil && browserCommandSnapshot.authority != nil &&
         albumOperation == nil && !canCloseViewer
     }
@@ -716,7 +740,7 @@ final class LibraryModel: ObservableObject {
     }
 
     func beginAlbumOperation(_ kind: AlbumOperation.Kind, captured: BrowserCommandSnapshot) {
-        guard !isIncomingCollection(captured.collection), albumOperation == nil, let timeline = captured.timeline,
+        guard allowsPersonalActions(in: captured.collection), albumOperation == nil, let timeline = captured.timeline,
               let fingerprint = captured.indexFingerprint, let authority = captured.authority,
               repository != nil else { return }
         if kind == .remove && !isNormalAlbum(captured.sourceAlbumID) { return }
@@ -727,7 +751,7 @@ final class LibraryModel: ObservableObject {
     }
 
     func beginAlbumOperation(_ kind: AlbumOperation.Kind, selection: PhotoSelectionSnapshot, sourceAlbumID: Int64?) {
-        guard !isIncomingCollection(selection.collection), albumOperation == nil, let repository, selection.authority != nil,
+        guard allowsPersonalActions(in: selection.collection), albumOperation == nil, let repository, selection.authority != nil,
               !selection.selectedOrdinals.isEmpty else { return }
         if kind == .remove && !isNormalAlbum(sourceAlbumID) { return }
         let operation = AlbumOperation(kind: kind, sourceAlbumID: sourceAlbumID)
@@ -759,7 +783,7 @@ final class LibraryModel: ObservableObject {
     /// Adds a captured selection independently of browser focus.
     @discardableResult
     func addCapturedSelection(_ selection: PhotoSelectionSnapshot, sourceAlbumID: Int64?, to albumID: Int64) -> Bool {
-        guard !isIncomingCollection(selection.collection), albumOperation == nil, let repository, selection.authority != nil,
+        guard allowsPersonalActions(in: selection.collection), albumOperation == nil, let repository, selection.authority != nil,
               (sessionSources[selection.collection] ?? selection.collection).incomingAlbumIdentity == nil,
               !selection.selectedOrdinals.isEmpty else { return false }
         let operation = AlbumOperation(kind: .add, sourceAlbumID: sourceAlbumID)
@@ -797,7 +821,7 @@ final class LibraryModel: ObservableObject {
     @discardableResult
     func addCapturedSelection(_ selection: PhotoSelectionSnapshot, sourceAlbumID: Int64?, to collection: PhotoCollectionDescriptor) -> Bool {
         if let id = collection.albumID { return addCapturedSelection(selection, sourceAlbumID: sourceAlbumID, to: id) }
-        guard collection.incomingAlbumIdentity != nil, albumOperation == nil, let repository,
+        guard collection.incomingAlbumIdentity != nil, allowsPersonalActions(in: selection.collection), albumOperation == nil, let repository,
               (sessionSources[selection.collection] ?? selection.collection).incomingAlbumIdentity == nil,
               selection.authority != nil, !selection.selectedOrdinals.isEmpty else { return false }
         let operation = AlbumOperation(kind: .add, sourceAlbumID: sourceAlbumID)

@@ -6,6 +6,7 @@ import TimelineCore
 struct ThumbnailRangeDownloadView: View {
     @EnvironmentObject private var library: LibraryModel
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("warmingIncludesSharedSpace") private var includesSharedSpace = true
     @State private var lower = 0.0
     @State private var upper = 0.0
     @State private var initialized = false
@@ -15,9 +16,29 @@ struct ThumbnailRangeDownloadView: View {
     @State private var summary: ThumbnailBatchSummary?
     @State private var outcomeText: String?
     @State private var batchSize: ThumbnailSize?
+    @State private var rangeSnapshot: TimelineSnapshot?
     @State private var downloadTask: Task<Void, Never>?
 
-    private var snapshot: TimelineSnapshot? { library.snapshot }
+    private var targets: [(collection: PhotoCollectionDescriptor, snapshot: TimelineSnapshot)] {
+        let collections: [PhotoCollectionDescriptor] = [.personalLibrary] + (includesSharedSpace ? [.sharedLibrary] : [])
+        return collections.compactMap { collection in
+            library.snapshot(for: collection).map { (collection, $0) }
+        }
+    }
+    private var timelinesVerified: Bool {
+        library.timelineVerified && (!includesSharedSpace || library.timelineVerified(for: .sharedLibrary))
+    }
+    private struct TimelineKey: Equatable {
+        let includesSharedSpace: Bool
+        let personalRevision: Int
+        let sharedRevision: Int
+    }
+    private var timelineKey: TimelineKey {
+        .init(includesSharedSpace: includesSharedSpace,
+              personalRevision: library.snapshotRevision(for: .personalLibrary),
+              sharedRevision: library.snapshotRevision(for: .sharedLibrary))
+    }
+    private var snapshot: TimelineSnapshot? { rangeSnapshot }
     private var days: [TimelineCore.LibraryDay] { snapshot?.timeline.days ?? [] }
     private var selectedRange: ThumbnailDateRange {
         ThumbnailDateRange(chronologicalLower: Int(lower.rounded()),
@@ -36,6 +57,10 @@ struct ThumbnailRangeDownloadView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Download Thumbnails").font(.title2.weight(.semibold))
+            Toggle("Include Shared Space", isOn: $includesSharedSpace)
+                .disabled(isRunning)
+            Text(includesSharedSpace ? "Personal and Shared Space; the same dates apply to both." : "Personal Space")
+                .font(.callout).foregroundStyle(.secondary)
             Text("Choose an inclusive range of populated days. Only the current \(sizeLabel) rendition is requested.")
                 .foregroundStyle(.secondary)
 
@@ -71,7 +96,10 @@ struct ThumbnailRangeDownloadView: View {
             Text("You can continue browsing while this window is open. Closing it cancels a running batch.")
                 .font(.callout).foregroundStyle(.secondary)
 
-            if !library.timelineVerified {
+            if includesSharedSpace, let message = library.error(for: .sharedLibrary) {
+                Text("Shared Space: \(message)").font(.callout).foregroundStyle(.secondary)
+            }
+            if !timelinesVerified {
                 Label("Waiting for the current timeline before a batch can start.", systemImage: "clock")
                     .font(.callout).foregroundStyle(.secondary)
             }
@@ -103,12 +131,16 @@ struct ThumbnailRangeDownloadView: View {
                 Button("Start") { start() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(isRunning || estimate == 0 || library.repository == nil || snapshot == nil ||
-                              !library.timelineVerified)
+                              !timelinesVerified)
             }
         }
         .padding(24)
         .frame(width: 540)
         .onAppear { initializeRange() }
+        .task(id: timelineKey) {
+            if includesSharedSpace { library.ensureCollectionLoaded(.sharedLibrary) }
+            rangeSnapshot = targets.isEmpty ? nil : ThumbnailWarmingPlan.combinedSnapshot(targets.map(\.snapshot))
+        }
         .onChange(of: lower) { _, _ in if !restoringSelection { rememberSelectedDates() } }
         .onChange(of: upper) { _, _ in if !restoringSelection { rememberSelectedDates() } }
         .onChange(of: days.map(\.id)) { _, _ in restoreSelectedDates() }
@@ -182,17 +214,29 @@ struct ThumbnailRangeDownloadView: View {
     }
 
     private func start() {
-        guard downloadTask == nil, library.timelineVerified,
-              let snapshot, let repository = library.repository else { return }
-        let range = selectedRange
+        guard downloadTask == nil, timelinesVerified,
+              snapshot != nil, let repository = library.repository else { return }
+        guard let firstDate = selectedDates.min(), let lastDate = selectedDates.max() else { return }
+        let jobs = targets.compactMap { target -> (PhotoCollectionDescriptor, TimelineSnapshot, ThumbnailDateRange)? in
+            guard let range = ThumbnailWarmingPlan.range(in: target.snapshot, from: firstDate, through: lastDate) else { return nil }
+            return (target.collection, target.snapshot, range)
+        }
+        let total = jobs.reduce(0) { $0 + $1.2.estimatedThumbnailCount(in: $1.1) }
         let size = library.thumbnailSize
         batchSize = size
-        summary = ThumbnailBatchSummary(estimated: range.estimatedThumbnailCount(in: snapshot))
+        summary = ThumbnailBatchSummary(estimated: total)
         outcomeText = nil
         downloadTask = Task {
             let downloader = ThumbnailRangeDownloader(repository: repository, workerCount: 2)
-            let final = await downloader.download(snapshot: snapshot, range: range, size: size) { update in
-                await MainActor.run { summary = update }
+            var final = ThumbnailBatchSummary(estimated: total)
+            for (collection, snapshot, range) in jobs {
+                guard !Task.isCancelled else { break }
+                let completed = final
+                let next = await downloader.download(snapshot: snapshot, range: range, size: size, collection: collection) { update in
+                    await MainActor.run { summary = completed.adding(update, estimated: total) }
+                }
+                final = completed.adding(next, estimated: total)
+                if next.interrupted { break }
             }
             if Task.isCancelled {
                 outcomeText = "Cancelled."

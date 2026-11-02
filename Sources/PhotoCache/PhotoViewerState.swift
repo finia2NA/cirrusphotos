@@ -74,6 +74,7 @@ public enum PhotoViewerResourceStatus: Sendable, Equatable {
 }
 
 public struct PhotoViewerState: Sendable {
+    public var contentScope: PhotoContentScope = .space(.personal)
     public let selection: PhotoViewerSelection
     public let desiredLocation: PhotoViewerLocation
     public let item: PhotoItem?

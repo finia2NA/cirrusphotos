@@ -4,7 +4,7 @@ import SynologyAPI
 // Actor-isolated favorites coordination; task identities remain owned by the session.
 extension PhotoViewerSession {
     public func toggleFavorite() async {
-        guard await repository.mediaCollection(for: collection) == .personalLibrary else { return }
+        guard supportsItemActions else { return }
         guard !closed, allowNetwork, metadataVerified, let item = currentItem,
               !pendingFavoriteIDs.contains(item.id) else { return }
         let itemID = item.id
@@ -14,7 +14,7 @@ extension PhotoViewerSession {
         let section = index.sections[desired.sectionIndex]
         let target = !item.isFavorite
         let previousPlaylistEntry = playlist.entry(for: itemID)
-        if collection == .favorites,
+        if collection.favoriteOnly,
            let slice = index.slices(inSection: desired.sectionIndex)
             .first(where: { $0.pageRange.contains(desired.pageOffset) }) {
             let dayOffset = slice.dayRange.lowerBound + desired.pageOffset - slice.pageRange.lowerBound
@@ -26,7 +26,7 @@ extension PhotoViewerSession {
         do {
             try await repository.setFavorite(itemID: itemID, item: item, in: section,
                                               collection: collection, to: target)
-            if collection == .favorites {
+            if collection.favoriteOnly {
                 playlist.commit(itemID: itemID, isFavorite: target)
                 // Any transient page request started while the write was pending used
                 // the prior server-membership translation and must not publish after
@@ -34,7 +34,7 @@ extension PhotoViewerSession {
                 playlistDidChange()
             }
         } catch {
-            if collection == .favorites {
+            if collection.favoriteOnly {
                 playlist.restore(previousPlaylistEntry, itemID: itemID)
                 playlistDidChange()
             }
@@ -60,7 +60,7 @@ extension PhotoViewerSession {
     }
 
     func applyingFavorite(_ item: PhotoItem) -> PhotoItem {
-        guard supportsPersonalMedia else { return item }
+        guard supportsItemActions else { return item }
         guard let value = favoriteValues[item.id] else { return item }
         return item.withFavorite(value)
     }
@@ -68,7 +68,7 @@ extension PhotoViewerSession {
     func applyingFavorites(_ items: [PhotoItem]) -> [PhotoItem] { items.map(applyingFavorite) }
 
     func applyFavorites(_ values: [Int64: Bool]) {
-        guard supportsPersonalMedia else { return }
+        guard supportsItemActions else { return }
         for (itemID, value) in values {
             favoriteValues[itemID] = value
         }

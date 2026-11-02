@@ -36,21 +36,28 @@ extension CachedPhotosRepository {
     /// `Browse.Item.get` records. Any transport or refresh failure restores the prior items.
     public func rotate(_ action: SelectionRotationAction,
                        direction: PhotoRotationDirection) async throws {
-        guard mediaCollection(for: action.collection) == .personalLibrary else {
+        let source = mediaCollection(for: action.collection)
+        guard source.incomingAlbumIdentity == nil, !source.isSessionDerived else {
             throw SynologyAPIError.unsupported("Rotation is unavailable for shared album photos.")
         }
+        let space = source.albumID != nil ? try await albumItemSpace(itemIDs: action.itemIDs, collection: source) : source.space
         guard !action.itemIDs.isEmpty else { return }
+        if let expected = action.expectedTimelineFingerprint {
+            guard let snapshot = metadata.latestTimelines[action.collection], LibraryIndex(snapshot: snapshot).fingerprint == expected else {
+                throw SynologyAPIError.unsupported("The collection changed before the rotation. Try again.")
+            }
+        }
         let mutationCacheEpoch = metadata.admissionEpoch
         guard action.itemIDs.allSatisfy({ action.itemsByID[$0]?.hasDisplayableStillImage == true }) else {
             throw SynologyAPIError.unsupported("Only photos and Live Photo still images can be rotated.")
         }
         for id in action.itemIDs {
-            guard !itemMutations.pendingIDs.contains(id) else {
+            guard !itemMutations.pendingIDs.contains(PhotoItemIdentity(scope: .space(space), itemID: id)) else {
                 throw SynologyAPIError.unsupported("A rotation is already in progress for one of these photos.")
             }
         }
-        for id in action.itemIDs { itemMutations.pendingIDs.insert(id) }
-        defer { for id in action.itemIDs { itemMutations.pendingIDs.remove(id) } }
+        for id in action.itemIDs { itemMutations.pendingIDs.insert(PhotoItemIdentity(scope: .space(space), itemID: id)) }
+        defer { for id in action.itemIDs { itemMutations.pendingIDs.remove(PhotoItemIdentity(scope: .space(space), itemID: id)) } }
 
         let originals = action.itemsByID
         let optimistic = originals.mapValues { $0.rotated(direction) }
@@ -58,29 +65,38 @@ extension CachedPhotosRepository {
             items: optimistic,
             quarterTurns: Dictionary(uniqueKeysWithValues: action.itemIDs.map {
                 ($0, direction == .clockwise ? 1 : -1)
-            })
+            }), scope: .space(space)
         ))
         await patchRotationPages(action: action, replacements: optimistic, metadataEpoch: mutationCacheEpoch)
+        if source.albumID != nil { itemMutations.publish(PhotoItemChange(items: optimistic, quarterTurns: Dictionary(uniqueKeysWithValues: action.itemIDs.map { ($0, direction == .clockwise ? 1 : -1) }), scope: source.contentScope)) }
         var attemptedWrite = false
         do {
             try await connect()
             for chunkStart in stride(from: 0, to: action.itemIDs.count, by: 100) {
                 let chunk = Array(action.itemIDs[chunkStart..<min(chunkStart + 100, action.itemIDs.count)])
                 attemptedWrite = true
-                try await client.rotate(itemIDs: chunk, direction: direction)
+                try await client.rotate(itemIDs: chunk, direction: direction, space: space)
             }
-            let refreshed = try await lookupAllRotationItems(action.itemIDs)
+            let refreshed = try await lookupAllRotationItems(action.itemIDs, space: space)
             guard refreshed.count == action.itemIDs.count else { throw SynologyAPIError.invalidResponse }
             let replacements = Dictionary(uniqueKeysWithValues: refreshed.map { ($0.id, $0) })
             await patchRotationPages(action: action, replacements: replacements, metadataEpoch: mutationCacheEpoch)
-            itemMutations.publish(PhotoItemChange(items: replacements))
+            itemMutations.publish(PhotoItemChange(items: replacements, scope: .space(space)))
+            if source.albumID != nil {
+                await patchRotationSpace(replacements, space: space, epoch: mutationCacheEpoch)
+                itemMutations.publish(PhotoItemChange(items: replacements, scope: source.contentScope))
+            }
         } catch {
             var recovery = originals
-            if attemptedWrite, let refreshed = try? await lookupAllRotationItems(action.itemIDs) {
+            if attemptedWrite, let refreshed = try? await lookupAllRotationItems(action.itemIDs, space: space) {
                 for item in refreshed { recovery[item.id] = item }
             }
             await patchRotationPages(action: action, replacements: recovery, metadataEpoch: mutationCacheEpoch)
-            itemMutations.publish(PhotoItemChange(items: recovery))
+            itemMutations.publish(PhotoItemChange(items: recovery, scope: .space(space)))
+            if source.albumID != nil {
+                await patchRotationSpace(recovery, space: space, epoch: mutationCacheEpoch)
+                itemMutations.publish(PhotoItemChange(items: recovery, scope: source.contentScope))
+            }
             throw error
         }
     }
@@ -126,8 +142,12 @@ extension CachedPhotosRepository {
         operation: ThumbnailRotationOperation,
         continuation: AsyncStream<ThumbnailRotationProgress>.Continuation
     ) async {
-        guard mediaCollection(for: action.collection) == .personalLibrary else {
-            let message = "Rotation is unavailable for shared album photos."
+        do {
+            let source = mediaCollection(for: action.collection)
+            let space = source.albumID != nil ? try await albumItemSpace(itemIDs: action.itemIDs, collection: source) : source.contentScope.space
+            guard space == .personal else { throw SynologyAPIError.unsupported("Thumbnail rotation requires verified Personal Space items.") }
+        } catch {
+            let message = error.localizedDescription
             continuation.yield(.init(completedItems: 0, totalItems: action.itemIDs.count, itemID: nil,
                                      stage: .finished, failures: [message], activity: [message]))
             continuation.finish()
@@ -140,7 +160,7 @@ extension CachedPhotosRepository {
         var activity: [String] = []
         var claimedIDs: Set<Int64> = []
         defer {
-            for id in claimedIDs { itemMutations.pendingIDs.remove(id) }
+            for id in claimedIDs { itemMutations.pendingIDs.remove(PhotoItemIdentity(scope: .space(.personal), itemID: id)) }
         }
         continuation.yield(.init(completedItems: 0, totalItems: total, itemID: nil,
                                  stage: .preparing, activity: activity))
@@ -164,7 +184,7 @@ extension CachedPhotosRepository {
                 activity.append("Photo \(id): cancelled before processing.")
                 break
             }
-            guard !itemMutations.pendingIDs.contains(id) else {
+            guard !itemMutations.pendingIDs.contains(PhotoItemIdentity(scope: .space(.personal), itemID: id)) else {
                 SynologyDiagnostics.rotations.error(
                     "Thumbnail rotation rejected pending item item_id=\(id, privacy: .public)"
                 )
@@ -173,7 +193,7 @@ extension CachedPhotosRepository {
                 completed += 1
                 continue
             }
-            itemMutations.pendingIDs.insert(id)
+            itemMutations.pendingIDs.insert(PhotoItemIdentity(scope: .space(.personal), itemID: id))
             claimedIDs.insert(id)
             guard let item = action.itemsByID[id], let descriptor = item.additional?.thumbnail,
                   item.hasDisplayableStillImage else {
@@ -183,7 +203,7 @@ extension CachedPhotosRepository {
                 failures.append("Photo \(id) does not have three replaceable thumbnails.")
                 activity.append("Photo \(id): failed — replaceable thumbnails are unavailable.")
                 completed += 1
-                itemMutations.pendingIDs.remove(id)
+                itemMutations.pendingIDs.remove(PhotoItemIdentity(scope: .space(.personal), itemID: id))
                 claimedIDs.remove(id)
                 continue
             }
@@ -239,7 +259,7 @@ extension CachedPhotosRepository {
                 case .manual(let direction):
                     clockwiseQuarterTurns = direction == .clockwise ? 1 : -1
                 case .automatic:
-                    guard let resource = item.fullImageResource else {
+                    guard let resource = item.fullImageResource(in: .space(.personal)) else {
                         throw SynologyAPIError.unsupported("A full-size image is unavailable.")
                     }
                     let downloadActivity = activity
@@ -291,7 +311,7 @@ extension CachedPhotosRepository {
                     )
                     activity.append("Photo \(id): already correct.")
                     completed += 1
-                    itemMutations.pendingIDs.remove(id)
+                    itemMutations.pendingIDs.remove(PhotoItemIdentity(scope: .space(.personal), itemID: id))
                     claimedIDs.remove(id)
                     continue
                 }
@@ -363,6 +383,11 @@ extension CachedPhotosRepository {
                                                                            oldCacheKey: descriptor.cacheKey)
                     await patchRotationPages(action: action, replacements: [id: refreshedItem], metadataEpoch: mutationCacheEpoch)
                     itemMutations.publish(PhotoItemChange(items: [id: refreshedItem]))
+                    let source = mediaCollection(for: action.collection)
+                    if source.albumID != nil {
+                        await patchRotationSpace([id: refreshedItem], space: .personal, epoch: mutationCacheEpoch)
+                        itemMutations.publish(PhotoItemChange(items: [id: refreshedItem], scope: source.contentScope))
+                    }
                     activity.append("Photo \(id): applied \(Self.rotationDescription(clockwiseQuarterTurns)).")
                     SynologyDiagnostics.rotations.info(
                         "Thumbnail rotation completed item_id=\(id, privacy: .public) unit_id=\(unit.unitID, privacy: .public)"
@@ -393,7 +418,7 @@ extension CachedPhotosRepository {
                 activity.append("Photo \(id): failed — \(error.localizedDescription)")
             }
             completed += 1
-            itemMutations.pendingIDs.remove(id)
+            itemMutations.pendingIDs.remove(PhotoItemIdentity(scope: .space(.personal), itemID: id))
             claimedIDs.remove(id)
         }
         continuation.yield(.init(completedItems: completed, totalItems: total, itemID: nil,
@@ -460,10 +485,13 @@ extension CachedPhotosRepository {
         return 0.5 * min(1, max(0, Double(completedBytes) / Double(totalBytes)))
     }
 
-    private func lookupAllRotationItems(_ ids: [Int64]) async throws -> [PhotoItem] {
+    private func lookupAllRotationItems(_ ids: [Int64], space: PhotoSpace = .personal) async throws -> [PhotoItem] {
         var result: [PhotoItem] = []
         for start in stride(from: 0, to: ids.count, by: 1_000) {
-            result.append(contentsOf: try await client.items(ids: Array(ids[start..<min(start + 1_000, ids.count)])))
+            let requested = Array(ids[start..<min(start + 1_000, ids.count)])
+            let items = try await client.items(ids: requested, space: space)
+            guard items.count == requested.count, Set(items.map(\.id)) == Set(requested) else { throw SynologyAPIError.invalidResponse }
+            result.append(contentsOf: items)
         }
         return result
     }
@@ -532,6 +560,11 @@ extension CachedPhotosRepository {
         }
         await patchRotationPages(action: action, replacements: [itemID: refreshed], metadataEpoch: mutationCacheEpoch)
         itemMutations.publish(PhotoItemChange(items: [itemID: refreshed]))
+        let source = mediaCollection(for: action.collection)
+        if source.albumID != nil {
+            await patchRotationSpace([itemID: refreshed], space: .personal, epoch: mutationCacheEpoch)
+            itemMutations.publish(PhotoItemChange(items: [itemID: refreshed], scope: source.contentScope))
+        }
     }
 
     nonisolated private static func logRotationFailure(
@@ -548,9 +581,17 @@ extension CachedPhotosRepository {
         }
     }
 
+    private func patchRotationSpace(_ items: [Int64: PhotoItem], space: PhotoSpace, epoch: UInt64) async {
+        guard epoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
+        let scoped = MetadataNamespace(account: namespace, scope: .space(space))
+        guard let admission = try? await store.metadataAdmission(scoped), epoch == metadata.admissionEpoch else { return }
+        try? await store.applyMetadataRotationValues(items, namespace: scoped, admission: admission)
+    }
+
     private func patchRotationPages(action: SelectionRotationAction,
                                     replacements: [Int64: PhotoItem], metadataEpoch: UInt64) async {
         guard metadataEpoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
+        let metadataNamespace = metadataNamespace(for: action.collection)
         if metadata.initialized,
            replacements.values.allSatisfy({ $0.pendingRotationQuarterTurns == 0 }),
            let admission = try? await store.metadataAdmission(metadataNamespace) {
@@ -559,7 +600,8 @@ extension CachedPhotosRepository {
             guard metadataEpoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
             let canonical = try? await store.metadataDetails(metadataNamespace, ids: Array(replacements.keys), currentRun: runID)
             guard metadataEpoch == metadata.admissionEpoch else { return }
-            publishLocationItemChanges(canonical?.values.compactMap(\.item) ?? [])
+            if metadataNamespace.scope == .space(.personal) { publishLocationItemChanges(canonical?.values.compactMap(\.item) ?? []) }
+            else if metadataNamespace.scope == .space(.shared) { await publishSharedLocationItemChanges(canonical?.values.compactMap(\.item) ?? []) }
         }
 
     }

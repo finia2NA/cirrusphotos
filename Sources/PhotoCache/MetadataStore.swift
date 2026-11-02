@@ -3,11 +3,14 @@ import SQLite3
 import SynologyAPI
 import TimelineCore
 
-/// Account identity includes the server and Personal Space. No bare item ID is a store key.
+/// Account/server identity and content authority jointly scope every stored item ID.
 public struct MetadataNamespace: Hashable, Sendable {
     public let account: String
-    public init(account: String) { self.account = account }
-    var key: String { account + "|personal" }
+    public let scope: PhotoContentScope
+    public init(account: String, scope: PhotoContentScope) {
+        self.account = account; self.scope = scope
+    }
+    var key: String { account + "|" + scope.cacheComponent }
 }
 public struct CollectionKey: Hashable, Sendable {
     public let namespace: MetadataNamespace
@@ -44,7 +47,7 @@ public struct MetadataStoreAdmission: Sendable {
 /// Typed helpers on the existing SQLite actor. No SQL transaction suspends.
 /// The normalized format is initialized explicitly when the engine enrolls it.
 extension DiskCache {
-    static let metadataFormatVersion = 2
+    static let metadataFormatVersion = 4
     private static let normalizedTables = ["tag_summaries", "subject_summaries", "people_summaries", "filter_option_catalogs", "metadata_inventory_staging", "folder_directories", "album_summaries", "page_items", "day_pages", "collection_days", "collection_state", "item_details", "item_index", "metadata_state"]
 
     public func initializeMetadataStore() throws {
@@ -739,10 +742,11 @@ extension DiskCache {
             for (id, favorite) in values {
                 try patchMetadataDetail(namespace: namespace, itemID: id, annotationRun: currentRun) { $0.withFavorite(favorite) }
             }
-            let catalog = try prepare("UPDATE collection_state SET validated_run=NULL WHERE namespace=? AND collection='favorites'")
-            bind(namespace.key, at: 1, in: catalog); try metadataStep(catalog)
-            let days = try prepare("UPDATE collection_days SET membership_generation=membership_generation+1 WHERE namespace=? AND collection='favorites'")
-            bind(namespace.key, at: 1, in: days); try metadataStep(days)
+            let collection = PhotoCollectionDescriptor.favorites.inSpace(namespace.scope.space ?? .personal)
+            let catalog = try prepare("UPDATE collection_state SET validated_run=NULL WHERE namespace=? AND collection=?")
+            bind(namespace.key, at: 1, in: catalog); bind(collection.rawValue, at: 2, in: catalog); try metadataStep(catalog)
+            let days = try prepare("UPDATE collection_days SET membership_generation=membership_generation+1 WHERE namespace=? AND collection=?")
+            bind(namespace.key, at: 1, in: days); bind(collection.rawValue, at: 2, in: days); try metadataStep(days)
             try advanceMetadataLocalRevision(namespace)
         }
     }

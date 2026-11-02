@@ -103,16 +103,21 @@ extension CachedPhotosRepository {
         metadata.collectionPageObservers.removeAll()
         for job in metadata.timelineJobs.values { job.task.cancel() }
         for job in metadata.pageJobs.values { job.task.cancel() }
-        metadata.peopleJob?.task.cancel()
-        metadata.peopleJob = nil
-        metadata.subjectsJob?.task.cancel()
-        metadata.subjectsJob = nil
-        metadata.tagsJob?.task.cancel()
-        metadata.tagsJob = nil
+        metadata.peopleJob.values.forEach { $0.task.cancel() }
+        metadata.peopleJob.removeAll()
+        metadata.subjectsJob.values.forEach { $0.task.cancel() }
+        metadata.subjectsJob.removeAll()
+        metadata.tagsJob.values.forEach { $0.task.cancel() }
+        metadata.tagsJob.removeAll()
         metadata.folderJobs.values.forEach { $0.task.cancel() }
         metadata.folderJobs.removeAll()
         metadata.albumListJob?.task.cancel()
         metadata.locationIndexWork?.task.cancel()
+        metadata.sharedLocations.job?.task.cancel()
+        metadata.sharedLocations.job = nil
+        metadata.sharedLocations.current = false
+        sharedFavorites.refreshTask?.cancel()
+        sharedFavorites.refreshTask = nil
         favorites.refreshTask?.cancel()
         favorites.refreshTask = nil
         metadata.timelineJobs.removeAll()
@@ -130,6 +135,8 @@ extension CachedPhotosRepository {
         metadata.albumListLatest = nil
         metadata.pendingPagePromotions.removeAll()
         metadata.locationRecords.removeAll()
+        metadata.sharedLocations.records.removeAll()
+        metadata.sharedLocations.revision &+= 1
         metadata.locationRevision &+= 1
         metadata.selectionRetentions.removeAll()
         metadata.deferredSelectionUnregisters.removeAll()

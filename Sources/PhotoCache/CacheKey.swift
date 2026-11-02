@@ -22,35 +22,35 @@ public enum CacheKey {
         digest("cirrus-cache-v1|\(server.absoluteString.lowercased())|\(account)")
     }
 
-    public static func page(namespace: String, section: TimelineSection,
+    public static func page(scope: PhotoContentScope, namespace: String, section: TimelineSection,
                             collection: PhotoCollectionDescriptor = .personalLibrary) -> String? {
         guard let address = try? DayPageAddress(section: section, collection: collection) else { return nil }
-        return digest("\(namespace)|personal|\(collection.rawValue)|day-page|\(address.day.id)|\(address.offset)|\(address.capacity)|\(address.order.rawValue)")
+        return digest("\(namespace)|\(scope.cacheComponent)|\(collection.rawValue)|day-page|\(address.day.id)|\(address.offset)|\(address.capacity)|\(address.order.rawValue)")
     }
 
-    public static func thumbnail(namespace: String, descriptor: ThumbnailInfo,
+    public static func thumbnail(scope: PhotoContentScope, namespace: String, descriptor: ThumbnailInfo,
                                  size: ThumbnailSize, collection: PhotoCollectionDescriptor = .personalLibrary) -> String {
-        let scope = collection.incomingAlbumIdentity != nil || collection.albumID != nil || collection.isLibraryFilter ? collection.rawValue : "personal"
-        return digest("\(namespace)|\(scope)|thumbnail|v2|\(descriptor.kind ?? "unit")|\(descriptor.unitID)|\(descriptor.cacheKey)|\(size.rawValue)")
+        let authority = collection.incomingAlbumIdentity != nil || collection.albumID != nil || collection.isLibraryFilter ? collection.rawValue + "|" + scope.cacheComponent : scope.cacheComponent
+        return digest("\(namespace)|\(authority)|thumbnail|v2|\(descriptor.kind ?? "unit")|\(descriptor.unitID)|\(descriptor.cacheKey)|\(size.rawValue)")
     }
 
-    public static func thumbnailIdentity(namespace: String, descriptor: ThumbnailInfo,
+    public static func thumbnailIdentity(scope: PhotoContentScope, namespace: String, descriptor: ThumbnailInfo,
                                          size: ThumbnailSize, collection: PhotoCollectionDescriptor = .personalLibrary) -> ThumbnailCacheIdentity {
-        let scope = collection.incomingAlbumIdentity != nil || collection.albumID != nil || collection.isLibraryFilter ? collection.rawValue : "personal"
+        let authority = collection.incomingAlbumIdentity != nil || collection.albumID != nil || collection.isLibraryFilter ? collection.rawValue + "|" + scope.cacheComponent : scope.cacheComponent
         return ThumbnailCacheIdentity(
-            key: thumbnail(namespace: namespace, descriptor: descriptor, size: size, collection: collection),
-            family: digest("\(namespace)|\(scope)|thumbnail-family|v1|\(descriptor.kind ?? "unit")|\(descriptor.unitID)|\(descriptor.cacheKey)"),
+            key: thumbnail(scope: scope, namespace: namespace, descriptor: descriptor, size: size, collection: collection),
+            family: digest("\(namespace)|\(authority)|thumbnail-family|v1|\(descriptor.kind ?? "unit")|\(descriptor.unitID)|\(descriptor.cacheKey)"),
             size: size
         )
     }
 
     public static func fullImage(namespace: String, resource: FullImageResource) -> String {
-        digest("\(namespace)|personal|download|v2|unit|\(resource.unitID)|\(resource.cacheKey)")
+        digest("\(namespace)|\(resource.scope.cacheComponent)|download|v2|unit|\(resource.unitID)|\(resource.cacheKey)")
     }
 
     public static func videoSegment(namespace: String, resource: VideoPlaybackResource,
                                     index: Int64) -> String {
-        digest("\(namespace)|personal|video|v3|segment-65536|unit|\(resource.unitID)|\(resource.cacheKey)|\(resource.variant.cacheComponent)|segment|\(index)")
+        digest("\(namespace)|\(resource.scope.cacheComponent)|video|v3|segment-65536|unit|\(resource.unitID)|\(resource.cacheKey)|\(resource.variant.cacheComponent)|segment|\(index)")
     }
 
     private static func digest(_ value: String) -> String {

@@ -56,10 +56,10 @@ final class InfoPanelTests: XCTestCase {
         let section = TimelineSection(offset: 0, limit: 1,
                                       list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         let namespace = CacheKey.namespace(server: SynologyClient.defaultBaseURL, account: "alice")
-        let standard = try XCTUnwrap(CacheKey.page(namespace: namespace, section: section))
-        XCTAssertEqual(standard, CacheKey.page(namespace: namespace, section: section))
+        let standard = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: namespace, section: section))
+        XCTAssertEqual(standard, CacheKey.page(scope: .space(.personal), namespace: namespace, section: section))
         let growth = TimelineSection(offset: 0, limit: 2, list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 2)])
-        XCTAssertEqual(standard, CacheKey.page(namespace: namespace, section: growth))
+        XCTAssertEqual(standard, CacheKey.page(scope: .space(.personal), namespace: namespace, section: growth))
 
     }
 

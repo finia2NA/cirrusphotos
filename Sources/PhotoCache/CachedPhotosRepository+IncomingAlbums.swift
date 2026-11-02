@@ -10,7 +10,11 @@ extension CachedPhotosRepository {
             guard seen.insert(source).inserted, let state = metadata.libraryFilters[filterID] else { return source }
             source = state.registration.sourceCollection
         }
-        return source.incomingAlbumIdentity == nil ? .personalLibrary : source
+        if let id = source.mapFilterID {
+            guard let map = metadata.mapFilters[id] else { return source }
+            return PhotoCollectionDescriptor.personalLibrary.inSpace(map.space)
+        }
+        return source.albumID == nil && source.incomingAlbumIdentity == nil && source.space != .shared ? .personalLibrary : source
     }
 
     func incomingReference(for collection: PhotoCollectionDescriptor) -> String? {
@@ -25,7 +29,7 @@ extension CachedPhotosRepository {
                 do {
                     try await initializeMetadataEngine()
                     let epoch = metadata.admissionEpoch
-                    let listNamespace = MetadataNamespace(account: namespace + "|incoming-albums")
+                    let listNamespace = MetadataNamespace(account: namespace + "|incoming-albums", scope: .space(.personal))
                     let cached = try await store.metadataAlbumSummaries(listNamespace)
                     guard !Task.isCancelled, epoch == metadata.admissionEpoch else { continuation.finish(); return }
                     if let cached { continuation.yield(.value(cached.albums, verified: false)) }
@@ -57,7 +61,9 @@ extension CachedPhotosRepository {
 extension CachedPhotosRepository {
     /// Only a fresh server grant and a verified personal selection authorize contribution.
     public func addItems(_ selection: ResolvedPhotoSelection, toIncomingAlbum collection: PhotoCollectionDescriptor) async throws {
-        guard collection.incomingAlbumIdentity != nil, mediaCollection(for: selection.authority.originatingCollection) == .personalLibrary,
+        let source = mediaCollection(for: selection.authority.originatingCollection)
+        let space = source.albumID != nil ? try await albumItemSpace(itemIDs: selection.items.map(\.id), collection: source) : source.contentScope.space
+        guard collection.incomingAlbumIdentity != nil, space == .personal,
               !selection.items.isEmpty, !metadata.albumMutationInProgress else {
             throw SynologyAPIError.unsupported("This selection cannot be added to the shared album.")
         }

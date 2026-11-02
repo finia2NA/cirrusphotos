@@ -228,22 +228,22 @@ struct LibraryBrowserView: View {
     }
     private var emptyTitle: String {
         if isAlbum { return library.albumName(for: collection) ?? "Album" }
-        return collection == .favorites ? "No favorites" : "No photos"
+        return collection.favoriteOnly ? "No favorites" : "No photos"
     }
     private var emptySymbol: String {
         if isAlbum { return "rectangle.stack" }
-        return collection == .favorites ? "heart" : "photo"
+        return collection.favoriteOnly ? "heart" : "photo"
     }
     private var emptyDescription: String {
         if library.error(for: collection) != nil { return "Cached collection is empty. Connection unavailable." }
         guard library.timelineVerified(for: collection) else { return "Cached collection is empty. Checking Cirrus…" }
         if isAlbum { return "This album is empty." }
         if collection.folderID != nil { return "This folder contains no photos." }
-        return collection == .favorites ? "No photos are marked as favorites." : "Personal Space is empty."
+        return collection.favoriteOnly ? "No photos are marked as favorites." : (collection.space == .shared ? "Shared Space is empty." : "Personal Space is empty.")
     }
     private var loadingText: String {
         if isAlbum { return "Opening album…" }
-        return collection == .favorites ? "Opening favorites…" : "Opening library…"
+        return collection.favoriteOnly ? "Opening favorites…" : "Opening library…"
     }
 
     private var emptyState: some View {
@@ -283,8 +283,9 @@ struct LibraryBrowserView: View {
                                              emptyContent: snapshot.timeline.days.isEmpty && !shouldHideEmptyCollectionState ? AnyView(emptyState) : nil,
                                              authority: library.selectionAuthority(for: collection),
                                              sourceAlbumID: library.sourceAlbumID(for: collection),
-                                             allowsPersonalActions: !library.isIncomingCollection(collection),
+                                             allowsPersonalActions: library.allowsPersonalActions(in: collection),
                                              allowsDownloads: library.canDownload(in: collection),
+                                             allowsFileDrag: library.allowsSpaceItemActions(in: collection),
                                              filterMembership: library.filterMembership(for: collection),
                                              filterAuthority: library.filterAuthority(for: collection),
                                              collection: collection,
@@ -720,6 +721,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let sourceAlbumID: Int64?
     let allowsPersonalActions: Bool
     let allowsDownloads: Bool
+    let allowsFileDrag: Bool
     let filterMembership: [[Int64]]?
     let filterAuthority: [[Bool]]?
     let collection: PhotoCollectionDescriptor
@@ -816,6 +818,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var sourceAlbumID: Int64?
         private var allowsPersonalActions = true
         private var allowsDownloads = true
+        private var allowsFileDrag = true
         private var geometry: LibraryViewportGeometry?
         private var header: BrowserHeaderConfiguration?
         private var emptyContent: AnyView?
@@ -888,6 +891,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             sourceAlbumID = input.sourceAlbumID
             allowsPersonalActions = input.allowsPersonalActions
             allowsDownloads = input.allowsDownloads
+            allowsFileDrag = input.allowsFileDrag
             onVisibleDay = input.onVisibleDay
             onRetry = input.onRetry
             onOpenPhoto = input.onOpenPhoto
@@ -1387,14 +1391,14 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         func cancelFileDragGesture() { cancelPointerInteraction() }
 
         func beginFileDrag(at point: CGPoint, event: NSEvent) -> Bool {
-            guard allowsPersonalActions else { return false }
+            guard allowsFileDrag else { return false }
             guard let ordinal = geometry?.ordinal(at: point), let clicked = loadedItem(ordinal),
                   let document, let repository,
                   let timelineSnapshot, let index else { return false }
             if !selection.contains(ordinal) { selection.replace(with: ordinal); publishSelection() }
             let selected = selection.indexes
             let count = selected.count
-            guard count > 0 else { return false }
+            guard count > 0, allowsPersonalActions || clicked.photo.hasDisplayableStillImage || count > 1 else { return false }
             var known: [Int: Int64] = [:]
             var previews: [NSImage] = []
             if let image = findViewerSourceAnchor(for: clicked.photo.id, in: document)?.image { previews.append(image) }
@@ -1424,7 +1428,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
             return PhotoFileDragSource.begin(payload: payload, previews: previews,
                                              cropsToSquare: geometry?.cropsThumbnailsToSquare ?? false,
                                              from: document, event: event,
-                                             localSelection: .init(selection: captured, sourceAlbumID: sourceAlbumID, namespace: repository.namespace),
+                                             localSelection: allowsPersonalActions ? .init(selection: captured, sourceAlbumID: sourceAlbumID, namespace: repository.namespace) : nil,
                                              promisesFile: clicked.photo.hasDisplayableStillImage || count > 1)
         }
 

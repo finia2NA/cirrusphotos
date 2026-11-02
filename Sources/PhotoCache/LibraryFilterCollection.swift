@@ -90,18 +90,18 @@ extension CachedPhotosRepository {
                     let cached = snapshot(try await store.metadataDetails(metadataNamespace(for: state.registration.sourceCollection), ids: ids, currentRun: runID))
                     guard current() else { continuation.finish(); return }
                     if cached.slots.contains(where: { $0.item != nil }) {
-                        continuation.yield(.value((sourceScope.incomingAlbumIdentity == nil ? applyingFavoriteOverrides(cached) : cached), verified: cached.verified))
+                        continuation.yield(.value(applyingFavoriteOverrides(cached, collection: sourceScope), verified: cached.verified))
                     }
                     guard allowNetwork && !cached.verified && references.allSatisfy(\.sourceVerified) else { continuation.finish(); return }
                     try await connect()
-                    try await reconcileMetadataSource()
+                    try await reconcileMetadataSource(for: state.registration.sourceCollection)
                     guard current() else { continuation.finish(); return }
                     _ = try await resolveMetadataItems(ids, priority: priority, collection: state.registration.sourceCollection)
                     guard current() else { continuation.finish(); return }
                     let result = snapshot(try await store.metadataDetails(metadataNamespace(for: state.registration.sourceCollection), ids: ids, currentRun: runID))
                     guard current() else { continuation.finish(); return }
                     guard result.verified else { throw SynologyAPIError.unsupported("The requested photos no longer match this filter.") }
-                    continuation.yield(.value((sourceScope.incomingAlbumIdentity == nil ? applyingFavoriteOverrides(result) : result), verified: true))
+                    continuation.yield(.value(applyingFavoriteOverrides(result, collection: sourceScope), verified: true))
                 } catch {
                     if !Task.isCancelled { continuation.yield(.failure(error.localizedDescription)) }
                 }
@@ -112,7 +112,9 @@ extension CachedPhotosRepository {
     }
 
     func promoteLibraryFilterSources(_ section: TimelineSection, collection: PhotoCollectionDescriptor) {
-        guard let id = collection.libraryFilterID, let references = metadata.libraryFilters[id]?.referencesBySection[section] else { return }
+        guard let id = collection.libraryFilterID, let state = metadata.libraryFilters[id],
+              metadataNamespace(for: state.registration.sourceCollection) == metadataNamespace,
+              let references = state.referencesBySection[section] else { return }
         for reference in references {
             if let job = metadata.detailJobByID[reference.itemID] { Task { await gate.promote(job) } }
         }

@@ -5,6 +5,31 @@ import XCTest
 
 @MainActor
 final class NavigationRestorationTests: XCTestCase {
+    func testNestedCollectionsRestoreIndependentlyInEachSpace() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = NavigationRestorationStore(defaults: defaults)
+        for space in PhotoSpace.allCases {
+            store.selectSpace(space)
+            _ = store.preparePerson(namespace: "account")
+            _ = store.prepareSubject(namespace: "account")
+            _ = store.prepareTag(namespace: "account")
+            _ = store.prepareFolders(namespace: "account")
+            let id: Int64 = space == .personal ? 1 : 2
+            store.setOpenedPerson(id); store.setOpenedSubject(id); store.setOpenedTag(id)
+            store.setFolders(shown: true, path: [id])
+        }
+        let reopened = NavigationRestorationStore(defaults: defaults)
+        for space in PhotoSpace.allCases {
+            reopened.selectSpace(space)
+            let id: Int64 = space == .personal ? 1 : 2
+            XCTAssertEqual(reopened.preparePerson(namespace: "account"), id)
+            XCTAssertEqual(reopened.prepareSubject(namespace: "account"), id)
+            XCTAssertEqual(reopened.prepareTag(namespace: "account"), id)
+            XCTAssertEqual(reopened.prepareFolders(namespace: "account"), [id])
+        }
+    }
+
     private func defaults() -> (UserDefaults, String) {
         let suite = "NavigationRestorationTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -41,6 +66,22 @@ final class NavigationRestorationTests: XCTestCase {
         XCTAssertEqual(reader.timelineAnchor(for: .personalLibrary), personal)
         XCTAssertEqual(reader.timelineAnchor(for: .favorites), favorites)
         XCTAssertEqual(reader.timelineAnchor(for: .album(54)), album)
+    }
+
+    func testSpaceSelectionAndIndependentAnchorsRoundTrip() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = NavigationRestorationStore(defaults: defaults, key: "state")
+        let shared = PhotoTimelineRestorationAnchor(itemID: 41, dayID: "2024-10-13", sectionOffsetHint: nil, localOffset: 0, sectionFraction: 0)
+        store.selectSpace(.shared)
+        store.setTimelineAnchor(shared, for: .sharedLibrary)
+        store.selectSidebar(.album(.album(54)))
+        store.setOpenedAlbum(.album(54))
+        let restored = NavigationRestorationStore(defaults: defaults, key: "state")
+        XCTAssertEqual(restored.selectedSpace, .shared)
+        XCTAssertEqual(restored.openedAlbum, .album(54))
+        XCTAssertEqual(restored.timelineAnchor(for: .sharedLibrary), shared)
+        XCTAssertNil(restored.timelineAnchor(for: .personalLibrary))
     }
 
     func testFolderModeAndPathRoundTrip() {

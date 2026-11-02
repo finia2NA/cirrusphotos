@@ -25,7 +25,7 @@ final class SelectionFavoritesTests: XCTestCase {
 
     private func pageKey(for section: TimelineSection) throws -> String {
         let namespace = CacheKey.namespace(server: SynologyClient.defaultBaseURL, account: "alice")
-        return try XCTUnwrap(CacheKey.page(namespace: namespace, section: section, collection: .personalLibrary))
+        return try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: namespace, section: section, collection: .personalLibrary))
     }
 
     private func seedPage(_ items: [PhotoItem], section: TimelineSection,

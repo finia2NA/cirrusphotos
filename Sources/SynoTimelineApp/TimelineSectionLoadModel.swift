@@ -41,6 +41,7 @@ final class TimelineSectionLoadModel: ObservableObject {
     private var libraryObserver: AnyCancellable?
     private var runActive = false
     private var lastUseCachedPages = false
+    private var includeSharedSpace = false
 
     func configure(library: LibraryModel, filter: LibraryFilterModel) {
         if self.library !== library {
@@ -78,12 +79,14 @@ final class TimelineSectionLoadModel: ObservableObject {
         return true
     }
 
-    func start(useCachedPages: Bool) {
+    func start(useCachedPages: Bool, includeSharedSpace: Bool = false) {
         guard staleTimelineMessage == nil, prepared, !runActive else { return }
         if !targetRuns.isEmpty || !discoveryFailures.isEmpty {
             shutdownPreparedLoaders()
         }
         lastUseCachedPages = useCachedPages
+        self.includeSharedSpace = includeSharedSpace
+        targetTitle = includeSharedSpace ? "Personal and Shared Library, Favorites, and All Albums" : "Personal Library, Favorites, and All Albums"
         runActive = true
         progress.state = .running
         progress.currentSectionLabel = "Discovering albums and timelines"
@@ -105,7 +108,7 @@ final class TimelineSectionLoadModel: ObservableObject {
         guard staleTimelineMessage == nil, prepared, !runActive else { return }
         if !discoveryFailures.isEmpty {
             shutdownPreparedLoaders()
-            start(useCachedPages: lastUseCachedPages)
+            start(useCachedPages: lastUseCachedPages, includeSharedSpace: includeSharedSpace)
             return
         }
         let failedIndices = targetRuns.indices.filter { targetRuns[$0].progress.failed > 0 }
@@ -117,7 +120,7 @@ final class TimelineSectionLoadModel: ObservableObject {
 
     private func runAll(useCachedPages: Bool) async {
         guard let library, let repository = library.repository else { return }
-        let discovery = await library.discoverTimelineWarmingTargets()
+        let discovery = await library.discoverTimelineWarmingTargets(includeSharedSpace: includeSharedSpace)
         guard !Task.isCancelled else { return }
         discoveryFailures = discovery.failures
         targetRuns = discovery.targets.map { target in

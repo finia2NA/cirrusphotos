@@ -93,7 +93,7 @@ public struct ThumbnailRangeDownloader: Sendable {
     /// Processes one metadata page at a time and at most `workerCount` thumbnails at once.
     /// No image bytes or whole-library item arrays are retained by this operation.
     public func download(snapshot: TimelineSnapshot, range: ThumbnailDateRange,
-                         size: ThumbnailSize,
+                         size: ThumbnailSize, collection: PhotoCollectionDescriptor = .personalLibrary,
                          progress: @escaping @Sendable (ThumbnailBatchSummary) async -> Void) async -> ThumbnailBatchSummary {
         guard let selected = range.clamped(to: snapshot) else {
             let empty = ThumbnailBatchSummary(estimated: 0)
@@ -102,7 +102,7 @@ public struct ThumbnailRangeDownloader: Sendable {
         }
         var summary = ThumbnailBatchSummary(estimated: selected.estimatedThumbnailCount(in: snapshot))
         guard let metadataToken = try? await repository.captureMetadataWorkToken(
-            resource: .transient(.personalLibrary), jobID: UUID(), collection: .personalLibrary
+            resource: .transient(collection), jobID: UUID(), collection: collection
         ) else {
             summary.interrupted = true
             await progress(summary)
@@ -123,7 +123,7 @@ public struct ThumbnailRangeDownloader: Sendable {
             let selectedOffsets = selectedPageOffsets(index: index, sectionIndex: sectionIndex, selectedDays: selectedDays)
             var currentItems: PhotoPageSnapshot?
             var pageFailed = false
-            pageRead: for await event in await repository.page(descriptor, collection: .personalLibrary,
+            pageRead: for await event in await repository.page(descriptor, collection: collection,
                                                       allowNetwork: true, priority: .prefetch) {
                 if Task.isCancelled { break }
                 switch event {
@@ -175,7 +175,7 @@ public struct ThumbnailRangeDownloader: Sendable {
                         group.addTask {
                             if Task.isCancelled { return nil }
                             return try? await repository.cacheThumbnailMeasurement(
-                                descriptor, size: size, priority: .prefetch,
+                                descriptor, size: size, collection: collection, priority: .prefetch,
                                 validateCached: false)
                         }
                     }

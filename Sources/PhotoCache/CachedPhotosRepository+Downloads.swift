@@ -2,19 +2,36 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
+    /// Editor handoff remains Personal Space only. An album supplies contextual
+    /// media authority, and must establish its member's origin before cache reuse.
+    public func collectionForPhotoEditing(itemID: Int64, collection: PhotoCollectionDescriptor) async throws -> PhotoCollectionDescriptor {
+        let source = mediaCollection(for: collection)
+        let space = source.albumID != nil
+            ? try await albumItemSpace(itemIDs: [itemID], collection: source)
+            : source.contentScope.space
+        guard space == .personal, source.incomingAlbumIdentity == nil, !source.isSessionDerived else {
+            throw SynologyAPIError.unsupported("Editing requires a verified Personal Space photo.")
+        }
+        return source
+    }
+
     /// Creates a disposable copy of a cached original for a single still photo.
     /// Live Photo downloads may represent more than the cached still, so they use
     /// the server's item-download endpoint instead.
-    public func cachedOriginalForDownload(_ item: PhotoItem, includeLivePhoto: Bool = false) async throws -> PhotoDownloadResponse? {
+    public func cachedOriginalForDownload(_ item: PhotoItem, includeLivePhoto: Bool = false, collection: PhotoCollectionDescriptor = .personalLibrary) async throws -> PhotoDownloadResponse? {
+        let source = mediaCollection(for: collection)
+        guard source.incomingAlbumIdentity == nil, !source.isSessionDerived else { return nil }
         guard (item.mediaKind == .photo || (includeLivePhoto && item.mediaKind == .livePhoto)),
-              let resource = item.fullImageResource else { return nil }
+              let resource = item.fullImageResource(in: source.contentScope) else { return nil }
         return try await originalStillCopy(item, resource: resource, allowNetwork: false, progress: nil)
     }
 
     /// Editing a Live Photo needs its still, not the ZIP returned by item download.
-    public func livePhotoStillForEditing(_ item: PhotoItem,
+    public func livePhotoStillForEditing(_ item: PhotoItem, collection: PhotoCollectionDescriptor = .personalLibrary,
         progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse? {
-        guard item.mediaKind == .livePhoto, let resource = item.fullImageResource else { return nil }
+        let source = mediaCollection(for: collection)
+        guard source.incomingAlbumIdentity == nil, !source.isSessionDerived,
+              item.mediaKind == .livePhoto, let resource = item.fullImageResource(in: source.contentScope) else { return nil }
         return try await originalStillCopy(item, resource: resource, allowNetwork: true, progress: progress)
     }
 
@@ -54,8 +71,10 @@ extension CachedPhotosRepository {
                                progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
         let source = mediaCollection(for: collection)
         guard source.incomingAlbumIdentity != nil else {
-            guard source == .personalLibrary else { throw SynologyAPIError.unsupported("The album context is unavailable.") }
-            return try await downloadPhotos(itemIDs: itemIDs, kind: kind, progress: progress)
+            guard !source.isSessionDerived else { throw SynologyAPIError.unsupported("The album context is unavailable.") }
+            try await connect()
+            let space = source.albumID != nil ? try await albumItemSpace(itemIDs: itemIDs, collection: source) : source.space
+            return try await client.downloadPhotos(itemIDs: itemIDs, kind: kind, space: space, progress: progress)
         }
         try await connect()
         let rows = try await metadataReadRequest(priority: .visible) { try await client.incomingAlbums() }

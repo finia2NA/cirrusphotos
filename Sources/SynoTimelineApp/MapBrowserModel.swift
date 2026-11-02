@@ -14,6 +14,7 @@ final class MapBrowserModel: ObservableObject {
         case failed(String)
     }
 
+    @Published private(set) var space: PhotoSpace = .personal
     @Published private(set) var status: Status = .idle
     @Published private(set) var groups: [MapClusterGroup] = []
     @Published private(set) var locatedCount = 0
@@ -37,12 +38,21 @@ final class MapBrowserModel: ObservableObject {
 
     /// Subscribes to the shared location index once. Later calls are ignored unless
     /// `retry()` reset the subscription after a failure.
-    func start(repository: CachedPhotosRepository?) {
+    func start(repository: CachedPhotosRepository?, space: PhotoSpace = .personal) {
+        if self.space != space {
+            stopObservingProjection()
+            invalidateMetadata(restart: false)
+            self.space = space
+            currentRegion = nil
+            currentCamera = nil
+            hasFitInitialCamera = false
+            camera = .automatic
+        }
         if let repository { self.repository = repository }
         guard let repository = self.repository else { return }
         if projectionTask == nil {
             projectionTask = Task { [weak self] in
-                for await event in await repository.locationIndexChanges() {
+                for await event in await repository.locationIndexChanges(space: space) {
                     guard !Task.isCancelled else { return }
                     self?.receive(event)
                 }
@@ -50,7 +60,7 @@ final class MapBrowserModel: ObservableObject {
         }
         guard indexTask == nil else { return }
         indexTask = Task { [weak self] in
-            for await event in await repository.locationIndex() {
+            for await event in await repository.locationIndex(space: space) {
                 guard !Task.isCancelled else { return }
                 self?.receive(event)
             }
@@ -68,7 +78,7 @@ final class MapBrowserModel: ObservableObject {
         indexTask?.cancel()
         indexTask = nil
         status = .idle
-        start(repository: repository)
+        start(repository: repository, space: space)
     }
 
     /// Releases every metadata-derived value while preserving the user's camera.
@@ -85,7 +95,7 @@ final class MapBrowserModel: ObservableObject {
         recordIndices = [:]
         locationRevision = nil
         hasFitInitialCamera = currentRegion != nil
-        if restart { start(repository: repository) }
+        if restart { start(repository: repository, space: space) }
     }
 
     /// Debounced recluster for a user-driven camera change. The full camera is kept
@@ -139,10 +149,10 @@ final class MapBrowserModel: ObservableObject {
             status = .cachedUnverified
         case .progress(let scanned, let total):
             status = .building(scanned: scanned, total: total)
-        case .completed(let value, _):
+        case .completed(let value, let verified):
             locationRevision = value.revision
             apply(value.records)
-            status = .ready
+            status = verified ? .ready : .cachedUnverified
         case .failure(let message):
             status = .failed(message)
         }

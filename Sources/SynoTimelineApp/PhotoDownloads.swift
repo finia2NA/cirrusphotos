@@ -37,7 +37,7 @@ enum PhotoDownloadSource: Sendable {
         switch self {
         case .item(_, let collection): return collection
         case .selection(let selection): return selection.collection
-        case .album: return .personalLibrary
+        case .album(let id): return .album(id)
         case .incomingAlbum(let collection): return collection
         }
     }
@@ -94,15 +94,16 @@ final class PhotoDownloadManager: ObservableObject {
         tasks[id] = Task { [weak self] in
             guard let self else { return }
             do {
+                let mediaCollection = await repository.mediaCollection(for: source.collection)
                 let items = try await source.resolve(repository: repository)
                 update(id) { $0.name = Self.jobName(items); $0.status = "Downloading…" }
-                let personal = await repository.mediaCollection(for: source.collection) == .personalLibrary
-                let cached = try await (personal && items.count == 1 && kind == .original
-                    ? repository.cachedOriginalForDownload(items[0]) : nil)
+                let reusable = mediaCollection.incomingAlbumIdentity == nil && !mediaCollection.isLibraryFilter
+                let cached = try await (reusable && items.count == 1 && kind == .original
+                    ? repository.cachedOriginalForDownload(items[0], collection: mediaCollection) : nil)
                 let result: PhotoDownloadResponse
                 if let cached { result = cached }
                 else {
-                    result = try await repository.downloadPhotos(itemIDs: items.map(\.id), kind: kind, collection: source.collection) { [weak self] progress in
+                    result = try await repository.downloadPhotos(itemIDs: items.map(\.id), kind: kind, collection: mediaCollection) { [weak self] progress in
                         Task { @MainActor [weak self] in
                             self?.update(id) { if $0.active { $0.progress = progress.fractionCompleted } }
                         }
@@ -126,7 +127,7 @@ final class PhotoDownloadManager: ObservableObject {
     }
 
     func edit(repository: CachedPhotosRepository, snapshot: TimelineSnapshot?, selection: BrowserCommandSnapshot?,
-              item: PhotoItem?, applicationURL: URL) {
+              item: PhotoItem?, collection: PhotoCollectionDescriptor = .personalLibrary, applicationURL: URL) {
         let capturedSelection = selection?.captureSelection(timeline: snapshot)
         let id = UUID()
         jobs.insert(PhotoDownloadJob(id: id, name: item?.filename ?? "Preparing photo…", progress: nil,
@@ -146,12 +147,14 @@ final class PhotoDownloadManager: ObservableObject {
                     photo = resolved
                 } else { throw DownloadFailure.message("No photo is selected.") }
                 try Task.checkCancellation()
+                let mediaCollection = try await repository.collectionForPhotoEditing(
+                    itemID: photo.id, collection: capturedSelection?.collection ?? collection)
                 update(id) { $0.name = photo.filename ?? "Photo"; $0.status = "Downloading…" }
-                let cached = try await repository.cachedOriginalForDownload(photo, includeLivePhoto: true)
+                let cached = try await repository.cachedOriginalForDownload(photo, includeLivePhoto: true, collection: mediaCollection)
                 let response: PhotoDownloadResponse
                 if let cached { response = cached }
                 else if photo.mediaKind == .livePhoto {
-                    guard let still = try await repository.livePhotoStillForEditing(photo, progress: { [weak self] progress in
+                    guard let still = try await repository.livePhotoStillForEditing(photo, collection: mediaCollection, progress: { [weak self] progress in
                         Task { @MainActor [weak self] in
                             self?.update(id) { if $0.active { $0.progress = progress.fractionCompleted } }
                         }
@@ -159,7 +162,7 @@ final class PhotoDownloadManager: ObservableObject {
                     response = still
                 }
                 else {
-                    response = try await repository.downloadPhotos(itemIDs: [photo.id], kind: .original) { [weak self] progress in
+                    response = try await repository.downloadPhotos(itemIDs: [photo.id], kind: .original, collection: mediaCollection) { [weak self] progress in
                         Task { @MainActor [weak self] in
                             self?.update(id) { if $0.active { $0.progress = progress.fractionCompleted } }
                         }
@@ -207,6 +210,7 @@ final class PhotoDownloadManager: ObservableObject {
         tasks[id] = Task { [weak self] in
             guard let self else { completion(CancellationError()); return }
             do {
+                let mediaCollection = await payload.repository.mediaCollection(for: payload.source.collection)
                 let items = try await payload.source.resolve(repository: payload.repository)
                 update(id) { $0.name = Self.jobName(items); $0.status = "Downloading…" }
                 let progress: @Sendable (TransferProgress) -> Void = { [weak self] value in
@@ -215,15 +219,15 @@ final class PhotoDownloadManager: ObservableObject {
                     }
                 }
                 let response: PhotoDownloadResponse
-                if payload.count == 1 && !payload.forcesArchive, let cached = try await payload.repository.cachedOriginalForDownload(items[0], includeLivePhoto: true) {
+                if payload.count == 1 && !payload.forcesArchive, let cached = try await payload.repository.cachedOriginalForDownload(items[0], includeLivePhoto: true, collection: mediaCollection) {
                     response = cached
                 } else if payload.count == 1 && !payload.forcesArchive, items[0].mediaKind == .livePhoto {
-                    guard let still = try await payload.repository.livePhotoStillForEditing(items[0], progress: progress) else {
+                    guard let still = try await payload.repository.livePhotoStillForEditing(items[0], collection: mediaCollection, progress: progress) else {
                         throw DownloadFailure.message("The Live Photo still is unavailable.")
                     }
                     response = still
                 } else {
-                    response = try await payload.repository.downloadPhotos(itemIDs: items.map(\.id), kind: .original, progress: progress)
+                    response = try await payload.repository.downloadPhotos(itemIDs: items.map(\.id), kind: .original, collection: mediaCollection, progress: progress)
                 }
                 defer { try? FileManager.default.removeItem(at: response.temporaryURL.deletingLastPathComponent()) }
                 try Task.checkCancellation()

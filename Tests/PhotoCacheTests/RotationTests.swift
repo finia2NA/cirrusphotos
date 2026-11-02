@@ -56,7 +56,7 @@ final class RotationTests: XCTestCase {
         let action = SelectionRotationAction(itemIDs: [1], sectionsByID: [1: section],
                                              collection: .personalLibrary, itemsByID: [1: original])
         let store = await repository.store
-        let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(
+        let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
             server: SynologyClient.defaultBaseURL, account: "rotation"), section: section))
         try await seedMetadataPage([original], section: section, repository: repository)
         try await repository.rotate(action, direction: .clockwise)
@@ -79,7 +79,7 @@ final class RotationTests: XCTestCase {
         let action = SelectionRotationAction(itemIDs: [2], sectionsByID: [2: section],
                                              collection: .personalLibrary, itemsByID: [2: original])
         let store = await repository.store
-        let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(
+        let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
             server: SynologyClient.defaultBaseURL, account: "rotation"), section: section))
         try await seedMetadataPage([original], section: section, repository: repository)
         do {
@@ -107,7 +107,7 @@ final class RotationTests: XCTestCase {
         for await _ in await repository.timeline(collection: .personalLibrary) {}
 
         let store = await repository.store
-        let sourceKey = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(
+        let sourceKey = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
             server: SynologyClient.defaultBaseURL, account: "rotation"), section: sourceSection))
         try await seedMetadataPage([original], section: sourceSection, repository: repository)
 
@@ -198,7 +198,7 @@ final class RotationTests: XCTestCase {
         let action = SelectionRotationAction(itemIDs: [11], sectionsByID: [11: section],
                                              collection: .personalLibrary, itemsByID: [11: original])
         let store = await repository.store
-        let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(
+        let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
             server: SynologyClient.defaultBaseURL, account: "rotation"), section: section))
         try await seedMetadataPage([original], section: section, repository: repository)
         var final: ThumbnailRotationProgress?
@@ -225,7 +225,7 @@ final class RotationTests: XCTestCase {
         let action = SelectionRotationAction(itemIDs: [12], sectionsByID: [12: section],
                                              collection: .personalLibrary, itemsByID: [12: original])
         let store = await repository.store
-        let key = try XCTUnwrap(CacheKey.page(namespace: CacheKey.namespace(
+        let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
             server: SynologyClient.defaultBaseURL, account: "rotation"), section: section))
         try await seedMetadataPage([original], section: section, repository: repository)
         for await _ in await repository.rotateThumbnails(action, direction: .clockwise) {}

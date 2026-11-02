@@ -57,6 +57,31 @@ final class TimelineSectionLoadModelTests: XCTestCase {
         XCTAssertNotNil(library.snapshot(for: .personalLibrary))
     }
 
+    func testSharedMapMetadataFilterRetainsSharedActionAvailability() {
+        let library = LibraryModel()
+        let snapshot = TimelineSnapshot(sections: [section()])
+        let map = PhotoCollectionDescriptor.mapFilter(UUID())
+        let filter = PhotoCollectionDescriptor.libraryFilter(UUID())
+        library.registerSessionCollection(map, snapshot: snapshot, source: .sharedLibrary)
+        library.registerSessionCollection(filter, snapshot: snapshot, source: map)
+        XCTAssertTrue(library.isSharedCollection(filter))
+        XCTAssertFalse(library.allowsPersonalActions(in: filter))
+        XCTAssertTrue(library.allowsSpaceItemActions(in: filter))
+    }
+
+    func testSharedInclusionWarmsBothSharedCollectionsAndPreservesPersonalAndAlbums() async throws {
+        let (library, filter, model, transport, root) = try await makeModels()
+        defer { try? FileManager.default.removeItem(at: root) }
+        XCTAssertTrue(model.prepare())
+        model.start(useCachedPages: false, includeSharedSpace: true)
+        let finished = await waitUntil { @MainActor in model.progress.state == .finished }
+        XCTAssertTrue(finished)
+        let collections = await transport.itemCollections()
+        XCTAssertEqual(Set(collections), [.personalLibrary, .favorites, .sharedLibrary, .sharedFavorites, .album(54), .album(55)])
+        _ = library
+        _ = filter
+    }
+
     func testCurrentDestinationDoesNotChangeAppWideScope() async throws {
         let (library, filter, model, transport, root) = try await makeModels()
         defer { try? FileManager.default.removeItem(at: root) }

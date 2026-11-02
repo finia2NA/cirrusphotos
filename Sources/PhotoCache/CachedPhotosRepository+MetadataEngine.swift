@@ -2,12 +2,18 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
-    var metadataNamespace: MetadataNamespace { MetadataNamespace(account: namespace) }
+    var metadataNamespace: MetadataNamespace { MetadataNamespace(account: namespace, scope: .space(.personal)) }
 
     func metadataNamespace(for collection: PhotoCollectionDescriptor) -> MetadataNamespace {
         let source = mediaCollection(for: collection)
-        guard source.incomingAlbumIdentity != nil else { return metadataNamespace }
-        return MetadataNamespace(account: namespace + "|" + source.rawValue)
+        return MetadataNamespace(account: namespace, scope: source.contentScope)
+    }
+
+    /// Shared Space uses current-run authoritative collection reads. The Personal
+    /// Diff cursor and inventory are never a freshness boundary for shared items.
+    func reconcileMetadataSource(for collection: PhotoCollectionDescriptor) async throws {
+        if mediaCollection(for: collection).contentScope != .space(.personal) { try await initializeMetadataEngine(); return }
+        try await reconcileMetadataSource()
     }
 
     /// Enroll the normalized format only when its consumer pipeline is admitted.

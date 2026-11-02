@@ -105,6 +105,8 @@ private actor AlbumFakeTransport: PhotosTransport {
 
     func login(credentials: SynologyCredentials) async throws {}
     func items(ids: [Int64]) async throws -> [PhotoItem] { ids.compactMap { id in pageItems.first { $0.id == id } } }
+    func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] { space == .personal ? try await items(ids: ids) : [] }
+    func albumItems(ids: [Int64], albumID: Int64) async throws -> [PhotoItem] { try await items(ids: ids) }
 
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
         collectionTimelineCalls.append((collection, initial))
@@ -525,7 +527,7 @@ final class AlbumBrowserTests: XCTestCase {
             let transport = AlbumFakeTransport()
             let day = Int64(1711929600)
             let photos = try (1...2).map { id in
-                try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":\(id),\"time\":1711929600,\"type\":\"photo\",\"additional\":{\"gps\":{\"latitude\":10,\"longitude\":20}}}".utf8))
+                try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":\(id),\"time\":1711929600,\"type\":\"photo\",\"additional\":{\"thumbnail\":{\"unit_id\":\(id),\"cache_key\":\"\(id)_rev\"},\"gps\":{\"latitude\":10,\"longitude\":20}}}".utf8))
             }
             let sourceAlbum = AlbumSummary(id: 54, name: "Source", itemCount: 2)
             let target = AlbumSummary(id: 55, name: "Target", itemCount: 0)
@@ -768,7 +770,7 @@ final class AlbumBrowserTests: XCTestCase {
         let timelineCalls = await transport.collectionTimelineCalls
         XCTAssertTrue(timelineCalls.isEmpty, "Albums must never call Browse.Timeline")
 
-        let namespace = await repository.metadataNamespace
+        let namespace = await repository.metadataNamespace(for: .album(54))
         let cached = try await repository.store.metadataCatalog(.init(namespace: namespace, collection: .album(54)))
         XCTAssertEqual(cached?.catalog.days.map(\.day.id), ["2024-01-01", "2023-12-31"])
 
@@ -843,7 +845,7 @@ final class AlbumBrowserTests: XCTestCase {
         XCTAssertEqual(requests.first?.1, .album(54))
         XCTAssertEqual(requests.first?.0, descriptor)
 
-        let cached = try await repository.store.metadataPage(try XCTUnwrap(DayPageAddress(section: descriptor, collection: .album(54))), namespace: repository.metadataNamespace, currentRun: repository.runID)
+        let cached = try await repository.store.metadataPage(try XCTUnwrap(DayPageAddress(section: descriptor, collection: .album(54))), namespace: await repository.metadataNamespace(for: .album(54)), currentRun: repository.runID)
         XCTAssertEqual(cached?.slots.map(\.itemID), [7])
 
     }
@@ -851,10 +853,10 @@ final class AlbumBrowserTests: XCTestCase {
     func testAlbumAndPersonalPageKeysAreIsolated() {
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
         let descriptor = section(1)
-        XCTAssertNotEqual(CacheKey.page(namespace: namespace, section: descriptor, collection: .personalLibrary),
-                          CacheKey.page(namespace: namespace, section: descriptor, collection: .album(54)))
-        XCTAssertNotEqual(CacheKey.page(namespace: namespace, section: descriptor, collection: .album(54)),
-                          CacheKey.page(namespace: namespace, section: descriptor, collection: .album(55)))
+        XCTAssertNotEqual(CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor, collection: .personalLibrary),
+                          CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor, collection: .album(54)))
+        XCTAssertNotEqual(CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor, collection: .album(54)),
+                          CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor, collection: .album(55)))
     }
 
     func testConfirmedFavoriteSharesCanonicalDetailsAcrossCollections() async throws {
@@ -866,11 +868,12 @@ final class AlbumBrowserTests: XCTestCase {
         for collection: PhotoCollectionDescriptor in [.album(54), .personalLibrary] {
             try await seedMetadataPage([photo], section: descriptor, repository: repository, collection: collection)
         }
+        await transport.configure(pageItems: [photo])
         let action = SelectionFavoriteAction(affectedIDs: [photo.id], targetFavorite: true,
             sectionsByID: [photo.id: descriptor], collection: .album(54), itemsByID: [photo.id: photo])
         try await repository.setFavoritesBatch(action: action)
         for collection: PhotoCollectionDescriptor in [.album(54), .personalLibrary] {
-            let cached = try await repository.store.metadataPage(try XCTUnwrap(DayPageAddress(section: descriptor, collection: collection)), namespace: repository.metadataNamespace, currentRun: repository.runID)
+            let cached = try await repository.store.metadataPage(try XCTUnwrap(DayPageAddress(section: descriptor, collection: collection)), namespace: await repository.metadataNamespace(for: collection), currentRun: repository.runID)
             XCTAssertEqual(cached?.slots.first?.item?.isFavorite, true)
         }
         let writes = await transport.favoriteWrites
@@ -908,7 +911,7 @@ final class AlbumBrowserTests: XCTestCase {
         let summaries = try await repository.store.metadataAlbumSummaries(repository.metadataNamespace)
         XCTAssertEqual(summaries?.albums.first?.thumbnail?.unitID, 2)
         let address = try DayPageAddress(section: XCTUnwrap(albumSection), collection: .album(54))
-        let albumPage = try await repository.store.metadataPage(address, namespace: repository.metadataNamespace, currentRun: repository.runID)
+        let albumPage = try await repository.store.metadataPage(address, namespace: await repository.metadataNamespace(for: .album(54)), currentRun: repository.runID)
         XCTAssertEqual(albumPage?.slots.map(\.itemID), [2])
         let personalAddress = try DayPageAddress(section: descriptor, collection: .personalLibrary)
         let personal = try await repository.store.metadataPage(personalAddress, namespace: repository.metadataNamespace, currentRun: repository.runID)
@@ -964,10 +967,10 @@ final class AlbumBrowserTests: XCTestCase {
         try await repository.addItems([2], toAlbum: 54)
         await transport.releaseCatalog()
         await oldRead.value
-        let catalog = try await repository.store.metadataCatalog(CollectionKey(namespace: repository.metadataNamespace, collection: .album(54)))
+        let catalog = try await repository.store.metadataCatalog(CollectionKey(namespace: await repository.metadataNamespace(for: .album(54)), collection: .album(54)))
         let snapshot = try CollectionDayPager.snapshot(catalog: XCTUnwrap(catalog).catalog)
         let address = try DayPageAddress(section: XCTUnwrap(snapshot.sections.first), collection: .album(54))
-        let page = try await repository.store.metadataPage(address, namespace: repository.metadataNamespace, currentRun: repository.runID)
+        let page = try await repository.store.metadataPage(address, namespace: await repository.metadataNamespace(for: .album(54)), currentRun: repository.runID)
         XCTAssertEqual(page?.slots.map(\.itemID), [2])
     }
 

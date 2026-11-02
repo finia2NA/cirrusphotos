@@ -210,7 +210,7 @@ final class LibraryFilterControllerTests: XCTestCase {
         let personal = await repository.observeCollectionPages(collection: .personalLibrary, sections: [section])
         let album = await repository.observeCollectionPages(collection: .album(42), sections: [section])
         let namespace = await repository.namespace
-        let key = try XCTUnwrap(CacheKey.page(namespace: namespace, section: section, collection: .album(42)))
+        let key = try XCTUnwrap(CacheKey.page(scope: .album(42), namespace: namespace, section: section, collection: .album(42)))
         await repository.publishCollectionPage(key: key)
         let personalChanges = await repository.takeCollectionPageChanges(personal.id)
         let albumChanges = await repository.takeCollectionPageChanges(album.id)

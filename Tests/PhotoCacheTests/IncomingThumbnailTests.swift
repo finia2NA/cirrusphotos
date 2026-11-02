@@ -55,9 +55,9 @@ final class IncomingThumbnailTests: XCTestCase {
         XCTAssertEqual(references, ["session-reference"])
         XCTAssertEqual(personalRequests, 0)
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        XCTAssertNotEqual(CacheKey.thumbnail(namespace: namespace, descriptor: descriptor, size: .sm, collection: first),
-                          CacheKey.thumbnail(namespace: namespace, descriptor: descriptor, size: .sm, collection: second))
-        XCTAssertNotEqual(CacheKey.thumbnail(namespace: namespace, descriptor: descriptor, size: .sm, collection: first),
-                          CacheKey.thumbnail(namespace: namespace, descriptor: descriptor, size: .sm))
+        XCTAssertNotEqual(CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm, collection: first),
+                          CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm, collection: second))
+        XCTAssertNotEqual(CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm, collection: first),
+                          CacheKey.thumbnail(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .sm))
     }
 }
