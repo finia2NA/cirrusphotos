@@ -6,6 +6,18 @@ public struct VideoPlaybackData: Sendable, Equatable {
     public let range: ClosedRange<Int64>
     public let totalLength: Int64
     public let contentType: String
+    public let etag: String?
+    public let lastModified: String?
+
+    public init(data: Data, range: ClosedRange<Int64>, totalLength: Int64, contentType: String,
+                etag: String? = nil, lastModified: String? = nil) {
+        self.data = data
+        self.range = range
+        self.totalLength = totalLength
+        self.contentType = contentType
+        self.etag = etag
+        self.lastModified = lastModified
+    }
 }
 
 struct CachedVideoSegment: Sendable {
@@ -18,6 +30,8 @@ struct CachedVideoSegment: Sendable {
 
     let header: Header
     let data: Data
+    let etag: String?
+    let lastModified: String?
 
     func encoded() throws -> Data {
         let metadata = try JSONEncoder().encode(header)
@@ -35,17 +49,23 @@ struct CachedVideoSegment: Sendable {
                         totalLength: response.totalLength,
                         contentType: response.contentType)
         data = response.data
+        etag = response.etag
+        lastModified = response.lastModified
     }
 
-    init(encoded: Data) throws {
+    init(encoded: Data, etag: String? = nil, lastModified: String? = nil) throws {
+        self.etag = etag
+        self.lastModified = lastModified
         guard encoded.count >= 4 else { throw CacheError.storage }
         let length = encoded.prefix(4).reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
         let end = 4 + Int(length)
         guard end <= encoded.count else { throw CacheError.storage }
         header = try JSONDecoder().decode(Header.self, from: encoded[4..<end])
         data = Data(encoded[end...])
-        guard header.rangeUpper >= header.rangeLower,
+        guard header.rangeLower >= 0, header.rangeUpper >= header.rangeLower,
+              header.rangeUpper < header.totalLength,
+              header.rangeUpper - header.rangeLower < CachedPhotosRepository.videoSegmentSize,
               data.count == Int(header.rangeUpper - header.rangeLower + 1),
-              header.totalLength > header.rangeUpper else { throw CacheError.storage }
+              header.contentType.hasPrefix("video/") || header.contentType.hasPrefix("application/octet-stream") else { throw CacheError.storage }
     }
 }

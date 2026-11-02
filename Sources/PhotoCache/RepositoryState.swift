@@ -72,9 +72,9 @@ struct RepositoryImageWork {
     var fullImageFinishWithoutSubscribers: Set<String> = []
     var fullImageProgressObservers: [String: [UUID: @Sendable (TransferProgress) -> Void]] = [:]
     var fullImageProgress: [String: TransferProgress] = [:]
-    var videoSegmentJobs: [String: VideoSegmentJob] = [:]
+    var videoWindowJobs: [String: VideoWindowJob] = [:]
 
-    var hasDemand: Bool { !thumbnailJobs.isEmpty || !fullImageJobs.isEmpty || !videoSegmentJobs.isEmpty }
+    var hasDemand: Bool { !thumbnailJobs.isEmpty || !fullImageJobs.isEmpty || !videoWindowJobs.isEmpty }
 }
 
 final class RepositoryFavoriteState {

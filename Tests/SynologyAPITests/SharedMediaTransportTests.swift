@@ -19,12 +19,14 @@ final class SharedMediaTransportTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: download.temporaryURL.deletingLastPathComponent()) }
         XCTAssertEqual(download.filename, "fixture.png")
         let original = VideoPlaybackResource(scope: .space(.shared), unitID: 9, cacheKey: "revision", filename: "fixture.mp4", variant: .original, itemID: 5)
-        let bytes = try await client.videoRange(original, range: 0...3)
-        XCTAssertEqual(bytes.data, Data([1, 2, 3, 4]))
+        let output = VideoBytesCollector()
+        try await client.streamVideoRange(original, range: 0...3) { event in await output.receive(event) }
+        let bytes = await output.data
+        XCTAssertEqual(bytes, Data([1, 2, 3, 4]))
         let motion = try await client.livePhotoMotion(itemID: 5, space: .shared)
         XCTAssertEqual(motion?.scope, .space(.shared))
         let converted = try XCTUnwrap(motion)
-        _ = try await client.videoRange(converted, range: 0...3)
+        try await client.streamVideoRange(converted, range: 0...3, receive: { _ in })
     }
 
     func testUnresolvedAlbumMediaFailsBeforeSendingSpaceRequests() async throws {
@@ -34,7 +36,7 @@ final class SharedMediaTransportTests: XCTestCase {
             XCTFail("Unresolved album media must retain its contextual authority")
         } catch SynologyAPIError.unsupported {} catch { XCTFail("Unexpected error: \(error)") }
         do {
-            _ = try await client.videoRange(.init(scope: .album(3), unitID: 9, cacheKey: "revision", filename: nil, variant: .original), range: 0...3)
+            try await client.streamVideoRange(.init(scope: .album(3), unitID: 9, cacheKey: "revision", filename: nil, variant: .original), range: 0...3, receive: { _ in })
             XCTFail("Unresolved album media must retain its contextual authority")
         } catch SynologyAPIError.unsupported {} catch { XCTFail("Unexpected error: \(error)") }
     }
@@ -92,5 +94,12 @@ private final class SharedMediaProtocol: URLProtocol, @unchecked Sendable {
         }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: headers)!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: payload); client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+private actor VideoBytesCollector {
+    var data = Data()
+    func receive(_ event: VideoRangeEvent) {
+        if case .bytes(_, let bytes) = event { data.append(bytes) }
     }
 }

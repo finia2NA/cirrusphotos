@@ -150,9 +150,11 @@ struct FullImageResolution: Sendable {
     let data: Data
 }
 
-struct VideoSegmentJob: Sendable {
+struct VideoWindowJob: Sendable {
     let id: UUID
-    let task: Task<CachedVideoSegment, Error>
+    let resourceKey: String
+    let range: ClosedRange<Int64>
+    let window: VideoWindow
 }
 
 public enum ThumbnailCacheOutcome: Sendable, Equatable {

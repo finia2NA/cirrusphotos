@@ -45,6 +45,28 @@ public struct VideoRangeResponse: Sendable, Equatable {
     }
 }
 
+public struct VideoRangeHeader: Sendable, Equatable {
+    public let range: ClosedRange<Int64>
+    public let totalLength: Int64
+    public let contentType: String
+    public let etag: String?
+    public let lastModified: String?
+
+    public init(range: ClosedRange<Int64>, totalLength: Int64, contentType: String,
+                etag: String?, lastModified: String?) {
+        self.range = range
+        self.totalLength = totalLength
+        self.contentType = contentType
+        self.etag = etag
+        self.lastModified = lastModified
+    }
+}
+
+public enum VideoRangeEvent: Sendable {
+    case header(VideoRangeHeader)
+    case bytes(offset: Int64, data: Data)
+}
+
 public enum PhotoRotationDirection: String, Codable, Sendable, CaseIterable {
     case clockwise
     case counterClockwise = "counter_clockwise"
@@ -165,8 +187,8 @@ public protocol PhotosTransport: Sendable {
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> FullImageResponse
 
-    func videoRange(_ resource: VideoPlaybackResource,
-                    range: ClosedRange<Int64>) async throws -> VideoRangeResponse
+    func streamVideoRange(_ resource: VideoPlaybackResource, range: ClosedRange<Int64>,
+                          receive: @escaping @Sendable (VideoRangeEvent) async throws -> Void) async throws
     func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws
     func rotate(itemIDs: [Int64], direction: PhotoRotationDirection, space: PhotoSpace) async throws
     func livePhotoMotion(itemID: Int64, space: PhotoSpace) async throws -> VideoPlaybackResource?
@@ -256,8 +278,8 @@ public extension PhotosTransport {
         try await fullImage(resource, etag: etag, lastModified: lastModified)
     }
 
-    func videoRange(_ resource: VideoPlaybackResource,
-                    range: ClosedRange<Int64>) async throws -> VideoRangeResponse {
+    func streamVideoRange(_ resource: VideoPlaybackResource, range: ClosedRange<Int64>,
+                          receive: @escaping @Sendable (VideoRangeEvent) async throws -> Void) async throws {
         throw SynologyAPIError.unsupported("Video range transport is unavailable.")
     }
 }

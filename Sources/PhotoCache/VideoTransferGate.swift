@@ -2,38 +2,33 @@ import Foundation
 
 actor VideoTransferGate {
     private let limit = 2
-    private var active = 0
+    private var active: Set<UUID> = []
     private var waiters: [(UUID, CheckedContinuation<Void, Error>)] = []
 
     func acquire(_ id: UUID) async throws {
         try Task.checkCancellation()
-        if active < limit { active += 1; return }
+        if active.count < limit { active.insert(id); return }
         try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                waiters.append((id, continuation))
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled { continuation.resume(throwing: CancellationError()) }
+                else { waiters.append((id, continuation)) }
             }
-        } onCancel: {
-            Task { await self.cancel(id) }
-        }
+        } onCancel: { Task { await self.cancel(id) } }
+        try Task.checkCancellation()
     }
 
     func release(_ id: UUID) {
-        if let index = waiters.firstIndex(where: { $0.0 == id }) {
-            let continuation = waiters.remove(at: index).1
-            continuation.resume(throwing: CancellationError())
-            return
-        }
-        guard active > 0 else { return }
-        if waiters.isEmpty {
-            active -= 1
-        } else {
-            let continuation = waiters.removeFirst().1
+        guard active.remove(id) != nil else { return }
+        if !waiters.isEmpty {
+            let (next, continuation) = waiters.removeFirst()
+            active.insert(next)
             continuation.resume()
         }
     }
 
     private func cancel(_ id: UUID) {
-        guard let index = waiters.firstIndex(where: { $0.0 == id }) else { return }
-        waiters.remove(at: index).1.resume(throwing: CancellationError())
+        if let index = waiters.firstIndex(where: { $0.0 == id }) {
+            waiters.remove(at: index).1.resume(throwing: CancellationError())
+        } else { release(id) }
     }
 }

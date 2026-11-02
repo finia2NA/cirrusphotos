@@ -112,6 +112,7 @@ final class VideoPlayerContainerView: NSView {
         let asset = AVURLAsset(url: url)
         asset.resourceLoader.setDelegate(loader, queue: loader.queue)
         let item = AVPlayerItem(asset: asset)
+        let playerStarted = ContinuousClock.now
         let player = AVPlayer(playerItem: item)
         self.player = player
         endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self, weak player] _ in
@@ -165,7 +166,12 @@ final class VideoPlayerContainerView: NSView {
             DispatchQueue.main.async { [weak self, weak player] in
                 guard let self, let player, self.player === player else { return }
                 self.posterView.isHidden = ready
-                if ready { self.onFirstFrame?() }
+                if ready {
+                    let elapsed = playerStarted.duration(to: .now).components
+                    let ms = elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000
+                    SynologyDiagnostics.videoPlayer.info("Video first frame unit_id=\(resource.unitID, privacy: .public) elapsed_ms=\(ms, privacy: .public)")
+                    self.onFirstFrame?()
+                }
             }
         }
         timeObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { player, _ in
@@ -236,31 +242,30 @@ final class VideoAssetLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecke
         SynologyDiagnostics.videoPlayer.debug(
             "Video asset request started unit_id=\(self.resource.unitID, privacy: .public) quality=\(self.resource.variant.cacheComponent, privacy: .public) offset=\(requestedOffset, privacy: .public) length=\(requestedLength, privacy: .public) content_info=\(loadingRequest.contentInformationRequest != nil, privacy: .public) network_allowed=\(self.allowNetwork, privacy: .public)"
         )
+        lock.lock()
         let task = Task { [weak self, weak loadingRequest] in
             guard let self, let loadingRequest else { return }
             do {
-                try await fulfill(loadingRequest)
-                guard !Task.isCancelled else { return }
-                loadingRequest.finishLoading()
-                SynologyDiagnostics.videoPlayer.debug(
-                    "Video asset request finished unit_id=\(self.resource.unitID, privacy: .public) quality=\(self.resource.variant.cacheComponent, privacy: .public) offset=\(requestedOffset, privacy: .public) length=\(requestedLength, privacy: .public)"
-                )
-            } catch is CancellationError {
-                SynologyDiagnostics.videoPlayer.debug(
-                    "Video asset request cancelled unit_id=\(self.resource.unitID, privacy: .public) quality=\(self.resource.variant.cacheComponent, privacy: .public) offset=\(requestedOffset, privacy: .public) length=\(requestedLength, privacy: .public)"
-                )
-                loadingRequest.finishLoading(with: NSError(domain: NSURLErrorDomain,
-                                                            code: NSURLErrorCancelled))
+                try await fulfill(loadingRequest, id: id)
+                queue.sync {
+                    if lock.withLock({ tasks.removeValue(forKey: id) != nil }) {
+                        loadingRequest.finishLoading()
+                    }
+                }
             } catch {
-                let nsError = error as NSError
-                SynologyDiagnostics.videoPlayer.error(
-                    "Video asset request failed unit_id=\(self.resource.unitID, privacy: .public) quality=\(self.resource.variant.cacheComponent, privacy: .public) offset=\(requestedOffset, privacy: .public) length=\(requestedLength, privacy: .public) error_domain=\(nsError.domain, privacy: .public) error_code=\(nsError.code, privacy: .public)"
-                )
-                loadingRequest.finishLoading(with: error)
+                if !Task.isCancelled {
+                    let error = error as NSError
+                    SynologyDiagnostics.videoPlayer.error("Video asset request failed unit_id=\(self.resource.unitID, privacy: .public) error_domain=\(error.domain, privacy: .public) error_code=\(error.code, privacy: .public)")
+                }
+                queue.sync {
+                    if lock.withLock({ tasks.removeValue(forKey: id) != nil }), !Task.isCancelled {
+                        loadingRequest.finishLoading(with: error)
+                    }
+                }
             }
-            removeTask(id)
         }
-        lock.withLock { tasks[id] = task }
+        tasks[id] = task
+        lock.unlock()
         return true
     }
 
@@ -283,35 +288,66 @@ final class VideoAssetLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecke
         for task in pending { task.cancel() }
     }
 
-    private func fulfill(_ request: AVAssetResourceLoadingRequest) async throws {
-        let dataRequest = request.dataRequest
-        var offset = dataRequest.map { max($0.requestedOffset, $0.currentOffset) } ?? 0
-        var remaining = dataRequest?.requestedLength ?? 1
-        repeat {
-            let amount = min(max(1, remaining), 4 * 1_024 * 1_024)
-            let value = try await repository.videoData(resource, offset: offset,
-                                                       length: amount,
-                                                       allowNetwork: allowNetwork)
-            if let information = request.contentInformationRequest {
-                information.contentType = UTType(mimeType: value.contentType)?.identifier
-                    ?? UTType.mpeg4Movie.identifier
-                information.contentLength = value.totalLength
-                information.isByteRangeAccessSupported = true
-                SynologyDiagnostics.videoPlayer.debug(
-                    "Video asset content information supplied unit_id=\(self.resource.unitID, privacy: .public) quality=\(self.resource.variant.cacheComponent, privacy: .public) total=\(value.totalLength, privacy: .public) content_type=\(value.contentType, privacy: .public)"
-                )
-            }
-            guard let dataRequest else { return }
-            dataRequest.respond(with: value.data)
-            offset += Int64(value.data.count)
-            remaining -= value.data.count
-            if offset >= value.totalLength || value.data.isEmpty { return }
-        } while remaining > 0
+    private final class LoadingState: @unchecked Sendable {
+        var demand: VideoLoadingDemand
+        var total: Int64?
+        var contentType: String?
+        var etag: String?
+        var lastModified: String?
+        var reportedFirstDelivery = false
+        let started = ContinuousClock.now
+        init(demand: VideoLoadingDemand) { self.demand = demand }
     }
 
-    private func removeTask(_ id: ObjectIdentifier) {
-        _ = lock.withLock { tasks.removeValue(forKey: id) }
+    private func fulfill(_ request: AVAssetResourceLoadingRequest, id: ObjectIdentifier) async throws {
+        let demand = try queue.sync { () throws -> VideoLoadingDemand in
+            guard let data = request.dataRequest else {
+                return try VideoLoadingDemand(requestedOffset: 0, currentOffset: 0, requestedLength: 1,
+                                              allToEnd: false, informationOnly: true)
+            }
+            return try VideoLoadingDemand(requestedOffset: data.requestedOffset, currentOffset: data.currentOffset,
+                                          requestedLength: data.requestedLength,
+                                          allToEnd: data.requestsAllDataToEndOfResource)
+        }
+        let state = LoadingState(demand: demand)
+        while let amount = state.demand.nextLength(limit: CachedPhotosRepository.videoWindowSize) {
+            try Task.checkCancellation()
+            let start = state.demand.offset
+            try await repository.streamVideoData(resource, offset: start, length: amount, allowNetwork: allowNetwork) { [self] value in
+                try Task.checkCancellation()
+                try queue.sync {
+                    guard lock.withLock({ tasks[id] != nil }) else { throw CancellationError() }
+                    guard value.range.lowerBound == state.demand.offset,
+                          state.total == nil || state.total == value.totalLength,
+                          state.contentType == nil || state.contentType == value.contentType,
+                          state.etag == nil || value.etag == nil || state.etag == value.etag,
+                          state.lastModified == nil || value.lastModified == nil || state.lastModified == value.lastModified else {
+                        throw SynologyAPIError.invalidResponse
+                    }
+                    if let information = request.contentInformationRequest {
+                        information.contentType = UTType(mimeType: value.contentType)?.identifier ?? UTType.mpeg4Movie.identifier
+                        information.contentLength = value.totalLength
+                        information.isByteRangeAccessSupported = true
+                    }
+                    state.total = value.totalLength
+                    state.contentType = value.contentType
+                    if state.etag == nil { state.etag = value.etag }
+                    if state.lastModified == nil { state.lastModified = value.lastModified }
+                    if !state.reportedFirstDelivery {
+                        state.reportedFirstDelivery = true
+                        let elapsed = state.started.duration(to: .now).components
+                        let ms = elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000
+                        SynologyDiagnostics.videoPlayer.info("Video first loader response unit_id=\(self.resource.unitID, privacy: .public) elapsed_ms=\(ms, privacy: .public)")
+                    }
+                    if !state.demand.informationOnly { request.dataRequest?.respond(with: value.data) }
+                    try state.demand.advance(value.data.count)
+                }
+            }
+            if state.demand.informationOnly || state.demand.offset >= (state.total ?? Int64.max) { return }
+            guard state.demand.offset > start else { throw SynologyAPIError.invalidResponse }
+        }
     }
+
 }
 
 private extension NSLock {

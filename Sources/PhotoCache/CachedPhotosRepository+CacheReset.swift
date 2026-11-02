@@ -51,6 +51,7 @@ extension CachedPhotosRepository {
             // when UI invalidation removes their last subscriber.
             imageWork.thumbnailFinishWithoutSubscribers.formUnion(imageWork.thumbnailJobs.keys)
             imageWork.fullImageFinishWithoutSubscribers.formUnion(imageWork.fullImageJobs.keys)
+            for job in imageWork.videoWindowJobs.values { await job.window.retainUntilFinished() }
         } else {
             for job in imageWork.thumbnailJobs.values { job.task.cancel() }
             for job in imageWork.fullImageJobs.values {
@@ -59,8 +60,8 @@ extension CachedPhotosRepository {
             }
             imageWork.thumbnailJobs.removeAll()
             imageWork.fullImageJobs.removeAll()
-            for job in imageWork.videoSegmentJobs.values { job.task.cancel() }
-            imageWork.videoSegmentJobs.removeAll()
+            for job in imageWork.videoWindowJobs.values { await job.window.cancel() }
+            imageWork.videoWindowJobs.removeAll()
             imageWork.thumbnailFinishWithoutSubscribers.removeAll()
             imageWork.fullImageFinishWithoutSubscribers.removeAll()
         }

@@ -53,7 +53,7 @@ final class PhotoIdentityTests: XCTestCase, @unchecked Sendable {
                 } catch SynologyAPIError.unsupported { }
             }
             do {
-                _ = try await client.videoRange(VideoPlaybackResource(scope: scope, unitID: 99, cacheKey: "same", filename: nil, variant: .original), range: 0...9)
+                try await client.streamVideoRange(VideoPlaybackResource(scope: scope, unitID: 99, cacheKey: "same", filename: nil, variant: .original), range: 0...9, receive: { _ in })
                 XCTFail("Unimplemented video context must not fall through to Personal Space")
             } catch SynologyAPIError.unsupported { }
         }

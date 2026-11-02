@@ -1045,8 +1045,8 @@ public actor SynologyClient: PhotosTransport {
         return members[0].playbackResource(scope: .space(space))
     }
 
-    public func videoRange(_ resource: VideoPlaybackResource,
-                           range: ClosedRange<Int64>) async throws -> VideoRangeResponse {
+    public func streamVideoRange(_ resource: VideoPlaybackResource, range: ClosedRange<Int64>,
+                                 receive: @escaping @Sendable (VideoRangeEvent) async throws -> Void) async throws {
         guard let space = resource.scope.space else {
             throw SynologyAPIError.unsupported("Media requests in this content context are unavailable.")
         }
@@ -1089,49 +1089,66 @@ public actor SynologyClient: PhotosTransport {
         request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
         request.setValue("bytes=\(range.lowerBound)-\(range.upperBound)", forHTTPHeaderField: "Range")
         request.setValue("video/*,application/octet-stream;q=0.8", forHTTPHeaderField: "Accept")
-        let data: Data
-        let response: URLResponse
-        let started = Date()
-        SynologyDiagnostics.videoTransport.info(
-            "Video range request started unit_id=\(resource.unitID, privacy: .public) quality=\(resource.variant.cacheComponent, privacy: .public) lower=\(range.lowerBound, privacy: .public) upper=\(range.upperBound, privacy: .public)"
-        )
-        do { (data, response) = try await session.data(for: request) }
-        catch is CancellationError {
-            SynologyDiagnostics.videoTransport.debug(
-                "Video range request cancelled unit_id=\(resource.unitID, privacy: .public) quality=\(resource.variant.cacheComponent, privacy: .public) lower=\(range.lowerBound, privacy: .public) upper=\(range.upperBound, privacy: .public)"
-            )
-            throw CancellationError()
-        }
-        catch {
-            let nsError = error as NSError
-            SynologyDiagnostics.videoTransport.error(
-                "Video range transport failed unit_id=\(resource.unitID, privacy: .public) quality=\(resource.variant.cacheComponent, privacy: .public) lower=\(range.lowerBound, privacy: .public) upper=\(range.upperBound, privacy: .public) error_domain=\(nsError.domain, privacy: .public) error_code=\(nsError.code, privacy: .public)"
-            )
-            throw SynologyAPIError.transport(error.localizedDescription)
-        }
-        guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
-        guard http.statusCode == 206,
+        let started = ContinuousClock.now
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse,
+              http.statusCode == 206,
               let contentRange = http.value(forHTTPHeaderField: "Content-Range"),
               let parsed = Self.parseContentRange(contentRange),
               parsed.range.lowerBound == range.lowerBound,
               parsed.range.upperBound <= range.upperBound,
               parsed.total > parsed.range.upperBound,
-              data.count == Int(parsed.range.upperBound - parsed.range.lowerBound + 1),
+              parsed.range.upperBound == range.upperBound || parsed.range.upperBound == parsed.total - 1,
               let contentType = http.value(forHTTPHeaderField: "Content-Type")?.lowercased(),
               contentType.hasPrefix("video/") || contentType.hasPrefix("application/octet-stream") else {
-            SynologyDiagnostics.videoTransport.error(
-                "Video range rejected unit_id=\(resource.unitID, privacy: .public) quality=\(resource.variant.cacheComponent, privacy: .public) status=\(http.statusCode, privacy: .public) bytes=\(data.count, privacy: .public) content_range=\(http.value(forHTTPHeaderField: "Content-Range") ?? "nil", privacy: .public) content_type=\(http.value(forHTTPHeaderField: "Content-Type") ?? "nil", privacy: .public)"
-            )
             throw SynologyAPIError.invalidResponse
         }
-        let elapsedMS = Int(Date().timeIntervalSince(started) * 1_000)
-        SynologyDiagnostics.videoTransport.info(
-            "Video range response accepted unit_id=\(resource.unitID, privacy: .public) quality=\(resource.variant.cacheComponent, privacy: .public) status=\(http.statusCode, privacy: .public) lower=\(parsed.range.lowerBound, privacy: .public) upper=\(parsed.range.upperBound, privacy: .public) bytes=\(data.count, privacy: .public) total=\(parsed.total, privacy: .public) elapsed_ms=\(elapsedMS, privacy: .public)"
+        let expected = parsed.range.upperBound - parsed.range.lowerBound + 1
+        if let length = http.value(forHTTPHeaderField: "Content-Length") {
+            guard Int64(length) == expected else { throw SynologyAPIError.invalidResponse }
+        }
+        let header = VideoRangeHeader(range: parsed.range, totalLength: parsed.total,
+                                      contentType: contentType,
+                                      etag: http.value(forHTTPHeaderField: "ETag"),
+                                      lastModified: http.value(forHTTPHeaderField: "Last-Modified"))
+        SynologyDiagnostics.videoTransport.debug(
+            "Video range headers unit_id=\(resource.unitID, privacy: .public) lower=\(parsed.range.lowerBound, privacy: .public) upper=\(parsed.range.upperBound, privacy: .public)"
         )
-        return VideoRangeResponse(data: data, range: parsed.range, totalLength: parsed.total,
-                                  contentType: contentType,
-                                  etag: http.value(forHTTPHeaderField: "ETag"),
-                                  lastModified: http.value(forHTTPHeaderField: "Last-Modified"))
+        try await receive(.header(header))
+        var buffer = Data()
+        buffer.reserveCapacity(16 * 1_024)
+        var delivered: Int64 = 0
+        var reportedFirst = false
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard delivered + Int64(buffer.count) < expected else { throw SynologyAPIError.invalidResponse }
+            buffer.append(byte)
+            if buffer.count == 16 * 1_024 {
+                if !reportedFirst {
+                    reportedFirst = true
+                    let elapsed = started.duration(to: .now).components
+                    let ms = elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000
+                    SynologyDiagnostics.videoTransport.info("Video first chunk unit_id=\(resource.unitID, privacy: .public) elapsed_ms=\(ms, privacy: .public)")
+                }
+                try await receive(.bytes(offset: parsed.range.lowerBound + delivered, data: buffer))
+                delivered += Int64(buffer.count)
+                buffer = Data()
+                buffer.reserveCapacity(16 * 1_024)
+            }
+        }
+        if !buffer.isEmpty {
+            if !reportedFirst {
+                let elapsed = started.duration(to: .now).components
+                let ms = elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000
+                SynologyDiagnostics.videoTransport.info("Video first chunk unit_id=\(resource.unitID, privacy: .public) elapsed_ms=\(ms, privacy: .public)")
+            }
+            try await receive(.bytes(offset: parsed.range.lowerBound + delivered, data: buffer))
+            delivered += Int64(buffer.count)
+        }
+        guard delivered == expected else { throw SynologyAPIError.invalidResponse }
+        let elapsed = started.duration(to: .now).components
+        let ms = elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000
+        SynologyDiagnostics.videoTransport.info("Video range completed unit_id=\(resource.unitID, privacy: .public) bytes=\(delivered, privacy: .public) elapsed_ms=\(ms, privacy: .public)")
     }
 
     private static func parseContentRange(_ value: String) -> (range: ClosedRange<Int64>, total: Int64)? {
