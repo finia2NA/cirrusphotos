@@ -19,7 +19,9 @@ struct AlbumRenameView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Rename Album").font(.headline)
-            TextField("Name", text: $name).disabled(working)
+            TextField("Name", text: $name)
+                .disabled(working)
+                .onSubmit { submit() }
             if let error { Text(error).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
             HStack {
                 if working { ProgressView().controlSize(.small) }
@@ -34,6 +36,7 @@ struct AlbumRenameView: View {
     }
 
     private func submit() {
+        guard !working, !trimmedName.isEmpty, trimmedName != album.name else { return }
         let submittedName = trimmedName
         working = true
         error = nil
