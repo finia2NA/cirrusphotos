@@ -46,6 +46,10 @@ struct MetadataEngineState {
     var albumMutationID: Int64?
     var albumSharingObservers: [UUID: AsyncStream<Void>.Continuation] = [:]
     var albumListEpoch: UInt64 = 0
+    var peopleMutationsInProgress: Set<PhotoSpace> = []
+    var peopleMutationSpaces: Set<PhotoSpace> = []
+    var peopleMutationCollections: Set<PhotoCollectionDescriptor> = []
+    var peopleEpoch: [PhotoSpace: UInt64] = [:]
     var peopleJob: [PhotoSpace: SharedJob<[PersonSummary]>] = [:]
     var subjectsJob: [PhotoSpace: SharedJob<[SubjectSummary]>] = [:]
     var tagsJob: [PhotoSpace: SharedJob<[TagSummary]>] = [:]

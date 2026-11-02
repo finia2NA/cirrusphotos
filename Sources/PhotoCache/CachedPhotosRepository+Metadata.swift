@@ -36,7 +36,7 @@ extension CachedPhotosRepository {
                 let cached = try? await store.metadataCatalog(CollectionKey(namespace: metadataNamespace(for: collection), collection: collection))
                 guard !Task.isCancelled, epoch == metadata.admissionEpoch, mutationEpoch == metadata.mutationEpochs[collection, default: 0], !metadata.resetInProgress else { continuation.finish(); return }
                 let snapshot = cached.flatMap { try? CollectionDayPager.snapshot(catalog: $0.catalog) }
-                let mutationInProgress = metadata.albumMutationWriting && collection.albumID != nil && collection.albumID == metadata.albumMutationID
+                let mutationInProgress = (metadata.albumMutationWriting && collection.albumID != nil && collection.albumID == metadata.albumMutationID) || metadata.peopleMutationCollections.contains(collection)
                 if let snapshot {
                     metadata.latestTimelines[collection] = snapshot
                     continuation.yield(.value(snapshot, verified: !mutationInProgress && cached?.validatedRun == validation))
@@ -93,7 +93,7 @@ extension CachedPhotosRepository {
                     let mutationEpoch = metadata.mutationEpochs[collection, default: 0]
                     let cached = useCachedPages ? try await store.metadataPage(address, namespace: metadataNamespace(for: collection), currentRun: runID) : nil
                     guard !Task.isCancelled, epoch == metadata.admissionEpoch, mutationEpoch == metadata.mutationEpochs[collection, default: 0], !metadata.resetInProgress else { continuation.finish(); return }
-                    let mutationInProgress = metadata.albumMutationWriting && collection.albumID != nil && collection.albumID == metadata.albumMutationID
+                    let mutationInProgress = (metadata.albumMutationWriting && collection.albumID != nil && collection.albumID == metadata.albumMutationID) || metadata.peopleMutationCollections.contains(collection)
                     if let cached {
                         let visible: PhotoPageSnapshot
                         if mutationInProgress {

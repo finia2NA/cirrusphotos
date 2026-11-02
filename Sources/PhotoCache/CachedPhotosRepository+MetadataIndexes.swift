@@ -19,11 +19,14 @@ extension CachedPhotosRepository {
                 do {
                     try await initializeMetadataEngine()
                     let epoch = metadata.admissionEpoch
+                    let peopleEpoch = metadata.peopleEpoch[space, default: 0]
                     let validation = "\(runID):\(epoch):\(name)"
                     let previous = try await cached(store, namespace)
                     guard !Task.isCancelled, epoch == metadata.admissionEpoch, !metadata.resetInProgress else { continuation.finish(); return }
-                    if let previous { continuation.yield(.value(previous.0, verified: previous.1 == validation)) }
-                    if previous?.1 == validation { continuation.finish(); return }
+                    let writing = name == "People" && metadata.peopleMutationSpaces.contains(space)
+                    guard name != "People" || peopleEpoch == metadata.peopleEpoch[space, default: 0] else { continuation.finish(); return }
+                    if let previous { continuation.yield(.value(previous.0, verified: !writing && previous.1 == validation)) }
+                    if writing || previous?.1 == validation { continuation.finish(); return }
                     let task: Task<Value, Error>
                     if var job = metadata[keyPath: jobs][key] {
                         job.subscribers.insert(subscriber)
@@ -45,7 +48,7 @@ extension CachedPhotosRepository {
                         metadata[keyPath: jobs][key] = SharedJob(id: id, task: task, subscribers: [subscriber])
                     }
                     let value = try await task.value
-                    guard !Task.isCancelled, epoch == metadata.admissionEpoch else { continuation.finish(); return }
+                    guard !Task.isCancelled, epoch == metadata.admissionEpoch, (name != "People" || (peopleEpoch == metadata.peopleEpoch[space, default: 0] && !metadata.peopleMutationSpaces.contains(space))) else { continuation.finish(); return }
                     continuation.yield(.value(value, verified: true))
                 } catch {
                     if !Task.isCancelled && !(error is CancellationError) { continuation.yield(.failure("\(name): \(error.localizedDescription)")) }

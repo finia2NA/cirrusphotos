@@ -38,7 +38,7 @@ On the NAS, sharing an owned normal album adds access settings to that same albu
 
 ### People
 
-People lists visible recognized people, including the server's expanded list, with face covers and item counts. Opening a person reuses the shared browser, viewer, selection and metadata filters. The index and opened timelines are cached-first and remain available when validation fails. Back or Escape returns to People. Person renaming and merging are not implemented.
+People lists visible recognized people, including the server's expanded list, with face covers and item counts. Opening a person reuses the shared browser, viewer, selection and metadata filters. The index and opened timelines are cached-first and remain available when validation fails. Back or Escape returns to People. A person card’s context menu can rename that person or merge them into a selected person in the same space. As a name is entered, matching people appear with face thumbnails; choosing one selects them as the merge target. Merging asks for confirmation; the target identity is retained. A change is confirmed by refreshing the server index, and an uncertain outcome is reported for review before retrying.
 
 ### Map
 

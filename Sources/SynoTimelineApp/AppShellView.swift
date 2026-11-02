@@ -24,6 +24,8 @@ struct AppShellView: View {
     @State private var openedPersonID: Int64?
     @State private var people: [PersonSummary]?
     @State private var peopleError: String?
+    @State private var personEdit: PersonEditRequest?
+    @State private var peopleEditRevision: UInt64 = 0
     @State private var openedAlbum: PhotoCollectionDescriptor?
     @State private var selectedSpace: PhotoSpace
     @State private var showsFolders: Bool
@@ -170,7 +172,7 @@ struct AppShellView: View {
         }
         .onChange(of: showsFolders) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
         .onChange(of: folderPath) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
-        .task(id: PeopleLoadKey(namespace: model.presentationNamespace.map { $0 + ":" + selectedSpace.rawValue }, active: selectedDestination == .people, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadPeople() }
+        .task(id: PeopleLoadKey(namespace: model.presentationNamespace.map { $0 + ":" + selectedSpace.rawValue }, active: selectedDestination == .people, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision, editRevision: peopleEditRevision)) { await loadPeople() }
         .task(id: SubjectsLoadKey(namespace: model.presentationNamespace.map { $0 + ":" + selectedSpace.rawValue }, active: selectedDestination == .subjects, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadSubjects() }
         .task(id: TagsLoadKey(namespace: model.presentationNamespace.map { $0 + ":" + selectedSpace.rawValue }, active: selectedDestination == .tags, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadTags() }
         .onChange(of: openedTagID) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
@@ -243,7 +245,10 @@ struct AppShellView: View {
             updateInfoPanelContext()
             updateTimelineSectionLoadSource()
         }
-        .onChange(of: model.presentationNamespace) { _, _ in configureAlbumPresentation() }
+        .onChange(of: model.presentationNamespace) { _, _ in
+            people = nil
+            configureAlbumPresentation()
+        }
         .onChange(of: albumPresentation.pinnedCollections) { _, _ in
             if !albumPresentation.pinnedCollections.isEmpty { model.ensureAlbumsLoaded() }
             synchronizeAlbumSelection()
@@ -289,6 +294,11 @@ struct AppShellView: View {
             Button("OK") { model.dismissRotationFailure(); viewer?.dismissRotationFailure() }
         } message: {
             Text(model.rotationFailure ?? viewer?.rotationFailure ?? "The photo could not be rotated.")
+        }
+        .sheet(item: $personEdit) { request in
+            PersonEditView(request: request, people: people ?? [], repository: model.repository) {
+                peopleEditRevision &+= 1
+            }
         }
         .sheet(item: $model.albumOperation) { operation in
             AlbumOperationView(model: model, operation: operation)
@@ -404,6 +414,7 @@ struct AppShellView: View {
         let active: Bool
         let resetRevision: UInt64
         let retryRevision: Int
+        let editRevision: UInt64
     }
 
     private func loadPeople() async {
@@ -411,7 +422,7 @@ struct AppShellView: View {
         let restored = navigationRestoration.preparePerson(namespace: repository.namespace)
         openedPersonID = restored
         if let restored { model.ensureCollectionLoaded(PhotoCollectionDescriptor.person(restored, space: selectedSpace)) }
-        people = nil; peopleError = nil
+        peopleError = nil
         for await event in await repository.people(space: selectedSpace) {
             guard !Task.isCancelled else { return }
             switch event {
@@ -451,6 +462,11 @@ struct AppShellView: View {
                                     Text("\(person.itemCount) items").font(.caption).foregroundStyle(.secondary)
                                 }
                             }.buttonStyle(.plain)
+                            .contextMenu {
+                                Button("Rename…") { personEdit = PersonEditRequest(person: person, space: selectedSpace, merge: false) }
+                                Button("Merge…") { personEdit = PersonEditRequest(person: person, space: selectedSpace, merge: true) }
+                                    .disabled(people.count < 2)
+                            }
                         }
                     }
                 }

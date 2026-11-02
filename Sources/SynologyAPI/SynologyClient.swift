@@ -227,6 +227,45 @@ public actor SynologyClient: PhotosTransport {
         throw CollectionCatalogError.exceedsLimit
     }
 
+    public func suggestPeople(prefix: String, space: PhotoSpace) async throws -> [PersonSummary] {
+        guard let sid, !prefix.isEmpty else { throw SynologyAPIError.invalidResponse }
+        let api = space == .shared ? "SYNO.FotoTeam.Browse.Person" : "SYNO.Foto.Browse.Person"
+        struct List: Decodable { let list: [PersonSummary] }
+        let response: APIEnvelope<List> = try await post(path: "/webapi/entry.cgi/" + api,
+            parameters: ["api": api, "version": "3", "method": "suggest", "name_prefix": prefix,
+                         "limit": "10", "additional": "[\"thumbnail\"]", "_sid": sid], authenticated: true)
+        guard response.success else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+        guard let list = response.data?.list, list.count <= 10,
+              list.allSatisfy({ $0.id > 0 && $0.itemCount >= 0 }), Set(list.map(\.id)).count == list.count else {
+            throw SynologyAPIError.invalidResponse
+        }
+        return list
+    }
+
+    public func renamePerson(id: Int64, name: String, space: PhotoSpace) async throws -> PersonSummary {
+        try await personMutation(method: "set", version: "1", targetID: id, sourceID: nil, name: name, space: space)
+    }
+
+    public func mergePerson(sourceID: Int64, targetID: Int64, name: String, space: PhotoSpace) async throws -> PersonSummary {
+        guard sourceID > 0, sourceID != targetID else { throw SynologyAPIError.invalidResponse }
+        return try await personMutation(method: "merge", version: "2", targetID: targetID, sourceID: sourceID, name: name, space: space)
+    }
+
+    private func personMutation(method: String, version: String, targetID: Int64, sourceID: Int64?, name: String, space: PhotoSpace) async throws -> PersonSummary {
+        guard let sid, targetID > 0 else { throw SynologyAPIError.invalidResponse }
+        let api = space == .shared ? "SYNO.FotoTeam.Browse.Person" : "SYNO.Foto.Browse.Person"
+        let encodedName = String(decoding: try JSONEncoder().encode(name), as: UTF8.self)
+        var parameters = ["api": api, "version": version, "method": method, "name": encodedName, "_sid": sid]
+        if let sourceID {
+            parameters["target_id"] = String(targetID)
+            parameters["merged_id"] = Self.idArray([sourceID])
+        } else { parameters["id"] = String(targetID) }
+        let response: APIEnvelope<PersonSummary> = try await post(path: "/webapi/entry.cgi/" + api, parameters: parameters, authenticated: true)
+        guard response.success else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+        guard let person = response.data, person.id == targetID, person.name == name, person.itemCount >= 0 else { throw SynologyAPIError.invalidResponse }
+        return person
+    }
+
     public func subjects(space: PhotoSpace) async throws -> [SubjectSummary] {
         let api = space == .shared ? "SYNO.FotoTeam.Browse.Concept" : "SYNO.Foto.Browse.Concept"
         struct List: Decodable { let list: [SubjectSummary] }

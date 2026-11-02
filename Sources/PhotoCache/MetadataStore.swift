@@ -192,6 +192,16 @@ extension DiskCache {
         }
     }
 
+    public func invalidateMetadataPeople(_ namespace: MetadataNamespace, admission: MetadataStoreAdmission) throws {
+        try metadataTransaction {
+            try admitLifetime(admission, namespace: namespace)
+            let statement = try prepare("UPDATE people_summaries SET validated_run=NULL WHERE namespace=?")
+            bind(namespace.key, at: 1, in: statement)
+            try metadataStep(statement)
+            try advanceMetadataLocalRevision(namespace)
+        }
+    }
+
     public func metadataSubjects(_ namespace: MetadataNamespace) throws -> ([SubjectSummary], String?)? {
         let statement = try prepare("SELECT payload,validated_run FROM subject_summaries WHERE namespace=?")
         defer { sqlite3_finalize(statement) }

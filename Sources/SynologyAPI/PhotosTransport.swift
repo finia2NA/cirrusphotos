@@ -125,6 +125,9 @@ public struct PhotoDownloadResponse: Sendable {
 
 public protocol PhotosTransport: Sendable {
     func people(space: PhotoSpace) async throws -> [PersonSummary]
+    func suggestPeople(prefix: String, space: PhotoSpace) async throws -> [PersonSummary]
+    func renamePerson(id: Int64, name: String, space: PhotoSpace) async throws -> PersonSummary
+    func mergePerson(sourceID: Int64, targetID: Int64, name: String, space: PhotoSpace) async throws -> PersonSummary
     func subjects(space: PhotoSpace) async throws -> [SubjectSummary]
     func tags(space: PhotoSpace) async throws -> [TagSummary]
     func folder(id: Int64, space: PhotoSpace) async throws -> FolderSummary
@@ -214,6 +217,15 @@ public extension PhotosTransport {
 
     func people(space: PhotoSpace) async throws -> [PersonSummary] {
         throw SynologyAPIError.unsupported("People is unavailable.")
+    }
+    func suggestPeople(prefix: String, space: PhotoSpace) async throws -> [PersonSummary] {
+        throw SynologyAPIError.unsupported("People suggestions are unavailable.")
+    }
+    func renamePerson(id: Int64, name: String, space: PhotoSpace) async throws -> PersonSummary {
+        throw SynologyAPIError.unsupported("Renaming people is unavailable.")
+    }
+    func mergePerson(sourceID: Int64, targetID: Int64, name: String, space: PhotoSpace) async throws -> PersonSummary {
+        throw SynologyAPIError.unsupported("Merging people is unavailable.")
     }
     func subjects(space: PhotoSpace) async throws -> [SubjectSummary] {
         throw SynologyAPIError.unsupported("Subjects are unavailable.")
