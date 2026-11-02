@@ -21,6 +21,16 @@ public enum PhotoContentScope: Hashable, Codable, Sendable {
         }
     }
 
+    init?(cacheComponent: String) {
+        if let space = PhotoSpace(rawValue: cacheComponent) { self = .space(space); return }
+        let parts = cacheComponent.split(separator: ":")
+        if parts.count == 2, parts[0] == "album", let id = Int64(parts[1]) { self = .album(id); return }
+        if parts.count == 3, parts[0] == "incoming", let owner = Int64(parts[1]), let id = Int64(parts[2]) {
+            self = .incomingAlbum(ownerID: owner, albumID: id); return
+        }
+        return nil
+    }
+
     public var space: PhotoSpace? {
         guard case .space(let space) = self else { return nil }
         return space

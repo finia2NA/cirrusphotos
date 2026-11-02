@@ -63,25 +63,9 @@ extension PhotosTransport {
         throw TestFailure("Unexpected Diff request")
     }
 
-
-    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
-        throw TestFailure("Unexpected favorite write")
-    }
-
-    func items(ids: [Int64]) async throws -> [PhotoItem] { throw TestFailure("Unexpected item lookup") }
-    func rotate(itemIDs: [Int64], direction: PhotoRotationDirection) async throws { throw TestFailure("Unexpected rotation") }
     func setRegenerating(itemIDs: [Int64]) async throws -> [RegeneratingThumbnailUnit] { throw TestFailure("Unexpected regeneration") }
     func restoreFromRegenerating(unitIDs: [Int64]) async throws { throw TestFailure("Unexpected regeneration restore") }
     func uploadConvertedThumbnails(unitID: Int64, files: ConvertedThumbnailFiles) async throws { throw TestFailure("Unexpected converted upload") }
-
-    func thumbnail(
-        _ descriptor: ThumbnailInfo,
-        size: ThumbnailSize,
-        etag: String?,
-        lastModified: String?
-    ) async throws -> ThumbnailResponse {
-        throw TestFailure("Unexpected thumbnail request")
-    }
 
     func fullImage(
         _ resource: FullImageResource,
@@ -94,10 +78,10 @@ extension PhotosTransport {
 
 /// Fixtures seed the current normalized model directly, never legacy page payloads.
 func seedMetadataCatalog(_ snapshot: TimelineSnapshot, repository: CachedPhotosRepository,
-                         collection: PhotoCollectionDescriptor = .personalLibrary,
+                         collection: PhotoCollectionDescriptor = .library(.personal),
                          currentRun: Bool = false) async throws {
     try await repository.initializeMetadataEngine()
-    let namespace = await repository.metadataNamespace
+    let namespace = await repository.personalMetadataNamespace
     let store = await repository.store
     let days = try snapshot.sections.flatMap(\.list).map { try CollectionDayCount(day: CaptureDay(year: $0.year, month: $0.month, day: $0.day), count: $0.itemCount) }
     let catalog = try CollectionDayCatalog(days: days, completeness: .complete)
@@ -105,7 +89,7 @@ func seedMetadataCatalog(_ snapshot: TimelineSnapshot, repository: CachedPhotosR
     try await store.storeMetadataCatalog(catalog, key: CollectionKey(namespace: namespace, collection: collection), validatedRun: run, admission: store.metadataAdmission(namespace))
 }
 func seedMetadataPage(_ items: [PhotoItem], section: TimelineSection, repository: CachedPhotosRepository,
-                      collection: PhotoCollectionDescriptor = .personalLibrary,
+                      collection: PhotoCollectionDescriptor = .library(.personal),
                       validatedRun: String? = nil) async throws {
     try await repository.initializeMetadataEngine()
     let namespace = await repository.metadataNamespace(for: collection)

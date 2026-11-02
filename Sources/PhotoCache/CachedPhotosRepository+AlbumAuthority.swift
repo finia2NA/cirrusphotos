@@ -2,6 +2,14 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
+    func itemActionSpace(itemIDs: [Int64], collection: PhotoCollectionDescriptor) async throws -> PhotoSpace {
+        switch collection.contentScope {
+        case .space(let space): return space
+        case .album: return try await albumItemSpace(itemIDs: itemIDs, collection: collection)
+        case .incomingAlbum: throw SynologyAPIError.unsupported("This action is unavailable for incoming albums.")
+        }
+    }
+
     /// Album IDs do not establish a member's origin. Compare authoritative reads
     /// in both domains and accept exactly one complete matching domain. Never
     /// persist these probe results into either canonical space namespace.
@@ -17,7 +25,7 @@ extension CachedPhotosRepository {
         for start in stride(from: 0, to: itemIDs.count, by: 100) {
             try Task.checkCancellation()
             let chunk = Array(itemIDs[start..<min(start + 100, itemIDs.count)])
-            let album = try await resolveMetadataItems(chunk, priority: .visible, collection: source)
+            let album = try await resolveMetadataItems(chunk, priority: .visible, collection: source, freshness: .fresh)
             var candidates: [PhotoSpace: [PhotoItem]] = [:]
             for space in PhotoSpace.allCases {
                 let result = try await metadataReadRequest(priority: .visible) { try await client.items(ids: chunk, space: space) }

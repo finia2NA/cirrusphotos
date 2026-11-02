@@ -10,8 +10,8 @@ public enum CollectionMembershipPolicy: Sendable, Equatable {
 public enum CollectionMetadataSource {
     public static func membershipPolicy(for collection: PhotoCollectionDescriptor) -> CollectionMembershipPolicy {
         switch collection {
-        case .personalLibrary: .itemInventory
-        case .sharedFavorites, .sharedFolder, .sharedPerson, .sharedSubject, .sharedTag, .sharedLibrary, .favorites, .recentlyAdded, .album, .incomingAlbum, .folder, .person, .subject, .tag: .authoritativePerRun
+        case .library(.personal): .itemInventory
+        case .library(.shared), .favorites, .recentlyAdded, .album, .incomingAlbum, .folder, .person, .subject, .tag: .authoritativePerRun
         case .mapFilter, .libraryFilter: .sessionDerived
         }
     }

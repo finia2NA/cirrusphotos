@@ -40,8 +40,8 @@ final class CollectionDayPagerTests: XCTestCase {
         XCTAssertEqual(Array(after.sections[1...6]), before.sections)
         let growth = try CollectionDayPager.snapshot(catalog: CollectionDayCatalog(days: [.init(day: old, count: 1501)], completeness: .complete))
         XCTAssertEqual(growth.sections.map(\.offset), [0, 250, 500, 750, 1000, 1250, 1500])
-        XCTAssertEqual(try DayPageAddress(collection: .personalLibrary, day: old, offset: before.sections[0].offset),
-                       try DayPageAddress(collection: .personalLibrary, day: old, offset: growth.sections[0].offset))
+        XCTAssertEqual(try DayPageAddress(collection: .library(.personal), day: old, offset: before.sections[0].offset),
+                       try DayPageAddress(collection: .library(.personal), day: old, offset: growth.sections[0].offset))
     }
     func testCaptureLocalBoundariesAndStrictDecode() throws {
         XCTAssertEqual(try CaptureDay(time: 1_704_067_199).id, "2023-12-31")

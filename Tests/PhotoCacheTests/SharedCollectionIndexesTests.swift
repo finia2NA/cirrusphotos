@@ -5,6 +5,10 @@ import XCTest
 
 private actor SharedIndexTransport: PhotosTransport {
     var offline = false
+    var blocked = false
+    var waiting: [CheckedContinuation<Void, Never>] = []
+    func blockPeople() { blocked = true }
+    func releasePeople() { blocked = false; let pending = waiting; waiting = []; pending.forEach { $0.resume() } }
     var diffCalls = 0
     var peopleCalls: [PhotoSpace: Int] = [:]
     func setOffline() { offline = true }
@@ -12,6 +16,7 @@ private actor SharedIndexTransport: PhotosTransport {
     func people(space: PhotoSpace) async throws -> [PersonSummary] {
         peopleCalls[space, default: 0] += 1
         if offline { throw SynologyAPIError.transport("offline") }
+        if blocked { await withCheckedContinuation { waiting.append($0) } }
         return [try JSONDecoder().decode(PersonSummary.self, from: Data("{\"id\":1,\"name\":\"\(space.rawValue)\",\"item_count\":1}".utf8))]
     }
     func folder(id: Int64, space: PhotoSpace) async throws -> FolderSummary {
@@ -21,7 +26,65 @@ private actor SharedIndexTransport: PhotosTransport {
     func folders(parentID: Int64, space: PhotoSpace) async throws -> [FolderSummary] { [] }
 }
 
+extension CachedPhotosRepository {
+    fileprivate func peopleSubscriberCount(_ space: PhotoSpace) -> Int { metadata.peopleJob[space]?.subscribers.count ?? 0 }
+}
+
 final class SharedCollectionIndexesTests: XCTestCase {
+    func testSharedIndexSubscribersCoalesceAndCancelIndependently() async throws {
+        let root = temporaryTestRoot("shared-index-subscribers")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = SharedIndexTransport()
+        await transport.blockPeople()
+        let repository = try CachedPhotosRepository(credentials: .init(username: "fixture", password: "unused"), cacheRoot: root, transport: transport)
+        let first = Task { for await _ in await repository.people(space: .shared) {} }
+        let started = await waitUntil { await transport.peopleCalls[.shared] == 1 }
+        XCTAssertTrue(started)
+        let second = Task { () -> [PersonSummary]? in
+            var result: [PersonSummary]?
+            for await event in await repository.people(space: .shared) {
+                if case .value(let people, true) = event { result = people }
+            }
+            return result
+        }
+        let joined = await waitUntil { await repository.peopleSubscriberCount(.shared) == 2 }
+        XCTAssertTrue(joined)
+        first.cancel()
+        let left = await waitUntil { await repository.peopleSubscriberCount(.shared) == 1 }
+        XCTAssertTrue(left)
+        await transport.releasePeople()
+        await first.value
+        let result = await second.value
+        XCTAssertEqual(result?.first?.name, "shared")
+        let calls = await transport.peopleCalls
+        XCTAssertEqual(calls[.shared], 1)
+    }
+
+    func testSharedFoldersValidateWhenPersonalAndSharedRevisionsDiffer() async throws {
+        let root = temporaryTestRoot("shared-folder-revision")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = SharedIndexTransport()
+        let repository = try CachedPhotosRepository(credentials: .init(username: "fixture", password: "unused"), cacheRoot: root, transport: transport)
+        try await repository.initializeMetadataEngine()
+        let personal = await repository.personalMetadataNamespace
+        let shared = await repository.metadataNamespace(for: .library(.shared))
+        try await repository.store.applyMetadataChanges(namespace: personal, cursor: .init(diffVersion: 1, versionTime: 1), replacements: [], deletedIDs: [], affectedDays: [], invalidateAll: true, currentRun: repository.runID, admission: repository.store.metadataAdmission(personal))
+        let personalVersion = try await repository.store.metadataState(personal)
+        let sharedVersion = try await repository.store.metadataState(shared)
+        XCTAssertNotEqual(personalVersion.revision, sharedVersion.revision)
+        var result: FolderDirectory?
+        for await event in await repository.folderDirectory(id: 0, space: .shared) {
+            switch event {
+            case .value(let value, true): result = value
+            case .failure(let message): XCTFail(message)
+            default: break
+            }
+        }
+        XCTAssertEqual(result?.folder.name, "shared")
+        let persisted = try await repository.store.metadataFolderDirectory(shared, id: 0)
+        XCTAssertEqual(persisted?.0.folder.name, "shared")
+    }
+
     func testIndexesAndDirectoriesKeepIdenticalIDsSeparateAndRetainOfflineCache() async throws {
         let root = temporaryTestRoot("shared-indexes")
         defer { try? FileManager.default.removeItem(at: root) }

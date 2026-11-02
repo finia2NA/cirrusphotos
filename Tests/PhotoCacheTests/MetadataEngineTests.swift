@@ -32,7 +32,7 @@ final class MetadataEngineTests: XCTestCase, @unchecked Sendable {
     }
     private func seedCheckpoint(_ repository: CachedPhotosRepository) async throws -> MetadataStoreVersion {
         try await repository.initializeMetadataEngine()
-        let namespace = await repository.metadataNamespace
+        let namespace = await repository.personalMetadataNamespace
         let store = await repository.store
         try await store.applyMetadataChanges(namespace: namespace, cursor: .init(diffVersion: 1, versionTime: 1), replacements: [], deletedIDs: [], affectedDays: [], invalidateAll: true, currentRun: "prior", admission: store.metadataAdmission(namespace))
         return try await store.metadataState(namespace)
@@ -49,7 +49,7 @@ final class MetadataEngineTests: XCTestCase, @unchecked Sendable {
         }
         let counts = await transport.counts()
         XCTAssertEqual(counts.0, 0); XCTAssertEqual(counts.1, 1)
-        let state = try await repository.store.metadataState(repository.metadataNamespace)
+        let state = try await repository.store.metadataState(repository.personalMetadataNamespace)
         XCTAssertEqual(state.cursor, .init(diffVersion: 2, versionTime: 2))
     }
     func testRejectedPartialOversizedIntervalsRecoverOnceAndUnsupportedInvalidatesWithoutProof() async throws {
@@ -60,7 +60,7 @@ final class MetadataEngineTests: XCTestCase, @unchecked Sendable {
             let repository = try repository(transport, root: root)
             let old = try await seedCheckpoint(repository)
             try await repository.reconcileMetadataSource()
-            let state = try await repository.store.metadataState(repository.metadataNamespace)
+            let state = try await repository.store.metadataState(repository.personalMetadataNamespace)
             XCTAssertEqual(state.resetEpoch, old.resetEpoch + 1)
             XCTAssertFalse(state.inventoryComplete)
             let counts = await transport.counts()
@@ -78,7 +78,7 @@ final class MetadataEngineTests: XCTestCase, @unchecked Sendable {
         let repository = try repository(transport, root: root)
         let old = try await seedCheckpoint(repository)
         do { try await repository.reconcileMetadataSource(); XCTFail("Offline succeeded") } catch { }
-        let current = try await repository.store.metadataState(repository.metadataNamespace)
+        let current = try await repository.store.metadataState(repository.personalMetadataNamespace)
         XCTAssertEqual(current, old)
         let counts = await transport.counts()
         XCTAssertEqual(counts.0, 0); XCTAssertEqual(counts.1, 1)

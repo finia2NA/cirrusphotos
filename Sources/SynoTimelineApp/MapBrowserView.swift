@@ -22,7 +22,7 @@ struct MapBrowserView: View {
                     MapClusterPin(group: group,
                                   thumbnail: model.thumbnail(for: group.representative),
                                   repository: library.repository,
-                                  collection: PhotoCollectionDescriptor.personalLibrary.inSpace(space),
+                                  collection: PhotoCollectionDescriptor.library(space),
                                   allowNetwork: model.status == .ready) {
                         if group.isSingle {
                             onOpenPhoto(group.representative.id)

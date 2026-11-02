@@ -93,11 +93,6 @@ public actor SynologyClient: PhotosTransport {
         }
     }
 
-    public func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind,
-                               progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
-        try await downloadPhotos(itemIDs: itemIDs, kind: kind, reference: nil, progress: progress)
-    }
-
     public func downloadIncomingPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, reference: String,
                                        progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
         guard !reference.isEmpty else { throw SynologyAPIError.invalidResponse }
@@ -156,6 +151,7 @@ public actor SynologyClient: PhotosTransport {
     }
 
     public func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
+        guard !collection.isSessionDerived else { throw SynologyAPIError.unsupported("Session collections have no server timeline.") }
         let sections = try await fetchTimelineSections(collection: collection, initial: initial)
         return try CollectionDayCatalog(sections: sections, completeness: initial ? .partial : .complete)
     }
@@ -198,12 +194,6 @@ public actor SynologyClient: PhotosTransport {
         return CollectionBatchResult(items: data.list, profile: fields)
     }
 
-    public func readFolderCatalogBatch(folderID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry] { try await readFolderCatalogBatch(folderID: folderID, offset: offset, limit: limit, space: .personal) }
-    public func folders(parentID: Int64) async throws -> [FolderSummary] { try await folders(parentID: parentID, space: .personal) }
-    public func folder(id: Int64) async throws -> FolderSummary { try await folder(id: id, space: .personal) }
-    public func tags() async throws -> [TagSummary] { try await tags(space: .personal) }
-    public func subjects() async throws -> [SubjectSummary] { try await subjects(space: .personal) }
-    public func people() async throws -> [PersonSummary] { try await people(space: .personal) }
     public func readFolderCatalogBatch(folderID: Int64, offset: Int, limit: Int, space: PhotoSpace) async throws -> [DayTimelineEntry] {
         let api = space == .shared ? "SYNO.FotoTeam.Browse.Item" : "SYNO.Foto.Browse.Item"
         guard let sid, offset >= 0, limit > 0, limit <= 1000 else { throw SynologyAPIError.invalidResponse }
@@ -628,10 +618,6 @@ public actor SynologyClient: PhotosTransport {
         "[" + fields.map { "\"\($0)\"" }.joined(separator: ",") + "]"
     }
 
-    public func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
-        try await setFavorite(itemIDs: itemIDs, favorite: favorite, space: .personal)
-    }
-
     public func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws {
         guard let sid else { throw SynologyAPIError.api(119) }
         guard !itemIDs.isEmpty else { return }
@@ -644,10 +630,6 @@ public actor SynologyClient: PhotosTransport {
             authenticated: true
         )
         guard response.success else { throw SynologyAPIError.api(response.error?.code ?? -1) }
-    }
-
-    public func items(ids: [Int64]) async throws -> [PhotoItem] {
-        try await items(ids: ids, space: .personal)
     }
 
     public func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] {
@@ -693,10 +675,6 @@ public actor SynologyClient: PhotosTransport {
             throw SynologyAPIError.api(response.error?.code ?? -1)
         }
         return data.list
-    }
-
-    public func rotate(itemIDs: [Int64], direction: PhotoRotationDirection) async throws {
-        try await rotate(itemIDs: itemIDs, direction: direction, space: .personal)
     }
 
     public func rotate(itemIDs: [Int64], direction: PhotoRotationDirection, space: PhotoSpace) async throws {
@@ -882,11 +860,6 @@ public actor SynologyClient: PhotosTransport {
         "[" + ids.map(String.init).joined(separator: ",") + "]"
     }
 
-    public func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                          etag: String? = nil, lastModified: String? = nil) async throws -> ThumbnailResponse {
-        try await thumbnail(descriptor, size: size, albumID: nil, reference: nil, etag: etag, lastModified: lastModified)
-    }
-
     public func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace,
                           etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         try await thumbnail(descriptor, size: size, albumID: nil, reference: nil, space: space, etag: etag, lastModified: lastModified)
@@ -1053,10 +1026,6 @@ public actor SynologyClient: PhotosTransport {
         )
         return FullImageResponse(data: data, etag: http.value(forHTTPHeaderField: "ETag"),
                                  lastModified: http.value(forHTTPHeaderField: "Last-Modified"))
-    }
-
-    public func livePhotoMotion(itemID: Int64) async throws -> VideoPlaybackResource? {
-        try await livePhotoMotion(itemID: itemID, space: .personal)
     }
 
     public func livePhotoMotion(itemID: Int64, space: PhotoSpace) async throws -> VideoPlaybackResource? {

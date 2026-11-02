@@ -2,7 +2,11 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
-    var metadataNamespace: MetadataNamespace { MetadataNamespace(account: namespace, scope: .space(.personal)) }
+    var personalMetadataNamespace: MetadataNamespace { MetadataNamespace(account: namespace, scope: .space(.personal)) }
+
+    func metadataNamespace(for space: PhotoSpace) -> MetadataNamespace {
+        MetadataNamespace(account: namespace, scope: .space(space))
+    }
 
     func metadataNamespace(for collection: PhotoCollectionDescriptor) -> MetadataNamespace {
         let source = mediaCollection(for: collection)
@@ -43,15 +47,15 @@ extension CachedPhotosRepository {
                 }
             }
             try await connect()
-            let admission = try await store.metadataAdmission(metadataNamespace)
-            let prior = try await store.metadataState(metadataNamespace)
+            let admission = try await store.metadataAdmission(personalMetadataNamespace)
+            let prior = try await store.metadataState(personalMetadataNamespace)
             do {
                 guard let cursor = prior.cursor else {
                     let boundary = try await metadataSourceRequest { try await client.diffVersion() }
                     try requireMetadataEngineAdmission(epoch: epoch, id: id)
-                    try await store.applyMetadataChanges(namespace: metadataNamespace, cursor: boundary, replacements: [], deletedIDs: [], affectedDays: [],
+                    try await store.applyMetadataChanges(namespace: personalMetadataNamespace, cursor: boundary, replacements: [], deletedIDs: [], affectedDays: [],
                                                          invalidateAll: true, currentRun: runID, admission: admission)
-                    let committed = try await store.metadataState(metadataNamespace)
+                    let committed = try await store.metadataState(personalMetadataNamespace)
                     try requireMetadataEngineAdmission(epoch: epoch, id: id)
                     metadata.revision = committed.revision
                     metadata.reconciled = true
@@ -64,20 +68,20 @@ extension CachedPhotosRepository {
                     return
                 }
                 if interval.isEmpty {
-                    try await store.applyMetadataChanges(namespace: metadataNamespace, cursor: interval.cursor, replacements: [], deletedIDs: [], affectedDays: [],
+                    try await store.applyMetadataChanges(namespace: personalMetadataNamespace, cursor: interval.cursor, replacements: [], deletedIDs: [], affectedDays: [],
                                                          invalidateAll: false, currentRun: runID, admission: admission)
-                    let committed = try await store.metadataState(metadataNamespace)
+                    let committed = try await store.metadataState(personalMetadataNamespace)
                     try requireMetadataEngineAdmission(epoch: epoch, id: id)
                     metadata.revision = committed.revision
                     metadata.reconciled = true
                     return
                 }
-                let old = try await store.metadataItemTimes(metadataNamespace, ids: interval.modifiedItemIDs + interval.deletedItemIDs)
+                let old = try await store.metadataItemTimes(personalMetadataNamespace, ids: interval.modifiedItemIDs + interval.deletedItemIDs)
                 var replacements: [PhotoItem] = []
                 for start in stride(from: 0, to: interval.modifiedItemIDs.count, by: MetadataReadPlanner.lookupBatchSize) {
                     let end = min(start + MetadataReadPlanner.lookupBatchSize, interval.modifiedItemIDs.count)
                     let ids = Array(interval.modifiedItemIDs[start..<end])
-                    let items = try await metadataSourceRequest { try await client.items(ids: ids) }
+                    let items = try await metadataSourceRequest { try await client.items(ids: ids, space: .personal) }
                     guard items.count == ids.count, Set(items.map(\.id)) == Set(ids) else {
                         try await recoverMetadataSource(admission: admission, epoch: epoch, id: id)
                         return
@@ -92,11 +96,11 @@ extension CachedPhotosRepository {
                     return
                 }
                 try requireMetadataEngineAdmission(epoch: epoch, id: id)
-                try await store.applyMetadataChanges(namespace: metadataNamespace, cursor: fence.cursor,
+                try await store.applyMetadataChanges(namespace: personalMetadataNamespace, cursor: fence.cursor,
                                                      replacements: candidate.replacements, deletedIDs: candidate.deletedIDs,
                                                      affectedDays: candidate.affectedDays, invalidateAll: candidate.invalidateAll,
                                                      currentRun: runID, admission: admission)
-                let committed = try await store.metadataState(metadataNamespace)
+                let committed = try await store.metadataState(personalMetadataNamespace)
                 try requireMetadataEngineAdmission(epoch: epoch, id: id)
                 metadata.revision = committed.revision
                 metadata.reconciled = true
@@ -136,9 +140,9 @@ extension CachedPhotosRepository {
     }
     private func disableMetadataSource(admission: MetadataStoreAdmission, epoch: UInt64, id: UUID) async throws {
         try requireMetadataEngineAdmission(epoch: epoch, id: id)
-        try await store.applyMetadataChanges(namespace: metadataNamespace, cursor: nil, replacements: [], deletedIDs: [], affectedDays: [],
+        try await store.applyMetadataChanges(namespace: personalMetadataNamespace, cursor: nil, replacements: [], deletedIDs: [], affectedDays: [],
                                              invalidateAll: true, currentRun: runID, admission: admission)
-        let committed = try await store.metadataState(metadataNamespace)
+        let committed = try await store.metadataState(personalMetadataNamespace)
         try requireMetadataEngineAdmission(epoch: epoch, id: id)
         metadata.revision = committed.revision
         metadata.sourceUnavailable = true
@@ -161,9 +165,9 @@ extension CachedPhotosRepository {
             return
         }
         try requireMetadataEngineAdmission(epoch: epoch, id: id)
-        try await store.applyMetadataChanges(namespace: metadataNamespace, cursor: fresh, replacements: [], deletedIDs: [], affectedDays: [],
+        try await store.applyMetadataChanges(namespace: personalMetadataNamespace, cursor: fresh, replacements: [], deletedIDs: [], affectedDays: [],
                                              invalidateAll: true, currentRun: runID, admission: admission)
-        let committed = try await store.metadataState(metadataNamespace)
+        let committed = try await store.metadataState(personalMetadataNamespace)
         try requireMetadataEngineAdmission(epoch: epoch, id: id)
         metadata.revision = committed.revision
         metadata.reconciled = true
@@ -175,10 +179,10 @@ extension CachedPhotosRepository {
     /// a Map synchronization path. SQL staging keeps all non-geotagged IDs too.
     func buildMetadataInventory(token: MetadataWorkToken, id: UUID) async throws -> [PhotoLocationRecord] {
             try await reconcileMetadataSource(force: true)
-            _ = try await verifiedTimelineSnapshot(collection: .personalLibrary)
-            let admission = try await store.metadataAdmission(metadataNamespace)
-            let prior = try await store.metadataState(metadataNamespace)
-            guard let catalog = try await store.metadataCatalog(CollectionKey(namespace: metadataNamespace, collection: .personalLibrary))?.catalog else { throw CollectionCatalogError.invalidCoverage }
+            _ = try await verifiedTimelineSnapshot(collection: .library(.personal))
+            let admission = try await store.metadataAdmission(personalMetadataNamespace)
+            let prior = try await store.metadataState(personalMetadataNamespace)
+            guard let catalog = try await store.metadataCatalog(CollectionKey(namespace: personalMetadataNamespace, collection: .library(.personal)))?.catalog else { throw CollectionCatalogError.invalidCoverage }
             let total = catalog.itemCount
             var scanned = 0
             do {
@@ -188,7 +192,7 @@ extension CachedPhotosRepository {
                     }
                     guard await metadataTokenIsCurrent(token) else { throw MetadataAdmissionError.superseded }
                     guard items.count <= Self.locationScanPageLimit, items.count <= total - scanned else { throw CollectionCatalogError.invalidCoverage }
-                    try await store.stageMetadataInventory(items, job: id, namespace: metadataNamespace, admission: admission)
+                    try await store.stageMetadataInventory(items, job: id, namespace: personalMetadataNamespace, admission: admission)
                     scanned += items.count
                     publishLocationIndexProgress(scanned: scanned, total: total)
                     if items.count < Self.locationScanPageLimit {
@@ -198,16 +202,16 @@ extension CachedPhotosRepository {
                             let fence = try await metadataReadRequest(priority: .prefetch, id: id) { try await client.changes(since: cursor) }
                             guard fence.isEmpty else {
                                 let boundary = try await metadataReadRequest(priority: .prefetch, id: id) { try await client.diffVersion() }
-                                try await store.applyMetadataChanges(namespace: metadataNamespace, cursor: boundary, replacements: [], deletedIDs: [], affectedDays: [],
+                                try await store.applyMetadataChanges(namespace: personalMetadataNamespace, cursor: boundary, replacements: [], deletedIDs: [], affectedDays: [],
                                                                      invalidateAll: true, currentRun: runID, admission: admission)
                                 throw CollectionCatalogError.invalidCoverage
                             }
                             fenceCursor = fence.cursor
                         }
                         guard await metadataTokenIsCurrent(token) else { throw MetadataAdmissionError.superseded }
-                        try await store.commitMetadataInventory(id, namespace: metadataNamespace, catalog: catalog, cursor: fenceCursor, admission: admission)
+                        try await store.commitMetadataInventory(id, namespace: personalMetadataNamespace, catalog: catalog, cursor: fenceCursor, admission: admission)
                         guard await metadataTokenIsCurrent(token) else { throw MetadataAdmissionError.superseded }
-                        let projection = try await store.metadataLocationProjection(metadataNamespace, currentOnly: true)
+                        let projection = try await store.metadataLocationProjection(personalMetadataNamespace, currentOnly: true)
                         guard projection.state.inventoryComplete, projection.state.resetEpoch == admission.resetEpoch else {
                             metadata.inventoryCurrent = false
                             throw CollectionCatalogError.invalidCoverage

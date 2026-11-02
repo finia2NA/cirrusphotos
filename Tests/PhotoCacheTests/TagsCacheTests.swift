@@ -7,7 +7,7 @@ private actor TagsCacheTransport: PhotosTransport {
     var offline = false
     var calls = 0
     func setOffline() { offline = true }
-    func tags() async throws -> [TagSummary] {
+    func tags(space: PhotoSpace) async throws -> [TagSummary] {
         calls += 1
         if offline { throw TestFailure("Offline") }
         return [try JSONDecoder().decode(TagSummary.self, from: Data(#"{"id":123,"name":"A","item_count":4,"additional":{"thumbnail":{"unit_id":123,"cache_key":"face","m":"ready"}}}"#.utf8))]

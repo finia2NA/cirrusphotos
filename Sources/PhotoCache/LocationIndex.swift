@@ -62,7 +62,7 @@ extension CachedPhotosRepository {
         }
         let epoch = metadata.admissionEpoch
         let revision = metadata.locationRevision
-        guard let projection = try? await store.metadataLocationProjection(metadataNamespace),
+        guard let projection = try? await store.metadataLocationProjection(personalMetadataNamespace),
               epoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
         guard revision == metadata.locationRevision else {
             metadata.locationProjectionLoaded = false
@@ -114,7 +114,7 @@ extension CachedPhotosRepository {
             if !metadata.locationProjectionLoaded { await publishStoredLocationProjection(); return }
             let epoch = metadata.admissionEpoch
             guard !metadata.locationProjectionObservers.isEmpty,
-                  let state = try? await store.metadataState(metadataNamespace),
+                  let state = try? await store.metadataState(personalMetadataNamespace),
                   epoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
             let records = metadata.locationRecords.values.sorted { $0.time > $1.time || ($0.time == $1.time && $0.id < $1.id) }
             let verified = state.inventoryComplete && (metadata.inventoryCurrent || (metadata.reconciled && !metadata.sourceUnavailable))
@@ -135,19 +135,19 @@ extension CachedPhotosRepository {
                 do {
                     try await initializeMetadataEngine()
                     let epoch = metadata.admissionEpoch
-                    let cached = try await store.metadataCachedLocations(metadataNamespace)
+                    let cached = try await store.metadataCachedLocations(personalMetadataNamespace)
                     guard epoch == metadata.admissionEpoch, !metadata.resetInProgress, !Task.isCancelled else { throw CancellationError() }
                     if !cached.isEmpty { continuation.yield(.cached(acceptLocationRecords(cached))) }
                     try await connect()
                     try await reconcileMetadataSource()
-                    let projection = try await store.metadataLocationProjection(metadataNamespace, currentOnly: true)
+                    let projection = try await store.metadataLocationProjection(personalMetadataNamespace, currentOnly: true)
                     let state = projection.state
                     if (metadata.inventoryCurrent && state.inventoryComplete) || (metadata.reconciled && !metadata.sourceUnavailable && state.inventoryComplete) {
                         let records = projection.records
                         guard epoch == metadata.admissionEpoch, !metadata.resetInProgress, !Task.isCancelled else { throw CancellationError() }
                         continuation.yield(.completed(acceptLocationRecords(records), verified: true))
                     } else {
-                        _ = try await verifiedTimelineSnapshot(collection: .personalLibrary)
+                        _ = try await verifiedTimelineSnapshot(collection: .library(.personal))
                         let task = registerLocationIndexScan(subscriber: subscriber)
                         let records = try await task.value
                         guard epoch == metadata.admissionEpoch, !metadata.resetInProgress, !Task.isCancelled else { throw CancellationError() }
@@ -197,20 +197,23 @@ extension CachedPhotosRepository {
         metadata.locationIndexWork?.subscribers.remove(id)
     }
 
-    func acceptLocationRecords(_ records: [PhotoLocationRecord]) -> LocationIndexValue {
-        metadata.locationProjectionLoaded = true
-        let previous = metadata.locationRecords
+    func acceptLocationRecords(_ records: [PhotoLocationRecord], space: PhotoSpace = .personal) -> LocationIndexValue {
+        if space == .personal { metadata.locationProjectionLoaded = true }
+        let previous = space == .shared ? metadata.sharedLocations.records : metadata.locationRecords
         let next = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         let semanticChanged = previous.count != next.count || next.contains { id, record in
             guard let old = previous[id] else { return true }
             return old.time != record.time || old.coordinate != record.coordinate
         }
-        metadata.locationRecords = next
-        if semanticChanged {
-            metadata.locationRevision &+= 1
-            invalidateMapFiltersForLocationChange()
+        if space == .shared {
+            metadata.sharedLocations.records = next
+            if semanticChanged { metadata.sharedLocations.revision &+= 1 }
+        } else {
+            metadata.locationRecords = next
+            if semanticChanged { metadata.locationRevision &+= 1 }
         }
-        return LocationIndexValue(records: records,
-                                  revision: LocationIndexRevision(metadata.locationRevision))
+        if semanticChanged { invalidateMapFiltersForLocationChange(space: space) }
+        let revision = space == .shared ? metadata.sharedLocations.revision : metadata.locationRevision
+        return LocationIndexValue(records: records, revision: LocationIndexRevision(revision, space: space))
     }
 }

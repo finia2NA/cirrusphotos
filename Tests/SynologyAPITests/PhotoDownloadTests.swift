@@ -22,7 +22,7 @@ final class PhotoDownloadTests: XCTestCase {
         defer { session.invalidateAndCancel() }
         let client = SynologyClient(baseURL: URL(string: "https://example.test")!, session: session)
         try await client.login(credentials: .init(username: "test", password: "unused"))
-        let result = try await client.downloadPhotos(itemIDs: [1], kind: .compressedJPEG, progress: { _ in })
+        let result = try await client.downloadPhotos(itemIDs: [1], kind: .compressedJPEG, space: .personal, progress: { _ in })
         defer { try? FileManager.default.removeItem(at: result.temporaryURL.deletingLastPathComponent()) }
         XCTAssertEqual(result.filename, "fallback.heic")
         XCTAssertEqual(try Data(contentsOf: result.temporaryURL), Data("original".utf8))
@@ -47,12 +47,12 @@ final class PhotoDownloadTests: XCTestCase {
         }
         let client = SynologyClient()
         try await client.login(credentials: CredentialStore.load())
-        let items = try await client.items(ids: [284351])
+        let items = try await client.items(ids: [284351], space: .personal)
         let item = try XCTUnwrap(items.first)
         let resource = try XCTUnwrap(item.fullImageResource(in: .space(.personal)))
         let original = try await client.fullImage(resource, etag: nil, lastModified: nil)
         let originalData = try XCTUnwrap(original.data)
-        let download = try await client.downloadPhotos(itemIDs: [item.id], kind: .original, progress: { _ in })
+        let download = try await client.downloadPhotos(itemIDs: [item.id], kind: .original, space: .personal, progress: { _ in })
         defer { try? FileManager.default.removeItem(at: download.temporaryURL.deletingLastPathComponent()) }
         let downloadData = try Data(contentsOf: download.temporaryURL)
         XCTAssertEqual(SHA256.hash(data: originalData), SHA256.hash(data: downloadData))
@@ -65,12 +65,12 @@ final class PhotoDownloadTests: XCTestCase {
         }
         let client = SynologyClient()
         try await client.login(credentials: CredentialStore.load())
-        let items = try await client.items(ids: [129468])
+        let items = try await client.items(ids: [129468], space: .personal)
         let item = try XCTUnwrap(items.first)
         let resource = try XCTUnwrap(item.fullImageResource(in: .space(.personal)))
         let response = try await client.fullImage(resource, etag: nil, lastModified: nil)
         let original = try XCTUnwrap(response.data)
-        let downloaded = try await client.downloadPhotos(itemIDs: [item.id], kind: .original, progress: { _ in })
+        let downloaded = try await client.downloadPhotos(itemIDs: [item.id], kind: .original, space: .personal, progress: { _ in })
         defer { try? FileManager.default.removeItem(at: downloaded.temporaryURL.deletingLastPathComponent()) }
         let bytes = try Data(contentsOf: downloaded.temporaryURL)
         XCTAssertNotEqual(SHA256.hash(data: original), SHA256.hash(data: bytes))
@@ -86,7 +86,7 @@ final class PhotoDownloadTests: XCTestCase {
         try await client.login(credentials: CredentialStore.load())
         for ids: [Int64] in [[284351], [284351, 284353]] {
             for kind: PhotoDownloadKind in [.original, .compressedJPEG] {
-                let result = try await client.downloadPhotos(itemIDs: ids, kind: kind, progress: { _ in })
+                let result = try await client.downloadPhotos(itemIDs: ids, kind: kind, space: .personal, progress: { _ in })
                 defer { try? FileManager.default.removeItem(at: result.temporaryURL.deletingLastPathComponent()) }
                 let attributes = try FileManager.default.attributesOfItem(atPath: result.temporaryURL.path)
                 XCTAssertGreaterThan((attributes[.size] as? NSNumber)?.intValue ?? 0, 0)

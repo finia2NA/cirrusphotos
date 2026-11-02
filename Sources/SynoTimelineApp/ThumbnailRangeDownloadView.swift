@@ -20,13 +20,13 @@ struct ThumbnailRangeDownloadView: View {
     @State private var downloadTask: Task<Void, Never>?
 
     private var targets: [(collection: PhotoCollectionDescriptor, snapshot: TimelineSnapshot)] {
-        let collections: [PhotoCollectionDescriptor] = [.personalLibrary] + (includesSharedSpace ? [.sharedLibrary] : [])
+        let collections: [PhotoCollectionDescriptor] = [.library(.personal)] + (includesSharedSpace ? [.library(.shared)] : [])
         return collections.compactMap { collection in
             library.snapshot(for: collection).map { (collection, $0) }
         }
     }
     private var timelinesVerified: Bool {
-        library.timelineVerified && (!includesSharedSpace || library.timelineVerified(for: .sharedLibrary))
+        library.timelineVerified && (!includesSharedSpace || library.timelineVerified(for: .library(.shared)))
     }
     private struct TimelineKey: Equatable {
         let includesSharedSpace: Bool
@@ -35,8 +35,8 @@ struct ThumbnailRangeDownloadView: View {
     }
     private var timelineKey: TimelineKey {
         .init(includesSharedSpace: includesSharedSpace,
-              personalRevision: library.snapshotRevision(for: .personalLibrary),
-              sharedRevision: library.snapshotRevision(for: .sharedLibrary))
+              personalRevision: library.snapshotRevision(for: .library(.personal)),
+              sharedRevision: library.snapshotRevision(for: .library(.shared)))
     }
     private var snapshot: TimelineSnapshot? { rangeSnapshot }
     private var days: [TimelineCore.LibraryDay] { snapshot?.timeline.days ?? [] }
@@ -96,7 +96,7 @@ struct ThumbnailRangeDownloadView: View {
             Text("You can continue browsing while this window is open. Closing it cancels a running batch.")
                 .font(.callout).foregroundStyle(.secondary)
 
-            if includesSharedSpace, let message = library.error(for: .sharedLibrary) {
+            if includesSharedSpace, let message = library.error(for: .library(.shared)) {
                 Text("Shared Space: \(message)").font(.callout).foregroundStyle(.secondary)
             }
             if !timelinesVerified {
@@ -138,7 +138,7 @@ struct ThumbnailRangeDownloadView: View {
         .frame(width: 540)
         .onAppear { initializeRange() }
         .task(id: timelineKey) {
-            if includesSharedSpace { library.ensureCollectionLoaded(.sharedLibrary) }
+            if includesSharedSpace { library.ensureCollectionLoaded(.library(.shared)) }
             rangeSnapshot = targets.isEmpty ? nil : ThumbnailWarmingPlan.combinedSnapshot(targets.map(\.snapshot))
         }
         .onChange(of: lower) { _, _ in if !restoringSelection { rememberSelectedDates() } }

@@ -6,7 +6,7 @@ import SynologyAPI
 final class PhotoPageSnapshotTests: XCTestCase {
     func testSparseSlotRetainsIdentityPositionAndIndividualAuthority() throws {
         let item = try JSONDecoder().decode(PhotoItem.self, from: Data(#"{"id":2,"time":1704067200,"type":"photo"}"#.utf8))
-        let page = PhotoPageSnapshot(address: try .init(collection: .personalLibrary, day: CaptureDay(time: item.time), offset: 0), membershipRevision: 1,
+        let page = PhotoPageSnapshot(address: try .init(collection: .library(.personal), day: CaptureDay(time: item.time), offset: 0), membershipRevision: 1,
                                      membershipVerified: true, slots: [.init(itemID: 1, item: nil, verified: true), .init(itemID: 2, item: item, verified: true)])
         XCTAssertEqual(page.slots.map(\.itemID), [1, 2])
         XCTAssertNil(page.slots[0].item)

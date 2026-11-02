@@ -17,7 +17,7 @@ private actor SharedMediaTransport: PhotosTransport {
         try CollectionDayCatalog(sections: [TimelineSection(offset: 0, limit: 1, list: [TimelineDay(year: 2024, month: 1, day: 1, itemCount: 1)])], completeness: .complete)
     }
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
-        CollectionBatchResult(items: [try photo(request.collection.space)], profile: fields)
+        CollectionBatchResult(items: [try photo(try XCTUnwrap(request.collection.space))], profile: fields)
     }
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] { [try photo(space)] }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
@@ -38,12 +38,12 @@ final class SharedMediaTests: XCTestCase, @unchecked Sendable {
         let transport = SharedMediaTransport()
         let repository = try CachedPhotosRepository(credentials: .init(username: "fixture", password: "unused"), cacheRoot: root, transport: transport)
         var snapshot: TimelineSnapshot?
-        for await event in await repository.timeline(collection: .sharedLibrary) {
+        for await event in await repository.timeline(collection: .library(.shared)) {
             if case .value(let value, true) = event { snapshot = value }
         }
         let timeline = try XCTUnwrap(snapshot)
         let photo = try await transport.photo(.shared)
-        let session = PhotoViewerSession(repository: repository, collection: .sharedLibrary,
+        let session = PhotoViewerSession(repository: repository, collection: .library(.shared),
             index: LibraryIndex(snapshot: timeline), seed: .init(sectionIndex: 0, pageOffset: 0, item: photo, page: [photo], pageVerified: true), allowNetwork: true)
         var received: PhotoViewerState?
         for await state in await session.states() {
@@ -70,10 +70,10 @@ final class SharedMediaTests: XCTestCase, @unchecked Sendable {
         let repository = try CachedPhotosRepository(credentials: .init(username: "fixture", password: "unused"), cacheRoot: root, transport: transport)
         let photo = try await transport.photo(.shared)
         let section = TimelineSection(offset: 0, limit: 1, list: [TimelineDay(year: 2024, month: 1, day: 1, itemCount: 1)])
-        try await seedMetadataPage([photo], section: section, repository: repository, collection: .personalLibrary)
-        try await seedMetadataPage([photo], section: section, repository: repository, collection: .sharedLibrary)
+        try await seedMetadataPage([photo], section: section, repository: repository, collection: .library(.personal))
+        try await seedMetadataPage([photo], section: section, repository: repository, collection: .library(.shared))
         let timeline = try CollectionDayPager.snapshot(catalog: CollectionDayCatalog(sections: [section], completeness: .complete))
-        let sharedViewer = PhotoViewerSession(repository: repository, collection: .sharedLibrary, index: LibraryIndex(snapshot: timeline),
+        let sharedViewer = PhotoViewerSession(repository: repository, collection: .library(.shared), index: LibraryIndex(snapshot: timeline),
             seed: .init(sectionIndex: 0, pageOffset: 0, item: photo, page: [photo], pageVerified: true), allowNetwork: false)
         let personalViewer = PhotoViewerSession(repository: repository, index: LibraryIndex(snapshot: timeline),
             seed: .init(sectionIndex: 0, pageOffset: 0, item: photo, page: [photo], pageVerified: true), allowNetwork: false)
@@ -81,8 +81,8 @@ final class SharedMediaTests: XCTestCase, @unchecked Sendable {
         _ = await personalViewer.state()
         // Allow stream registration before publishing the mutations.
         try await Task.sleep(for: .milliseconds(10))
-        try await repository.setFavorite(itemID: photo.id, item: photo, in: section, collection: .sharedLibrary, to: true)
-        try await repository.rotate(.init(itemIDs: [photo.id], sectionsByID: [photo.id: section], collection: .sharedLibrary, itemsByID: [photo.id: photo]), direction: .clockwise)
+        try await repository.setFavorite(itemID: photo.id, item: photo, in: section, collection: .library(.shared), to: true)
+        try await repository.rotate(.init(itemIDs: [photo.id], sectionsByID: [photo.id: section], collection: .library(.shared), itemsByID: [photo.id: photo]), direction: .clockwise)
         for _ in 0..<100 {
             let state = await sharedViewer.state()
             if state.item?.additional?.orientation == 6 && state.item?.isFavorite == true { break }
@@ -97,8 +97,8 @@ final class SharedMediaTests: XCTestCase, @unchecked Sendable {
         await sharedViewer.close()
         await personalViewer.close()
         let store = await repository.store
-        let sharedNamespace = await repository.metadataNamespace(for: .sharedLibrary)
-        let personalNamespace = await repository.metadataNamespace(for: .personalLibrary)
+        let sharedNamespace = await repository.metadataNamespace(for: .library(.shared))
+        let personalNamespace = await repository.metadataNamespace(for: .library(.personal))
         let shared = try await store.metadataDetails(sharedNamespace, ids: [photo.id], currentRun: repository.runID)[photo.id]?.item
         let personal = try await store.metadataDetails(personalNamespace, ids: [photo.id], currentRun: repository.runID)[photo.id]?.item
         XCTAssertEqual(shared?.additional?.orientation, 6)

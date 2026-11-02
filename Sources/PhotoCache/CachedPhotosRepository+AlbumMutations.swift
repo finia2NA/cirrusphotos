@@ -116,8 +116,8 @@ extension CachedPhotosRepository {
         metadata.albumListEpoch &+= 1
         metadata.albumListJob?.task.cancel()
         metadata.albumListJob = nil
-        let admission = try await store.metadataAdmission(metadataNamespace)
-        try await store.invalidateMetadataAlbumSummaries(metadataNamespace, admission: admission)
+        let admission = try await store.metadataAdmission(personalMetadataNamespace)
+        try await store.invalidateMetadataAlbumSummaries(personalMetadataNamespace, admission: admission)
         if let selection {
             let source = mediaCollection(for: selection.authority.originatingCollection)
             let space = source.albumID != nil ? try await albumItemSpace(itemIDs: selection.items.map(\.id), collection: source) : source.contentScope.space
@@ -191,8 +191,8 @@ extension CachedPhotosRepository {
             try await store.invalidateMetadataCollection(CollectionKey(namespace: scopedNamespace, collection: collection), admission: admission)
             publishMetadataInvalidation(collection: collection)
         }
-        let admission = try await store.metadataAdmission(metadataNamespace)
-        try await store.invalidateMetadataAlbumSummaries(metadataNamespace, admission: admission)
+        let admission = try await store.metadataAdmission(personalMetadataNamespace)
+        try await store.invalidateMetadataAlbumSummaries(personalMetadataNamespace, admission: admission)
     }
 
     private func reconcileAlbumMutation(albumID: Int64?, deleting: Bool) async throws {

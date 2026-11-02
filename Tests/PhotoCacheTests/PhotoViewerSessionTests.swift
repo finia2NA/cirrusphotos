@@ -45,7 +45,7 @@ fileprivate actor ViewerTransport: PhotosTransport {
     func setFavoriteBlocked(_ enabled: Bool) { blockFavorite = enabled }
     func releaseFavoriteWrite() { releaseFavorite = true }
 
-    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
+    func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws {
         favoriteRequests.append(contentsOf: itemIDs.map { ($0, favorite) })
         while blockFavorite, !releaseFavorite {
             try await Task.sleep(for: .milliseconds(2))
@@ -81,7 +81,7 @@ fileprivate actor ViewerTransport: PhotosTransport {
         return CollectionBatchResult(items: rows, profile: fields)
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         thumbnailCalls.append(descriptor.unitID)
         thumbnailRequests.append((descriptor.unitID, size))
         if failImages { throw TestFailure("Offline") }
@@ -1043,7 +1043,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         XCTAssertTrue(badgeUpdated)
         let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(server: server, account: credentials.username),
                                               section: section))
-        let stored = try await repo.store.metadataPage(try DayPageAddress(section: section, collection: .personalLibrary), namespace: repo.metadataNamespace, currentRun: repo.runID)?.completeItems ?? []
+        let stored = try await repo.store.metadataPage(try DayPageAddress(section: section, collection: .library(.personal)), namespace: repo.personalMetadataNamespace, currentRun: repo.runID)?.completeItems ?? []
         XCTAssertTrue(stored[0].isFavorite)
         await session.toggleFavorite()
         let unfavoredState = await session.state()
@@ -1138,7 +1138,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
                                                                            account: credentials.username),
                                               section: section))
         let store = await repo.store
-        let cached = try await store.metadataPage(try DayPageAddress(section: section, collection: .personalLibrary), namespace: repo.metadataNamespace, currentRun: repo.runID)
+        let cached = try await store.metadataPage(try DayPageAddress(section: section, collection: .library(.personal)), namespace: repo.personalMetadataNamespace, currentRun: repo.runID)
         XCTAssertEqual(cached?.slots.first?.item?.isFavorite, true)
         await window.cancelAll()
     }
@@ -1207,7 +1207,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         let transport = ViewerTransport()
         await transport.configure(pages: [0: [first], 1: [second]])
         let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
-                                         collection: .favorites,
+                                         collection: .favorites(.personal),
                                          index: LibraryIndex(snapshot: TimelineSnapshot(sections: sections)),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: first, page: [first],
@@ -1218,7 +1218,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         XCTAssertTrue(reachedSecond)
         let collections = await transport.pageCollections
         XCTAssertFalse(collections.isEmpty)
-        XCTAssertTrue(collections.allSatisfy { $0 == .favorites })
+        XCTAssertTrue(collections.allSatisfy { $0 == .favorites(.personal) })
         await session.close()
     }
 
@@ -1234,7 +1234,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         await transport.configure(pages: [250: Array(items[250...253])])
         await transport.setFavoriteBlocked(true)
         let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
-                                         collection: .favorites,
+                                         collection: .favorites(.personal),
                                          index: LibraryIndex(snapshot: TimelineSnapshot(sections: sections)),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1,
                                                                item: items[1], page: Array(items[0...249]),
@@ -1270,7 +1270,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
                                   blockedPages: [250])
         await transport.setFavoriteBlocked(true)
         let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport),
-                                         collection: .favorites,
+                                         collection: .favorites(.personal),
                                          index: LibraryIndex(snapshot: TimelineSnapshot(sections: sections)),
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1,
                                                                item: items[1], page: Array(items[0...249]),

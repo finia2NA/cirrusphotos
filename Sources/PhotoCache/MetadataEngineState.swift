@@ -6,7 +6,7 @@ struct MetadataEngineState {
     var expectedPageDemands: [UUID: Set<DayPageAddress>] = [:]
     var collectionRecoveries: [PhotoCollectionDescriptor: MetadataCollectionRecovery] = [:]
     var detailJobs: [UUID: MetadataDetailJob] = [:]
-    var detailJobByID: [Int64: UUID] = [:]
+    var detailJobByID: [PhotoItemIdentity: UUID] = [:]
     var pendingPages: [DayPageAddress: MetadataPendingPage] = [:]
     var activePages: [DayPageAddress: MetadataPendingPage] = [:]
     var batchJobs: [UUID: Task<Void, Never>] = [:]
@@ -95,6 +95,7 @@ struct AlbumCatalogMembership {
 }
 
 struct MetadataDetailJob {
+    let scope: PhotoContentScope
     let task: Task<[Int64: PhotoItem], Error>
     let itemIDs: [Int64]
     var subscribers: Set<UUID>

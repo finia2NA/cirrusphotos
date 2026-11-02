@@ -19,7 +19,7 @@ extension CachedPhotosRepository {
                 catch { continuation.yield(.failure(error.localizedDescription)); continuation.finish(); return }
                 let validation = albumListValidationRun()
                 let epoch = metadata.admissionEpoch
-                let cached = try? await store.metadataAlbumSummaries(metadataNamespace)
+                let cached = try? await store.metadataAlbumSummaries(personalMetadataNamespace)
                 guard !Task.isCancelled, epoch == metadata.admissionEpoch, validation == albumListValidationRun(), !metadata.resetInProgress else { continuation.finish(); return }
                 let list = cached?.albums
                 if let list {
@@ -62,11 +62,11 @@ extension CachedPhotosRepository {
             let token = try await captureMetadataWorkToken(resource: .albumList, jobID: id)
             try await connect()
             try await reconcileMetadataSource()
-            let admission = try await store.metadataAdmission(metadataNamespace)
+            let admission = try await store.metadataAdmission(personalMetadataNamespace)
             let list = try await metadataReadRequest(priority: .visible, id: id) { try await client.albums() }
             try Task.checkCancellation()
             guard validation == albumListValidationRun(), await metadataTokenIsCurrent(token) else { throw CancellationError() }
-            try await store.storeMetadataAlbumSummaries(list, namespace: metadataNamespace, currentRun: validation, admission: admission)
+            try await store.storeMetadataAlbumSummaries(list, namespace: personalMetadataNamespace, currentRun: validation, admission: admission)
             guard await metadataTokenIsCurrent(token) else { throw MetadataAdmissionError.superseded }
             return list
         }

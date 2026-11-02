@@ -18,13 +18,13 @@ final class SharedCollectionsTransportTests: XCTestCase {
         _ = try await client.folders(parentID: root.id, space: .shared)
         _ = try await client.readFolderCatalogBatch(folderID: root.id, offset: 0, limit: 1000, space: .shared)
         let day = try CaptureDay(year: 2024, month: 1, day: 1)
-        for collection in [PhotoCollectionDescriptor.sharedFavorites, .sharedPerson(7), .sharedSubject(7), .sharedTag(7)] {
+        for collection in [PhotoCollectionDescriptor.favorites(.shared), .person(7, space: .shared), .subject(7, space: .shared), .tag(7, space: .shared)] {
             XCTAssertEqual(PhotoCollectionDescriptor(rawValue: collection.rawValue), collection)
             _ = try await client.collectionDayCatalog(collection: collection, initial: false)
             _ = try await client.readCollectionBatch(.init(collection: collection, order: .timeline,
                 newestDay: day, oldestDay: day, offset: 0, limit: 1), fields: .fullPage)
         }
-        XCTAssertEqual(PhotoCollectionDescriptor(rawValue: "shared:folder:7"), .sharedFolder(7))
+        XCTAssertEqual(PhotoCollectionDescriptor(rawValue: "shared:folder:7"), .folder(7, space: .shared))
     }
 }
 

@@ -14,7 +14,8 @@ extension CachedPhotosRepository {
 
     private func storeLibraryFilter(_ registration: LibraryFilterRegistration) throws {
         guard let id = registration.descriptor.libraryFilterID,
-              registration.referencesBySection.count == registration.snapshot.sections.count else {
+              registration.referencesBySection.count == registration.snapshot.sections.count,
+              registration.descriptor.contentScope == registration.sourceCollection.contentScope else {
             throw SynologyAPIError.unsupported("An invalid library filter registration was supplied.")
         }
         guard !metadata.resetInProgress else { throw MetadataAdmissionError.resetInProgress }
@@ -113,10 +114,10 @@ extension CachedPhotosRepository {
 
     func promoteLibraryFilterSources(_ section: TimelineSection, collection: PhotoCollectionDescriptor) {
         guard let id = collection.libraryFilterID, let state = metadata.libraryFilters[id],
-              metadataNamespace(for: state.registration.sourceCollection) == metadataNamespace,
               let references = state.referencesBySection[section] else { return }
+        let scope = metadataNamespace(for: state.registration.sourceCollection).scope
         for reference in references {
-            if let job = metadata.detailJobByID[reference.itemID] { Task { await gate.promote(job) } }
+            if let job = metadata.detailJobByID[PhotoItemIdentity(scope: scope, itemID: reference.itemID)] { Task { await gate.promote(job) } }
         }
     }
 }

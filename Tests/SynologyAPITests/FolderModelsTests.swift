@@ -13,7 +13,7 @@ final class FolderModelsTests: XCTestCase {
     }
 
     func testFolderCollectionIdentityAndOrdering() throws {
-        let collection = PhotoCollectionDescriptor.folder(42)
+        let collection = PhotoCollectionDescriptor.folder(42, space: .personal)
         XCTAssertEqual(PhotoCollectionDescriptor(rawValue: collection.rawValue), collection)
         XCTAssertEqual(try JSONDecoder().decode(PhotoCollectionDescriptor.self, from: JSONEncoder().encode(collection)), collection)
         XCTAssertTrue(collection.usesItemCatalog)

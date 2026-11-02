@@ -56,12 +56,12 @@ extension PhotosTransport {
     }
 
 
-    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
+    func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws {
         throw UnexpectedTransportCall()
     }
 
-    func items(ids: [Int64]) async throws -> [PhotoItem] { throw UnexpectedTransportCall() }
-    func rotate(itemIDs: [Int64], direction: PhotoRotationDirection) async throws { throw UnexpectedTransportCall() }
+    func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] { throw UnexpectedTransportCall() }
+    func rotate(itemIDs: [Int64], direction: PhotoRotationDirection, space: PhotoSpace) async throws { throw UnexpectedTransportCall() }
     func setRegenerating(itemIDs: [Int64]) async throws -> [RegeneratingThumbnailUnit] { throw UnexpectedTransportCall() }
     func restoreFromRegenerating(unitIDs: [Int64]) async throws { throw UnexpectedTransportCall() }
     func uploadConvertedThumbnails(unitID: Int64, files: ConvertedThumbnailFiles) async throws { throw UnexpectedTransportCall() }
@@ -69,7 +69,7 @@ extension PhotosTransport {
     func thumbnail(
         _ descriptor: ThumbnailInfo,
         size: ThumbnailSize,
-        etag: String?,
+        space: PhotoSpace, etag: String?,
         lastModified: String?
     ) async throws -> ThumbnailResponse {
         throw UnexpectedTransportCall()

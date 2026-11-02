@@ -20,7 +20,8 @@ extension CachedPhotosRepository {
                     if let albumID = collection.albumID {
                         return try await client.readAlbumCatalogBatch(albumID: albumID, offset: page * 1000, limit: 1000)
                     }
-                    return try await client.readFolderCatalogBatch(folderID: collection.folderID!, offset: page * 1000, limit: 1000, space: collection.space)
+                    guard let folderID = collection.folderID, let space = collection.space else { throw CollectionCatalogError.invalidAddress }
+                    return try await client.readFolderCatalogBatch(folderID: folderID, offset: page * 1000, limit: 1000, space: space)
                 }
                 guard batch.count <= 1000 else { throw CollectionCatalogError.invalidCoverage }
                 for entry in batch {

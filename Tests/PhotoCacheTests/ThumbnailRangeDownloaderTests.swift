@@ -53,7 +53,7 @@ private actor RangeTransport: PhotosTransport {
         return CollectionBatchResult(items: rows, profile: fields)
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         thumbnailCalls += 1
         if blockThumbnails { try await Task.sleep(for: .seconds(30)) }
         return ThumbnailResponse(data: Data([UInt8(truncatingIfNeeded: descriptor.unitID)]),

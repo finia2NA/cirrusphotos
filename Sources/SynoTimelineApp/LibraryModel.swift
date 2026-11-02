@@ -159,10 +159,10 @@ final class LibraryModel: ObservableObject {
         self.presentationNamespace = repository?.namespace
     }
 
-    var snapshot: TimelineSnapshot? { snapshot(for: .personalLibrary) }
-    var snapshotRevision: Int { snapshotRevision(for: .personalLibrary) }
-    var timelineVerified: Bool { timelineVerified(for: .personalLibrary) }
-    var error: String? { error(for: .personalLibrary) }
+    var snapshot: TimelineSnapshot? { snapshot(for: .library(.personal)) }
+    var snapshotRevision: Int { snapshotRevision(for: .library(.personal)) }
+    var timelineVerified: Bool { timelineVerified(for: .library(.personal)) }
+    var error: String? { error(for: .library(.personal)) }
 
     func snapshot(for collection: PhotoCollectionDescriptor) -> TimelineSnapshot? { snapshots[collection] }
     func snapshotRevision(for collection: PhotoCollectionDescriptor) -> Int { snapshotRevisions[collection, default: 0] }
@@ -223,7 +223,7 @@ final class LibraryModel: ObservableObject {
             return .init(targets: [], failures: ["The photo repository is unavailable."])
         }
 
-        let baseCollections: [PhotoCollectionDescriptor] = [.personalLibrary, .favorites] + (includeSharedSpace ? [.sharedLibrary, .sharedFavorites] : [])
+        let baseCollections: [PhotoCollectionDescriptor] = [.library(.personal), .favorites(.personal)] + (includeSharedSpace ? [.library(.shared), .favorites(.shared)] : [])
         for collection in baseCollections {
             startCollectionFetchIfNeeded(collection)
         }
@@ -248,12 +248,12 @@ final class LibraryModel: ObservableObject {
             guard !Task.isCancelled else { break }
             let title: String
             switch collection {
-            case .personalLibrary: title = "Personal Library"
-            case .sharedLibrary: title = "Shared Library"
-            case .favorites: title = "Favorites"
-            case .sharedFavorites: title = "Shared Favorites"
+            case .library(.personal): title = "Personal Library"
+            case .library(.shared): title = "Shared Library"
+            case .favorites(.personal): title = "Favorites"
+            case .favorites(.shared): title = "Shared Favorites"
             case .album(let id): title = albumName(for: collection) ?? "Album \(id)"
-            case .sharedFolder, .sharedPerson, .sharedSubject, .sharedTag, .recentlyAdded, .incomingAlbum, .folder, .person, .subject, .tag, .mapFilter, .libraryFilter: continue
+            case .folder, .person, .subject, .tag, .recentlyAdded, .incomingAlbum, .mapFilter, .libraryFilter: continue
             }
             if timelineVerified(for: collection), let snapshot = snapshot(for: collection) {
                 targets.append(.init(collection: collection, snapshot: snapshot,
@@ -291,7 +291,13 @@ final class LibraryModel: ObservableObject {
 
     func allowsPersonalActions(in collection: PhotoCollectionDescriptor) -> Bool {
         let source = sessionSources[collection] ?? collection
-        return source.space == .personal && source.incomingAlbumIdentity == nil
+        // Owned album actions verify their members' origin at execution; album
+        // authority itself must not be interpreted as Personal Space.
+        guard !source.isSessionDerived else { return false }
+        switch source.contentScope {
+        case .space(.personal), .album: return true
+        case .space(.shared), .incomingAlbum: return false
+        }
     }
 
     func canDownload(in collection: PhotoCollectionDescriptor) -> Bool {
@@ -343,7 +349,7 @@ final class LibraryModel: ObservableObject {
             registerSessionCollection(registration.descriptor, snapshot: registration.snapshot, authority: registration.authority, source: source)
             return registration.descriptor
         } catch {
-            collectionErrors[.personalLibrary] = error.localizedDescription
+            collectionErrors[.library(.personal)] = error.localizedDescription
             return nil
         }
     }
@@ -400,7 +406,7 @@ final class LibraryModel: ObservableObject {
         active: Bool,
         canOpen: Bool,
         canToggleFavorite: Bool = false,
-        collection: PhotoCollectionDescriptor = .personalLibrary,
+        collection: PhotoCollectionDescriptor = .library(.personal),
         selectedOrdinals: IndexSet = IndexSet(),
         handler: ((BrowserSelectionCommand) -> Void)? = nil
     ) {
@@ -961,7 +967,7 @@ final class LibraryModel: ObservableObject {
                     }
                 }
             }
-            for collection in PhotoCollectionDescriptor.allCases where refreshTasks[collection] == nil {
+            for collection in PhotoCollectionDescriptor.bootstrapCollections where refreshTasks[collection] == nil {
                 refreshTasks[collection] = Task { [weak self] in
                     for await event in await repository.timelineRefreshes(collection: collection) {
                         guard !Task.isCancelled else { return }
@@ -974,15 +980,15 @@ final class LibraryModel: ObservableObject {
             for collection in openedCollections {
                 startCollectionFetchIfNeeded(collection)
             }
-            for collection in PhotoCollectionDescriptor.allCases {
+            for collection in PhotoCollectionDescriptor.bootstrapCollections {
                 startCollectionFetchIfNeeded(collection)
             }
-            for collection in PhotoCollectionDescriptor.allCases {
+            for collection in PhotoCollectionDescriptor.bootstrapCollections {
                 await collectionFetchTasks[collection]?.value
             }
             await refreshUsage()
         } catch {
-            collectionErrors[.personalLibrary] = error.localizedDescription
+            collectionErrors[.library(.personal)] = error.localizedDescription
         }
         isLoading = false
     }
@@ -1095,7 +1101,7 @@ final class LibraryModel: ObservableObject {
         incomingAlbumsVerified = false
         for task in collectionFetchTasks.values { task.cancel() }
         collectionFetchTasks.removeAll()
-        let affected = Set(snapshots.keys).union(PhotoCollectionDescriptor.allCases)
+        let affected = Set(snapshots.keys).union(PhotoCollectionDescriptor.bootstrapCollections)
         snapshots.removeAll()
         selectionAuthorities.removeAll()
         sessionSources.removeAll()
@@ -1118,7 +1124,7 @@ final class LibraryModel: ObservableObject {
         updateBrowserFavoriteAvailability()
 
         guard repository != nil else { return }
-        for collection in PhotoCollectionDescriptor.allCases {
+        for collection in PhotoCollectionDescriptor.bootstrapCollections {
             startCollectionFetchIfNeeded(collection)
         }
         for collection in openedCollections {

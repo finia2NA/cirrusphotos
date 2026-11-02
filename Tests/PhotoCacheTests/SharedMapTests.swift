@@ -5,6 +5,10 @@ import XCTest
 
 private actor SharedMapTransport: PhotosTransport {
     var offline = false
+    var blockBatch = false
+    var waiting: [CheckedContinuation<Void, Never>] = []
+    func block() { blockBatch = true }
+    func release() { blockBatch = false; let pending = waiting; waiting = []; pending.forEach { $0.resume() } }
     var duplicate = false
     var drift = false
     var catalogCalls = 0
@@ -24,14 +28,15 @@ private actor SharedMapTransport: PhotosTransport {
     func setDrift() { drift = true }
     func diffVersion() async throws -> DiffCursor { diffCalls += 1; throw TestFailure("Personal Diff must not run") }
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
-        guard collection == .sharedLibrary else { throw TestFailure("Wrong map collection") }
+        guard collection == .library(.shared) else { throw TestFailure("Wrong map collection") }
         catalogCalls += 1
         if offline { throw TestFailure("offline") }
         return try CollectionDayCatalog(days: [CollectionDayCount(day: CaptureDay(time: 1704067200), count: drift && catalogCalls > 1 ? 1 : 2)], completeness: .complete)
     }
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
-        guard request.collection == .sharedLibrary, fields == .locations else { throw TestFailure("Wrong inventory request") }
+        guard request.collection == .library(.shared), fields == .locations else { throw TestFailure("Wrong inventory request") }
         batchCalls += 1
+        if blockBatch { await withCheckedContinuation { waiting.append($0) } }
         return CollectionBatchResult(items: duplicate ? [rows[0], rows[0]] : rows, profile: fields)
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace,
@@ -44,6 +49,10 @@ private actor SharedMapTransport: PhotosTransport {
         guard space == .shared else { throw TestFailure("Wrong detail space") }
         return rows.filter { ids.contains($0.id) }
     }
+}
+
+extension CachedPhotosRepository {
+    fileprivate func sharedMapScanSubscribers() -> Int { metadata.sharedLocations.job?.subscribers.count ?? 0 }
 }
 
 final class SharedMapTests: XCTestCase, @unchecked Sendable {
@@ -64,6 +73,30 @@ final class SharedMapTests: XCTestCase, @unchecked Sendable {
         return (cached, completed, failed)
     }
 
+    func testLastSharedMapSubscriberCancelsTheScanWithoutPublishingInventory() async throws {
+        let root = temporaryTestRoot("shared-map-cancel")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = try SharedMapTransport()
+        await transport.block()
+        let repository = try CachedPhotosRepository(credentials: credentials, cacheRoot: root, transport: transport)
+        let task = Task { for await _ in await repository.locationIndex(space: .shared) {} }
+        let started = await waitUntil { await transport.batchCalls == 1 }
+        XCTAssertTrue(started)
+        let registered = await repository.sharedMapScanSubscribers()
+        XCTAssertEqual(registered, 1)
+        task.cancel()
+        await task.value
+        let cancelled = await waitUntil { await repository.sharedMapScanSubscribers() == 0 }
+        XCTAssertTrue(cancelled)
+        await transport.release()
+        let namespace = await repository.metadataNamespace(for: PhotoSpace.shared)
+        let version = try await repository.store.metadataState(namespace)
+        XCTAssertFalse(version.inventoryComplete)
+        let result = await scan(repository)
+        XCTAssertFalse(result.failed)
+        XCTAssertNotNil(result.completed)
+    }
+
     func testSharedInventoryAndPinUseIsolatedScopeWithoutPersonalDiff() async throws {
         let root = temporaryTestRoot("shared-map"); defer { try? FileManager.default.removeItem(at: root) }
         let transport = try SharedMapTransport()
@@ -72,8 +105,8 @@ final class SharedMapTests: XCTestCase, @unchecked Sendable {
         XCTAssertFalse(result.failed)
         let value = try XCTUnwrap(result.completed)
         XCTAssertEqual(value.records.map(\.id), [1])
-        let personal = await repository.metadataNamespace(for: .personalLibrary)
-        let shared = await repository.metadataNamespace(for: .sharedLibrary)
+        let personal = await repository.metadataNamespace(for: .library(.personal))
+        let shared = await repository.metadataNamespace(for: .library(.shared))
         let sharedInventory = try await repository.store.metadataInventory(shared)
         let personalInventory = try await repository.store.metadataInventory(personal)
         XCTAssertEqual(Set(sharedInventory.map(\.id)), [1, 2], "Non-geotagged IDs participate in coverage")
@@ -84,12 +117,12 @@ final class SharedMapTests: XCTestCase, @unchecked Sendable {
 
         let pin = try await repository.registerMapFilter(itemIDs: [1], locationRevision: value.revision)
         let source = await repository.mediaCollection(for: pin.descriptor)
-        XCTAssertEqual(source, .sharedLibrary)
+        XCTAssertEqual(source, .library(.shared))
         let observationSource = await repository.metadataObservationSource(for: pin.descriptor)
-        XCTAssertEqual(observationSource, .sharedLibrary)
+        XCTAssertEqual(observationSource, .library(.shared))
         let observation = await repository.observeCollectionPages(collection: pin.descriptor, sections: Set(pin.snapshot.sections))
         await repository.publishDerivedPageChanges(ids: [1])
-        await repository.publishMetadataInvalidation(collection: .personalLibrary)
+        await repository.publishMetadataInvalidation(collection: .library(.personal))
         let changes = await repository.takeCollectionPageChanges(observation.id)
         XCTAssertTrue(changes.isEmpty)
         var name: String?
@@ -120,7 +153,7 @@ final class SharedMapTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(filtered.referencesBySection.flatMap { $0 }.map(\.itemID), [1])
         _ = try await repository.registerLibraryFilter(filtered)
         let filteredSource = await repository.mediaCollection(for: filtered.descriptor)
-        XCTAssertEqual(filteredSource, .sharedLibrary)
+        XCTAssertEqual(filteredSource, .library(.shared))
         await controller.shutdown()
     }
 
@@ -168,7 +201,7 @@ final class SharedMapTests: XCTestCase, @unchecked Sendable {
             let result = await scan(repository)
             XCTAssertTrue(result.failed)
             XCTAssertNil(result.completed)
-            let state = try await repository.store.metadataState(repository.metadataNamespace(for: .sharedLibrary))
+            let state = try await repository.store.metadataState(repository.metadataNamespace(for: .library(.shared)))
             XCTAssertFalse(state.inventoryComplete)
         }
     }

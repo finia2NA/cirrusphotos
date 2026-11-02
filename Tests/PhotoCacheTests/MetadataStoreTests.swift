@@ -15,7 +15,7 @@ final class MetadataStoreTests: XCTestCase, @unchecked Sendable {
         try await store.initializeMetadataStore()
         return (store, root)
     }
-    private func seed(_ store: DiskCache, collection: PhotoCollectionDescriptor = .personalLibrary) async throws -> DayPageRead {
+    private func seed(_ store: DiskCache, collection: PhotoCollectionDescriptor = .library(.personal)) async throws -> DayPageRead {
         let day = try CaptureDay(year: 2024, month: 1, day: 1)
         let catalog = try CollectionDayCatalog(days: [.init(day: day, count: 3)], completeness: .complete)
         let admission = try await store.metadataAdmission(namespace)
@@ -46,7 +46,7 @@ final class MetadataStoreTests: XCTestCase, @unchecked Sendable {
         let (store, root) = try await open()
         defer { try? FileManager.default.removeItem(at: root) }
         let page = try await seed(store)
-        let favorites = try await seed(store, collection: .favorites)
+        let favorites = try await seed(store, collection: .favorites(.personal))
         let full = try await store.metadataPage(page.address, namespace: namespace, currentRun: "run")
         XCTAssertEqual(full?.slots.map(\.itemID), [1, 2, 3])
         XCTAssertEqual(full?.verified, true)
@@ -68,7 +68,7 @@ final class MetadataStoreTests: XCTestCase, @unchecked Sendable {
         defer { try? FileManager.default.removeItem(at: root) }
         let page = try await seed(store)
         let newDay = try CaptureDay(year: 2024, month: 1, day: 2)
-        let key = CollectionKey(namespace: namespace, collection: .personalLibrary)
+        let key = CollectionKey(namespace: namespace, collection: .library(.personal))
         let catalog = try CollectionDayCatalog(days: [.init(day: page.address.day, count: 3), .init(day: newDay, count: 2)], completeness: .complete)
         try await store.storeMetadataCatalog(catalog, key: key, validatedRun: "run", admission: store.metadataAdmission(namespace))
         let retained = try await store.metadataPage(page.address, namespace: namespace, currentRun: "run")
@@ -93,6 +93,29 @@ final class MetadataStoreTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(snapshot?.slots[0].item?.filename, "fixture.jpg")
         XCTAssertEqual(snapshot?.slots[0].verified, false)
     }
+    func testMetadataAdmissionRejectsAnotherNamespaceWithMatchingCounters() async throws {
+        let root = temporaryTestRoot("admission-scope")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try DiskCache(root: root, budget: 10_000_000)
+        try await store.initializeMetadataStore()
+        let personal = MetadataNamespace(account: "test", scope: .space(.personal))
+        let shared = MetadataNamespace(account: "test", scope: .space(.shared))
+        let admission = try await store.metadataAdmission(personal)
+        let sharedAdmission = try await store.metadataAdmission(shared)
+        XCTAssertEqual(admission.revision, sharedAdmission.revision)
+        XCTAssertEqual(admission.resetEpoch, sharedAdmission.resetEpoch)
+        do {
+            try await store.storeMetadataPeople([], namespace: shared, currentRun: "run", admission: admission)
+            XCTFail("A token from another namespace must not authorize this write")
+        } catch MetadataAdmissionError.superseded { }
+        do {
+            try await store.applyMetadataFavoriteValues([1: true], namespace: shared, currentRun: "run", admission: admission)
+            XCTFail("Mutation patches must also reject tokens from another namespace")
+        } catch MetadataAdmissionError.superseded { }
+        let cached = try await store.metadataPeople(shared)
+        XCTAssertNil(cached)
+    }
+
     func testMetadataAdmissionRejectsLateResetWriter() async throws {
         let (store, root) = try await open()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -175,9 +198,9 @@ final class MetadataStoreTests: XCTestCase, @unchecked Sendable {
         let secondDay = try CaptureDay(year: 2024, month: 1, day: 2)
         let catalog = try CollectionDayCatalog(days: [.init(day: firstDay, count: 1), .init(day: secondDay, count: 1)], completeness: .complete)
         let admission = try await store.metadataAdmission(namespace)
-        try await store.storeMetadataCatalog(catalog, key: .init(namespace: namespace, collection: .personalLibrary), validatedRun: "run", admission: admission)
-        let first = try DayPageRead(address: .init(collection: .personalLibrary, day: firstDay, offset: 0), dayCount: 1, membershipGeneration: 1)
-        let second = try DayPageRead(address: .init(collection: .personalLibrary, day: secondDay, offset: 0), dayCount: 1, membershipGeneration: 1)
+        try await store.storeMetadataCatalog(catalog, key: .init(namespace: namespace, collection: .library(.personal)), validatedRun: "run", admission: admission)
+        let first = try DayPageRead(address: .init(collection: .library(.personal), day: firstDay, offset: 0), dayCount: 1, membershipGeneration: 1)
+        let second = try DayPageRead(address: .init(collection: .library(.personal), day: secondDay, offset: 0), dayCount: 1, membershipGeneration: 1)
         try await store.storeMetadataPage(first, items: [item(1, day: firstDay)], profile: .fullPage, namespace: namespace, currentRun: "run", admission: admission)
         try await Task.sleep(for: .milliseconds(10))
         try await store.storeMetadataPage(second, items: [item(2, day: secondDay)], profile: .fullPage, namespace: namespace, currentRun: "run", admission: admission)

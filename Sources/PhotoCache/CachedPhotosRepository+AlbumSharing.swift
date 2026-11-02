@@ -55,8 +55,8 @@ extension CachedPhotosRepository {
         var result: AlbumSummary?
         var activated = false
         do {
-            let admission = try await store.metadataAdmission(metadataNamespace)
-            try await store.invalidateMetadataAlbumSummaries(metadataNamespace, admission: admission)
+            let admission = try await store.metadataAdmission(personalMetadataNamespace)
+            try await store.invalidateMetadataAlbumSummaries(personalMetadataNamespace, admission: admission)
             let user = try await client.currentPhotosUserID()
             let current = try await client.album(id: snapshot.album.id)
             guard current.type == "normal", current.ownerUserID == user,
@@ -147,8 +147,8 @@ extension CachedPhotosRepository {
         metadata.albumListEpoch &+= 1
         metadata.albumListJob?.task.cancel(); metadata.albumListJob = nil
         do {
-            let admission = try await store.metadataAdmission(metadataNamespace)
-            try await store.invalidateMetadataAlbumSummaries(metadataNamespace, admission: admission)
+            let admission = try await store.metadataAdmission(personalMetadataNamespace)
+            try await store.invalidateMetadataAlbumSummaries(personalMetadataNamespace, admission: admission)
         } catch { if operationError == nil { operationError = error } }
         metadata.albumMutationWriting = false
         for observer in metadata.albumSharingObservers.values { observer.yield(()) }

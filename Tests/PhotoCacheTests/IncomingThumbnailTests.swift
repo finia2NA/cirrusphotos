@@ -7,7 +7,7 @@ private actor IncomingThumbnailTransport: PhotosTransport {
     var personalRequests = 0
     var references: [String] = []
 
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         personalRequests += 1
         return ThumbnailResponse(data: Data("personal".utf8), etag: nil, lastModified: nil)
     }

@@ -7,10 +7,10 @@ import SynologyAPI
 final class LibraryFilterModelTests: XCTestCase {
     func testFilteredAlbumRetainsItsSourceForRemoval() {
         let library = LibraryModel()
-        let filter = PhotoCollectionDescriptor.libraryFilter(UUID())
+        let filter = PhotoCollectionDescriptor.libraryFilter(UUID(), scope: .space(.personal))
         library.registerSessionCollection(filter, snapshot: TimelineSnapshot(sections: []), source: .album(42))
         XCTAssertEqual(library.sourceAlbumID(for: filter), 42)
-        XCTAssertNil(library.sourceAlbumID(for: .personalLibrary))
+        XCTAssertNil(library.sourceAlbumID(for: .library(.personal)))
         library.unregisterSessionCollection(filter)
         XCTAssertNil(library.sourceAlbumID(for: filter))
     }
@@ -102,7 +102,7 @@ final class LibraryFilterModelTests: XCTestCase {
         let library = LibraryModel(repository: repository)
         await library.load()
         let filter = LibraryFilterModel()
-        filter.configure(library: library, source: .personalLibrary)
+        filter.configure(library: library, source: .library(.personal))
         filter.draft.mediaKinds = [.photo]
         filter.apply()
         let applied = await waitUntil { filter.activeCollection != nil }
@@ -110,8 +110,8 @@ final class LibraryFilterModelTests: XCTestCase {
         filter.configure(library: library, source: .album(77))
         XCTAssertNil(filter.activeCollection)
         XCTAssertFalse(filter.isReady)
-        XCTAssertNil(filter.activeCollection(for: .personalLibrary))
-        filter.configure(library: library, source: .personalLibrary)
+        XCTAssertNil(filter.activeCollection(for: .library(.personal)))
+        filter.configure(library: library, source: .library(.personal))
         XCTAssertTrue(filter.isReady)
         XCTAssertFalse(filter.isActive)
     }
@@ -166,7 +166,7 @@ private actor FilterModelTransport: PhotosTransport {
     }
 
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
-        return try fixtureDayCatalog(collection == .personalLibrary ? snapshot : TimelineSnapshot(sections: []), initial: initial)
+        return try fixtureDayCatalog(collection == .library(.personal) ? snapshot : TimelineSnapshot(sections: []), initial: initial)
     }
 
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {

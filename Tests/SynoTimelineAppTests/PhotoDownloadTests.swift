@@ -262,13 +262,13 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let resource = try XCTUnwrap(photo.fullImageResource(in: .space(.personal)))
         for await _ in await repository.fullImage(resource) {}
         let manager = PhotoDownloadManager()
-        manager.start(repository: repository, source: .item(photo, collection: .personalLibrary), kind: .original, choose: false)
+        manager.start(repository: repository, source: .item(photo, collection: .library(.personal)), kind: .original, choose: false)
         let originalFinished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
         XCTAssertTrue(originalFinished)
         XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("a.dng")), Data("raw-image".utf8))
         let firstCalls = await transport.downloadedIDs
         XCTAssertTrue(firstCalls.isEmpty)
-        manager.start(repository: repository, source: .item(photo, collection: .personalLibrary), kind: .compressedJPEG, choose: false)
+        manager.start(repository: repository, source: .item(photo, collection: .library(.personal)), kind: .compressedJPEG, choose: false)
         let compressedFinished = await waitUntil { manager.jobs.count == 2 && !manager.jobs[0].active }
         XCTAssertTrue(compressedFinished)
         let kind = await transport.kind
@@ -301,7 +301,7 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let repository = try CachedPhotosRepository(credentials: .init(username: "test", password: "test"),
                                                      budget: 100_000_000, cacheRoot: root.appendingPathComponent("cache"), transport: transport)
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.dng\",\"time\":1,\"type\":\"photo\"}".utf8))
-        let payload = PhotoDragPayload(repository: repository, source: .item(photo, collection: .personalLibrary), count: 1, filename: "a.dng")
+        let payload = PhotoDragPayload(repository: repository, source: .item(photo, collection: .library(.personal)), count: 1, filename: "a.dng")
         let delegate = PhotoPromiseDelegate(payload: payload)
         let provider = NSFilePromiseProvider(fileType: UTType.data.identifier, delegate: delegate)
         provider.userInfo = delegate
@@ -345,7 +345,7 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let repository = try CachedPhotosRepository(credentials: .init(username: "test", password: "test"),
                                                      budget: 100_000_000, cacheRoot: root.appendingPathComponent("cache"), transport: transport)
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.dng\",\"time\":1,\"type\":\"photo\"}".utf8))
-        let payload = PhotoDragPayload(repository: repository, source: .item(photo, collection: .personalLibrary), count: 1,
+        let payload = PhotoDragPayload(repository: repository, source: .item(photo, collection: .library(.personal)), count: 1,
                                        filename: "Album.zip", forcesArchive: true)
         let manager = PhotoDownloadManager()
         let destination = root.appendingPathComponent("Album.zip")
@@ -469,7 +469,7 @@ private actor EditingMockTransport: PhotosTransport {
         FullImageResponse(data: Data("raw-image".utf8), etag: nil, lastModified: nil)
     }
     func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind,
-                        progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
+                        space: PhotoSpace, progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
         downloadedIDs = itemIDs
         self.kind = kind
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -510,13 +510,9 @@ private actor AlbumDownloadMockTransport: PhotosTransport {
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] {
         space == origin ? try await albumItems(ids: ids, albumID: 54) : []
     }
-    func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, space: PhotoSpace,
-                        progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
-        downloadedSpace = space
-        return try await downloadPhotos(itemIDs: itemIDs, kind: kind, progress: progress)
-    }
     func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind,
-                        progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
+                        space: PhotoSpace, progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
+        downloadedSpace = space
         downloadedIDs = itemIDs; self.kind = kind
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

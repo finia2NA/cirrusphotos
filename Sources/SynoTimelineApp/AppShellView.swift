@@ -55,18 +55,18 @@ struct AppShellView: View {
     private var sourceCollection: PhotoCollectionDescriptor? {
         let collection: PhotoCollectionDescriptor? = switch selectedDestination {
         case .personalLibrary:
-            if showsFolders { folderDirectoryRequest == (folderPath.last ?? 0) ? folderDirectory.map { .folder($0.folder.id) } : nil }
-            else { .personalLibrary }
-        case .favorites: .favorites
+            if showsFolders { folderDirectoryRequest == (folderPath.last ?? 0) ? folderDirectory.map { .folder($0.folder.id, space: selectedSpace) } : nil }
+            else { .library(selectedSpace) }
+        case .favorites: .favorites(selectedSpace)
         case .recentlyAdded: .recentlyAdded
-        case .people: openedPersonID.map { .person($0) }
-        case .subjects: openedSubjectID.map { .subject($0) }
-        case .tags: openedTagID.map { .tag($0) }
+        case .people: openedPersonID.map { .person($0, space: selectedSpace) }
+        case .subjects: openedSubjectID.map { .subject($0, space: selectedSpace) }
+        case .tags: openedTagID.map { .tag($0, space: selectedSpace) }
         case .albums: openedAlbum
         case .map: openedMapFilter
         }
         if selectedSpace == .shared && selectedDestination == .recentlyAdded { return nil }
-        return selectedDestination == .albums ? collection : collection?.inSpace(selectedSpace)
+        return collection
     }
 
     private var selectedCollection: PhotoCollectionDescriptor? {
@@ -162,9 +162,10 @@ struct AppShellView: View {
             else { mapModel.stopObservingProjection(); mapModel.invalidateMetadata(restart: false) }
             openedPersonID = nil; openedSubjectID = nil; openedTagID = nil
             people = nil; subjects = nil; tags = nil; folderDirectory = nil; folderDirectoryRequest = nil
+            showsFolders = navigationRestoration.showsFolders
             folderPath = navigationRestoration.folderPath
             if let collection = sourceCollection { model.ensureCollectionLoaded(collection) }
-            if space == .shared { model.ensureCollectionLoaded(.sharedLibrary) }
+            if space == .shared { model.ensureCollectionLoaded(.library(.shared)) }
             updateBackHandler(); updateTimelineSectionLoadSource(); updateInfoPanelContext()
         }
         .onChange(of: showsFolders) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
@@ -199,7 +200,7 @@ struct AppShellView: View {
         }
         .task {
             if let collection = sourceCollection { model.ensureCollectionLoaded(collection) }
-            if selectedSpace == .shared { model.ensureCollectionLoaded(.sharedLibrary) }
+            if selectedSpace == .shared { model.ensureCollectionLoaded(.library(.shared)) }
             if selectedSpace == .personal && selectedDestination == .recentlyAdded { model.ensureCollectionLoaded(.recentlyAdded) }
             guard selectedDestination == .albums || !albumPresentation.pinnedCollections.isEmpty else { return }
             model.ensureAlbumsLoaded()
@@ -409,7 +410,7 @@ struct AppShellView: View {
         guard selectedDestination == .people, let repository = model.repository else { return }
         let restored = navigationRestoration.preparePerson(namespace: repository.namespace)
         openedPersonID = restored
-        if let restored { model.ensureCollectionLoaded(PhotoCollectionDescriptor.person(restored).inSpace(selectedSpace)) }
+        if let restored { model.ensureCollectionLoaded(PhotoCollectionDescriptor.person(restored, space: selectedSpace)) }
         people = nil; peopleError = nil
         for await event in await repository.people(space: selectedSpace) {
             guard !Task.isCancelled else { return }
@@ -441,11 +442,11 @@ struct AppShellView: View {
                             Button {
                                 openedPersonID = person.id
                                 navigationRestoration.setOpenedPerson(person.id)
-                                model.ensureCollectionLoaded(PhotoCollectionDescriptor.person(person.id).inSpace(selectedSpace))
+                                model.ensureCollectionLoaded(PhotoCollectionDescriptor.person(person.id, space: selectedSpace))
                                 updateBackHandler(); updateInfoPanelContext()
                             } label: {
                                 VStack(alignment: .leading, spacing: 6) {
-                                    AlbumCoverView(thumbnail: person.thumbnail, repository: model.repository, collection: PhotoCollectionDescriptor.personalLibrary.inSpace(selectedSpace), placeholderSymbol: "person.crop.square")
+                                    AlbumCoverView(thumbnail: person.thumbnail, repository: model.repository, collection: PhotoCollectionDescriptor.library(selectedSpace), placeholderSymbol: "person.crop.square")
                                     Text(person.name.isEmpty ? "Unnamed" : person.name).font(.headline).lineLimit(1)
                                     Text("\(person.itemCount) items").font(.caption).foregroundStyle(.secondary)
                                 }
@@ -470,7 +471,7 @@ struct AppShellView: View {
         guard selectedDestination == .subjects, let repository = model.repository else { return }
         let restored = navigationRestoration.prepareSubject(namespace: repository.namespace)
         openedSubjectID = restored
-        if let restored { model.ensureCollectionLoaded(PhotoCollectionDescriptor.subject(restored).inSpace(selectedSpace)) }
+        if let restored { model.ensureCollectionLoaded(PhotoCollectionDescriptor.subject(restored, space: selectedSpace)) }
         subjects = nil; subjectsError = nil
         for await event in await repository.subjects(space: selectedSpace) {
             guard !Task.isCancelled else { return }
@@ -502,11 +503,11 @@ struct AppShellView: View {
                             Button {
                                 openedSubjectID = subject.id
                                 navigationRestoration.setOpenedSubject(subject.id)
-                                model.ensureCollectionLoaded(PhotoCollectionDescriptor.subject(subject.id).inSpace(selectedSpace))
+                                model.ensureCollectionLoaded(PhotoCollectionDescriptor.subject(subject.id, space: selectedSpace))
                                 updateBackHandler(); updateInfoPanelContext()
                             } label: {
                                 VStack(alignment: .leading, spacing: 6) {
-                                    AlbumCoverView(thumbnail: subject.thumbnail, repository: model.repository, collection: PhotoCollectionDescriptor.personalLibrary.inSpace(selectedSpace), placeholderSymbol: "square.grid.2x2")
+                                    AlbumCoverView(thumbnail: subject.thumbnail, repository: model.repository, collection: PhotoCollectionDescriptor.library(selectedSpace), placeholderSymbol: "square.grid.2x2")
                                     Text(subject.name.isEmpty ? "Unnamed" : subject.name).font(.headline).lineLimit(1)
                                     Text("\(subject.itemCount) items").font(.caption).foregroundStyle(.secondary)
                                 }
@@ -531,7 +532,7 @@ struct AppShellView: View {
         guard selectedDestination == .tags, let repository = model.repository else { return }
         let restored = navigationRestoration.prepareTag(namespace: repository.namespace)
         openedTagID = restored
-        if let restored { model.ensureCollectionLoaded(PhotoCollectionDescriptor.tag(restored).inSpace(selectedSpace)) }
+        if let restored { model.ensureCollectionLoaded(PhotoCollectionDescriptor.tag(restored, space: selectedSpace)) }
         tags = nil; tagsError = nil
         for await event in await repository.tags(space: selectedSpace) {
             guard !Task.isCancelled else { return }
@@ -563,11 +564,11 @@ struct AppShellView: View {
                             Button {
                                 openedTagID = tag.id
                                 navigationRestoration.setOpenedTag(tag.id)
-                                model.ensureCollectionLoaded(PhotoCollectionDescriptor.tag(tag.id).inSpace(selectedSpace))
+                                model.ensureCollectionLoaded(PhotoCollectionDescriptor.tag(tag.id, space: selectedSpace))
                                 updateBackHandler(); updateInfoPanelContext()
                             } label: {
                                 VStack(alignment: .leading, spacing: 6) {
-                                    AlbumCoverView(thumbnail: tag.thumbnail, repository: model.repository, collection: PhotoCollectionDescriptor.personalLibrary.inSpace(selectedSpace), placeholderSymbol: "tag")
+                                    AlbumCoverView(thumbnail: tag.thumbnail, repository: model.repository, collection: PhotoCollectionDescriptor.library(selectedSpace), placeholderSymbol: "tag")
                                     Text(tag.name.isEmpty ? "Unnamed" : tag.name).font(.headline).lineLimit(1)
                                     Text("\(tag.itemCount) items").font(.caption).foregroundStyle(.secondary)
                                 }
@@ -600,7 +601,7 @@ struct AppShellView: View {
             switch event {
             case .value(let directory, _):
                 folderDirectory = directory
-                model.ensureCollectionLoaded(PhotoCollectionDescriptor.folder(directory.folder.id).inSpace(selectedSpace))
+                model.ensureCollectionLoaded(PhotoCollectionDescriptor.folder(directory.folder.id, space: selectedSpace))
             case .failure(let message): folderError = message
             }
         }
@@ -649,7 +650,7 @@ struct AppShellView: View {
                         navigationRestoration.setFolders(shown: showsFolders, path: folderPath)
                     } label: {
                         VStack(alignment: .leading, spacing: 6) {
-                            AlbumCoverView(thumbnail: child.thumbnail, repository: repository, collection: PhotoCollectionDescriptor.personalLibrary.inSpace(selectedSpace), placeholderSymbol: "folder")
+                            AlbumCoverView(thumbnail: child.thumbnail, repository: repository, collection: PhotoCollectionDescriptor.library(selectedSpace), placeholderSymbol: "folder")
                             Text(child.displayName).font(.headline).lineLimit(1).frame(height: 20, alignment: .top)
                         }
                     }.buttonStyle(.plain)

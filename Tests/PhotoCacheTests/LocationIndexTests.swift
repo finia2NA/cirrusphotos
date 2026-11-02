@@ -37,7 +37,7 @@ private actor InventoryTransport: PhotosTransport {
         guard offset < items.count else { return [] }
         return Array(items[offset..<min(offset + limit, items.count)])
     }
-    func items(ids: [Int64]) async throws -> [PhotoItem] { items.filter { ids.contains($0.id) } }
+    func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] { items.filter { ids.contains($0.id) } }
     func counts() -> (scans: Int, changes: Int, catalogs: Int) { (scans, changes, catalogs) }
 }
 final class LocationIndexTests: XCTestCase, @unchecked Sendable {
@@ -63,7 +63,7 @@ final class LocationIndexTests: XCTestCase, @unchecked Sendable {
         let repository = try repository(root: root, transport: transport)
         let output = await events(repository)
         XCTAssertEqual(completed(output)?.map(\.id), [1])
-        let namespace = await repository.metadataNamespace
+        let namespace = await repository.personalMetadataNamespace
         let all = try await repository.store.metadataItemTimes(namespace, ids: [1, 2])
         XCTAssertEqual(Set(all.map(\.id)), [1, 2])
         let state = try await repository.store.metadataState(namespace)
@@ -97,7 +97,7 @@ final class LocationIndexTests: XCTestCase, @unchecked Sendable {
         let repository = try repository(root: root, transport: InventoryTransport(items: [item(1, located: true)], count: 2))
         let repositoryOutput = await events(repository)
         XCTAssertNil(completed(repositoryOutput))
-        let state = try await repository.store.metadataState(repository.metadataNamespace)
+        let state = try await repository.store.metadataState(repository.personalMetadataNamespace)
         XCTAssertFalse(state.inventoryComplete)
     }
     func testUnsupportedSourceUsesAuthoritativeBaselineAgainOnNextRun() async throws {
@@ -128,7 +128,7 @@ final class LocationIndexTests: XCTestCase, @unchecked Sendable {
         let repository = try repository(root: root, transport: transport)
         let repositoryOutput = await events(repository)
         XCTAssertNil(completed(repositoryOutput))
-        let state = try await repository.store.metadataState(repository.metadataNamespace)
+        let state = try await repository.store.metadataState(repository.personalMetadataNamespace)
         XCTAssertFalse(state.inventoryComplete)
         let counts = await transport.counts()
         XCTAssertEqual(counts.scans, 1)
@@ -143,7 +143,7 @@ final class LocationIndexTests: XCTestCase, @unchecked Sendable {
         await transport.setScanFailure()
         let after = await events(repository)
         XCTAssertNil(completed(after))
-        let state = try await repository.store.metadataState(repository.metadataNamespace)
+        let state = try await repository.store.metadataState(repository.personalMetadataNamespace)
         XCTAssertFalse(state.inventoryComplete)
         let calls = await transport.counts()
         XCTAssertEqual(calls.scans, 1, "A budget too small for its catalog must not start a futile rebuild")

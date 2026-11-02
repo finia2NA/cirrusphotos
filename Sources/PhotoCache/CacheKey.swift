@@ -23,19 +23,19 @@ public enum CacheKey {
     }
 
     public static func page(scope: PhotoContentScope, namespace: String, section: TimelineSection,
-                            collection: PhotoCollectionDescriptor = .personalLibrary) -> String? {
+                            collection: PhotoCollectionDescriptor = .library(.personal)) -> String? {
         guard let address = try? DayPageAddress(section: section, collection: collection) else { return nil }
         return digest("\(namespace)|\(scope.cacheComponent)|\(collection.rawValue)|day-page|\(address.day.id)|\(address.offset)|\(address.capacity)|\(address.order.rawValue)")
     }
 
     public static func thumbnail(scope: PhotoContentScope, namespace: String, descriptor: ThumbnailInfo,
-                                 size: ThumbnailSize, collection: PhotoCollectionDescriptor = .personalLibrary) -> String {
+                                 size: ThumbnailSize, collection: PhotoCollectionDescriptor = .library(.personal)) -> String {
         let authority = collection.incomingAlbumIdentity != nil || collection.albumID != nil || collection.isLibraryFilter ? collection.rawValue + "|" + scope.cacheComponent : scope.cacheComponent
         return digest("\(namespace)|\(authority)|thumbnail|v2|\(descriptor.kind ?? "unit")|\(descriptor.unitID)|\(descriptor.cacheKey)|\(size.rawValue)")
     }
 
     public static func thumbnailIdentity(scope: PhotoContentScope, namespace: String, descriptor: ThumbnailInfo,
-                                         size: ThumbnailSize, collection: PhotoCollectionDescriptor = .personalLibrary) -> ThumbnailCacheIdentity {
+                                         size: ThumbnailSize, collection: PhotoCollectionDescriptor = .library(.personal)) -> ThumbnailCacheIdentity {
         let authority = collection.incomingAlbumIdentity != nil || collection.albumID != nil || collection.isLibraryFilter ? collection.rawValue + "|" + scope.cacheComponent : scope.cacheComponent
         return ThumbnailCacheIdentity(
             key: thumbnail(scope: scope, namespace: namespace, descriptor: descriptor, size: size, collection: collection),

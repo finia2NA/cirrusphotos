@@ -92,7 +92,7 @@ final class RepositoryFavoriteState {
         }
     }
 
-    func publish(values: [Int64: Bool], section: TimelineSection? = nil, collection: PhotoCollectionDescriptor = .personalLibrary) {
+    func publish(values: [Int64: Bool], section: TimelineSection? = nil, collection: PhotoCollectionDescriptor = .library(.personal)) {
         for (itemID, favorite) in values {
             overrides[itemID] = favorite
         }

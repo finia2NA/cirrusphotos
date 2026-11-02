@@ -43,7 +43,7 @@ final class SelectionFavoritesAppTests: XCTestCase {
         let owner5 = UUID()
         let snapshot5 = BrowserCommandSnapshot(
             owner: owner5, active: true, canOpen: false, canToggleFavorite: true,
-            collection: .personalLibrary, indexFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
+            collection: .library(.personal), indexFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
             selectionGeneration: "gen:0", selectedOrdinals: IndexSet(integersIn: 0...4),
             knownItemIDsByOrdinal: Dictionary(uniqueKeysWithValues: (0...4).map { ($0, Int64($0)) })
         )
@@ -70,7 +70,7 @@ final class SelectionFavoritesAppTests: XCTestCase {
         let owner6 = UUID()
         let snapshot6 = BrowserCommandSnapshot(
             owner: owner6, active: true, canOpen: false, canToggleFavorite: true,
-            collection: .personalLibrary, indexFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
+            collection: .library(.personal), indexFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
             selectionGeneration: "gen:0", selectedOrdinals: IndexSet(integersIn: 0...5),
             knownItemIDsByOrdinal: Dictionary(uniqueKeysWithValues: (0...5).map { ($0, Int64($0)) })
         )
@@ -111,7 +111,7 @@ final class SelectionFavoritesAppTests: XCTestCase {
         let owner = UUID()
         let commandSnapshot = BrowserCommandSnapshot(
             owner: owner, active: true, canOpen: false, canToggleFavorite: true,
-            collection: .personalLibrary, indexFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
+            collection: .library(.personal), indexFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
             selectionGeneration: "gen:0", selectedOrdinals: IndexSet(integersIn: 1...99),
             knownItemIDsByOrdinal: Dictionary(uniqueKeysWithValues: (1..<100).map { ($0, Int64($0)) })
         )
@@ -143,7 +143,7 @@ final class SelectionFavoritesAppTests: XCTestCase {
         await model.load()
         model.installBrowserCommands(snapshot: BrowserCommandSnapshot(
             owner: UUID(), active: true, canOpen: false, canToggleFavorite: true,
-            collection: .personalLibrary, indexFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
+            collection: .library(.personal), indexFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
             selectionGeneration: "gen:0", selectedOrdinals: IndexSet(integersIn: 0..<3),
             knownItemIDsByOrdinal: Dictionary(uniqueKeysWithValues: (0..<3).map { ($0, Int64($0)) })
         ), handler: nil)
@@ -174,7 +174,7 @@ final class SelectionFavoritesAppTests: XCTestCase {
         let owner = UUID()
         let commandSnapshot = BrowserCommandSnapshot(
             owner: owner, active: true, canOpen: false, canToggleFavorite: true,
-            collection: .personalLibrary, indexFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
+            collection: .library(.personal), indexFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
             selectionGeneration: "gen:0", selectedOrdinals: IndexSet(integersIn: 0...9),
             knownItemIDsByOrdinal: Dictionary(uniqueKeysWithValues: (0..<10).map { ($0, Int64($0)) })
         )
@@ -213,7 +213,7 @@ final class SelectionFavoritesAppTests: XCTestCase {
         let owner = UUID()
         let commandSnapshot = BrowserCommandSnapshot(
             owner: owner, active: true, canOpen: false, canToggleFavorite: true,
-            collection: .personalLibrary, indexFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
+            collection: .library(.personal), indexFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
             selectionGeneration: "gen:0", selectedOrdinals: IndexSet(integersIn: 0...5),
             knownItemIDsByOrdinal: Dictionary(uniqueKeysWithValues: (0..<6).map { ($0, Int64($0)) })
         )
@@ -279,7 +279,7 @@ final class SelectionFavoritesAppTests: XCTestCase {
                 active: true,
                 canOpen: false,
                 canToggleFavorite: true,
-                collection: .personalLibrary,
+                collection: .library(.personal),
                 indexFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
                 selectionGeneration: "generation",
                 selectedOrdinals: IndexSet(integer: 0),
@@ -340,12 +340,12 @@ actor AppMockTransport: PhotosTransport {
         return try fixtureBatch(Array((pages[0] ?? []).dropFirst(request.offset).prefix(request.limit)), request: request, fields: fields)
     }
 
-    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
+    func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws {
         setFavoriteCalls.append((itemIDs, favorite))
         if favoriteFailure { throw AppFavoriteFailure() }
     }
 
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         ThumbnailResponse(data: Data([1]), etag: nil, lastModified: nil)
     }
 

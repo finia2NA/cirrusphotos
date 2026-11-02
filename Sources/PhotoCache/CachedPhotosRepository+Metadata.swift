@@ -23,7 +23,7 @@ extension CachedPhotosRepository {
         )
     }
 
-    public func timeline(collection: PhotoCollectionDescriptor = .personalLibrary) -> AsyncStream<ResourceEvent<TimelineSnapshot>> {
+    public func timeline(collection: PhotoCollectionDescriptor = .library(.personal)) -> AsyncStream<ResourceEvent<TimelineSnapshot>> {
         let subscriber = UUID()
         let producer = StreamProducer()
         return AsyncStream(bufferingPolicy: .bufferingNewest(3)) { continuation in
@@ -73,7 +73,7 @@ extension CachedPhotosRepository {
         }
     }
 
-    public func page(_ section: TimelineSection, collection: PhotoCollectionDescriptor = .personalLibrary,
+    public func page(_ section: TimelineSection, collection: PhotoCollectionDescriptor = .library(.personal),
                      useCachedPages: Bool = true, allowNetwork: Bool = true,
                      priority: RequestPriority = .visible) -> AsyncStream<ResourceEvent<PhotoPageSnapshot>> {
         if collection.isMapFilter { return mapFilterPage(section, collection: collection, allowNetwork: allowNetwork, priority: priority) }
@@ -122,10 +122,10 @@ extension CachedPhotosRepository {
         }
     }
 
-    func applyingFavoriteOverrides(_ page: PhotoPageSnapshot, collection: PhotoCollectionDescriptor = .personalLibrary) -> PhotoPageSnapshot {
+    func applyingFavoriteOverrides(_ page: PhotoPageSnapshot, collection: PhotoCollectionDescriptor = .library(.personal)) -> PhotoPageSnapshot {
         let source = mediaCollection(for: collection)
-        guard source.albumID == nil, source.incomingAlbumIdentity == nil, !source.isLibraryFilter else { return page }
-        let favorites = favoriteState(for: source.space)
+        guard let space = source.space, !source.isSessionDerived else { return page }
+        let favorites = favoriteState(for: space)
         return PhotoPageSnapshot(address: page.address, membershipRevision: page.membershipRevision, membershipVerified: page.membershipVerified,
                           slots: page.slots.map { slot in
                               let item = slot.item.map { item in favorites.overrides[item.id].map { item.withFavorite($0) } ?? item }
@@ -152,8 +152,8 @@ extension CachedPhotosRepository {
         let items = try await client.readCollectionBatch(request, fields: .fullPage).items
         guard await metadataTokenIsCurrent(token) else { throw CancellationError() }
         let source = mediaCollection(for: collection)
-        guard source.contentScope.space != nil else { return items }
-        return favoriteState(for: source.space).applyingOverrides(items)
+        guard let space = source.space else { return items }
+        return favoriteState(for: space).applyingOverrides(items)
     }
 
     /// Emits authoritative metadata replacements caused by local mutations. Normal startup
@@ -169,7 +169,7 @@ extension CachedPhotosRepository {
     }
 
     public func promotePage(_ section: TimelineSection,
-                            collection: PhotoCollectionDescriptor = .personalLibrary) async {
+                            collection: PhotoCollectionDescriptor = .library(.personal)) async {
         guard let key = CacheKey.page(scope: collection.contentScope, namespace: namespace, section: section, collection: collection) else { return }
         if collection.isLibraryFilter {
             promoteLibraryFilterSources(section, collection: collection)
@@ -177,7 +177,7 @@ extension CachedPhotosRepository {
         }
         if let filterID = collection.mapFilterID, let ids = metadata.mapFilters[filterID]?.idsBySection[section] {
             for id in ids {
-                if let job = metadata.detailJobByID[id] { await gate.promote(job) }
+                if let job = metadata.detailJobByID[PhotoItemIdentity(scope: metadataNamespace(for: collection).scope, itemID: id)] { await gate.promote(job) }
             }
             return
         }

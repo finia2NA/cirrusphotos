@@ -25,30 +25,23 @@ enum SidebarSelection: Codable, Hashable {
     }
 }
 
+struct RestorableSpaceNavigation: Codable, Equatable {
+    var namespace: String?
+    var openedPersonID: Int64?
+    var openedSubjectID: Int64?
+    var openedTagID: Int64?
+    var showsFolders = false
+    var folderPath: [Int64] = []
+}
+
 struct RestorableAppNavigationState: Codable, Equatable {
-    static let currentVersion = 8
+    static let currentVersion = 9
 
     var version = currentVersion
     var sidebarSelection: SidebarSelection = .destination(.personalLibrary)
     var openedAlbum: PhotoCollectionDescriptor?
-    var openedPersonID: Int64?
-    var personNamespace: String?
-    var openedSubjectID: Int64?
-    var subjectNamespace: String?
-    var openedTagID: Int64?
-    var tagNamespace: String?
-    var sharedPersonID: Int64?
-    var sharedPersonNamespace: String?
-    var sharedSubjectID: Int64?
-    var sharedSubjectNamespace: String?
-    var sharedTagID: Int64?
-    var sharedTagNamespace: String?
-    var sharedFolderPath: [Int64] = []
-    var sharedFolderNamespace: String?
     var selectedSpace: PhotoSpace = .personal
-    var showsFolders = false
-    var folderPath: [Int64] = []
-    var folderNamespace: String?
+    var spaces: [PhotoSpace: RestorableSpaceNavigation] = [:]
     /// Keyed by `PhotoCollectionDescriptor.rawValue`.
     var anchors: [String: PhotoTimelineRestorationAnchor] = [:]
 }
@@ -83,60 +76,46 @@ final class NavigationRestorationStore: ObservableObject {
     var selectedSpace: PhotoSpace { state.selectedSpace }
     func selectSpace(_ space: PhotoSpace) { state.selectedSpace = space; save() }
 
-    var showsFolders: Bool { state.showsFolders }
-    var folderPath: [Int64] { state.selectedSpace == .shared ? state.sharedFolderPath : state.folderPath }
-    func prepareFolders(namespace: String) -> [Int64] {
-        if state.selectedSpace == .shared {
-            if state.sharedFolderNamespace != namespace { state.sharedFolderPath = []; state.sharedFolderNamespace = namespace; save() }
-            return state.sharedFolderPath
+    private var spaceNavigation: RestorableSpaceNavigation {
+        state.spaces[state.selectedSpace] ?? RestorableSpaceNavigation()
+    }
+    private func updateSpaceNavigation(_ update: (inout RestorableSpaceNavigation) -> Void) {
+        var navigation = spaceNavigation
+        update(&navigation)
+        state.spaces[state.selectedSpace] = navigation
+        save()
+    }
+    private func prepareSpace(namespace: String) {
+        guard spaceNavigation.namespace != namespace else { return }
+        updateSpaceNavigation { navigation in
+            navigation = RestorableSpaceNavigation(namespace: namespace, showsFolders: navigation.showsFolders)
         }
-        if state.folderNamespace != namespace { state.folderPath = []; state.folderNamespace = namespace; save() }
-        return state.folderPath
+    }
+
+    var showsFolders: Bool { spaceNavigation.showsFolders }
+    var folderPath: [Int64] { spaceNavigation.folderPath }
+    func prepareFolders(namespace: String) -> [Int64] {
+        prepareSpace(namespace: namespace)
+        return folderPath
     }
     func setFolders(shown: Bool, path: [Int64]) {
-        state.showsFolders = shown
-        if state.selectedSpace == .shared { state.sharedFolderPath = path } else { state.folderPath = path }
-        save()
+        updateSpaceNavigation { $0.showsFolders = shown; $0.folderPath = path }
     }
-
     func preparePerson(namespace: String) -> Int64? {
-        if state.selectedSpace == .shared {
-            if state.sharedPersonNamespace != namespace { state.sharedPersonID = nil; state.sharedPersonNamespace = namespace; save() }
-            return state.sharedPersonID
-        }
-        if state.personNamespace != namespace { state.openedPersonID = nil; state.personNamespace = namespace; save() }
-        return state.openedPersonID
+        prepareSpace(namespace: namespace)
+        return spaceNavigation.openedPersonID
     }
-    func setOpenedPerson(_ id: Int64?) {
-        if state.selectedSpace == .shared { state.sharedPersonID = id } else { state.openedPersonID = id }
-        save()
-    }
-
+    func setOpenedPerson(_ id: Int64?) { updateSpaceNavigation { $0.openedPersonID = id } }
     func prepareSubject(namespace: String) -> Int64? {
-        if state.selectedSpace == .shared {
-            if state.sharedSubjectNamespace != namespace { state.sharedSubjectID = nil; state.sharedSubjectNamespace = namespace; save() }
-            return state.sharedSubjectID
-        }
-        if state.subjectNamespace != namespace { state.openedSubjectID = nil; state.subjectNamespace = namespace; save() }
-        return state.openedSubjectID
+        prepareSpace(namespace: namespace)
+        return spaceNavigation.openedSubjectID
     }
-    func setOpenedSubject(_ id: Int64?) {
-        if state.selectedSpace == .shared { state.sharedSubjectID = id } else { state.openedSubjectID = id }
-        save()
-    }
-
+    func setOpenedSubject(_ id: Int64?) { updateSpaceNavigation { $0.openedSubjectID = id } }
     func prepareTag(namespace: String) -> Int64? {
-        if state.selectedSpace == .shared {
-            if state.sharedTagNamespace != namespace { state.sharedTagID = nil; state.sharedTagNamespace = namespace; save() }
-            return state.sharedTagID
-        }
-        if state.tagNamespace != namespace { state.openedTagID = nil; state.tagNamespace = namespace; save() }
-        return state.openedTagID
+        prepareSpace(namespace: namespace)
+        return spaceNavigation.openedTagID
     }
-    func setOpenedTag(_ id: Int64?) {
-        if state.selectedSpace == .shared { state.sharedTagID = id } else { state.openedTagID = id }
-        save()
-    }
+    func setOpenedTag(_ id: Int64?) { updateSpaceNavigation { $0.openedTagID = id } }
 
     var openedAlbum: PhotoCollectionDescriptor? {
         state.openedAlbum

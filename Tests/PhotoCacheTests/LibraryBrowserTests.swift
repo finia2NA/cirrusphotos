@@ -62,7 +62,7 @@ fileprivate actor FakeTransport: PhotosTransport {
         collectionItemCalls.append(collection)
         return try fixtureBatch(try await loadItems(in: section), request: request, fields: fields)
     }
-    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
+    func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws {
         favoriteRequests.append(contentsOf: itemIDs.map { ($0, favorite) })
         while favoriteBlocked, !favoriteReleased {
             try await Task.sleep(for: .milliseconds(2))
@@ -137,12 +137,12 @@ final class LibraryIndexAndCacheIdentityTests: LibraryBrowserTestCase {
     func testCollectionMetadataCacheKeysAreIsolated() {
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
         let descriptor = section(3)
-        XCTAssertEqual(PhotoCollectionDescriptor.personalLibrary.rawValue, "personal",
+        XCTAssertEqual(PhotoCollectionDescriptor.library(.personal).rawValue, "personal",
                        "Collection refactoring must preserve the existing Personal Library cache keys")
-        XCTAssertNotEqual(CacheKey.page(scope: .space(.personal), namespace: namespace, section: section(1), collection: .personalLibrary),
-                          CacheKey.page(scope: .space(.personal), namespace: namespace, section: section(1), collection: .favorites))
-        XCTAssertNotEqual(CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor, collection: .personalLibrary),
-                          CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor, collection: .favorites))
+        XCTAssertNotEqual(CacheKey.page(scope: .space(.personal), namespace: namespace, section: section(1), collection: .library(.personal)),
+                          CacheKey.page(scope: .space(.personal), namespace: namespace, section: section(1), collection: .favorites(.personal)))
+        XCTAssertNotEqual(CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor, collection: .library(.personal)),
+                          CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor, collection: .favorites(.personal)))
     }
 }
 
@@ -155,13 +155,13 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         await transport.configure(itemBlocked: true, items: [photo])
         let repository = try repository(root: root, transport: transport)
         let read = Task {
-            try await repository.transientPage(descriptor, collection: .favorites,
+            try await repository.transientPage(descriptor, collection: .favorites(.personal),
                                                priority: .visible)
         }
         await transport.waitForItemStart()
 
         try await repository.setFavorite(itemID: photo.id, item: photo, in: descriptor,
-                                         collection: .favorites, to: true)
+                                         collection: .favorites(.personal), to: true)
         await transport.releaseItems()
 
         let items = try await read.value
@@ -177,16 +177,16 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
                                   timelineSnapshot: TimelineSnapshot(sections: [descriptor]))
         let repository = try repository(root: root, transport: transport)
 
-        for await _ in await repository.timeline(collection: .favorites) {}
-        for await _ in await repository.page(descriptor, collection: .favorites) {}
+        for await _ in await repository.timeline(collection: .favorites(.personal)) {}
+        for await _ in await repository.page(descriptor, collection: .favorites(.personal)) {}
 
         let timelineCalls = await transport.collectionTimelineCalls
         XCTAssertEqual(timelineCalls.count, 1)
-        XCTAssertEqual(timelineCalls.first?.0, .favorites)
+        XCTAssertEqual(timelineCalls.first?.0, .favorites(.personal))
         XCTAssertEqual(timelineCalls.first?.1, false,
                        "Favorites must use full Timeline.get, never get_init_timeline")
         let itemCalls = await transport.collectionItemCalls
-        XCTAssertEqual(itemCalls, [.favorites])
+        XCTAssertEqual(itemCalls, [.favorites(.personal)])
     }
 
     func testFavoriteMutationRefreshesAuthoritativeTimelineAfterWrite() async throws {
@@ -197,28 +197,28 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         await transport.configure(items: [photo],
                                   timelineSnapshot: TimelineSnapshot(sections: [descriptor]))
         let repository = try repository(root: root, transport: transport)
-        for await _ in await repository.timeline(collection: .favorites) {}
-        for await _ in await repository.page(descriptor, collection: .favorites) {}
-        var refreshes = await repository.timelineRefreshes(collection: .favorites).makeAsyncIterator()
+        for await _ in await repository.timeline(collection: .favorites(.personal)) {}
+        for await _ in await repository.page(descriptor, collection: .favorites(.personal)) {}
+        var refreshes = await repository.timelineRefreshes(collection: .favorites(.personal)).makeAsyncIterator()
         await transport.configure(timelineSnapshot: TimelineSnapshot(sections: []))
 
         try await repository.setFavorite(itemID: photo.id, item: photo, in: descriptor,
-                                         collection: .favorites, to: false)
+                                         collection: .favorites(.personal), to: false)
         guard case .value(let updated, let verified) = await refreshes.next() else {
             return XCTFail("Missing authoritative Favorites refresh")
         }
         XCTAssertTrue(updated.sections.isEmpty)
         XCTAssertTrue(verified)
-        let favoriteTimelineCallCount = await transport.collectionTimelineCalls.filter { $0.0 == .favorites }.count
+        let favoriteTimelineCallCount = await transport.collectionTimelineCalls.filter { $0.0 == .favorites(.personal) }.count
         XCTAssertEqual(favoriteTimelineCallCount, 2)
         let finalItemCallCount = await transport.collectionItemCalls.count
         XCTAssertEqual(finalItemCallCount, 1)
 
-        let namespace = await repository.metadataNamespace
+        let namespace = await repository.personalMetadataNamespace
         let store = await repository.store
-        let catalog = try await store.metadataCatalog(.init(namespace: namespace, collection: .favorites))
+        let catalog = try await store.metadataCatalog(.init(namespace: namespace, collection: .favorites(.personal)))
         XCTAssertEqual(catalog?.catalog.days.count, 0)
-        let oldPage = try await store.metadataPage(try DayPageAddress(section: descriptor, collection: .favorites), namespace: namespace, currentRun: repository.runID)
+        let oldPage = try await store.metadataPage(try DayPageAddress(section: descriptor, collection: .favorites(.personal)), namespace: namespace, currentRun: repository.runID)
         XCTAssertNil(oldPage, "Removed days retire their membership slots")
 
     }
@@ -231,17 +231,17 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         let photo = try item(8)
         await transport.configure(timelineSnapshot: TimelineSnapshot(sections: [existingFavoritesSection]))
         let repository = try repository(root: root, transport: transport)
-        for await _ in await repository.timeline(collection: .favorites) {}
+        for await _ in await repository.timeline(collection: .favorites(.personal)) {}
         await transport.blockFavoriteWrite()
-        var refreshes = await repository.timelineRefreshes(collection: .favorites).makeAsyncIterator()
+        var refreshes = await repository.timelineRefreshes(collection: .favorites(.personal)).makeAsyncIterator()
 
         let mutation = Task {
             try await repository.setFavorite(itemID: photo.id, item: photo, in: sourceSection,
-                                             collection: .personalLibrary, to: true)
+                                             collection: .library(.personal), to: true)
         }
         let requestStarted = await waitUntil { await transport.favoriteRequests.count == 1 }
         XCTAssertTrue(requestStarted)
-        let timelineCalls = await transport.collectionTimelineCalls.filter { $0.0 == .favorites }.count
+        let timelineCalls = await transport.collectionTimelineCalls.filter { $0.0 == .favorites(.personal) }.count
         XCTAssertEqual(timelineCalls, 1)
 
         let authoritative = section(1, limit: 3, count: 3)
@@ -253,7 +253,7 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         }
         XCTAssertTrue(verified)
         XCTAssertEqual(refreshed.sections, [authoritative])
-        let finalTimelineCalls = await transport.collectionTimelineCalls.filter { $0.0 == .favorites }.count
+        let finalTimelineCalls = await transport.collectionTimelineCalls.filter { $0.0 == .favorites(.personal) }.count
         XCTAssertEqual(finalTimelineCalls, 2)
     }
 
@@ -262,7 +262,7 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         let transport = FakeTransport()
         let descriptor = section(1, limit: 2, count: 2)
         let repository = try repository(root: root, transport: transport)
-        var refreshes = await repository.timelineRefreshes(collection: .favorites).makeAsyncIterator()
+        var refreshes = await repository.timelineRefreshes(collection: .favorites(.personal)).makeAsyncIterator()
 
         async let first: Void = repository.setFavorite(itemID: 81, in: descriptor, to: true)
         async let second: Void = repository.setFavorite(itemID: 82, in: descriptor, to: true)
@@ -273,7 +273,7 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
 
         let favoriteWriteCount = await transport.favoriteWrites.count
         XCTAssertEqual(favoriteWriteCount, 2)
-        let timelineCalls = await transport.collectionTimelineCalls.filter { $0.0 == .favorites }.count
+        let timelineCalls = await transport.collectionTimelineCalls.filter { $0.0 == .favorites(.personal) }.count
         XCTAssertEqual(timelineCalls, 1)
     }
 
@@ -286,13 +286,13 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
                                   timelineSnapshot: TimelineSnapshot(sections: [descriptor]))
         await transport.blockFavoriteWrite()
         let repository = try repository(root: root, transport: transport)
-        for await _ in await repository.timeline(collection: .favorites) {}
-        for await _ in await repository.page(descriptor, collection: .favorites) {}
+        for await _ in await repository.timeline(collection: .favorites(.personal)) {}
+        for await _ in await repository.page(descriptor, collection: .favorites(.personal)) {}
         var favoriteChanges = await repository.favoriteChanges().makeAsyncIterator()
 
         let mutation = Task {
             try await repository.setFavorite(itemID: photo.id, item: photo, in: descriptor,
-                                             collection: .favorites, to: false)
+                                             collection: .favorites(.personal), to: false)
         }
         let requestStarted = await waitUntil { await transport.favoriteRequests.count == 1 }
         XCTAssertTrue(requestStarted)
@@ -300,7 +300,7 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         XCTAssertEqual(optimisticChange?.values[photo.id], false)
 
         // A concurrent authoritative read must persist the response, never the pending overlay.
-        for await _ in await repository.page(descriptor, collection: .favorites, useCachedPages: false) {}
+        for await _ in await repository.page(descriptor, collection: .favorites(.personal), useCachedPages: false) {}
         await transport.releaseFavoriteWrite(failing: true)
         do {
             try await mutation.value
@@ -309,10 +309,10 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         let rollbackChange = await favoriteChanges.next()
         XCTAssertEqual(rollbackChange?.values[photo.id], true)
 
-        let page = try await repository.store.metadataPage(try DayPageAddress(section: descriptor, collection: .favorites), namespace: repository.metadataNamespace, currentRun: repository.runID)
+        let page = try await repository.store.metadataPage(try DayPageAddress(section: descriptor, collection: .favorites(.personal)), namespace: repository.personalMetadataNamespace, currentRun: repository.runID)
         XCTAssertEqual(page?.slots.map(\.itemID), [photo.id])
         XCTAssertEqual(page?.slots.first?.item?.isFavorite, true)
-        let timelineCalls = await transport.collectionTimelineCalls.filter { $0.0 == .favorites }.count
+        let timelineCalls = await transport.collectionTimelineCalls.filter { $0.0 == .favorites(.personal) }.count
         XCTAssertEqual(timelineCalls, 2, "The explicit overlapping forced read revalidates its catalog")
     }
 
@@ -326,7 +326,7 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         let repository = try repository(root: root, transport: transport)
         let staleRequest = Task { () -> [[Int64]] in
             var values: [[Int64]] = []
-            for await event in await repository.page(descriptor, collection: .favorites) {
+            for await event in await repository.page(descriptor, collection: .favorites(.personal)) {
                 if case .value(let items, _) = event { let items = items.completeItems ?? []; values.append(items.map(\.id)) }
             }
             return values
@@ -341,7 +341,7 @@ final class FavoriteRepositoryTests: LibraryBrowserTestCase {
         let staleValues = await staleRequest.value
         XCTAssertEqual(staleValues, [],
                        "A response from the prior Favorites generation must not be published")
-        for await event in await repository.page(descriptor, collection: .favorites) {
+        for await event in await repository.page(descriptor, collection: .favorites(.personal)) {
             if case .value(let items, true) = event { let items = items.completeItems ?? []; XCTAssertTrue(items.isEmpty) }
         }
         let itemCalls = await transport.collectionItemCalls.count
@@ -430,7 +430,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         await fake.configure(loginBlocked: true, items: [try item(5)])
         let repository = try repository(root: root, transport: fake)
         let first = await repository.page(section(1))
-        let second = await repository.page(section(1), collection: .favorites)
+        let second = await repository.page(section(1), collection: .favorites(.personal))
         let firstTask = Task { for await _ in first {} }
         let secondTask = Task { () -> [Int64] in
             for await event in second {

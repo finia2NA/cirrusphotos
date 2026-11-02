@@ -11,7 +11,7 @@ struct ThumbnailCell: View {
     let repository: CachedPhotosRepository?
     let size: ThumbnailSize
     let allowNetwork: Bool
-    var collection: PhotoCollectionDescriptor = .personalLibrary
+    var collection: PhotoCollectionDescriptor = .library(.personal)
     let failures: ThumbnailFailureRegistry
     var fillsFrame = false
     var isSelected = false

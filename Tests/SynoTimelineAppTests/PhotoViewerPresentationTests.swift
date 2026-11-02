@@ -19,7 +19,7 @@ private actor PresentationTransport: PhotosTransport {
     init(preview: Data) { self.preview = preview }
     func releaseThumbnail(_ id: Int64) { releasedThumbnails.insert(id) }
     func setPreview(_ data: Data, for id: Int64) { previews[id] = data }
-    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {}
+    func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws {}
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
         timelineCalls.append((collection, initial))
         return try fixtureDayCatalog(TimelineSnapshot(sections: []), initial: initial)
@@ -33,7 +33,7 @@ private actor PresentationTransport: PhotosTransport {
         return []
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         while !releasedThumbnails.contains(descriptor.unitID) {
             try await Task.sleep(for: .milliseconds(2))
         }
@@ -65,7 +65,7 @@ private actor ProgressivePresentationTransport: PhotosTransport {
     func releasePreview() { previewReleased = true }
     func releaseOriginal() { originalReleased = true }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         thumbnailSizes.append(size)
         if size == .xl {
             while !previewReleased { try await Task.sleep(for: .milliseconds(2)) }
@@ -450,11 +450,11 @@ final class LibraryModelTests: PhotoViewerPresentationTestCase {
         await model.load()
 
         let calls = await transport.timelineCalls
-        XCTAssertTrue(calls.contains { $0.0 == .personalLibrary })
-        XCTAssertTrue(calls.contains { $0.0 == .favorites && !$0.1 })
-        XCTAssertFalse(calls.contains { $0.0 == .favorites && $0.1 })
-        XCTAssertNotNil(model.snapshot(for: .personalLibrary))
-        XCTAssertNotNil(model.snapshot(for: .favorites))
+        XCTAssertTrue(calls.contains { $0.0 == .library(.personal) })
+        XCTAssertTrue(calls.contains { $0.0 == .favorites(.personal) && !$0.1 })
+        XCTAssertFalse(calls.contains { $0.0 == .favorites(.personal) && $0.1 })
+        XCTAssertNotNil(model.snapshot(for: .library(.personal)))
+        XCTAssertNotNil(model.snapshot(for: .favorites(.personal)))
         let albumCallsBeforeDemand = await transport.albumListCalls
         XCTAssertEqual(albumCallsBeforeDemand, 0)
         let incomingCallsBeforeDemand = await transport.incomingListCalls
@@ -482,17 +482,17 @@ final class LibraryModelTests: PhotoViewerPresentationTestCase {
             transport: transport)
         let model = LibraryModel(repository: repository)
         await model.load()
-        let browserRevision = model.snapshotRevision(for: .favorites)
-        let viewerRevision = model.viewerSnapshotRevision(for: .favorites)
+        let browserRevision = model.snapshotRevision(for: .favorites(.personal))
+        let viewerRevision = model.viewerSnapshotRevision(for: .favorites(.personal))
         let section = TimelineSection(offset: 0, limit: 1,
             list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)])
 
         try await repository.setFavorite(itemID: 77, item: try item(77), in: section, to: true)
         let refreshed = await waitUntil {
-            model.snapshotRevision(for: .favorites) > browserRevision
+            model.snapshotRevision(for: .favorites(.personal)) > browserRevision
         }
 
         XCTAssertTrue(refreshed)
-        XCTAssertEqual(model.viewerSnapshotRevision(for: .favorites), viewerRevision)
+        XCTAssertEqual(model.viewerSnapshotRevision(for: .favorites(.personal)), viewerRevision)
     }
 }

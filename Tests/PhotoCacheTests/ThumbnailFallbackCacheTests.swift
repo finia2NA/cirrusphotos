@@ -10,7 +10,7 @@ private actor FallbackThumbnailTransport: PhotosTransport {
     func failNextRequest() { failuresRemaining = 1 }
 
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         requestedSizes.append(size)
         if failuresRemaining > 0 {
             failuresRemaining -= 1

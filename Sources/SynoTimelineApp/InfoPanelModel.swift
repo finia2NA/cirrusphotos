@@ -55,7 +55,7 @@ final class InfoPanelModel: ObservableObject {
     private var browserRepository: CachedPhotosRepository?
     private var browserSnapshot: TimelineSnapshot?
     private var browserIndex: LibraryIndex?
-    private var browserCollection: PhotoCollectionDescriptor = .personalLibrary
+    private var browserCollection: PhotoCollectionDescriptor = .library(.personal)
     private var browserSelection = IndexSet()
     private var lastKey: ResolutionKey?
     private var generation: UInt64 = 0

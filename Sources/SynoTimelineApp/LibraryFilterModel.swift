@@ -53,7 +53,7 @@ final class LibraryFilterModel: ObservableObject {
         source == sourceCollection ? activeCollection : nil
     }
 
-    func configure(library: LibraryModel, source: PhotoCollectionDescriptor? = .personalLibrary) {
+    func configure(library: LibraryModel, source: PhotoCollectionDescriptor? = .library(.personal)) {
         self.library = library
         let changedSource = sourceCollection != source
         let resetMetadata = metadataRevision != nil && metadataRevision != library.metadataInvalidationRevision

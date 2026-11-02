@@ -50,7 +50,7 @@ extension MixedAlbumAuthorityTests {
         } catch SynologyAPIError.api(105) { }
         let writes = await transport.writes
         XCTAssertEqual(writes, 0)
-        let namespace = await repository.metadataNamespace
+        let namespace = await repository.personalMetadataNamespace
         let details = try await repository.store.metadataDetails(namespace, ids: [member.id], currentRun: repository.runID)
         XCTAssertNil(details[member.id]?.item)
         let albumNamespace = await repository.metadataNamespace(for: .album(3))

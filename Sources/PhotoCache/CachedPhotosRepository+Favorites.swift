@@ -10,7 +10,7 @@ extension CachedPhotosRepository {
         return AsyncStream(bufferingPolicy: .unbounded) { continuation in
             favorites.observers[id] = continuation
             if !favorites.overrides.isEmpty {
-                continuation.yield(FavoriteChange(values: favorites.overrides, sourceCollection: space == .shared ? .sharedLibrary : .personalLibrary))
+                continuation.yield(FavoriteChange(values: favorites.overrides, sourceCollection: space == .shared ? .library(.shared) : .library(.personal)))
             }
             continuation.onTermination = { @Sendable _ in
                 Task { await self.removeFavoriteObserver(id, space: space) }
@@ -22,7 +22,7 @@ extension CachedPhotosRepository {
     /// does not fork into a separate pipeline.
     public func setFavorite(itemID: Int64, item: PhotoItem? = nil,
                             in section: TimelineSection,
-                            collection: PhotoCollectionDescriptor = .personalLibrary,
+                            collection: PhotoCollectionDescriptor = .library(.personal),
                             to favorite: Bool) async throws {
         var itemsByID: [Int64: PhotoItem] = [:]
         if let item {
@@ -47,10 +47,10 @@ extension CachedPhotosRepository {
         guard source.incomingAlbumIdentity == nil, !source.isSessionDerived else {
             throw SynologyAPIError.unsupported("Favorites are unavailable for shared album photos.")
         }
-        let space = source.albumID != nil ? try await albumItemSpace(itemIDs: action.affectedIDs, collection: source) : source.space
+        let space = try await itemActionSpace(itemIDs: action.affectedIDs, collection: source)
         let favorites = favoriteState(for: space)
-        let favoriteCollection: PhotoCollectionDescriptor = space == .shared ? .sharedFavorites : .favorites
-        let metadataNamespace = MetadataNamespace(account: namespace, scope: .space(space))
+        let favoriteCollection: PhotoCollectionDescriptor = space == .shared ? .favorites(.shared) : .favorites(.personal)
+        let scopedNamespace = MetadataNamespace(account: namespace, scope: .space(space))
         let allIDs = action.affectedIDs
         guard !allIDs.isEmpty else { return }
         let target = action.targetFavorite
@@ -88,8 +88,8 @@ extension CachedPhotosRepository {
                 resource: .mutation, jobID: UUID()
             )
 
-            if self.metadata.initialized, let admission = try? await self.store.metadataAdmission(metadataNamespace) {
-                try? await self.store.invalidateMetadataCollection(CollectionKey(namespace: metadataNamespace, collection: favoriteCollection), admission: admission)
+            if self.metadata.initialized, let admission = try? await self.store.metadataAdmission(scopedNamespace) {
+                try? await self.store.invalidateMetadataCollection(CollectionKey(namespace: scopedNamespace, collection: favoriteCollection), admission: admission)
             }
 
             // Record previous values for all affected IDs
@@ -130,9 +130,9 @@ extension CachedPhotosRepository {
                         try await self.client.setFavorite(itemIDs: chunk, favorite: target, space: space)
                         successfulIDs.append(contentsOf: chunk)
                         if await self.metadataTokenIsCurrent(metadataToken), self.metadata.initialized,
-                           let admission = try? await self.store.metadataAdmission(metadataNamespace) {
+                           let admission = try? await self.store.metadataAdmission(scopedNamespace) {
                             try? await self.store.applyMetadataFavoriteValues(Dictionary(uniqueKeysWithValues: chunk.map { ($0, target) }),
-                                                                             namespace: metadataNamespace, currentRun: self.runID, admission: admission)
+                                                                             namespace: scopedNamespace, currentRun: self.runID, admission: admission)
                             if source.albumID != nil {
                                 let albumNamespace = self.metadataNamespace(for: source)
                                 if let albumAdmission = try? await self.store.metadataAdmission(albumNamespace) {
@@ -202,7 +202,7 @@ extension CachedPhotosRepository {
 
     func scheduleFavoritesRefresh(space: PhotoSpace = .personal) {
         let favorites = favoriteState(for: space)
-        let collection: PhotoCollectionDescriptor = space == .shared ? .sharedFavorites : .favorites
+        let collection: PhotoCollectionDescriptor = space == .shared ? .favorites(.shared) : .favorites(.personal)
         favorites.refreshTask?.cancel()
         let epoch = metadata.mutationEpochs[collection, default: 0]
         favorites.refreshTask = Task { [weak self] in
@@ -213,9 +213,9 @@ extension CachedPhotosRepository {
     }
 
     private func refreshFavoritesAfterMutation(epoch: UInt64, space: PhotoSpace) async {
-        let collection: PhotoCollectionDescriptor = space == .shared ? .sharedFavorites : .favorites
+        let collection: PhotoCollectionDescriptor = space == .shared ? .favorites(.shared) : .favorites(.personal)
         let favorites = favoriteState(for: space)
-        let metadataNamespace = metadataNamespace(for: collection)
+        let scopedNamespace = metadataNamespace(for: collection)
         metadata.timelineJobs.removeValue(forKey: collection)?.task.cancel()
         let id = UUID()
         do {
@@ -225,10 +225,10 @@ extension CachedPhotosRepository {
             try await initializeMetadataEngine()
             try await connect()
             try await reconcileMetadataSource(for: collection)
-            let admission = try await store.metadataAdmission(metadataNamespace)
+            let admission = try await store.metadataAdmission(scopedNamespace)
             let catalog = try await acquireCollectionCatalog(collection).catalog
             guard epoch == metadata.mutationEpochs[collection, default: 0], await metadataTokenIsCurrent(token) else { return }
-            try await store.storeMetadataCatalog(catalog, key: CollectionKey(namespace: metadataNamespace, collection: collection),
+            try await store.storeMetadataCatalog(catalog, key: CollectionKey(namespace: scopedNamespace, collection: collection),
                                                  validatedRun: runID, admission: admission, invalidateMembership: true)
             guard epoch == metadata.mutationEpochs[collection, default: 0], await metadataTokenIsCurrent(token) else { return }
             let snapshot = try CollectionDayPager.snapshot(catalog: catalog)

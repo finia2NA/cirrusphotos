@@ -34,7 +34,7 @@ final class MetadataCacheResetAppTests: XCTestCase {
         )
         let model = LibraryModel(repository: repository)
         await model.load()
-        let filter = PhotoCollectionDescriptor.mapFilter(UUID())
+        let filter = PhotoCollectionDescriptor.mapFilter(UUID(), space: .personal)
         model.registerSessionCollection(filter, snapshot: snapshot)
 
         await model.clearMetadataCache()

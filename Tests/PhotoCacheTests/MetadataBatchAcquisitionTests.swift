@@ -15,7 +15,7 @@ actor BatchedMetadataTransport: PhotosTransport {
     var transportFailuresRemaining = 0
     var detailCalls = 0
     func failNextTransport() { transportFailuresRemaining = 1 }
-    func items(ids: [Int64]) async throws -> [PhotoItem] { detailCalls += 1; return rows.filter { ids.contains($0.id) } }
+    func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] { detailCalls += 1; return rows.filter { ids.contains($0.id) } }
     func detailCallCount() -> Int { detailCalls }
     init(delay: Duration = .milliseconds(10), days: Int = 69, badResponses: Int = 0) throws {
         badResponsesRemaining = badResponses
@@ -55,8 +55,8 @@ final class MetadataBatchAcquisitionTests: XCTestCase, @unchecked Sendable {
         let root = temporaryTestRoot("metadata-69-days"); defer { try? FileManager.default.removeItem(at: root) }
         let transport = try BatchedMetadataTransport()
         let repository = try CachedPhotosRepository(credentials: .init(username: "batch", password: "unused"), cacheRoot: root, transport: transport)
-        let snapshot = try await repository.verifiedTimelineSnapshot(collection: .favorites)
-        let loader = TimelineSectionCacheLoader(repository: repository, collection: .favorites, snapshot: snapshot)
+        let snapshot = try await repository.verifiedTimelineSnapshot(collection: .favorites(.personal))
+        let loader = TimelineSectionCacheLoader(repository: repository, collection: .favorites(.personal), snapshot: snapshot)
         await loader.loadAll()
         let finished = await waitUntil(attempts: 1000) { await loader.progress().state == .finished }
         XCTAssertTrue(finished)
@@ -73,8 +73,8 @@ final class MetadataBatchAcquisitionTests: XCTestCase, @unchecked Sendable {
         let root = temporaryTestRoot("metadata-batch-cancel"); defer { try? FileManager.default.removeItem(at: root) }
         let transport = try BatchedMetadataTransport(delay: .seconds(3))
         let repository = try CachedPhotosRepository(credentials: .init(username: "batch", password: "unused"), cacheRoot: root, transport: transport)
-        let snapshot = try await repository.verifiedTimelineSnapshot(collection: .favorites)
-        let loader = TimelineSectionCacheLoader(repository: repository, collection: .favorites, snapshot: snapshot)
+        let snapshot = try await repository.verifiedTimelineSnapshot(collection: .favorites(.personal))
+        let loader = TimelineSectionCacheLoader(repository: repository, collection: .favorites(.personal), snapshot: snapshot)
         await loader.loadAll()
         let admitted = await waitUntil { await transport.stats().requests.count == 2 }
         XCTAssertTrue(admitted)
@@ -88,8 +88,8 @@ final class MetadataBatchAcquisitionTests: XCTestCase, @unchecked Sendable {
         let root = temporaryTestRoot("metadata-batch-repair"); defer { try? FileManager.default.removeItem(at: root) }
         let transport = try BatchedMetadataTransport(days: 32, badResponses: 1)
         let repository = try CachedPhotosRepository(credentials: .init(username: "batch", password: "unused"), cacheRoot: root, transport: transport)
-        let snapshot = try await repository.verifiedTimelineSnapshot(collection: .favorites)
-        let loader = TimelineSectionCacheLoader(repository: repository, collection: .favorites, snapshot: snapshot)
+        let snapshot = try await repository.verifiedTimelineSnapshot(collection: .favorites(.personal))
+        let loader = TimelineSectionCacheLoader(repository: repository, collection: .favorites(.personal), snapshot: snapshot)
         await loader.loadAll()
         let finished = await waitUntil(attempts: 1000) { await loader.progress().state == .finished }
         XCTAssertTrue(finished)

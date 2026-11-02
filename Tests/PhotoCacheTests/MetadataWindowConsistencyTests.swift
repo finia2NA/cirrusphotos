@@ -25,7 +25,7 @@ private actor WindowMetadataTransport: PhotosTransport {
         batches += 1
         return try .init(items: edited ? [photo(2), photo(1)] : [photo(1), photo(2)], profile: fields)
     }
-    func items(ids: [Int64]) async throws -> [PhotoItem] { try ids.map(photo) }
+    func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] { try ids.map(photo) }
     func batchCount() -> Int { batches }
 }
 private struct WindowNoNetworkTransport: PhotosTransport {}
@@ -34,7 +34,7 @@ final class MetadataWindowConsistencyTests: XCTestCase, @unchecked Sendable {
         let root = temporaryTestRoot("window-source"); defer { try? FileManager.default.removeItem(at: root) }
         let transport = WindowMetadataTransport()
         let repository = try CachedPhotosRepository(credentials: .init(username: "window", password: "unused"), cacheRoot: root, transport: transport)
-        let snapshot = try await repository.verifiedTimelineSnapshot(collection: .personalLibrary)
+        let snapshot = try await repository.verifiedTimelineSnapshot(collection: .library(.personal))
         let window = LibraryPageWindow(repository: repository)
         let events = await window.events()
         let observer = Task { for await _ in events {} }
@@ -48,7 +48,7 @@ final class MetadataWindowConsistencyTests: XCTestCase, @unchecked Sendable {
             return page?.verified == true && page?.slots.map(\.itemID) == [2, 1]
         }
         XCTAssertTrue(changed)
-        let current = try await repository.verifiedTimelineSnapshot(collection: .personalLibrary)
+        let current = try await repository.verifiedTimelineSnapshot(collection: .library(.personal))
         XCTAssertEqual(LibraryIndex(snapshot: current).fingerprint, LibraryIndex(snapshot: snapshot).fingerprint)
         let pages = await window.retainedPages()
         XCTAssertEqual(pages.first?.slots.last?.item?.filename, "edited.jpg")

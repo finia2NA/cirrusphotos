@@ -61,11 +61,11 @@ struct PhotoViewerView: View {
                                 }
                               },
                               livePhotoConfiguration: viewer.state.flatMap { state in
-                                guard !viewer.isIncoming, state.contentScope.space != nil, let item = state.item, item.mediaKind == .livePhoto,
+                                guard !viewer.isIncoming, let space = state.contentScope.space, let item = state.item, item.mediaKind == .livePhoto,
                                       state.metadataVerified, state.allowNetwork,
                                       viewer.isDisplayingFullResolution,
                                       item.additional?.orientation == item.additional?.orientationOriginal else { return nil }
-                                return LivePhotoConfiguration(repository: viewer.repository, itemID: item.id, space: state.contentScope.space ?? viewer.collection.space,
+                                return LivePhotoConfiguration(repository: viewer.repository, itemID: item.id, space: space,
                                                               generation: state.selection.generation, isMuted: videoMuted)
                               },
                               showsLivePhotoIndicator: !viewer.isIncoming && viewer.state?.contentScope.space != nil && viewer.state?.item?.mediaKind == .livePhoto,

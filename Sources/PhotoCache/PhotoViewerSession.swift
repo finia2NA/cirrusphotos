@@ -41,7 +41,7 @@ public actor PhotoViewerSession {
 
     var observers: [UUID: AsyncStream<PhotoViewerState>.Continuation] = [:]
 
-    public init(repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor = .personalLibrary,
+    public init(repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor = .library(.personal),
                 index: LibraryIndex,
                 seed: PhotoViewerSeed, thumbnailSize: ThumbnailSize = .xl,
                 loadsLargePreviews: Bool = false,
@@ -163,9 +163,10 @@ public actor PhotoViewerSession {
         started = true
         let repository = repository
         favoriteTask = Task { [weak self] in
-            let source = await repository.mediaCollection(for: self?.collection ?? .personalLibrary)
+            let source = await repository.mediaCollection(for: self?.collection ?? .library(.personal))
             guard !source.isSessionDerived, source.contentScope.space != nil else { return }
-            for await change in await repository.favoriteChanges(space: source.space) {
+            guard let space = source.space else { return }
+            for await change in await repository.favoriteChanges(space: space) {
                 guard !Task.isCancelled else { return }
                 await self?.applyFavorites(change.values)
             }

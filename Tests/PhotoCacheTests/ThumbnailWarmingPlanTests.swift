@@ -35,9 +35,9 @@ final class ThumbnailWarmingPlanTests: XCTestCase, @unchecked Sendable {
         let transport = ScopedWarmingTransport()
         let repository = try CachedPhotosRepository(credentials: .init(username: "warm", password: "unused"), cacheRoot: root, transport: transport)
         let thumbnail = ThumbnailInfo(unitID: 1, cacheKey: "same-key")
-        _ = try await repository.cacheThumbnailMeasurement(thumbnail, size: .sm, collection: .personalLibrary, validateCached: false)
-        let shared = try await repository.cacheThumbnailMeasurement(thumbnail, size: .sm, collection: .sharedLibrary, validateCached: false)
-        let cached = try await repository.cacheThumbnailMeasurement(thumbnail, size: .sm, collection: .sharedLibrary, validateCached: false)
+        _ = try await repository.cacheThumbnailMeasurement(thumbnail, size: .sm, collection: .library(.personal), validateCached: false)
+        let shared = try await repository.cacheThumbnailMeasurement(thumbnail, size: .sm, collection: .library(.shared), validateCached: false)
+        let cached = try await repository.cacheThumbnailMeasurement(thumbnail, size: .sm, collection: .library(.shared), validateCached: false)
         XCTAssertEqual(shared.outcome, .fetched)
         XCTAssertEqual(cached.outcome, .reused)
         let spaces = await transport.spaces

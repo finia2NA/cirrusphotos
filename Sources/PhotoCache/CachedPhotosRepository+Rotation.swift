@@ -40,7 +40,7 @@ extension CachedPhotosRepository {
         guard source.incomingAlbumIdentity == nil, !source.isSessionDerived else {
             throw SynologyAPIError.unsupported("Rotation is unavailable for shared album photos.")
         }
-        let space = source.albumID != nil ? try await albumItemSpace(itemIDs: action.itemIDs, collection: source) : source.space
+        let space = try await itemActionSpace(itemIDs: action.itemIDs, collection: source)
         guard !action.itemIDs.isEmpty else { return }
         if let expected = action.expectedTimelineFingerprint {
             guard let snapshot = metadata.latestTimelines[action.collection], LibraryIndex(snapshot: snapshot).fingerprint == expected else {
@@ -235,7 +235,7 @@ extension CachedPhotosRepository {
                         throw SynologyAPIError.unsupported("The \(size.rawValue) thumbnail is not ready.")
                     }
                     let response = try await client.thumbnail(descriptor, size: size,
-                                                              etag: nil, lastModified: nil)
+                                                              space: .personal, etag: nil, lastModified: nil)
                     guard let data = response.data else { throw SynologyAPIError.invalidResponse }
                     downloaded[size] = data
                     completedThumbnailDownloadBytes += Self.estimatedDownloadBytes(for: size)
@@ -541,7 +541,7 @@ extension CachedPhotosRepository {
         let client = client
         let refreshed = await Task.detached(priority: .utility) { () -> PhotoItem? in
             for attempt in 0..<8 {
-                if let item = try? await client.items(ids: [itemID]).first,
+                if let item = try? await client.items(ids: [itemID], space: .personal).first,
                    item.additional?.thumbnail?.cacheKey != descriptor.cacheKey {
                     SynologyDiagnostics.rotations.info(
                         "Reconciled advanced thumbnail revision after failure item_id=\(itemID, privacy: .public) attempt=\(attempt + 1, privacy: .public)"
@@ -591,17 +591,17 @@ extension CachedPhotosRepository {
     private func patchRotationPages(action: SelectionRotationAction,
                                     replacements: [Int64: PhotoItem], metadataEpoch: UInt64) async {
         guard metadataEpoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
-        let metadataNamespace = metadataNamespace(for: action.collection)
+        let scopedNamespace = metadataNamespace(for: action.collection)
         if metadata.initialized,
            replacements.values.allSatisfy({ $0.pendingRotationQuarterTurns == 0 }),
-           let admission = try? await store.metadataAdmission(metadataNamespace) {
+           let admission = try? await store.metadataAdmission(scopedNamespace) {
             guard metadataEpoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
-            try? await store.applyMetadataRotationValues(replacements, namespace: metadataNamespace, admission: admission)
+            try? await store.applyMetadataRotationValues(replacements, namespace: scopedNamespace, admission: admission)
             guard metadataEpoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
-            let canonical = try? await store.metadataDetails(metadataNamespace, ids: Array(replacements.keys), currentRun: runID)
+            let canonical = try? await store.metadataDetails(scopedNamespace, ids: Array(replacements.keys), currentRun: runID)
             guard metadataEpoch == metadata.admissionEpoch else { return }
-            if metadataNamespace.scope == .space(.personal) { publishLocationItemChanges(canonical?.values.compactMap(\.item) ?? []) }
-            else if metadataNamespace.scope == .space(.shared) { await publishSharedLocationItemChanges(canonical?.values.compactMap(\.item) ?? []) }
+            if scopedNamespace.scope == .space(.personal) { publishLocationItemChanges(canonical?.values.compactMap(\.item) ?? []) }
+            else if scopedNamespace.scope == .space(.shared) { await publishSharedLocationItemChanges(canonical?.values.compactMap(\.item) ?? []) }
         }
 
     }

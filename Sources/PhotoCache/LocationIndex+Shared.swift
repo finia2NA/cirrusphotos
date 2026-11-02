@@ -26,25 +26,9 @@ extension CachedPhotosRepository {
         metadata.sharedLocations.observers.removeValue(forKey: id)
     }
 
-    func acceptSharedLocationRecords(_ records: [PhotoLocationRecord]) -> LocationIndexValue {
-        let next = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
-        let previous = metadata.sharedLocations.records
-        let changed = previous.count != next.count || next.contains { id, record in
-            guard let old = previous[id] else { return true }
-            return old.time != record.time || old.coordinate != record.coordinate
-        }
-        metadata.sharedLocations.records = next
-        if changed {
-            metadata.sharedLocations.revision &+= 1
-            invalidateMapFiltersForLocationChange(space: .shared)
-        }
-        return LocationIndexValue(records: records,
-            revision: LocationIndexRevision(metadata.sharedLocations.revision, space: .shared))
-    }
-
     func publishSharedLocationItemChanges(_ items: [PhotoItem]) async {
         let epoch = metadata.admissionEpoch
-        let state = try? await store.metadataState(metadataNamespace(for: .sharedLibrary))
+        let state = try? await store.metadataState(metadataNamespace(for: .library(.shared)))
         guard epoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
         if state?.inventoryComplete != true { metadata.sharedLocations.current = false }
         guard metadata.sharedLocations.current || !metadata.sharedLocations.records.isEmpty else { return }
@@ -55,7 +39,7 @@ extension CachedPhotosRepository {
             }
         }
         let oldRevision = metadata.sharedLocations.revision
-        let value = acceptSharedLocationRecords(records.values.sorted { $0.time > $1.time || ($0.time == $1.time && $0.id < $1.id) })
+        let value = acceptLocationRecords(records.values.sorted { $0.time > $1.time || ($0.time == $1.time && $0.id < $1.id) }, space: .shared)
         if oldRevision != metadata.sharedLocations.revision { metadata.sharedLocations.current = false }
         for observer in metadata.sharedLocations.observers.values {
             observer.yield(.completed(value, verified: metadata.sharedLocations.current))
@@ -64,20 +48,20 @@ extension CachedPhotosRepository {
 
     func sharedLocationIndex() -> AsyncStream<LocationIndexEvent> {
         let producer = StreamProducer()
+        let subscriber = UUID()
         return AsyncStream(bufferingPolicy: .bufferingNewest(4)) { continuation in
             producer.task = Task {
-                let subscriber = UUID()
                 metadata.directSubscribers.insert(subscriber)
                 defer { metadata.directSubscribers.remove(subscriber); cancelIdleLogin() }
                 do {
                     try await initializeMetadataEngine()
                     let epoch = metadata.admissionEpoch
-                    let scope = metadataNamespace(for: .sharedLibrary)
+                    let scope = metadataNamespace(for: .library(.shared))
                     let cached = try await store.metadataLocationProjection(scope)
                     guard epoch == metadata.admissionEpoch, !metadata.resetInProgress, !Task.isCancelled else { throw CancellationError() }
                     metadata.sharedLocations.current = metadata.sharedLocations.current && cached.state.inventoryComplete
                     if !cached.records.isEmpty || cached.state.inventoryComplete {
-                        let value = acceptSharedLocationRecords(cached.records)
+                        let value = acceptLocationRecords(cached.records, space: .shared)
                         if metadata.sharedLocations.current && cached.state.inventoryComplete {
                             continuation.yield(.completed(value, verified: true))
                             continuation.finish()
@@ -86,7 +70,10 @@ extension CachedPhotosRepository {
                         continuation.yield(.cached(value))
                     }
                     let task: Task<[PhotoLocationRecord], Error>
-                    if let job = metadata.sharedLocations.job { task = job.task }
+                    if var job = metadata.sharedLocations.job {
+                        job.subscribers.insert(subscriber); metadata.sharedLocations.job = job
+                        task = job.task
+                    }
                     else {
                         let id = UUID()
                         task = Task {
@@ -96,25 +83,35 @@ extension CachedPhotosRepository {
                             }
                             return try await buildSharedMetadataInventory(id: id)
                         }
-                        metadata.sharedLocations.job = SharedJob(id: id, task: task, subscribers: [])
+                        metadata.sharedLocations.job = SharedJob(id: id, task: task, subscribers: [subscriber])
                     }
                     let records = try await task.value
                     guard epoch == metadata.admissionEpoch, !metadata.resetInProgress, !Task.isCancelled else { throw CancellationError() }
-                    continuation.yield(.completed(acceptSharedLocationRecords(records), verified: true))
+                    continuation.yield(.completed(acceptLocationRecords(records, space: .shared), verified: true))
                 } catch {
                     if !Task.isCancelled { continuation.yield(.failure(error.localizedDescription)) }
                 }
                 continuation.finish()
             }
-            continuation.onTermination = { @Sendable _ in producer.task?.cancel() }
+            continuation.onTermination = { @Sendable _ in
+                producer.task?.cancel()
+                Task { await self.releaseSharedLocationScan(subscriber) }
+            }
         }
+    }
+
+    private func releaseSharedLocationScan(_ subscriber: UUID) {
+        guard var job = metadata.sharedLocations.job else { cancelIdleLogin(); return }
+        job.subscribers.remove(subscriber)
+        if job.subscribers.isEmpty { job.task.cancel(); metadata.sharedLocations.job = nil; cancelIdleLogin() }
+        else { metadata.sharedLocations.job = job }
     }
 
     /// Uses the existing scoped Timeline/Item contracts, never Personal Diff or
     /// web Places. Staging retains non-geotagged IDs to prove full coverage too.
     func buildSharedMetadataInventory(id: UUID) async throws -> [PhotoLocationRecord] {
-        let token = try await captureMetadataWorkToken(resource: .transient(.sharedLibrary), jobID: id)
-        let scope = metadataNamespace(for: .sharedLibrary)
+        let token = try await captureMetadataWorkToken(resource: .transient(.library(.shared)), jobID: id)
+        let scope = metadataNamespace(for: .library(.shared))
         let admission = try await store.metadataAdmission(scope)
         func requireCurrent() async throws {
             guard !Task.isCancelled, metadata.sharedLocations.job?.id == id,
@@ -122,13 +119,13 @@ extension CachedPhotosRepository {
         }
         do {
             try await connect()
-            let catalog = try await acquireCollectionCatalog(.sharedLibrary, priority: .prefetch).catalog
+            let catalog = try await acquireCollectionCatalog(.library(.shared), priority: .prefetch).catalog
             try await requireCurrent()
             guard catalog.completeness == .complete else { throw CollectionCatalogError.invalidCoverage }
             let snapshot = try CollectionDayPager.snapshot(catalog: catalog)
             let counts = Dictionary(uniqueKeysWithValues: catalog.days.map { ($0.day, $0.count) })
             let demands = try snapshot.sections.map { section in
-                let address = try DayPageAddress(section: section, collection: .sharedLibrary)
+                let address = try DayPageAddress(section: section, collection: .library(.shared))
                 guard let count = counts[address.day] else { throw CollectionCatalogError.invalidCoverage }
                 return try DayPageRead(address: address, dayCount: count, membershipGeneration: 0)
             }
@@ -149,7 +146,7 @@ extension CachedPhotosRepository {
             }
             // No supported change cursor: refuse count/day drift and leave the
             // preceding inventory intact. This cannot establish a server snapshot.
-            let fence = try await acquireCollectionCatalog(.sharedLibrary, priority: .prefetch).catalog
+            let fence = try await acquireCollectionCatalog(.library(.shared), priority: .prefetch).catalog
             guard fence.completeness == .complete, fence.days == catalog.days, scanned == catalog.itemCount else { throw CollectionCatalogError.invalidCoverage }
             try await requireCurrent()
             try await store.commitMetadataInventory(id, namespace: scope, catalog: catalog, cursor: nil, admission: admission)
@@ -157,7 +154,7 @@ extension CachedPhotosRepository {
             let projection = try await store.metadataLocationProjection(scope, currentOnly: true)
             guard projection.state.inventoryComplete, projection.state.resetEpoch == admission.resetEpoch else { throw CollectionCatalogError.invalidCoverage }
             metadata.sharedLocations.current = true
-            let value = acceptSharedLocationRecords(projection.records)
+            let value = acceptLocationRecords(projection.records, space: .shared)
             for observer in metadata.sharedLocations.observers.values { observer.yield(.completed(value, verified: true)) }
             return projection.records
         } catch {

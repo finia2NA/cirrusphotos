@@ -53,16 +53,16 @@ final class TimelineSectionLoadModelTests: XCTestCase {
         XCTAssertTrue(finished)
         XCTAssertTrue(ingested)
         let collections = await transport.itemCollections()
-        XCTAssertEqual(collections, [.personalLibrary, .favorites, .album(54), .album(55)])
-        XCTAssertNotNil(library.snapshot(for: .personalLibrary))
+        XCTAssertEqual(collections, [.library(.personal), .favorites(.personal), .album(54), .album(55)])
+        XCTAssertNotNil(library.snapshot(for: .library(.personal)))
     }
 
     func testSharedMapMetadataFilterRetainsSharedActionAvailability() {
         let library = LibraryModel()
         let snapshot = TimelineSnapshot(sections: [section()])
-        let map = PhotoCollectionDescriptor.mapFilter(UUID())
-        let filter = PhotoCollectionDescriptor.libraryFilter(UUID())
-        library.registerSessionCollection(map, snapshot: snapshot, source: .sharedLibrary)
+        let map = PhotoCollectionDescriptor.mapFilter(UUID(), space: .personal)
+        let filter = PhotoCollectionDescriptor.libraryFilter(UUID(), scope: .space(.personal))
+        library.registerSessionCollection(map, snapshot: snapshot, source: .library(.shared))
         library.registerSessionCollection(filter, snapshot: snapshot, source: map)
         XCTAssertTrue(library.isSharedCollection(filter))
         XCTAssertFalse(library.allowsPersonalActions(in: filter))
@@ -77,7 +77,7 @@ final class TimelineSectionLoadModelTests: XCTestCase {
         let finished = await waitUntil { @MainActor in model.progress.state == .finished }
         XCTAssertTrue(finished)
         let collections = await transport.itemCollections()
-        XCTAssertEqual(Set(collections), [.personalLibrary, .favorites, .sharedLibrary, .sharedFavorites, .album(54), .album(55)])
+        XCTAssertEqual(Set(collections), [.library(.personal), .favorites(.personal), .library(.shared), .favorites(.shared), .album(54), .album(55)])
         _ = library
         _ = filter
     }
@@ -94,7 +94,7 @@ final class TimelineSectionLoadModelTests: XCTestCase {
         XCTAssertTrue(finished)
 
         let collections = await transport.itemCollections()
-        XCTAssertEqual(collections, [.personalLibrary, .favorites, .album(54), .album(55)])
+        XCTAssertEqual(collections, [.library(.personal), .favorites(.personal), .album(54), .album(55)])
         _ = library
         _ = filter
     }
@@ -104,7 +104,7 @@ final class TimelineSectionLoadModelTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         model.refreshAvailability()
         XCTAssertTrue(model.canPresent)
-        let map = PhotoCollectionDescriptor.mapFilter(UUID())
+        let map = PhotoCollectionDescriptor.mapFilter(UUID(), space: .personal)
         library.registerSessionCollection(map, snapshot: TimelineSnapshot(sections: [section()]))
         model.refreshAvailability()
         XCTAssertTrue(model.canPresent)
@@ -139,7 +139,7 @@ final class TimelineSectionLoadModelTests: XCTestCase {
         XCTAssertTrue(admitted)
 
         library.registerSessionCollection(
-            .favorites,
+            .favorites(.personal),
             snapshot: TimelineSnapshot(sections: [section(day: 19)])
         )
         let stale = await waitUntil { @MainActor in model.staleTimelineMessage != nil }

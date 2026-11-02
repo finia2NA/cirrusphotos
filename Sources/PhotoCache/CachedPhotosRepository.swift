@@ -42,7 +42,7 @@ public actor CachedPhotosRepository {
 
     public func setBudget(_ bytes: Int64) async throws {
         try await store.setBudget(bytes)
-        if metadata.initialized, let state = try? await store.metadataState(metadataNamespace), !state.inventoryComplete { metadata.inventoryCurrent = false }
+        if metadata.initialized, let state = try? await store.metadataState(personalMetadataNamespace), !state.inventoryComplete { metadata.inventoryCurrent = false }
         await publishStoredLocationProjection()
     }
 

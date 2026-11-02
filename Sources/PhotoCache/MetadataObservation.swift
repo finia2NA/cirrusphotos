@@ -41,14 +41,14 @@ extension CachedPhotosRepository {
     func publishMetadataInvalidation(collection: PhotoCollectionDescriptor? = nil, days: Set<CaptureDay>? = nil) {
         for id in Array(metadata.collectionObservers.keys) {
             guard var observer = metadata.collectionObservers[id], collection == nil || observer.collection == collection else { continue }
-            if collection == nil && metadataNamespace(for: observer.collection) != metadataNamespace { continue }
+            if collection == nil && metadataNamespace(for: observer.collection) != personalMetadataNamespace { continue }
             if let days { observer.days.formUnion(days) } else { observer.allDays = true; observer.days.removeAll() }
             metadata.collectionObservers[id] = observer
             observer.continuation.yield(())
         }
         let sources = Set(metadata.collectionPageObservers.values.map(\.collection))
         for source in sources where collection == nil || collection == source || (source.isMapFilter && collection == mediaCollection(for: source)) {
-            if collection == nil && metadataNamespace(for: source) != metadataNamespace { continue }
+            if collection == nil && metadataNamespace(for: source) != personalMetadataNamespace { continue }
             for section in metadata.latestTimelines[source]?.sections ?? [] {
                 if let raw = section.list.first, let day = try? CaptureDay(year: raw.year, month: raw.month, day: raw.day),
                    days == nil || days!.contains(day), let key = CacheKey.page(scope: source.contentScope, namespace: namespace, section: section, collection: source) {

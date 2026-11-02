@@ -81,7 +81,7 @@ public actor LibraryPageWindow {
     private var favoriteValues: [Int64: Bool] = [:]
 
     public init(repository: CachedPhotosRepository,
-                collection: PhotoCollectionDescriptor = .personalLibrary,
+                collection: PhotoCollectionDescriptor = .library(.personal),
                 maximumPages: Int = 8) {
         self.repository = repository
         self.collection = collection

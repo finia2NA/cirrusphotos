@@ -57,10 +57,10 @@ final class SelectionInfoResolverTests: XCTestCase {
         let run = await repo.runID
         try await seedMetadataPage([makeItem(id: 1)], section: first, repository: repo, validatedRun: run)
         try await seedMetadataPage([makeItem(id: 2)], section: second, repository: repo, validatedRun: run)
-        let namespace = await repo.metadataNamespace
+        let namespace = await repo.personalMetadataNamespace
         let store = await repo.store
-        let firstPage = try await store.metadataPage(DayPageAddress(section: first, collection: .personalLibrary), namespace: namespace, currentRun: run)
-        let secondPage = try await store.metadataPage(DayPageAddress(section: second, collection: .personalLibrary), namespace: namespace, currentRun: run)
+        let firstPage = try await store.metadataPage(DayPageAddress(section: first, collection: .library(.personal)), namespace: namespace, currentRun: run)
+        let secondPage = try await store.metadataPage(DayPageAddress(section: second, collection: .library(.personal)), namespace: namespace, currentRun: run)
         let one = try XCTUnwrap(firstPage), two = try XCTUnwrap(secondPage)
         let proofs = [SelectionMembershipProof(address: one.address, revision: one.membershipRevision, offsetsAndIDs: [(0, 1)]),
                       SelectionMembershipProof(address: two.address, revision: two.membershipRevision, offsetsAndIDs: [(0, 2)])]
@@ -79,18 +79,18 @@ final class SelectionInfoResolverTests: XCTestCase {
         await transport.setPage([makeItem(id: 1), makeItem(id: 2, type: "video"), makeItem(id: 3)], start: start(section))
         let snapshot = TimelineSnapshot(sections: [section])
         let repository = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
-        for await _ in await repository.timeline(collection: .personalLibrary) {}
-        let selection = PhotoSelectionSnapshot(collection: .personalLibrary, timeline: snapshot,
+        for await _ in await repository.timeline(collection: .library(.personal)) {}
+        let selection = PhotoSelectionSnapshot(collection: .library(.personal), timeline: snapshot,
             timelineFingerprint: LibraryIndex(snapshot: snapshot).fingerprint,
             selectedOrdinals: IndexSet(integersIn: 0...2), knownItemIDsByOrdinal: [0: 1])
         let allItems = await SelectionItemResolver(repository: repository).resolve(selection)
         XCTAssertEqual(allItems?.map(\.id), [1, 2, 3])
         let resolver = SelectionDownloadResolver(repository: repository)
-        let result = await resolver.resolve(collection: .personalLibrary, snapshot: snapshot,
+        let result = await resolver.resolve(collection: .library(.personal), snapshot: snapshot,
                                             selectedOrdinals: IndexSet(integersIn: 0...2),
                                             knownItemIDsByOrdinal: [0: 1])
         XCTAssertEqual(result?.map(\.id), [1, 3])
-        let changed = await resolver.resolve(collection: .personalLibrary, snapshot: snapshot,
+        let changed = await resolver.resolve(collection: .library(.personal), snapshot: snapshot,
                                              selectedOrdinals: IndexSet(integer: 0),
                                              knownItemIDsByOrdinal: [0: 999])
         XCTAssertNil(changed)
@@ -110,7 +110,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
-            collection: .personalLibrary, snapshot: snapshot,
+            collection: .library(.personal), snapshot: snapshot,
             selectedOrdinals: IndexSet(integersIn: 0...3))
         var iterator = stream.makeAsyncIterator()
         let initial = await iterator.next()
@@ -145,7 +145,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         try await seedPage([item], section: sec, repository: repo)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
-            collection: .personalLibrary, snapshot: snapshot,
+            collection: .library(.personal), snapshot: snapshot,
             selectedOrdinals: IndexSet(integer: 0))
         let emissions = await collectAll(stream)
         let sizes = emissions.compactMap(\.cumulativeSize)
@@ -166,7 +166,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         try await seedPage([makeItem(id: 1)], section: sec, repository: repo)
 
         let emissions = await collectAll(SelectionInfoResolver(repository: repo).resolve(
-            collection: .personalLibrary, snapshot: snapshot,
+            collection: .library(.personal), snapshot: snapshot,
             selectedOrdinals: IndexSet(integer: 0)))
 
         XCTAssertEqual(emissions.last?.cumulativeSize, 250)
@@ -185,7 +185,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
-            collection: .personalLibrary, snapshot: snapshot,
+            collection: .library(.personal), snapshot: snapshot,
             selectedOrdinals: IndexSet(integer: 0))
         var iterator = stream.makeAsyncIterator()
         let initial = await iterator.next()
@@ -210,7 +210,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
-            collection: .personalLibrary, snapshot: snapshot,
+            collection: .library(.personal), snapshot: snapshot,
             selectedOrdinals: IndexSet(integer: 0))
         let emissions = await collectAll(stream)
         let last = try XCTUnwrap(emissions.last)
@@ -235,7 +235,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         try await seedPage([item], section: sec, repository: repo)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
-            collection: .personalLibrary, snapshot: snapshot,
+            collection: .library(.personal), snapshot: snapshot,
             selectedOrdinals: IndexSet(integer: 0))
         var iterator = stream.makeAsyncIterator()
         let initialValue = await iterator.next()
@@ -268,7 +268,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
-            collection: .personalLibrary, snapshot: snapshot,
+            collection: .library(.personal), snapshot: snapshot,
             selectedOrdinals: IndexSet(integersIn: 0...3))
         let emissions = await collectAll(stream)
         let last = try XCTUnwrap(emissions.last)
@@ -292,7 +292,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         try await seedPage([item], section: sec, repository: repo)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
-            collection: .personalLibrary, snapshot: snapshot,
+            collection: .library(.personal), snapshot: snapshot,
             selectedOrdinals: IndexSet(integer: 0))
         let emissions = await collectAll(stream)
         XCTAssertLessThanOrEqual(emissions.map(\.coordinates.count).max() ?? 0, 1)
@@ -313,7 +313,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
-            collection: .personalLibrary, snapshot: snapshot,
+            collection: .library(.personal), snapshot: snapshot,
             selectedOrdinals: IndexSet(integersIn: 0...2))
         let emissions = await collectAll(stream)
         XCTAssertEqual(emissions.last?.coordinates, [
@@ -333,7 +333,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
-            collection: .personalLibrary, snapshot: snapshot,
+            collection: .library(.personal), snapshot: snapshot,
             selectedOrdinals: IndexSet(integer: 0))
         let emissions = await collectAll(stream)
         XCTAssertEqual(emissions.last?.coordinates,
@@ -352,7 +352,7 @@ final class SelectionInfoResolverTests: XCTestCase {
         let repo = try await makeRepository(transport: transport, root: root, snapshot: snapshot)
 
         let stream = SelectionInfoResolver(repository: repo).resolve(
-            collection: .personalLibrary, snapshot: snapshot,
+            collection: .library(.personal), snapshot: snapshot,
             selectedOrdinals: IndexSet(integersIn: 0...3))
         let consumer = Task {
             for await _ in stream {}
@@ -411,12 +411,12 @@ actor InfoResolverMockTransport: PhotosTransport {
         return CollectionBatchResult(items: Array(values.dropFirst(request.offset).prefix(request.limit)), profile: fields)
     }
 
-    func setFavorite(itemIDs: [Int64], favorite: Bool) async throws {
+    func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws {
         throw TestFailure("Unexpected favorite write")
     }
 
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         throw TestFailure("Unexpected thumbnail request")
     }
 

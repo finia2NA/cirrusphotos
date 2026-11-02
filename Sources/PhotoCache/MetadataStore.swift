@@ -38,6 +38,7 @@ public struct StoredCollectionCatalog: Sendable {
     public let validatedRun: String?
 }
 public struct MetadataStoreAdmission: Sendable {
+    public let namespace: MetadataNamespace
     public let generation: Int
     public let metadataGeneration: Int
     public let revision: Int64
@@ -140,13 +141,13 @@ extension DiskCache {
     }
     public func metadataAdmission(_ namespace: MetadataNamespace) throws -> MetadataStoreAdmission {
         let state = try metadataState(namespace)
-        return MetadataStoreAdmission(generation: generation, metadataGeneration: metadataGeneration,
+        return MetadataStoreAdmission(namespace: namespace, generation: generation, metadataGeneration: metadataGeneration,
                                       revision: state.revision, resetEpoch: state.resetEpoch)
     }
     private func admit(_ admission: MetadataStoreAdmission, namespace: MetadataNamespace) throws {
         let state = try metadataState(namespace)
-        guard generation == admission.generation, metadataGeneration == admission.metadataGeneration,
-              state.revision == admission.revision, state.resetEpoch == admission.resetEpoch else {
+        try admitLifetime(admission, namespace: namespace)
+        guard state.revision == admission.revision, state.resetEpoch == admission.resetEpoch else {
             throw MetadataAdmissionError.superseded
         }
     }
@@ -266,12 +267,19 @@ extension DiskCache {
 
     public func invalidateMetadataAlbumSummaries(_ namespace: MetadataNamespace, admission: MetadataStoreAdmission) throws {
         try metadataTransaction {
-            guard generation == admission.generation, metadataGeneration == admission.metadataGeneration else { throw MetadataAdmissionError.superseded }
+            try admitLifetime(admission, namespace: namespace)
             let statement = try prepare("UPDATE album_summaries SET validated_run=NULL WHERE namespace=?")
             bind(namespace.key, at: 1, in: statement)
             try metadataStep(statement)
             try advanceMetadataLocalRevision(namespace)
         }
+    }
+
+    /// Local mutation patches intentionally tolerate revision changes caused by
+    /// other serialized writes, while retaining namespace/reset fencing.
+    private func admitLifetime(_ admission: MetadataStoreAdmission, namespace: MetadataNamespace) throws {
+        guard namespace == admission.namespace, generation == admission.generation,
+              metadataGeneration == admission.metadataGeneration else { throw MetadataAdmissionError.superseded }
     }
 
     public func metadataCatalog(_ key: CollectionKey) throws -> StoredCollectionCatalog? {
@@ -726,7 +734,7 @@ extension DiskCache {
 
     public func invalidateMetadataCollection(_ key: CollectionKey, admission: MetadataStoreAdmission) throws {
         try metadataTransaction {
-            guard generation == admission.generation, metadataGeneration == admission.metadataGeneration else { throw MetadataAdmissionError.superseded }
+            try admitLifetime(admission, namespace: key.namespace)
             let catalog = try prepare("UPDATE collection_state SET validated_run=NULL WHERE namespace=? AND collection=?")
             bind(key.namespace.key, at: 1, in: catalog); bind(key.collection.rawValue, at: 2, in: catalog); try metadataStep(catalog)
             let days = try prepare("UPDATE collection_days SET membership_generation=membership_generation+1 WHERE namespace=? AND collection=?")
@@ -738,22 +746,24 @@ extension DiskCache {
     public func applyMetadataFavoriteValues(_ values: [Int64: Bool], namespace: MetadataNamespace,
                                             currentRun: String, admission: MetadataStoreAdmission) throws {
         try metadataTransaction {
-            guard generation == admission.generation, metadataGeneration == admission.metadataGeneration else { throw MetadataAdmissionError.superseded }
+            try admitLifetime(admission, namespace: namespace)
             for (id, favorite) in values {
                 try patchMetadataDetail(namespace: namespace, itemID: id, annotationRun: currentRun) { $0.withFavorite(favorite) }
             }
-            let collection = PhotoCollectionDescriptor.favorites.inSpace(namespace.scope.space ?? .personal)
-            let catalog = try prepare("UPDATE collection_state SET validated_run=NULL WHERE namespace=? AND collection=?")
-            bind(namespace.key, at: 1, in: catalog); bind(collection.rawValue, at: 2, in: catalog); try metadataStep(catalog)
-            let days = try prepare("UPDATE collection_days SET membership_generation=membership_generation+1 WHERE namespace=? AND collection=?")
-            bind(namespace.key, at: 1, in: days); bind(collection.rawValue, at: 2, in: days); try metadataStep(days)
+            if let space = namespace.scope.space {
+                let collection = PhotoCollectionDescriptor.favorites(space)
+                let catalog = try prepare("UPDATE collection_state SET validated_run=NULL WHERE namespace=? AND collection=?")
+                bind(namespace.key, at: 1, in: catalog); bind(collection.rawValue, at: 2, in: catalog); try metadataStep(catalog)
+                let days = try prepare("UPDATE collection_days SET membership_generation=membership_generation+1 WHERE namespace=? AND collection=?")
+                bind(namespace.key, at: 1, in: days); bind(collection.rawValue, at: 2, in: days); try metadataStep(days)
+            }
             try advanceMetadataLocalRevision(namespace)
         }
     }
     public func applyMetadataRotationValues(_ values: [Int64: PhotoItem], namespace: MetadataNamespace,
                                             admission: MetadataStoreAdmission) throws {
         try metadataTransaction {
-            guard generation == admission.generation, metadataGeneration == admission.metadataGeneration else { throw MetadataAdmissionError.superseded }
+            try admitLifetime(admission, namespace: namespace)
             for (id, replacement) in values {
                 try patchMetadataDetail(namespace: namespace, itemID: id) { $0.withRotationMetadata(from: replacement) }
                 let query = try prepare("SELECT capture_time,projection FROM item_index WHERE namespace=? AND item_id=?")

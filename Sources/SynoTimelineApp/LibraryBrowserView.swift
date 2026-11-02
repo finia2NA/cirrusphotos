@@ -39,7 +39,7 @@ struct BrowserCommandSnapshot: Sendable {
         active: false,
         canOpen: false,
         canToggleFavorite: false,
-        collection: .personalLibrary,
+        collection: .library(.personal),
         indexFingerprint: nil,
         selectionGeneration: nil,
         selectedOrdinals: IndexSet(),
@@ -840,7 +840,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         private var allowNetwork = false
         private var thumbnailSize: ThumbnailSize = .m
         private var repository: CachedPhotosRepository?
-        private var collection: PhotoCollectionDescriptor = .personalLibrary
+        private var collection: PhotoCollectionDescriptor = .library(.personal)
         private var onVisibleDay: ((String) -> Void)?
         private var lastVisibleDay: String?
         private var unavailableOffline = false

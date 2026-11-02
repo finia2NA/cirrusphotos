@@ -68,7 +68,7 @@ final class InfoPanelTests: XCTestCase {
     func testEmptySelectionShowsPlaceholder() async throws {
         let setup = try await makeContext()
         setup.model.updateBrowserContext(repository: setup.repo, snapshot: nil,
-                                         collection: .personalLibrary, selection: IndexSet())
+                                         collection: .library(.personal), selection: IndexSet())
         setup.model.setVisible(true)
         XCTAssertEqual(setup.model.content.kind, .empty)
     }
@@ -83,7 +83,7 @@ final class InfoPanelTests: XCTestCase {
         let setup = try await makeContext(items: [item])
         let model = setup.model
         model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
-                                   collection: .personalLibrary, selection: IndexSet(integer: 0))
+                                   collection: .library(.personal), selection: IndexSet(integer: 0))
         model.setVisible(true)
         let resolved = await waitUntil { model.content.kind == .single && !model.content.isLoading }
         XCTAssertTrue(resolved)
@@ -109,7 +109,7 @@ final class InfoPanelTests: XCTestCase {
         let setup = try await makeContext(items: [item])
         let model = setup.model
         model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
-                                   collection: .personalLibrary, selection: IndexSet(integer: 0))
+                                   collection: .library(.personal), selection: IndexSet(integer: 0))
         model.setVisible(true)
         _ = await waitUntil { model.content.kind == .single && !model.content.isLoading }
         XCTAssertNil(model.content.camera)
@@ -124,7 +124,7 @@ final class InfoPanelTests: XCTestCase {
         let setup = try await makeContext(items: [item])
         let model = setup.model
         model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
-                                   collection: .personalLibrary, selection: IndexSet(integer: 0))
+                                   collection: .library(.personal), selection: IndexSet(integer: 0))
         model.setVisible(true)
         _ = await waitUntil { model.content.kind == .single && !model.content.isLoading }
         XCTAssertEqual(model.content.durationText, "0:49")
@@ -138,7 +138,7 @@ final class InfoPanelTests: XCTestCase {
         let setup = try await makeContext(items: items)
         let model = setup.model
         model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
-                                   collection: .personalLibrary, selection: IndexSet(integersIn: 0...1))
+                                   collection: .library(.personal), selection: IndexSet(integersIn: 0...1))
         model.setVisible(true)
         let resolved = await waitUntil {
             model.content.kind == .multiple && model.content.countText == "2 Photos" &&
@@ -158,7 +158,7 @@ final class InfoPanelTests: XCTestCase {
         let setup = try await makeContext(items: items)
         let model = setup.model
         model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
-                                   collection: .personalLibrary, selection: IndexSet(integersIn: 0...1))
+                                   collection: .library(.personal), selection: IndexSet(integersIn: 0...1))
         model.setVisible(true)
         let resolved = await waitUntil {
             model.content.kind == .multiple && model.content.countText == "2 Items" &&
@@ -172,7 +172,7 @@ final class InfoPanelTests: XCTestCase {
         let setup = try await makeContext(items: [item])
         let model = setup.model
         model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
-                                   collection: .personalLibrary, selection: IndexSet(integer: 0))
+                                   collection: .library(.personal), selection: IndexSet(integer: 0))
         model.setVisible(true)
         let resolved = await waitUntil { model.content.kind == .single && !model.content.isLoading }
         XCTAssertTrue(resolved)
@@ -186,7 +186,7 @@ final class InfoPanelTests: XCTestCase {
         let setup = try await makeContext(items: [item])
         let model = setup.model
         model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
-                                   collection: .personalLibrary, selection: IndexSet(integer: 0))
+                                   collection: .library(.personal), selection: IndexSet(integer: 0))
         model.setVisible(true)
         _ = await waitUntil { model.content.kind == .single && !model.content.isLoading }
         XCTAssertTrue(model.content.pins.isEmpty)
@@ -198,7 +198,7 @@ final class InfoPanelTests: XCTestCase {
         let setup = try await makeContext(items: items)
         let model = setup.model
         model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
-                                   collection: .personalLibrary, selection: IndexSet(integersIn: 0...1))
+                                   collection: .library(.personal), selection: IndexSet(integersIn: 0...1))
         model.setVisible(true)
         let resolved = await waitUntil {
             model.content.kind == .multiple && !model.content.isResolvingSize
@@ -218,7 +218,7 @@ final class InfoPanelTests: XCTestCase {
         let setup = try await makeContext(items: items)
         let model = setup.model
         model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
-                                   collection: .personalLibrary, selection: IndexSet(integersIn: 0...500))
+                                   collection: .library(.personal), selection: IndexSet(integersIn: 0...500))
         model.setVisible(true)
         let resolved = await waitUntil {
             model.content.kind == .multiple && !model.content.isResolvingSize
@@ -234,7 +234,7 @@ final class InfoPanelTests: XCTestCase {
         let setup = try await makeContext(items: items)
         let model = setup.model
         model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
-                                   collection: .personalLibrary, selection: IndexSet(integersIn: 0...1))
+                                   collection: .library(.personal), selection: IndexSet(integersIn: 0...1))
         model.setVisible(true)
         let resolved = await waitUntil {
             model.content.kind == .multiple && !model.content.isResolvingSize
@@ -248,7 +248,7 @@ final class InfoPanelTests: XCTestCase {
         let setup = try await makeContext(items: items)
         let model = setup.model
         model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
-                                   collection: .personalLibrary, selection: IndexSet(integersIn: 0...1))
+                                   collection: .library(.personal), selection: IndexSet(integersIn: 0...1))
         model.setVisible(true)
         _ = await waitUntil { model.content.kind == .multiple }
 
@@ -270,7 +270,7 @@ final class InfoPanelTests: XCTestCase {
         let setup = try await makeContext(items: items)
         let model = setup.model
         model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
-                                   collection: .personalLibrary, selection: IndexSet(integersIn: 0...1))
+                                   collection: .library(.personal), selection: IndexSet(integersIn: 0...1))
         model.setVisible(true)
         model.updateViewer(active: true, item: nil)
         XCTAssertEqual(model.content.kind, .single)
@@ -298,7 +298,7 @@ final class InfoPanelTests: XCTestCase {
         let setup = try await makeContext(items: [makeItem(id: 1, filesize: 1000)])
         let model = setup.model
         model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
-                                   collection: .personalLibrary, selection: IndexSet(integer: 0))
+                                   collection: .library(.personal), selection: IndexSet(integer: 0))
         try? await Task.sleep(for: .milliseconds(250))
         let calls = await setup.transport.recordedItemCalls()
         XCTAssertEqual(calls, 0)
@@ -310,7 +310,7 @@ final class InfoPanelTests: XCTestCase {
         await setup.transport.setBlocked(true)
         let model = setup.model
         model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
-                                   collection: .personalLibrary, selection: IndexSet(integer: 0))
+                                   collection: .library(.personal), selection: IndexSet(integer: 0))
         model.setVisible(true)
         let initiallyStarted = await waitUntil { await setup.transport.recordedItemCalls() == 1 }
         XCTAssertTrue(initiallyStarted)
@@ -337,7 +337,7 @@ final class InfoPanelTests: XCTestCase {
         model.setVisible(true)
         for selection in [IndexSet(integer: 0), IndexSet(integer: 1), IndexSet(integer: 0)] {
             model.updateBrowserContext(repository: setup.repo, snapshot: setup.snapshot,
-                                       collection: .personalLibrary, selection: selection)
+                                       collection: .library(.personal), selection: selection)
             try? await Task.sleep(for: .milliseconds(20))
         }
         let resolved = await waitUntil { model.content.kind == .single && !model.content.isLoading }
@@ -350,7 +350,7 @@ final class InfoPanelTests: XCTestCase {
 
     func testUnavailableLibraryShowsFailureForNonEmptySelection() async throws {
         let model = InfoPanelModel()
-        model.updateBrowserContext(repository: nil, snapshot: nil, collection: .personalLibrary,
+        model.updateBrowserContext(repository: nil, snapshot: nil, collection: .library(.personal),
                                    selection: IndexSet(integer: 0))
         model.setVisible(true)
         guard case .failure = model.content.kind else {

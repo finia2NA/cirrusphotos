@@ -12,7 +12,7 @@ private actor CanonicalFilterTransport: PhotosTransport {
     init(_ items: [PhotoItem]) { rows = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) }) }
     func block() { blocked = true }
     func release() { released = true }
-    func items(ids: [Int64]) async throws -> [PhotoItem] {
+    func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] {
         requests.append(ids)
         while blocked && !released { try await Task.sleep(for: .milliseconds(2)) }
         return ids.compactMap { rows[$0] }
@@ -32,7 +32,7 @@ final class MapFilterTests: XCTestCase, @unchecked Sendable {
     }
     private func register(_ repository: CachedPhotosRepository, items: [PhotoItem], current: Bool = false) async throws -> MapFilterRegistration {
         try await repository.initializeMetadataEngine()
-        let namespace = await repository.metadataNamespace
+        let namespace = await repository.personalMetadataNamespace
         let run = current ? await repository.runID : "previous-run"
         _ = try await repository.store.storeMetadataDetails(items, namespace: namespace, currentRun: run, admission: repository.store.metadataAdmission(namespace))
         let records = try await repository.store.metadataCachedLocations(namespace)
@@ -53,7 +53,7 @@ final class MapFilterTests: XCTestCase, @unchecked Sendable {
         let transport = CanonicalFilterTransport(photos)
         let repository = try repository(root: root, transport: transport)
         let registration = try await register(repository, items: photos)
-        try await repository.store.evictMetadataDetails(namespace: repository.metadataNamespace, itemIDs: [1])
+        try await repository.store.evictMetadataDetails(namespace: repository.personalMetadataNamespace, itemIDs: [1])
         let values = await pages(repository, registration: registration, allowNetwork: false)
         let page = try XCTUnwrap(values.first)
         XCTAssertEqual(page.slots.map(\.itemID), [1, 2])
@@ -102,7 +102,7 @@ final class MapFilterTests: XCTestCase, @unchecked Sendable {
         let transport = CanonicalFilterTransport([photo])
         let repository = try repository(root: root, transport: transport)
         let registration = try await register(repository, items: [photo])
-        try await repository.store.evictMetadataDetails(namespace: repository.metadataNamespace, itemIDs: [999])
+        try await repository.store.evictMetadataDetails(namespace: repository.personalMetadataNamespace, itemIDs: [999])
         let values = await pages(repository, registration: registration)
         XCTAssertEqual(values.last?.completeItems?.map(\.id), [999])
         XCTAssertTrue(values.last?.verified == true)
@@ -115,9 +115,9 @@ final class MapFilterTests: XCTestCase, @unchecked Sendable {
         let transport = CanonicalFilterTransport([photo])
         let repository = try repository(root: root, transport: transport)
         let first = try await register(repository, items: [photo])
-        let value = await repository.acceptLocationRecords(try await repository.store.metadataCachedLocations(repository.metadataNamespace))
+        let value = await repository.acceptLocationRecords(try await repository.store.metadataCachedLocations(repository.personalMetadataNamespace))
         let second = try await repository.registerMapFilter(itemIDs: [1], locationRevision: value.revision)
-        try await repository.store.evictMetadataDetails(namespace: repository.metadataNamespace, itemIDs: [1])
+        try await repository.store.evictMetadataDetails(namespace: repository.personalMetadataNamespace, itemIDs: [1])
         await transport.block()
         let left = Task { await self.pages(repository, registration: first) }
         let right = Task { await self.pages(repository, registration: second) }
@@ -151,7 +151,7 @@ final class MapFilterTests: XCTestCase, @unchecked Sendable {
         let selection = PhotoSelectionSnapshot(collection: map.descriptor, timeline: map.snapshot,
             timelineFingerprint: LibraryIndex(snapshot: map.snapshot).fingerprint,
             selectedOrdinals: IndexSet(integer: 0), knownItemIDsByOrdinal: [:], authority: map.authority)
-        try await repository.store.evictMetadataDetails(namespace: repository.metadataNamespace, itemIDs: [7])
+        try await repository.store.evictMetadataDetails(namespace: repository.personalMetadataNamespace, itemIDs: [7])
         await transport.block()
         let task = Task { await SelectionItemResolver(repository: repository).resolve(selection) }
         let started = await waitUntil { await transport.stats().lookups.count == 1 }
@@ -203,7 +203,7 @@ final class MapFilterTests: XCTestCase, @unchecked Sendable {
         let transport = CanonicalFilterTransport([photo])
         let repository = try repository(root: root, transport: transport)
         let map = try await register(repository, items: [photo])
-        try await repository.store.evictMetadataDetails(namespace: repository.metadataNamespace, itemIDs: [8])
+        try await repository.store.evictMetadataDetails(namespace: repository.personalMetadataNamespace, itemIDs: [8])
         let selection = PhotoSelectionSnapshot(collection: map.descriptor, timeline: map.snapshot,
             timelineFingerprint: LibraryIndex(snapshot: map.snapshot).fingerprint,
             selectedOrdinals: IndexSet(integer: 0), knownItemIDsByOrdinal: [:], authority: map.authority)

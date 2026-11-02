@@ -179,7 +179,7 @@ final class AlbumPresentationStoreTests: XCTestCase {
 
     func testSpringTargetOpensOnlyForAnActiveLocalSelection() async {
         let timeline = TimelineSnapshot(sections: [])
-        let selection = PhotoSelectionSnapshot(collection: .favorites, timeline: timeline,
+        let selection = PhotoSelectionSnapshot(collection: .favorites(.personal), timeline: timeline,
             timelineFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
             selectedOrdinals: IndexSet(integer: 1), knownItemIDsByOrdinal: [1: 42])
         let nonce = SelectionDragRegistry.register(.init(selection: selection, sourceAlbumID: nil, namespace: "a"))
@@ -202,7 +202,7 @@ final class AlbumPresentationStoreTests: XCTestCase {
 
     func testDragEndObserverSurvivesAcceptedSelectionAndFiresOnce() {
         let timeline = TimelineSnapshot(sections: [])
-        let selection = PhotoSelectionSnapshot(collection: .favorites, timeline: timeline,
+        let selection = PhotoSelectionSnapshot(collection: .favorites(.personal), timeline: timeline,
             timelineFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
             selectedOrdinals: IndexSet(integer: 1), knownItemIDsByOrdinal: [1: 42])
         let nonce = SelectionDragRegistry.register(.init(selection: selection, sourceAlbumID: nil, namespace: "a"))
@@ -218,7 +218,7 @@ final class AlbumPresentationStoreTests: XCTestCase {
 
     func testSelectionNonceIsScopedAndConsumedOnce() {
         let timeline = TimelineSnapshot(sections: [])
-        let selection = PhotoSelectionSnapshot(collection: .favorites, timeline: timeline,
+        let selection = PhotoSelectionSnapshot(collection: .favorites(.personal), timeline: timeline,
             timelineFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
             selectedOrdinals: IndexSet(integer: 1), knownItemIDsByOrdinal: [1: 42])
         let nonce = SelectionDragRegistry.register(.init(selection: selection, sourceAlbumID: nil, namespace: "a"))

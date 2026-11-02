@@ -30,6 +30,28 @@ final class NavigationRestorationTests: XCTestCase {
         }
     }
 
+    func testFolderModeAndAccountResetStayWithinTheirSpace() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = NavigationRestorationStore(defaults: defaults)
+        _ = store.prepareFolders(namespace: "first")
+        store.setFolders(shown: true, path: [1])
+        store.setOpenedPerson(4)
+        store.selectSpace(.shared)
+        _ = store.prepareFolders(namespace: "first")
+        store.setFolders(shown: false, path: [2])
+        store.setOpenedPerson(5)
+        store.selectSpace(.personal)
+        XCTAssertTrue(store.showsFolders)
+        XCTAssertEqual(store.folderPath, [1])
+        XCTAssertNil(store.preparePerson(namespace: "second"))
+        XCTAssertTrue(store.folderPath.isEmpty)
+        store.selectSpace(.shared)
+        XCTAssertFalse(store.showsFolders)
+        XCTAssertEqual(store.preparePerson(namespace: "first"), 5)
+        XCTAssertEqual(store.folderPath, [2])
+    }
+
     private func defaults() -> (UserDefaults, String) {
         let suite = "NavigationRestorationTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -52,8 +74,8 @@ final class NavigationRestorationTests: XCTestCase {
                                                    sectionFraction: 0.0)
 
         let writer = NavigationRestorationStore(defaults: defaults, key: key)
-        writer.setTimelineAnchor(personal, for: .personalLibrary)
-        writer.setTimelineAnchor(favorites, for: .favorites)
+        writer.setTimelineAnchor(personal, for: .library(.personal))
+        writer.setTimelineAnchor(favorites, for: .favorites(.personal))
         writer.setTimelineAnchor(album, for: .album(54))
         writer.selectSidebar(.destination(.albums))
         writer.setOpenedAlbum(.album(54))
@@ -63,8 +85,8 @@ final class NavigationRestorationTests: XCTestCase {
         XCTAssertEqual(reader.selectedDestination, .albums)
         XCTAssertEqual(reader.openedAlbum, .album(54))
         XCTAssertEqual(reader.sidebarSelection, .album(.album(54)))
-        XCTAssertEqual(reader.timelineAnchor(for: .personalLibrary), personal)
-        XCTAssertEqual(reader.timelineAnchor(for: .favorites), favorites)
+        XCTAssertEqual(reader.timelineAnchor(for: .library(.personal)), personal)
+        XCTAssertEqual(reader.timelineAnchor(for: .favorites(.personal)), favorites)
         XCTAssertEqual(reader.timelineAnchor(for: .album(54)), album)
     }
 
@@ -74,14 +96,14 @@ final class NavigationRestorationTests: XCTestCase {
         let store = NavigationRestorationStore(defaults: defaults, key: "state")
         let shared = PhotoTimelineRestorationAnchor(itemID: 41, dayID: "2024-10-13", sectionOffsetHint: nil, localOffset: 0, sectionFraction: 0)
         store.selectSpace(.shared)
-        store.setTimelineAnchor(shared, for: .sharedLibrary)
+        store.setTimelineAnchor(shared, for: .library(.shared))
         store.selectSidebar(.album(.album(54)))
         store.setOpenedAlbum(.album(54))
         let restored = NavigationRestorationStore(defaults: defaults, key: "state")
         XCTAssertEqual(restored.selectedSpace, .shared)
         XCTAssertEqual(restored.openedAlbum, .album(54))
-        XCTAssertEqual(restored.timelineAnchor(for: .sharedLibrary), shared)
-        XCTAssertNil(restored.timelineAnchor(for: .personalLibrary))
+        XCTAssertEqual(restored.timelineAnchor(for: .library(.shared)), shared)
+        XCTAssertNil(restored.timelineAnchor(for: .library(.personal)))
     }
 
     func testFolderModeAndPathRoundTrip() {
@@ -172,8 +194,8 @@ final class NavigationRestorationTests: XCTestCase {
 
         XCTAssertEqual(store.selectedDestination, .personalLibrary, file: file, line: line)
         XCTAssertNil(store.openedAlbum, file: file, line: line)
-        XCTAssertNil(store.timelineAnchor(for: .personalLibrary), file: file, line: line)
-        XCTAssertNil(store.timelineAnchor(for: .favorites), file: file, line: line)
+        XCTAssertNil(store.timelineAnchor(for: .library(.personal)), file: file, line: line)
+        XCTAssertNil(store.timelineAnchor(for: .favorites(.personal)), file: file, line: line)
         XCTAssertNil(defaults.object(forKey: key), file: file, line: line)
     }
 }

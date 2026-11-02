@@ -93,7 +93,7 @@ public struct ThumbnailRangeDownloader: Sendable {
     /// Processes one metadata page at a time and at most `workerCount` thumbnails at once.
     /// No image bytes or whole-library item arrays are retained by this operation.
     public func download(snapshot: TimelineSnapshot, range: ThumbnailDateRange,
-                         size: ThumbnailSize, collection: PhotoCollectionDescriptor = .personalLibrary,
+                         size: ThumbnailSize, collection: PhotoCollectionDescriptor = .library(.personal),
                          progress: @escaping @Sendable (ThumbnailBatchSummary) async -> Void) async -> ThumbnailBatchSummary {
         guard let selected = range.clamped(to: snapshot) else {
             let empty = ThumbnailBatchSummary(estimated: 0)

@@ -10,7 +10,7 @@ final class MetadataReadPlannerTests: XCTestCase {
         let catalog = try CollectionDayCatalog(days: entries, completeness: .complete)
         let demands = try entries.flatMap { entry in
             try stride(from: 0, to: entry.count, by: 250).map { offset in
-                try DayPageRead(address: DayPageAddress(collection: .personalLibrary, day: entry.day, offset: offset), dayCount: entry.count, membershipGeneration: 1)
+                try DayPageRead(address: DayPageAddress(collection: .library(.personal), day: entry.day, offset: offset), dayCount: entry.count, membershipGeneration: 1)
             }
         }
         return (catalog, demands)
@@ -41,7 +41,7 @@ final class MetadataReadPlannerTests: XCTestCase {
     }
     func testDistinctPredicateNeverSharesMembership() throws {
         let (catalog, demands) = try fixtures([20])
-        let favorites = try DayPageRead(address: DayPageAddress(collection: .favorites, day: demands[0].address.day, offset: 0), dayCount: 20, membershipGeneration: 1)
+        let favorites = try DayPageRead(address: DayPageAddress(collection: .favorites(.personal), day: demands[0].address.day, offset: 0), dayCount: 20, membershipGeneration: 1)
         XCTAssertEqual(try MetadataReadPlanner.plan(demands: [demands[0], favorites], catalog: catalog, profile: .fullPage).count, 2)
     }
     func testMaterializerRejectsMissingExtraDuplicateAndUnexpectedDays() throws {

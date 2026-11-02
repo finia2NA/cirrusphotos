@@ -17,7 +17,7 @@ final class IncomingAlbumIsolationTests: XCTestCase {
         let repository = try CachedPhotosRepository(credentials: .init(username: "test", password: "unused"), cacheRoot: root)
         try await repository.initializeMetadataEngine()
         let store = await repository.store
-        let personal = await repository.metadataNamespace
+        let personal = await repository.personalMetadataNamespace
         let first = await repository.metadataNamespace(for: .incomingAlbum(ownerID: 7, albumID: 42))
         let second = await repository.metadataNamespace(for: .incomingAlbum(ownerID: 8, albumID: 42))
         func item(_ time: Int) throws -> PhotoItem {
@@ -130,7 +130,7 @@ extension IncomingAlbumIsolationTests {
         XCTAssertEqual(multipleItems?.map(\.id), [1, 2])
         XCTAssertEqual(personalSelection.items.first?.filename, "personal")
         XCTAssertEqual(incomingSelection.items.first?.filename, "shared")
-        let filtered = PhotoCollectionDescriptor.libraryFilter(UUID())
+        let filtered = PhotoCollectionDescriptor.libraryFilter(UUID(), scope: incoming.contentScope)
         let registration = LibraryFilterRegistration(descriptor: filtered, snapshot: sharedTimeline,
             referencesBySection: [[.init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: 1)]],
             filter: LibraryFilter(), revision: 1, sourceFingerprint: LibraryIndex(snapshot: sharedTimeline).fingerprint,

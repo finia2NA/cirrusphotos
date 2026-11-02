@@ -7,7 +7,7 @@ private actor PeopleCacheTransport: PhotosTransport {
     var offline = false
     var calls = 0
     func setOffline() { offline = true }
-    func people() async throws -> [PersonSummary] {
+    func people(space: PhotoSpace) async throws -> [PersonSummary] {
         calls += 1
         if offline { throw TestFailure("Offline") }
         return [try JSONDecoder().decode(PersonSummary.self, from: Data(#"{"id":123,"name":"A","item_count":4,"additional":{"thumbnail":{"cache_key":"face"}}}"#.utf8))]

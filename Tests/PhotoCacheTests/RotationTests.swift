@@ -54,7 +54,7 @@ final class RotationTests: XCTestCase {
         let section = TimelineSection(offset: 0, limit: 1,
             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         let action = SelectionRotationAction(itemIDs: [1], sectionsByID: [1: section],
-                                             collection: .personalLibrary, itemsByID: [1: original])
+                                             collection: .library(.personal), itemsByID: [1: original])
         let store = await repository.store
         let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
             server: SynologyClient.defaultBaseURL, account: "rotation"), section: section))
@@ -63,7 +63,7 @@ final class RotationTests: XCTestCase {
         let calls = await transport.rotateCalls
         XCTAssertEqual(calls.first?.0, [1])
         XCTAssertEqual(calls.first?.1, .clockwise)
-        let cachedItems = try await store.metadataPage(try DayPageAddress(section: section, collection: .personalLibrary), namespace: repository.metadataNamespace, currentRun: repository.runID)?.completeItems ?? []
+        let cachedItems = try await store.metadataPage(try DayPageAddress(section: section, collection: .library(.personal)), namespace: repository.personalMetadataNamespace, currentRun: repository.runID)?.completeItems ?? []
         XCTAssertEqual(cachedItems.first?.additional?.thumbnail?.cacheKey, "new")
         XCTAssertEqual(cachedItems.first?.additional?.resolution?.width, 300)
     }
@@ -77,7 +77,7 @@ final class RotationTests: XCTestCase {
         let section = TimelineSection(offset: 0, limit: 1,
             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         let action = SelectionRotationAction(itemIDs: [2], sectionsByID: [2: section],
-                                             collection: .personalLibrary, itemsByID: [2: original])
+                                             collection: .library(.personal), itemsByID: [2: original])
         let store = await repository.store
         let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
             server: SynologyClient.defaultBaseURL, account: "rotation"), section: section))
@@ -86,7 +86,7 @@ final class RotationTests: XCTestCase {
             try await repository.rotate(action, direction: .clockwise)
             XCTFail("Expected rotation failure")
         } catch {}
-        let page = try await store.metadataPage(try DayPageAddress(section: section, collection: .personalLibrary), namespace: repository.metadataNamespace, currentRun: repository.runID)
+        let page = try await store.metadataPage(try DayPageAddress(section: section, collection: .library(.personal)), namespace: repository.personalMetadataNamespace, currentRun: repository.runID)
         let item = try XCTUnwrap(page?.slots.first?.item)
         XCTAssertEqual(item.additional?.thumbnail?.cacheKey, "old")
         XCTAssertEqual(item.additional?.resolution?.width, 400)
@@ -104,7 +104,7 @@ final class RotationTests: XCTestCase {
         let transport = RotationTransport(thumbnail: try jpeg(), refreshed: refreshed,
                                           timelineSnapshot: sourceSnapshot, pageItems: [original])
         let repository = try repository(transport, root: root)
-        for await _ in await repository.timeline(collection: .personalLibrary) {}
+        for await _ in await repository.timeline(collection: .library(.personal)) {}
 
         let store = await repository.store
         let sourceKey = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
@@ -112,7 +112,7 @@ final class RotationTests: XCTestCase {
         try await seedMetadataPage([original], section: sourceSection, repository: repository)
 
         let built = DayGroupedTimelineBuilder.build(entries: [.init(id: original.id, time: original.time)])
-        let descriptor = PhotoCollectionDescriptor.libraryFilter(UUID())
+        let descriptor = PhotoCollectionDescriptor.libraryFilter(UUID(), scope: .space(.personal))
         let registration = LibraryFilterRegistration(
             descriptor: descriptor, snapshot: built.snapshot,
             referencesBySection: [[.init(sourceSectionIndex: 0, sourcePageOffset: 0, itemID: original.id)]],
@@ -145,7 +145,7 @@ final class RotationTests: XCTestCase {
         let section = TimelineSection(offset: 0, limit: 1,
             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         let action = SelectionRotationAction(itemIDs: [7], sectionsByID: [7: section],
-                                             collection: .personalLibrary, itemsByID: [7: original])
+                                             collection: .library(.personal), itemsByID: [7: original])
         var final: ThumbnailRotationProgress?
         for await progress in await repository.rotateThumbnails(action, direction: .counterClockwise) {
             final = progress
@@ -168,7 +168,7 @@ final class RotationTests: XCTestCase {
         let section = TimelineSection(offset: 0, limit: 1,
             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         let action = SelectionRotationAction(itemIDs: [9], sectionsByID: [9: section],
-                                             collection: .personalLibrary, itemsByID: [9: original])
+                                             collection: .library(.personal), itemsByID: [9: original])
         var final: ThumbnailRotationProgress?
         for await progress in await repository.rotateThumbnails(action, direction: .clockwise) { final = progress }
         XCTAssertEqual(final?.stage, .finished)
@@ -196,7 +196,7 @@ final class RotationTests: XCTestCase {
         let section = TimelineSection(offset: 0, limit: 1,
             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         let action = SelectionRotationAction(itemIDs: [11], sectionsByID: [11: section],
-                                             collection: .personalLibrary, itemsByID: [11: original])
+                                             collection: .library(.personal), itemsByID: [11: original])
         let store = await repository.store
         let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
             server: SynologyClient.defaultBaseURL, account: "rotation"), section: section))
@@ -207,7 +207,7 @@ final class RotationTests: XCTestCase {
         XCTAssertFalse(final?.failures.isEmpty == true)
         let restored = await transport.restoredUnits
         XCTAssertEqual(restored, [[111]])
-        let page = try await store.metadataPage(try DayPageAddress(section: section, collection: .personalLibrary), namespace: repository.metadataNamespace, currentRun: repository.runID)
+        let page = try await store.metadataPage(try DayPageAddress(section: section, collection: .library(.personal)), namespace: repository.personalMetadataNamespace, currentRun: repository.runID)
         let cachedItem = try XCTUnwrap(page?.slots.first?.item)
         XCTAssertEqual(cachedItem.additional?.thumbnail?.cacheKey, "committed")
     }
@@ -223,7 +223,7 @@ final class RotationTests: XCTestCase {
         let section = TimelineSection(offset: 0, limit: 1,
             list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
         let action = SelectionRotationAction(itemIDs: [12], sectionsByID: [12: section],
-                                             collection: .personalLibrary, itemsByID: [12: original])
+                                             collection: .library(.personal), itemsByID: [12: original])
         let store = await repository.store
         let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
             server: SynologyClient.defaultBaseURL, account: "rotation"), section: section))
@@ -231,7 +231,7 @@ final class RotationTests: XCTestCase {
         for await _ in await repository.rotateThumbnails(action, direction: .clockwise) {}
         let restored = await transport.restoredUnits
         XCTAssertEqual(restored, [[112]])
-        let page = try await store.metadataPage(try DayPageAddress(section: section, collection: .personalLibrary), namespace: repository.metadataNamespace, currentRun: repository.runID)
+        let page = try await store.metadataPage(try DayPageAddress(section: section, collection: .library(.personal)), namespace: repository.personalMetadataNamespace, currentRun: repository.runID)
         let cachedItem = try XCTUnwrap(page?.slots.first?.item)
         XCTAssertEqual(cachedItem.additional?.thumbnail?.cacheKey, "set-committed")
     }
@@ -339,7 +339,7 @@ final class RotationTests: XCTestCase {
         )
         let repository = try repository(transport, root: root)
         let action = SelectionRotationAction(itemIDs: [23], sectionsByID: [:],
-                                             collection: .personalLibrary,
+                                             collection: .library(.personal),
                                              itemsByID: [23: original])
         var final: ThumbnailRotationProgress?
         for await progress in await repository.fixThumbnailRotations(action) { final = progress }
@@ -367,7 +367,7 @@ final class RotationTests: XCTestCase {
         )
         let repository = try repository(transport, root: root)
         let action = SelectionRotationAction(itemIDs: [26], sectionsByID: [:],
-                                             collection: .personalLibrary,
+                                             collection: .library(.personal),
                                              itemsByID: [26: item])
         var final: ThumbnailRotationProgress?
         for await progress in await repository.fixThumbnailRotations(action) { final = progress }
@@ -396,7 +396,7 @@ final class RotationTests: XCTestCase {
         )
         let repository = try repository(transport, root: root)
         let action = SelectionRotationAction(itemIDs: [24], sectionsByID: [:],
-                                             collection: .personalLibrary,
+                                             collection: .library(.personal),
                                              itemsByID: [24: original])
         var final: ThumbnailRotationProgress?
         for await progress in await repository.fixThumbnailRotations(action) { final = progress }
@@ -431,7 +431,7 @@ final class RotationTests: XCTestCase {
         )
         let repository = try repository(transport, root: root)
         let action = SelectionRotationAction(itemIDs: [28], sectionsByID: [:],
-                                             collection: .personalLibrary,
+                                             collection: .library(.personal),
                                              itemsByID: [28: original])
         var updates: [ThumbnailRotationProgress] = []
         for await progress in await repository.fixThumbnailRotations(action) {
@@ -560,12 +560,12 @@ private actor RotationTransport: PhotosTransport {
         return try fixtureBatch(pageItems, request: request, fields: fields)
     }
 
-    func rotate(itemIDs: [Int64], direction: PhotoRotationDirection) async throws {
+    func rotate(itemIDs: [Int64], direction: PhotoRotationDirection, space: PhotoSpace) async throws {
         rotateCalls.append((itemIDs, direction))
         if failRotate { throw TestFailure("rotation failed") }
     }
-    func items(ids: [Int64]) async throws -> [PhotoItem] { [currentItem] }
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, etag: String?,
+    func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] { [currentItem] }
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?,
                    lastModified: String?) async throws -> ThumbnailResponse {
         ThumbnailResponse(data: thumbnails[size], etag: nil, lastModified: nil)
     }

@@ -890,7 +890,7 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
 }
 
 private actor LivePhotoCanvasTransport: PhotosTransport {
-    func livePhotoMotion(itemID: Int64) async throws -> VideoPlaybackResource? {
+    func livePhotoMotion(itemID: Int64, space: PhotoSpace) async throws -> VideoPlaybackResource? {
         // Ignore cancellation to exercise the canvas's stale-result fence.
         try? await Task.sleep(for: .milliseconds(150))
         return VideoPlaybackResource(scope: .space(.personal), unitID: 2, cacheKey: "key", filename: "motion.mp4", variant: .converted(.high))

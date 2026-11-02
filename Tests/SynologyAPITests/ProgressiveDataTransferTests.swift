@@ -28,7 +28,7 @@ final class ProgressiveDataTransferTests: XCTestCase {
         }
         let client = SynologyClient()
         try await client.login(credentials: CredentialStore.load())
-        let items = try await client.items(ids: [239363])
+        let items = try await client.items(ids: [239363], space: .personal)
         let item = try XCTUnwrap(items.first)
         let resource = try XCTUnwrap(item.fullImageResource(in: .space(.personal)))
         let recorder = TransferProgressRecorder()

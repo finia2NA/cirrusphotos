@@ -16,7 +16,7 @@ private actor OwnedAlbumThumbnailTransport: PhotosTransport {
         albums.append(albumID)
         return ThumbnailResponse(data: Data("album".utf8), etag: nil, lastModified: nil)
     }
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> ThumbnailResponse {
         personalCount += 1
         return ThumbnailResponse(data: Data("personal".utf8), etag: nil, lastModified: nil)
     }
@@ -30,7 +30,7 @@ final class OwnedAlbumThumbnailTests: XCTestCase {
         let repository = try CachedPhotosRepository(credentials: .init(username: "test", password: "unused"),
             baseURL: URL(string: "https://example.invalid")!, cacheRoot: root, transport: transport)
         let descriptor = ThumbnailInfo(unitID: 10, cacheKey: "same")
-        for collection in [PhotoCollectionDescriptor.personalLibrary, .album(69)] {
+        for collection in [PhotoCollectionDescriptor.library(.personal), .album(69)] {
             for await _ in await repository.thumbnail(descriptor, size: .sm, allowNetwork: true, collection: collection) {}
         }
         let albums = await transport.albums

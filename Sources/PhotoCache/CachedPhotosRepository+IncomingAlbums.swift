@@ -12,9 +12,9 @@ extension CachedPhotosRepository {
         }
         if let id = source.mapFilterID {
             guard let map = metadata.mapFilters[id] else { return source }
-            return PhotoCollectionDescriptor.personalLibrary.inSpace(map.space)
+            return PhotoCollectionDescriptor.library(map.space)
         }
-        return source.albumID == nil && source.incomingAlbumIdentity == nil && source.space != .shared ? .personalLibrary : source
+        return source.space.map { .library($0) } ?? source
     }
 
     func incomingReference(for collection: PhotoCollectionDescriptor) -> String? {

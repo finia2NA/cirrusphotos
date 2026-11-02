@@ -201,8 +201,8 @@ final class TimelineSectionLoadModel: ObservableObject {
     private func refreshAvailabilityAndCheckRevisions() {
         if let library {
             canPresent = library.repository != nil &&
-                library.timelineVerified(for: .personalLibrary) &&
-                library.timelineVerified(for: .favorites)
+                library.timelineVerified(for: .library(.personal)) &&
+                library.timelineVerified(for: .favorites(.personal))
         } else {
             canPresent = false
         }

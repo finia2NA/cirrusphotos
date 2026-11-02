@@ -9,7 +9,7 @@ extension CachedPhotosRepository {
 
     /// Provisional metadata can request cached bytes with allowNetwork=false.
     public func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, allowNetwork: Bool,
-                          collection: PhotoCollectionDescriptor = .personalLibrary,
+                          collection: PhotoCollectionDescriptor = .library(.personal),
                           priority: RequestPriority = .visible,
                           cachePurpose: ThumbnailCachePurpose = .library) -> AsyncStream<ResourceEvent<Data>> {
         let scope = thumbnailCollection(for: collection)
@@ -60,7 +60,7 @@ extension CachedPhotosRepository {
     /// configured size. Alternate sizes are never fetched or treated as exact completion.
     public func thumbnailWithFallback(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                                       allowNetwork: Bool,
-                                      collection: PhotoCollectionDescriptor = .personalLibrary,
+                                      collection: PhotoCollectionDescriptor = .library(.personal),
                                       priority: RequestPriority = .visible) -> AsyncStream<ResourceEvent<ThumbnailRenditionValue>> {
         let scope = thumbnailCollection(for: collection)
         let producer = StreamProducer()
@@ -136,7 +136,7 @@ extension CachedPhotosRepository {
     /// Resolves one thumbnail while reporting bytes transferred in a successful image response.
     /// Conditional 304 responses and current-run cache hits report zero downloaded bytes.
     public func cacheThumbnailMeasurement(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                                          collection: PhotoCollectionDescriptor = .personalLibrary,
+                                          collection: PhotoCollectionDescriptor = .library(.personal),
                                           priority: RequestPriority = .prefetch,
                                           validateCached: Bool = true) async throws -> ThumbnailCacheMeasurement {
         try Task.checkCancellation()
@@ -208,7 +208,8 @@ extension CachedPhotosRepository {
                 if let albumID = collection.albumID {
                     return try await client.albumThumbnail(descriptor, size: size, albumID: albumID, etag: etag, lastModified: lastModified)
                 }
-                return try await client.thumbnail(descriptor, size: size, space: collection.space, etag: etag, lastModified: lastModified)
+                guard let space = collection.space else { throw SynologyAPIError.unsupported("Collection space is unavailable.") }
+                return try await client.thumbnail(descriptor, size: size, space: space, etag: etag, lastModified: lastModified)
             }
             var response = try await request(etag: prior?.etag, lastModified: prior?.lastModified)
             if response.notModified && prior == nil {

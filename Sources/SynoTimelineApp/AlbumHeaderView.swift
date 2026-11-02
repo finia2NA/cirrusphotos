@@ -48,7 +48,7 @@ struct AlbumHeaderView: View {
     var body: some View {
         let coverSize = min(144, max(0, width * 0.25))
         HStack(alignment: .top, spacing: 20) {
-            AlbumCoverView(thumbnail: model.album?.thumbnail, repository: repository, collection: model.album?.collection ?? .personalLibrary)
+            AlbumCoverView(thumbnail: model.album?.thumbnail, repository: repository, collection: model.album?.collection ?? .library(.personal))
                 .frame(width: coverSize, height: coverSize)
             VStack(alignment: .leading, spacing: 6) {
                 Text(model.album?.name ?? "Album")

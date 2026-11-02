@@ -150,7 +150,7 @@ struct AlbumDownloadCommands: View {
 struct AlbumCoverView: View {
     let thumbnail: ThumbnailInfo?
     let repository: CachedPhotosRepository?
-    var collection: PhotoCollectionDescriptor = .personalLibrary
+    var collection: PhotoCollectionDescriptor = .library(.personal)
     var cornerRadius: CGFloat = 8
     var placeholderFont: Font = .largeTitle
     var placeholderSymbol: String = "rectangle.stack"

@@ -10,9 +10,9 @@ final class SharedTimelineTransportTests: XCTestCase {
         defer { session.invalidateAndCancel() }
         let client = SynologyClient(baseURL: URL(string: "https://example.test")!, session: session)
         try await client.login(credentials: .init(username: "test", password: "test"))
-        let catalog = try await client.collectionDayCatalog(collection: .sharedLibrary, initial: false)
+        let catalog = try await client.collectionDayCatalog(collection: .library(.shared), initial: false)
         let day = try XCTUnwrap(catalog.days.first?.day)
-        let batch = try await client.readCollectionBatch(.init(collection: .sharedLibrary, order: .timeline,
+        let batch = try await client.readCollectionBatch(.init(collection: .library(.shared), order: .timeline,
             newestDay: day, oldestDay: day, offset: 0, limit: 1), fields: .fullPage)
         XCTAssertEqual(batch.items.first?.id, 5)
         let details = try await client.items(ids: [5], space: .shared)
@@ -20,7 +20,7 @@ final class SharedTimelineTransportTests: XCTestCase {
         let thumbnail = try await client.thumbnail(.init(unitID: 9, cacheKey: "key"), size: .sm,
             space: .shared, etag: "fixture-etag", lastModified: nil)
         XCTAssertNotNil(thumbnail.data)
-        XCTAssertEqual(PhotoCollectionDescriptor(rawValue: "shared"), .sharedLibrary)
+        XCTAssertEqual(PhotoCollectionDescriptor(rawValue: "shared"), .library(.shared))
     }
 }
 

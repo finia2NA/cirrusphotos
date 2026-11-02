@@ -40,7 +40,7 @@ extension CachedPhotosRepository {
         guard records.count == itemIDs.count else {
             throw SynologyAPIError.unsupported("Some selected map photos are no longer available.")
         }
-        let descriptor = PhotoCollectionDescriptor.mapFilter(UUID())
+        let descriptor = PhotoCollectionDescriptor.mapFilter(UUID(), space: space)
         let built = DayGroupedTimelineBuilder.build(
             entries: records.map { DayTimelineEntry(id: $0.id, time: $0.time) },
             sectionLimit: 250
@@ -56,7 +56,7 @@ extension CachedPhotosRepository {
                            snapshot: TimelineSnapshot,
                            itemIDsBySection: [[Int64]],
                            locationRevision: UInt64, space: PhotoSpace) throws {
-        guard let filterID = descriptor.mapFilterID else {
+        guard let filterID = descriptor.mapFilterID, descriptor.space == space else {
             throw SynologyAPIError.unsupported("A map filter collection descriptor is required.")
         }
         guard itemIDsBySection.count == snapshot.sections.count else {
@@ -106,7 +106,7 @@ extension CachedPhotosRepository {
                     try await initializeMetadataEngine()
                     guard let filterID = collection.mapFilterID, let state = metadata.mapFilters[filterID],
                           let ids = state.idsBySection[section] else { throw SynologyAPIError.unsupported("This location filter is no longer available.") }
-                    let source = PhotoCollectionDescriptor.personalLibrary.inSpace(state.space)
+                    let source = PhotoCollectionDescriptor.library(state.space)
                     let scopedNamespace = metadataNamespace(for: source)
                     let address = try DayPageAddress(section: section, collection: collection)
                     func current() -> Bool {
@@ -144,7 +144,7 @@ extension CachedPhotosRepository {
     }
 
     func invalidateMapFiltersForLocationChange(space: PhotoSpace = .personal) {
-        let descriptors = metadata.mapFilters.filter { $0.value.space == space }.keys.map(PhotoCollectionDescriptor.mapFilter)
+        let descriptors = metadata.mapFilters.filter { $0.value.space == space }.map { PhotoCollectionDescriptor.mapFilter($0.key, space: $0.value.space) }
         for descriptor in descriptors {
             removeMapFilter(descriptor)
             for observer in metadata.mapFilterInvalidationObservers.values {
