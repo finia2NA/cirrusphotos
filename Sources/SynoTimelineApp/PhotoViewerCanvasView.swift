@@ -682,14 +682,8 @@ final class PhotoViewerCanvasView: NSView {
     override func scrollWheel(with event: NSEvent) {
         stopLivePhotoMotion()
         guard event.hasPreciseScrollingDeltas else {
-            guard phase == .resting || phase == .opening else { return }
-                finishOpeningForInteraction()
-            // Preserve ordinary mouse-wheel zoom.
-            let anchor = convert(event.locationInWindow, from: nil)
-            let factor = exp(-event.scrollingDeltaY * 0.08)
-            transform.setZoom(transform.zoom * factor, anchoredAt: anchor)
-            onZoomChanged?(transform.zoom)
-            snapLayerToRest()
+            routeMouseWheelZoom(deltaY: event.scrollingDeltaY,
+                                anchor: convert(event.locationInWindow, from: nil))
             return
         }
 
@@ -698,6 +692,18 @@ final class PhotoViewerCanvasView: NSView {
                                          height: -event.scrollingDeltaY),
                            phase: event.phase, momentumPhase: event.momentumPhase,
                            timestamp: event.timestamp)
+    }
+
+    /// Discrete vertical scrolling zooms around the pointer; precise scrolling remains
+    /// reserved for trackpad panning, paging, and dismissal.
+    func routeMouseWheelZoom(deltaY: CGFloat, anchor: CGPoint) {
+        guard videoView == nil, deltaY.isFinite, deltaY != 0,
+              phase == .resting || phase == .opening else { return }
+        finishOpeningForInteraction()
+        let factor = exp(min(10, max(-10, deltaY * 0.08)))
+        transform.setZoom(transform.zoom * factor, anchoredAt: anchor)
+        onZoomChanged?(transform.zoom)
+        snapLayerToRest()
     }
 
     /// Routes a precise trackpad scroll sample. An in-flight interactive dismissal keeps
