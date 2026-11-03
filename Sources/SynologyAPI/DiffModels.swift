@@ -12,31 +12,39 @@ public struct PhotoDiff: Sendable, Equatable {
     public let cursor: DiffCursor
     public let modifiedItemIDs: [Int64]
     public let deletedItemIDs: [Int64]
+    /// Bare IDs from `item.merge`. Adding a Live Photo creates a short-lived item for its
+    /// video that the NAS then folds into the still; the merge lists that absorbed ID,
+    /// which no longer exists, while the still arrives in `modify`. The reconciler looks
+    /// merged IDs up and treats each as a replacement if it exists and a deletion if not.
+    public let mergedItemIDs: [Int64]
     public let hasNext: Bool
     public let hasUnsupportedActivity: Bool
     /// Entry counts of the non-empty categories that make `hasUnsupportedActivity` true.
     public let unsupportedCounts: [String: Int]
     /// Distinct structures of the first unsupported entries, without values.
     public let unsupportedShapes: [String]
-    public init(cursor: DiffCursor, modifiedItemIDs: [Int64], deletedItemIDs: [Int64],
+    public init(cursor: DiffCursor, modifiedItemIDs: [Int64], deletedItemIDs: [Int64], mergedItemIDs: [Int64] = [],
                 hasNext: Bool = false, hasUnsupportedActivity: Bool = false, unsupportedCounts: [String: Int] = [:],
                 unsupportedShapes: [String] = []) {
         self.cursor = cursor; self.modifiedItemIDs = modifiedItemIDs; self.deletedItemIDs = deletedItemIDs
+        self.mergedItemIDs = mergedItemIDs
         self.hasNext = hasNext; self.hasUnsupportedActivity = hasUnsupportedActivity || !unsupportedCounts.isEmpty
         self.unsupportedCounts = unsupportedCounts; self.unsupportedShapes = unsupportedShapes
     }
     /// A one-line description for diagnostics; it contains counts only, no item IDs.
     public var summary: String {
         let overlap = Set(modifiedItemIDs).intersection(deletedItemIDs).count
+            + Set(mergedItemIDs).intersection(modifiedItemIDs + deletedItemIDs).count
         let unsupported = unsupportedCounts.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ",")
-        return "modify=\(modifiedItemIDs.count) delete=\(deletedItemIDs.count) overlap=\(overlap) hasNext=\(hasNext) unsupported=[\(unsupported)]"
+        return "modify=\(modifiedItemIDs.count) delete=\(deletedItemIDs.count) merge=\(mergedItemIDs.count) overlap=\(overlap) hasNext=\(hasNext) unsupported=[\(unsupported)]"
             + (unsupportedShapes.isEmpty ? "" : " shapes=[\(unsupportedShapes.joined(separator: "; "))]")
     }
-    public var isEmpty: Bool { modifiedItemIDs.isEmpty && deletedItemIDs.isEmpty && !hasNext && !hasUnsupportedActivity }
+    public var isEmpty: Bool {
+        modifiedItemIDs.isEmpty && deletedItemIDs.isEmpty && mergedItemIDs.isEmpty && !hasNext && !hasUnsupportedActivity
+    }
     public var isBoundedTerminal: Bool {
-        !hasNext && !hasUnsupportedActivity && modifiedItemIDs.count <= 2000 && deletedItemIDs.count <= 2000 - modifiedItemIDs.count &&
-        Set(modifiedItemIDs).count == modifiedItemIDs.count && Set(deletedItemIDs).count == deletedItemIDs.count &&
-        Set(modifiedItemIDs).isDisjoint(with: deletedItemIDs)
+        let all = modifiedItemIDs + deletedItemIDs + mergedItemIDs
+        return !hasNext && !hasUnsupportedActivity && all.count <= 2000 && Set(all).count == all.count
     }
 }
 /// One favorite toggle from the v7 `list_user_event` feed.
@@ -128,13 +136,16 @@ struct PhotoDiffData: Decodable {
         value = PhotoDiff(cursor: DiffCursor(diffVersion: try container.decode(Int64.self, forKey: .diffVersion),
                                             versionTime: try container.decode(Int64.self, forKey: .versionTime)),
                           modifiedItemIDs: item.modify.map(\.id), deletedItemIDs: item.delete,
+                          mergedItemIDs: item.mergedIDs ?? [],
                           hasNext: try container.decode(Bool.self, forKey: .hasNext),
-                          unsupportedCounts: ["merge": item.merge.count, "move": item.move.count, "similar": similar.count].filter { $0.value > 0 },
+                          unsupportedCounts: ["merge": item.mergedIDs == nil ? item.merge.count : 0, "move": item.move.count,
+                                              "similar": similar.count].filter { $0.value > 0 },
                           unsupportedShapes: Self.shapes(item: item, similar: similar))
     }
     private static func shapes(item: ItemChanges, similar: [OpaqueChange]) -> [String] {
         let modified = Set(item.modify.map(\.id)), deleted = Set(item.delete)
-        let entries = item.merge.map { ("merge", $0) } + item.move.map { ("move", $0) } + similar.map { ("similar", $0) }
+        let merges = item.mergedIDs == nil ? item.merge : []
+        let entries = merges.map { ("merge", $0) } + item.move.map { ("move", $0) } + similar.map { ("similar", $0) }
         var seen: [String] = []
         for (category, entry) in entries.prefix(20) {
             let description = entry.describe(category, modified: modified, deleted: deleted)
@@ -148,6 +159,10 @@ private struct ItemChanges: Decodable {
     let delete: [Int64]
     let merge: [OpaqueChange]
     let move: [OpaqueChange]
+    /// The merge entries as item IDs when every entry is a bare integer, the only observed shape.
+    var mergedIDs: [Int64]? {
+        merge.allSatisfy { $0.shape == "int" } ? merge.flatMap(\.integers) : nil
+    }
     private enum CodingKeys: String, CodingKey, CaseIterable { case modify, delete, merge, move }
     init(from decoder: Decoder) throws {
         let dynamic = try decoder.container(keyedBy: AnyCodingKey.self)

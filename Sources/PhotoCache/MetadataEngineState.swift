@@ -21,6 +21,8 @@ struct MetadataEngineState {
     var batchJobs: [UUID: Task<Void, Never>] = [:]
     var flushJob: Task<Void, Never>?
     var initialized = false
+    /// Concurrent first callers share one store initialization.
+    var initialization: (id: UUID, task: Task<Void, Error>)?
     /// One Diff source per space; each space has its own cursor and feed.
     var sources: [PhotoSpace: MetadataSourceState] = [:]
     var inventoryCurrent = false
@@ -63,7 +65,7 @@ struct MetadataEngineState {
             albums.listJob != nil || !collectionIndexJobs.isEmpty || !folderJobs.isEmpty || locations.work != nil || sharedLocations.job != nil
     }
     mutating func clearSourceWork() {
-        initialized = false; sources.removeAll()
+        initialized = false; initialization = nil; sources.removeAll()
         inventoryCurrent = false; locations.projectionLoaded = false; locations.lastPublishedInventoryVerified = nil
         locations.publicationTask = nil; locations.publicationID = nil
         collectionRecoveries.removeAll(); directSubscribers.removeAll()

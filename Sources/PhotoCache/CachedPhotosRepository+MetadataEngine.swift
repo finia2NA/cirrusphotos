@@ -24,14 +24,21 @@ extension CachedPhotosRepository {
     /// Enroll the normalized format only when its consumer pipeline is admitted.
     func initializeMetadataEngine() async throws {
         guard !metadata.initialized else { return }
+        if let pending = metadata.initialization { return try await pending.task.value }
+        let id = UUID()
         let epoch = metadata.admissionEpoch
-        try await store.initializeMetadataStore()
-        try requireAdmission(epoch)
-        metadata.initialized = true
-        for space in PhotoSpace.allCases {
-            guard let state = try? await store.metadataState(metadataNamespace(for: space)) else { continue }
-            SynologyDiagnostics.diff.notice("\(space.rawValue, privacy: .public) stored at launch: inventoryComplete=\(state.inventoryComplete, privacy: .public) cursor=\(state.cursor != nil, privacy: .public)")
+        let task = Task<Void, Error> {
+            defer { if metadata.initialization?.id == id { metadata.initialization = nil } }
+            try await store.initializeMetadataStore()
+            try requireAdmission(epoch)
+            metadata.initialized = true
+            for space in PhotoSpace.allCases {
+                guard let state = try? await store.metadataState(metadataNamespace(for: space)) else { continue }
+                SynologyDiagnostics.diff.notice("\(space.rawValue, privacy: .public) stored at launch: inventoryComplete=\(state.inventoryComplete, privacy: .public) cursor=\(state.cursor != nil, privacy: .public)")
+            }
         }
+        metadata.initialization = (id, task)
+        try await task.value
     }
 
     /// Every destination of a space joins this source job. Personal Space also reads the
@@ -85,23 +92,31 @@ extension CachedPhotosRepository {
                     try await finishReconciliation(space, namespace: namespace, epoch: epoch, id: id)
                     return
                 }
-                let old = try await store.metadataItemTimes(namespace, ids: interval.modifiedItemIDs + interval.deletedItemIDs)
+                let modified = Set(interval.modifiedItemIDs)
+                let lookupIDs = interval.modifiedItemIDs + interval.mergedItemIDs
+                let old = try await store.metadataItemTimes(namespace, ids: lookupIDs + interval.deletedItemIDs)
                 var replacements: [PhotoItem] = []
-                for start in stride(from: 0, to: interval.modifiedItemIDs.count, by: MetadataReadPlanner.lookupBatchSize) {
-                    let end = min(start + MetadataReadPlanner.lookupBatchSize, interval.modifiedItemIDs.count)
-                    let ids = Array(interval.modifiedItemIDs[start..<end])
+                for start in stride(from: 0, to: lookupIDs.count, by: MetadataReadPlanner.lookupBatchSize) {
+                    let ids = Array(lookupIDs[start..<min(start + MetadataReadPlanner.lookupBatchSize, lookupIDs.count)])
                     let items = try await metadataSourceRequest { try await client.items(ids: ids, space: space) }
-                    guard items.count == ids.count, Set(items.map(\.id)) == Set(ids) else {
-                        try await recoverMetadataSource(space, reason: "item lookup returned \(Set(items.map(\.id)).intersection(ids).count) of \(ids.count) modified items",
+                    let returned = Set(items.map(\.id))
+                    // Every modified item must exist; a merged ID may already be gone.
+                    let required = ids.filter(modified.contains)
+                    guard items.count == returned.count, returned.isSubset(of: ids), required.allSatisfy(returned.contains) else {
+                        try await recoverMetadataSource(space, reason: "item lookup returned \(returned.intersection(required).count) of \(required.count) modified items",
                                                         admission: admission, epoch: epoch, id: id)
                         return
                     }
                     replacements.append(contentsOf: items)
                 }
+                // A merged ID that still exists is a replacement; one that is gone is a deletion.
+                let returned = Set(replacements.map(\.id))
+                let applied = PhotoDiff(cursor: interval.cursor, modifiedItemIDs: lookupIDs.filter(returned.contains),
+                                        deletedItemIDs: interval.deletedItemIDs + interval.mergedItemIDs.filter { !returned.contains($0) })
                 let known = Set(old.map(\.id))
-                let unknown = (interval.modifiedItemIDs + interval.deletedItemIDs).filter { !known.contains($0) }
+                let unknown = (applied.modifiedItemIDs + applied.deletedItemIDs).filter { !known.contains($0) }
                 let referenced = try await store.metadataReferencedDays(namespace, ids: unknown)
-                let candidate = try MetadataChangeApplication.prepare(diff: interval, oldInventory: old,
+                let candidate = try MetadataChangeApplication.prepare(diff: applied, oldInventory: old,
                                                                       referencedDays: referenced, lookup: replacements)
                 var favorites: [Int64: Bool] = [:]
                 for event in favoriteEvents.favorites { for itemID in event.itemIDs { favorites[itemID] = event.favorite } }
@@ -124,6 +139,9 @@ extension CachedPhotosRepository {
                 let unknownFavorite = favoriteDays.count < favorites.count
                 publishMetadataInvalidation(space: space, days: candidate.invalidateAll || unknownFavorite ? nil : candidate.affectedDays.union(favoriteDays))
                 await publishLocationChanges(space, items: candidate.replacements, deletedIDs: candidate.deletedIDs)
+                if !interval.mergedItemIDs.isEmpty {
+                    try await verifyInventoryCount(space, namespace: namespace, epoch: epoch, id: id)
+                }
             } catch {
                 try requireMetadataEngineAdmission(space, epoch: epoch, id: id)
                 if let api = error as? SynologyAPIError {
@@ -142,6 +160,19 @@ extension CachedPhotosRepository {
         metadata[source: space].reconciliationID = id
         metadata[source: space].reconciliation = job
         try await job.value
+    }
+
+    /// The meaning of `item.merge` is inferred from Live Photo additions, so after applying
+    /// one a complete inventory must still match the library's item count. A mismatch,
+    /// such as an absorbed item the feed did not name, falls back to a reset.
+    private func verifyInventoryCount(_ space: PhotoSpace, namespace: MetadataNamespace, epoch: UInt64, id: UUID) async throws {
+        guard let stored = try await store.metadataCompleteInventoryCount(namespace) else { return }
+        let catalog = try await metadataSourceRequest { try await client.collectionDayCatalog(collection: .library(space), initial: false) }
+        try requireMetadataEngineAdmission(space, epoch: epoch, id: id)
+        guard catalog.completeness != .complete || catalog.itemCount != stored else { return }
+        let admission = try await store.metadataAdmission(namespace)
+        try await recoverMetadataSource(space, reason: "inventory holds \(stored) items after a merge but the library lists \(catalog.itemCount)",
+                                        admission: admission, epoch: epoch, id: id)
     }
 
     /// The space's Diff feed was applied this run, so stored content is current.

@@ -560,6 +560,14 @@ extension DiskCache {
 
     // MARK: Item index and locations
 
+    /// The number of indexed items when the namespace holds a complete inventory, otherwise nil.
+    public func metadataCompleteInventoryCount(_ namespace: MetadataNamespace) throws -> Int? {
+        try database.read { db in
+            let state = try metadataState(db, namespace)
+            guard state.inventoryComplete else { return nil }
+            return try ItemIndexRecord.filter { $0.namespace == namespace.key && $0.identityEpoch == state.resetEpoch }.fetchCount(db)
+        }
+    }
     public func metadataItemTimes(_ namespace: MetadataNamespace, ids: [Int64]) throws -> [MetadataIndexItem] {
         guard ids.count <= 2000 else { throw CollectionCatalogError.exceedsLimit }
         return try database.read { db in

@@ -846,6 +846,7 @@ A probe on the disposable `phototest` account took a fresh `get_version` v7 curs
   - People and Subjects changes; `phototest` has no people and one generated subject.
   - Album deletion in `album.delete`.
   - Mixing these feeds with more than one change per interval.
+- **Live Photo merges (2026-11-04, `phototest`):** three iPhone Live Photos and three JPEGs uploaded by the user produced one terminal `list` interval with the six surviving items in `item.modify` and `item.merge: [id, id, id]`, bare integers, one per Live Photo. The merge IDs fill the gaps between the Live HEIC IDs and appear in neither `modify` nor `delete`; `Browse.Item get` no longer returns them, so each is the video's temporary item that the NAS folded into its still. Surviving stills have type `live` and `additional.live_type: "live"`. `Diff.get` v7 reported the same `modify`, `delete` and `merge`. Synthetic same-basename JPEG/HEIC + MOV pairs without Apple MakerNote content identifiers produced no merge and stayed two items (MOV type `live`). `Browse.Item get` v7 omits unknown or deleted IDs from `list` without an error.
 - `SYNO.FotoTeam.Browse.Diff get_version` v7 returned error 801 for `phototest`, which has no Shared Space access.
 - **Shared Space (main account, read-only):**
   - What works: `SYNO.FotoTeam.Browse.Diff` v1–v7 is advertised, and v7 `get_version`, `list` and `get` succeed. `list` returns the same `item`/`similar`/`has_next` shape as Personal; `get` returns `item` and `album` groups.

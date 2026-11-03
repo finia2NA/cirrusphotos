@@ -11,15 +11,16 @@ private actor InventoryTransport: TestPhotosTransport {
     let offline: Bool
     let changeOnCall: Int?
     let changedIDs: [Int64]
+    let mergedIDs: [Int64]
     var scans = 0
     var changes = 0
     var catalogs = 0
     var failScan = false
     func setScanFailure() { failScan = true }
     init(items: [PhotoItem], count: Int? = nil, supported: Bool = true, offline: Bool = false, changeOnCall: Int? = nil,
-         changedIDs: [Int64] = [2]) {
+         changedIDs: [Int64] = [2], mergedIDs: [Int64] = []) {
         self.items = items; catalogCount = count ?? items.count; self.supported = supported; self.offline = offline; self.changeOnCall = changeOnCall
-        self.changedIDs = changedIDs
+        self.changedIDs = changedIDs; self.mergedIDs = mergedIDs
     }
     func login(credentials: SynologyCredentials) async throws { if offline { throw SynologyAPIError.transport("fixture offline") } }
     func diffVersion(space: PhotoSpace) async throws -> DiffCursor {
@@ -28,7 +29,8 @@ private actor InventoryTransport: TestPhotosTransport {
     }
     func changes(since cursor: DiffCursor, space: PhotoSpace) async throws -> PhotoDiff {
         changes += 1
-        return .init(cursor: .init(diffVersion: Int64(changes + 1), versionTime: Int64(changes + 1)), modifiedItemIDs: changeOnCall == changes ? changedIDs : [], deletedItemIDs: [])
+        return .init(cursor: .init(diffVersion: Int64(changes + 1), versionTime: Int64(changes + 1)), modifiedItemIDs: changeOnCall == changes ? changedIDs : [], deletedItemIDs: [],
+                     mergedItemIDs: changeOnCall == changes ? mergedIDs : [])
     }
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
         catalogs += 1
@@ -97,6 +99,40 @@ final class LocationIndexTests: XCTestCase, @unchecked Sendable {
         XCTAssertTrue(state.inventoryComplete)
         let counts = await transport.counts()
         XCTAssertEqual(counts.scans, 0)
+    }
+    func testLivePhotoMergeRemovesTheAbsorbedItemWithoutAScan() async throws {
+        for alreadyIndexed in [false, true] {
+            let root = temporaryTestRoot("inventory-merge-\(alreadyIndexed)"); defer { try? FileManager.default.removeItem(at: root) }
+            let initial = try alreadyIndexed ? [item(1, located: true), item(9, located: false)] : [item(1, located: true)]
+            let first = try repository(root: root, transport: InventoryTransport(items: initial))
+            _ = await events(first)
+            // The still (3) arrives in modify; its absorbed video item (9) is merged and no longer exists.
+            let transport = try InventoryTransport(items: [item(1, located: true), item(3, located: true)], changeOnCall: 1,
+                                                   changedIDs: [3], mergedIDs: [9])
+            let second = try repository(root: root, transport: transport)
+            let output = await events(second)
+            XCTAssertEqual(completed(output)?.map(\.id).sorted(), [1, 3])
+            let namespace = await second.personalMetadataNamespace
+            let state = try await second.store.metadataState(namespace)
+            XCTAssertTrue(state.inventoryComplete)
+            let remaining = try await second.store.metadataItemTimes(namespace, ids: [9])
+            XCTAssertTrue(remaining.isEmpty)
+            let counts = await transport.counts()
+            XCTAssertEqual(counts.scans, 0, "alreadyIndexed=\(alreadyIndexed)")
+        }
+    }
+    func testMergeThatLeavesTheInventoryShortOfTheLibraryFallsBackToAScan() async throws {
+        let root = temporaryTestRoot("inventory-merge-mismatch"); defer { try? FileManager.default.removeItem(at: root) }
+        let first = try repository(root: root, transport: InventoryTransport(items: [item(1, located: true)]))
+        _ = await events(first)
+        // The library lists an item the feed never named, so the merged interval cannot be trusted.
+        let transport = try InventoryTransport(items: [item(1, located: true), item(3, located: true), item(4, located: true)],
+                                               changeOnCall: 1, changedIDs: [3], mergedIDs: [9])
+        let second = try repository(root: root, transport: transport)
+        let output = await events(second)
+        XCTAssertEqual(completed(output)?.map(\.id).sorted(), [1, 3, 4])
+        let counts = await transport.counts()
+        XCTAssertEqual(counts.scans, 1)
     }
     func testOfflineKeepsCachedPinsWithoutClaimingCompleteCurrentCoverage() async throws {
         let root = temporaryTestRoot("inventory-offline"); defer { try? FileManager.default.removeItem(at: root) }

@@ -19,6 +19,14 @@ final class DiffModelsTests: XCTestCase {
             XCTAssertFalse(diff.isEmpty); XCTAssertFalse(diff.isBoundedTerminal)
         }
     }
+    func testObservedLivePhotoMergeDecodesBareIDsAsBoundedActivity() throws {
+        let diff = try decode(#"{"diff_version":1,"version_time":2,"item":{"modify":[{"id":52},{"id":53}],"delete":[],"merge":[54],"move":[]},"similar":[],"has_next":false}"#)
+        XCTAssertEqual(diff.mergedItemIDs, [54])
+        XCTAssertTrue(diff.isBoundedTerminal); XCTAssertFalse(diff.isEmpty)
+        let cursor = DiffCursor(diffVersion: 1, versionTime: 2)
+        XCTAssertFalse(PhotoDiff(cursor: cursor, modifiedItemIDs: [54], deletedItemIDs: [], mergedItemIDs: [54]).isBoundedTerminal)
+        XCTAssertFalse(PhotoDiff(cursor: cursor, modifiedItemIDs: Array(1...1999), deletedItemIDs: [], mergedItemIDs: [5000, 5001]).isBoundedTerminal)
+    }
     func testUnsupportedEntriesAreSummarizedByStructureWithoutValues() throws {
         let diff = try decode(#"{"diff_version":1,"version_time":2,"item":{"modify":[{"id":7}],"delete":[],"merge":[{"from":5,"to":7,"name":"secret.jpg"}],"move":[]},"similar":[],"has_next":false}"#)
         XCTAssertFalse(diff.isBoundedTerminal)
