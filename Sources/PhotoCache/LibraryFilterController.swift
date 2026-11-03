@@ -82,7 +82,9 @@ public actor LibraryFilterController {
         let failure: String?
     }
 
-    private static let cacheReadBatchSize = 16
+    private static let cacheReadBatchSize = 64
+    private static let scanGroupSize = 64
+    private static let demandLimit = 8
     private let repository: CachedPhotosRepository
     private let sourceFingerprint: String
     private let sourceCollection: PhotoCollectionDescriptor
@@ -111,9 +113,13 @@ public actor LibraryFilterController {
     private var lastDemand: (direction: LibraryFilterScanDirection, sources: [Int], generation: UInt64)?
     private var failureMessages: [Int: String] = [:]
     private var failureCachePolicies: [Int: Bool] = [:]
+    private var networkAllowed: Bool
+    private var scanDirty = false
 
-    public init(repository: CachedPhotosRepository, snapshot: TimelineSnapshot, sourceCollection: PhotoCollectionDescriptor) {
+    public init(repository: CachedPhotosRepository, snapshot: TimelineSnapshot, sourceCollection: PhotoCollectionDescriptor,
+                networkAllowed: Bool = true) {
         self.repository = repository
+        self.networkAllowed = networkAllowed
         self.sourceCollection = sourceCollection
         sourceSnapshot = snapshot
         sourceFingerprint = LibraryIndex(snapshot: snapshot).fingerprint
@@ -194,11 +200,18 @@ public actor LibraryFilterController {
                 candidates.append(contentsOf: (last + 1)..<states.count)
             }
         }
-        enqueue(candidates.filter { states[$0] != .failed }, useCachedPages: true, limit: 8)
+        enqueue(candidates.filter { states[$0] != .failed }, useCachedPages: true, limit: Self.demandLimit, front: true)
     }
 
     public func loadInitialBatch() {
-        enqueue(states.indices.filter { states[$0] != .failed }, useCachedPages: true, limit: 8)
+        enqueue(states.indices.filter { states[$0] != .failed }, useCachedPages: true, limit: Self.demandLimit)
+    }
+
+    public func setNetworkAllowed(_ allowed: Bool) {
+        guard allowed != networkAllowed else { return }
+        networkAllowed = allowed
+        guard allowed, !stopped else { return }
+        if continuousScan { refillContinuousScan() } else if !pending.isEmpty { startSchedulerIfNeeded() }
     }
 
     public func startContinuousScan() {
@@ -209,7 +222,7 @@ public actor LibraryFilterController {
 
     private func refillContinuousScan() {
         guard continuousScan, activeFilter != nil else { return }
-        let capacity = max(0, 8 - pending.count - activeIndices.count)
+        let capacity = max(0, Self.scanGroupSize - pending.count - activeIndices.count)
         guard capacity > 0 else { return }
         enqueue(states.indices.filter { states[$0] != .failed }, useCachedPages: true, limit: capacity)
     }
@@ -256,7 +269,7 @@ public actor LibraryFilterController {
         for start in stride(from: 0, to: states.count, by: Self.cacheReadBatchSize) {
             guard !stopped, !Task.isCancelled else { break }
             let indices = Array(start..<min(start + Self.cacheReadBatchSize, states.count))
-            let results = await read(indices: indices, useCachedPages: true, allowNetwork: false)
+            let results = await read(indices.map { .init(index: $0, useCachedPages: true) }, allowNetwork: false)
             guard !stopped, !Task.isCancelled else { break }
             var changed = false
             for result in results {
@@ -323,7 +336,7 @@ public actor LibraryFilterController {
         revision &+= 1
         cachedRegistration = nil
         publish()
-        if activeFilter != nil { enqueue(invalidated, useCachedPages: true, limit: 8) }
+        if activeFilter != nil { enqueue(invalidated, useCachedPages: true, limit: Self.demandLimit) }
     }
 
     private func receiveCachedPages(_ sections: Set<TimelineSection>) async {
@@ -331,7 +344,7 @@ public actor LibraryFilterController {
         for start in stride(from: 0, to: indices.count, by: Self.cacheReadBatchSize) {
             guard !stopped, !Task.isCancelled else { return }
             let batch = Array(indices[start..<min(start + Self.cacheReadBatchSize, indices.count)])
-            let results = await read(indices: batch, useCachedPages: true, allowNetwork: false)
+            let results = await read(batch.map { .init(index: $0, useCachedPages: true) }, allowNetwork: false)
             guard !stopped, !Task.isCancelled else { return }
             var changed = false
             for result in results {
@@ -344,36 +357,35 @@ public actor LibraryFilterController {
         }
     }
 
-    private func enqueue(_ indices: [Int], useCachedPages: Bool, limit: Int?) {
+    private func enqueue(_ indices: [Int], useCachedPages: Bool, limit: Int?, front: Bool = false) {
         guard !stopped else { return }
         var admitted = 0
+        var added: [QueuedRead] = []
         for index in indices where states.indices.contains(index) && states[index] != .verified {
             if activeIndices.contains(index) { continue }
             if pending.contains(where: { $0.index == index }) { continue }
             if let limit, admitted >= limit { break }
-            pending.append(.init(index: index, useCachedPages: useCachedPages))
+            added.append(.init(index: index, useCachedPages: useCachedPages))
             admitted += 1
         }
+        if front { pending.insert(contentsOf: added, at: 0) } else { pending.append(contentsOf: added) }
         if !pending.isEmpty { startSchedulerIfNeeded() } else { publish() }
     }
 
     private func startSchedulerIfNeeded() {
-        guard scheduler == nil, !pending.isEmpty else { return }
+        guard networkAllowed, scheduler == nil, !pending.isEmpty else { return }
         scheduler = Task { await scan() }
         publish()
     }
 
     private func scan() async {
         while !Task.isCancelled, !pending.isEmpty {
-            let group = Array(pending.prefix(2))
+            let group = Array(pending.prefix(Self.scanGroupSize))
             pending.removeFirst(group.count)
             activeIndices.formUnion(group.map(\.index))
-            let cached = group.filter(\.useCachedPages).map(\.index)
-            let uncached = group.filter { !$0.useCachedPages }.map(\.index)
-            var results = await read(indices: cached, useCachedPages: true, allowNetwork: true)
-            results += await read(indices: uncached, useCachedPages: false, allowNetwork: true)
+            let results = await read(group, allowNetwork: true)
             guard !Task.isCancelled else { break }
-            results.sort { $0.index < $1.index }
+            var groupChanged = scanDirty
             for result in results {
                 activeIndices.remove(result.index)
                 var changed = false
@@ -388,8 +400,10 @@ public actor LibraryFilterController {
                     revision &+= 1
                     changed = true
                 }
-                if changed { publish() }
+                groupChanged = groupChanged || changed
             }
+            scanDirty = false
+            if groupChanged { publish() }
             refillContinuousScan()
         }
         activeIndices.removeAll()
@@ -397,9 +411,13 @@ public actor LibraryFilterController {
         publish()
     }
 
-    private func read(indices: [Int], useCachedPages: Bool, allowNetwork: Bool) async -> [ReadResult] {
-        await withTaskGroup(of: ReadResult.self, returning: [ReadResult].self) { tasks in
-            for index in indices {
+    private func read(_ reads: [QueuedRead], allowNetwork: Bool) async -> [ReadResult] {
+        let batch = allowNetwork
+            ? await repository.beginMetadataPageDemandBatch(reads.map { sourceSnapshot.sections[$0.index] }, collection: sourceCollection)
+            : nil
+        let results = await withTaskGroup(of: ReadResult.self, returning: [ReadResult].self) { tasks in
+            for read in reads {
+                let index = read.index, useCachedPages = read.useCachedPages
                 let section = sourceSnapshot.sections[index]
                 tasks.addTask { [repository] in
                     var emissions: [(items: [PhotoItem?], verified: Bool)] = []
@@ -425,11 +443,13 @@ public actor LibraryFilterController {
             for await value in tasks { result.append(value) }
             return result.sorted { $0.index < $1.index }
         }
+        if let batch { await repository.endMetadataPageDemandBatch(batch) }
+        return results
     }
 
     private func receiveScanEmission(index: Int, items: [PhotoItem?], verified: Bool) {
         guard !stopped, !Task.isCancelled else { return }
-        if replace(sectionIndex: index, items: items, verified: verified) { publish() }
+        if replace(sectionIndex: index, items: items, verified: verified) { scanDirty = true }
     }
 
     @discardableResult

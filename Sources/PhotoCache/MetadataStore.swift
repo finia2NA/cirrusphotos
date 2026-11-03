@@ -1,5 +1,5 @@
 import Foundation
-import SQLite3
+import GRDB
 import SynologyAPI
 import TimelineCore
 
@@ -45,320 +45,219 @@ public struct MetadataStoreAdmission: Sendable {
     public let resetEpoch: Int64
 }
 
-/// Typed helpers on the existing SQLite actor. No SQL transaction suspends.
+/// Typed record access on the existing cache actor. No transaction suspends.
 /// The normalized format is initialized explicitly when the engine enrolls it.
-extension CollectionIndexKind {
-    var summaryTable: String {
-        switch self {
-        case .person: "people_summaries"
-        case .subject: "subject_summaries"
-        case .tag: "tag_summaries"
-        }
-    }
-}
-
 extension DiskCache {
-    static let metadataFormatVersion = 4
-    private static let normalizedTables = CollectionIndexKind.allCases.map(\.summaryTable) + ["filter_option_catalogs", "metadata_inventory_staging", "folder_directories", "album_summaries", "page_items", "day_pages", "collection_days", "collection_state", "item_details", "item_index", "metadata_state"]
+    static let metadataFormatVersion = 5
 
     public func initializeMetadataStore() throws {
-        try metadataTransaction {
-            try metadataSQL("CREATE TABLE IF NOT EXISTS metadata_format (version INTEGER NOT NULL)")
-            let statement = try prepare("SELECT version FROM metadata_format")
-            let version = sqlite3_step(statement) == SQLITE_ROW ? Int(sqlite3_column_int(statement, 0)) : nil
-            sqlite3_finalize(statement)
-            if version != Self.metadataFormatVersion {
-                for table in Self.normalizedTables { try metadataSQL("DROP TABLE IF EXISTS \(table)") }
-                // Media records are unchanged. Superseded metadata is never decoded.
-                try metadataSQL("DELETE FROM metadata_format; INSERT INTO metadata_format VALUES (\(Self.metadataFormatVersion))")
+        try database.inTransaction(.immediate) { db in
+            try db.execute(sql: "CREATE TABLE IF NOT EXISTS metadata_format (version INTEGER NOT NULL)")
+            if try Int.fetchOne(db, sql: "SELECT version FROM metadata_format") != Self.metadataFormatVersion {
+                // Superseded metadata is dropped, never decoded. Media records are unchanged.
+                let keep: Set = [CacheEntryRecord.databaseTableName, "metadata_format"]
+                for table in try String.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+                where !keep.contains(table) { try db.drop(table: table) }
+                try db.execute(sql: "DELETE FROM metadata_format; INSERT INTO metadata_format VALUES (\(Self.metadataFormatVersion))")
             }
-            try metadataSQL("""
-            CREATE TABLE IF NOT EXISTS metadata_state (
-              namespace TEXT PRIMARY KEY, revision INTEGER NOT NULL, reset_epoch INTEGER NOT NULL,
-              cursor BLOB, inventory_complete INTEGER NOT NULL DEFAULT 0);
-            CREATE TABLE IF NOT EXISTS item_index (
-              namespace TEXT NOT NULL, item_id INTEGER NOT NULL, capture_time INTEGER NOT NULL,
-              projection BLOB, profile TEXT NOT NULL, epoch INTEGER NOT NULL, identity_epoch INTEGER NOT NULL,
-              PRIMARY KEY(namespace,item_id));
-            CREATE TABLE IF NOT EXISTS item_details (
-              namespace TEXT NOT NULL, item_id INTEGER NOT NULL, payload BLOB NOT NULL,
-              content_epoch INTEGER NOT NULL, annotation_run TEXT, revision INTEGER NOT NULL,
-              cost INTEGER NOT NULL, accessed REAL NOT NULL,
-              PRIMARY KEY(namespace,item_id));
-            CREATE TABLE IF NOT EXISTS collection_state (
-              namespace TEXT NOT NULL, collection TEXT NOT NULL, catalog BLOB NOT NULL,
-              presentation_revision INTEGER NOT NULL, validated_run TEXT, epoch INTEGER NOT NULL,
-              PRIMARY KEY(namespace,collection));
-            CREATE TABLE IF NOT EXISTS collection_days (
-              namespace TEXT NOT NULL, collection TEXT NOT NULL, day TEXT NOT NULL,
-              item_count INTEGER NOT NULL, membership_generation INTEGER NOT NULL,
-              PRIMARY KEY(namespace,collection,day));
-            CREATE TABLE IF NOT EXISTS day_pages (
-              namespace TEXT NOT NULL, collection TEXT NOT NULL, day TEXT NOT NULL,
-              page_offset INTEGER NOT NULL, capacity INTEGER NOT NULL, sort_order TEXT NOT NULL,
-              actual_count INTEGER NOT NULL, day_count INTEGER NOT NULL, day_generation INTEGER NOT NULL,
-              revision INTEGER NOT NULL, epoch INTEGER NOT NULL, validated_run TEXT,
-              cost INTEGER NOT NULL, accessed REAL NOT NULL,
-              PRIMARY KEY(namespace,collection,day,page_offset,capacity,sort_order));
-            CREATE TABLE IF NOT EXISTS page_items (
-              namespace TEXT NOT NULL, collection TEXT NOT NULL, day TEXT NOT NULL,
-              page_offset INTEGER NOT NULL, capacity INTEGER NOT NULL, sort_order TEXT NOT NULL,
-              ordinal INTEGER NOT NULL, item_id INTEGER NOT NULL,
-              PRIMARY KEY(namespace,collection,day,page_offset,capacity,sort_order,ordinal));
-            \(CollectionIndexKind.allCases.map { "CREATE TABLE IF NOT EXISTS \($0.summaryTable) (namespace TEXT PRIMARY KEY, payload BLOB NOT NULL, validated_run TEXT);" }.joined(separator: "\n"))
-            CREATE TABLE IF NOT EXISTS folder_directories (
-              namespace TEXT NOT NULL, folder_id INTEGER NOT NULL, payload BLOB NOT NULL, validated_run TEXT,
-              PRIMARY KEY(namespace,folder_id));
-            CREATE TABLE IF NOT EXISTS album_summaries (
-              namespace TEXT PRIMARY KEY,payload BLOB NOT NULL,validated_run TEXT,revision INTEGER NOT NULL,
-              cost INTEGER NOT NULL,accessed REAL NOT NULL);
-            CREATE TABLE IF NOT EXISTS filter_option_catalogs (
-              namespace TEXT NOT NULL, collection TEXT NOT NULL, payload BLOB NOT NULL,
-              PRIMARY KEY(namespace,collection));
-            CREATE TABLE IF NOT EXISTS metadata_inventory_staging (
-              job TEXT NOT NULL, namespace TEXT NOT NULL, item_id INTEGER NOT NULL,
-              capture_time INTEGER NOT NULL, projection BLOB NOT NULL,
-              PRIMARY KEY(job,namespace,item_id));
-            CREATE INDEX IF NOT EXISTS page_items_reverse ON page_items(namespace,item_id);
-            """)
+            try CacheSchema.createMetadataTables(db)
+            return .commit
         }
+        metadataInitialized = true
     }
 
-    func clearNormalizedMetadata() throws {
-        let query = try prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata_state'")
-        let exists = sqlite3_step(query) == SQLITE_ROW
-        sqlite3_finalize(query)
-        guard exists else { return }
-        for table in Self.normalizedTables { try metadataSQL("DELETE FROM \(table)") }
+    func clearNormalizedMetadata(_ db: Database) throws {
+        guard try db.tableExists(MetadataStateRecord.databaseTableName) else { return }
+        for table in CacheSchema.metadataTables { try Table(table).deleteAll(db) }
     }
+
+    // MARK: State and admission
 
     public func metadataState(_ namespace: MetadataNamespace) throws -> MetadataStoreVersion {
-        let statement = try prepare("SELECT revision,reset_epoch,cursor,inventory_complete FROM metadata_state WHERE namespace=?")
-        defer { sqlite3_finalize(statement) }
-        bind(namespace.key, at: 1, in: statement)
-        guard sqlite3_step(statement) == SQLITE_ROW else {
+        try database.read { try metadataState($0, namespace) }
+    }
+    func metadataState(_ db: Database, _ namespace: MetadataNamespace) throws -> MetadataStoreVersion {
+        guard let state = try MetadataStateRecord.fetchOne(db, key: namespace.key) else {
             return MetadataStoreVersion(revision: 0, resetEpoch: 0, cursor: nil, inventoryComplete: false)
         }
-        return MetadataStoreVersion(revision: sqlite3_column_int64(statement, 0), resetEpoch: sqlite3_column_int64(statement, 1),
-                                    cursor: try metadataBlob(statement, 2).map { try JSONDecoder().decode(DiffCursor.self, from: $0) },
-                                    inventoryComplete: sqlite3_column_int(statement, 3) == 1)
+        return MetadataStoreVersion(revision: state.revision, resetEpoch: state.resetEpoch, cursor: state.cursor,
+                                    inventoryComplete: state.inventoryComplete)
     }
     public func metadataAdmission(_ namespace: MetadataNamespace) throws -> MetadataStoreAdmission {
         let state = try metadataState(namespace)
         return MetadataStoreAdmission(namespace: namespace, generation: generation, metadataGeneration: metadataGeneration,
                                       revision: state.revision, resetEpoch: state.resetEpoch)
     }
-    private func admit(_ admission: MetadataStoreAdmission, namespace: MetadataNamespace) throws {
-        let state = try metadataState(namespace)
+    private func admit(_ admission: MetadataStoreAdmission, namespace: MetadataNamespace, _ db: Database) throws {
+        let state = try metadataState(db, namespace)
         try admitLifetime(admission, namespace: namespace)
         guard state.revision == admission.revision, state.resetEpoch == admission.resetEpoch else {
             throw MetadataAdmissionError.superseded
         }
     }
-
-    func filterOptionCatalog(_ key: CollectionKey) throws -> LibraryFilterCatalog? {
-        let statement = try prepare("SELECT payload FROM filter_option_catalogs WHERE namespace=? AND collection=?")
-        defer { sqlite3_finalize(statement) }
-        bind(key.namespace.key, at: 1, in: statement)
-        bind(key.collection.rawValue, at: 2, in: statement)
-        guard sqlite3_step(statement) == SQLITE_ROW, let payload = metadataBlob(statement, 0) else { return nil }
-        return try? JSONDecoder().decode(LibraryFilterCatalog.self, from: payload)
-    }
-
-    func storeFilterOptionCatalog(_ catalog: LibraryFilterCatalog, key: CollectionKey,
-                                  admission: MetadataStoreAdmission) throws {
-        try metadataTransaction {
-            try admit(admission, namespace: key.namespace)
-            let data = try JSONEncoder().encode(catalog)
-            let statement = try prepare("INSERT OR REPLACE INTO filter_option_catalogs VALUES (?,?,?)")
-            bind(key.namespace.key, at: 1, in: statement)
-            bind(key.collection.rawValue, at: 2, in: statement)
-            metadataBind(data, at: 3, in: statement)
-            try metadataStep(statement)
-        }
-    }
-
-    public func metadataCollectionIndex(_ kind: CollectionIndexKind, namespace: MetadataNamespace) throws -> ([CollectionIndexEntry], String?)? {
-        let statement = try prepare("SELECT payload,validated_run FROM \(kind.summaryTable) WHERE namespace=?")
-        defer { sqlite3_finalize(statement) }
-        bind(namespace.key, at: 1, in: statement)
-        guard sqlite3_step(statement) == SQLITE_ROW, let data = metadataBlob(statement, 0) else { return nil }
-        return (try CollectionIndexEntry.decoder(for: kind).decode([CollectionIndexEntry].self, from: data), columnString(statement, 1))
-    }
-
-    public func storeMetadataCollectionIndex(_ kind: CollectionIndexKind, _ entries: [CollectionIndexEntry], namespace: MetadataNamespace,
-                                             currentRun: String, admission: MetadataStoreAdmission) throws {
-        try metadataTransaction {
-            try admit(admission, namespace: namespace)
-            let statement = try prepare("INSERT OR REPLACE INTO \(kind.summaryTable) VALUES (?,?,?)")
-            bind(namespace.key, at: 1, in: statement)
-            metadataBind(try JSONEncoder().encode(entries), at: 2, in: statement)
-            bind(currentRun, at: 3, in: statement)
-            try metadataStep(statement)
-        }
-    }
-
-    public func invalidateMetadataCollectionIndex(_ kind: CollectionIndexKind, namespace: MetadataNamespace, admission: MetadataStoreAdmission) throws {
-        try metadataTransaction {
-            try admitLifetime(admission, namespace: namespace)
-            let statement = try prepare("UPDATE \(kind.summaryTable) SET validated_run=NULL WHERE namespace=?")
-            bind(namespace.key, at: 1, in: statement)
-            try metadataStep(statement)
-            try advanceMetadataLocalRevision(namespace)
-        }
-    }
-
-    public func metadataFolderDirectory(_ namespace: MetadataNamespace, id: Int64) throws -> (FolderDirectory, String?)? {
-        let statement = try prepare("SELECT payload,validated_run FROM folder_directories WHERE namespace=? AND folder_id=?")
-        defer { sqlite3_finalize(statement) }
-        bind(namespace.key, at: 1, in: statement); sqlite3_bind_int64(statement, 2, id)
-        guard sqlite3_step(statement) == SQLITE_ROW, let data = metadataBlob(statement, 0) else { return nil }
-        return (try JSONDecoder().decode(FolderDirectory.self, from: data), columnString(statement, 1))
-    }
-    public func storeMetadataFolderDirectory(_ value: FolderDirectory, namespace: MetadataNamespace, id: Int64, currentRun: String, admission: MetadataStoreAdmission) throws {
-        try metadataTransaction {
-            try admit(admission, namespace: namespace)
-            let statement = try prepare("INSERT OR REPLACE INTO folder_directories VALUES (?,?,?,?)")
-            bind(namespace.key, at: 1, in: statement); sqlite3_bind_int64(statement, 2, id)
-            metadataBind(try JSONEncoder().encode(value), at: 3, in: statement); bind(currentRun, at: 4, in: statement)
-            try metadataStep(statement)
-        }
-    }
-
-    public func metadataAlbumSummaries(_ namespace: MetadataNamespace) throws -> (albums: [AlbumSummary], validatedRun: String?)? {
-        let statement = try prepare("SELECT payload,validated_run FROM album_summaries WHERE namespace=?")
-        defer { sqlite3_finalize(statement) }
-        bind(namespace.key, at: 1, in: statement)
-        guard sqlite3_step(statement) == SQLITE_ROW, let data = metadataBlob(statement, 0) else { return nil }
-        return (try JSONDecoder().decode([AlbumSummary].self, from: data), columnString(statement, 1))
-    }
-    public func storeMetadataAlbumSummaries(_ albums: [AlbumSummary], namespace: MetadataNamespace,
-                                            currentRun: String, admission: MetadataStoreAdmission) throws {
-        try metadataTransaction {
-            try admit(admission, namespace: namespace)
-            let data = try JSONEncoder().encode(albums)
-            let statement = try prepare("INSERT OR REPLACE INTO album_summaries VALUES (?,?,?,?,?,?)")
-            bind(namespace.key, at: 1, in: statement); metadataBind(data, at: 2, in: statement)
-            bind(currentRun, at: 3, in: statement); sqlite3_bind_int64(statement, 4, admission.revision)
-            sqlite3_bind_int64(statement, 5, Int64(data.count)); sqlite3_bind_double(statement, 6, Date().timeIntervalSince1970)
-            try metadataStep(statement)
-        }
-    }
-
-    public func invalidateMetadataAlbumSummaries(_ namespace: MetadataNamespace, admission: MetadataStoreAdmission) throws {
-        try metadataTransaction {
-            try admitLifetime(admission, namespace: namespace)
-            let statement = try prepare("UPDATE album_summaries SET validated_run=NULL WHERE namespace=?")
-            bind(namespace.key, at: 1, in: statement)
-            try metadataStep(statement)
-            try advanceMetadataLocalRevision(namespace)
-        }
-    }
-
     /// Local mutation patches intentionally tolerate revision changes caused by
     /// other serialized writes, while retaining namespace/reset fencing.
     private func admitLifetime(_ admission: MetadataStoreAdmission, namespace: MetadataNamespace) throws {
         guard namespace == admission.namespace, generation == admission.generation,
               metadataGeneration == admission.metadataGeneration else { throw MetadataAdmissionError.superseded }
     }
+    private func writeState(_ db: Database, _ namespace: MetadataNamespace, revision: Int64, resetEpoch: Int64,
+                            cursor: DiffCursor?, inventoryComplete: Bool) throws {
+        try MetadataStateRecord(namespace: namespace.key, revision: revision, resetEpoch: resetEpoch, cursor: cursor,
+                                inventoryComplete: inventoryComplete).insert(db, onConflict: .replace)
+    }
+    private func advanceMetadataLocalRevision(_ db: Database, _ namespace: MetadataNamespace) throws {
+        let prior = try metadataState(db, namespace)
+        try writeState(db, namespace, revision: prior.revision + 1, resetEpoch: prior.resetEpoch,
+                       cursor: prior.cursor, inventoryComplete: prior.inventoryComplete)
+    }
+    private func markInventoryIncomplete(_ db: Database, _ namespace: String) throws {
+        try MetadataStateRecord.filter(key: namespace).updateAll(db) { $0.inventoryComplete.set(to: false) }
+    }
+
+    // MARK: Summaries
+
+    func filterOptionCatalog(_ key: CollectionKey) throws -> LibraryFilterCatalog? {
+        try? database.read { try FilterOptionCatalogRecord.row(key).fetchOne($0) }?.payload
+    }
+
+    func storeFilterOptionCatalog(_ catalog: LibraryFilterCatalog, key: CollectionKey,
+                                  admission: MetadataStoreAdmission) throws {
+        try metadataWrite { db in
+            try admit(admission, namespace: key.namespace, db)
+            try FilterOptionCatalogRecord(namespace: key.namespace.key, collection: key.collection.rawValue, payload: catalog)
+                .insert(db, onConflict: .replace)
+        }
+    }
+
+    public func metadataCollectionIndex(_ kind: CollectionIndexKind, namespace: MetadataNamespace) throws -> ([CollectionIndexEntry], String?)? {
+        guard let record = try database.read({ try CollectionSummaryRecord.row(namespace, kind).fetchOne($0) }) else { return nil }
+        return (try CollectionIndexEntry.decoder(for: kind).decode([CollectionIndexEntry].self, from: record.payload), record.validatedRun)
+    }
+
+    public func storeMetadataCollectionIndex(_ kind: CollectionIndexKind, _ entries: [CollectionIndexEntry], namespace: MetadataNamespace,
+                                             currentRun: String, admission: MetadataStoreAdmission) throws {
+        try metadataWrite { db in
+            try admit(admission, namespace: namespace, db)
+            try CollectionSummaryRecord(namespace: namespace.key, kind: kind, payload: JSONEncoder().encode(entries), validatedRun: currentRun)
+                .insert(db, onConflict: .replace)
+        }
+    }
+
+    public func invalidateMetadataCollectionIndex(_ kind: CollectionIndexKind, namespace: MetadataNamespace, admission: MetadataStoreAdmission) throws {
+        try metadataWrite { db in
+            try admitLifetime(admission, namespace: namespace)
+            try CollectionSummaryRecord.row(namespace, kind).updateAll(db) { $0.validatedRun.set(to: nil) }
+            try advanceMetadataLocalRevision(db, namespace)
+        }
+    }
+
+    public func metadataFolderDirectory(_ namespace: MetadataNamespace, id: Int64) throws -> (FolderDirectory, String?)? {
+        try database.read { try FolderDirectoryRecord.row(namespace, id).fetchOne($0) }.map { ($0.payload, $0.validatedRun) }
+    }
+    public func storeMetadataFolderDirectory(_ value: FolderDirectory, namespace: MetadataNamespace, id: Int64, currentRun: String, admission: MetadataStoreAdmission) throws {
+        try metadataWrite { db in
+            try admit(admission, namespace: namespace, db)
+            try FolderDirectoryRecord(namespace: namespace.key, folderID: id, payload: value, validatedRun: currentRun)
+                .insert(db, onConflict: .replace)
+        }
+    }
+
+    public func metadataAlbumSummaries(_ namespace: MetadataNamespace) throws -> (albums: [AlbumSummary], validatedRun: String?)? {
+        try database.read { try AlbumSummariesRecord.fetchOne($0, key: namespace.key) }.map { ($0.payload, $0.validatedRun) }
+    }
+    public func storeMetadataAlbumSummaries(_ albums: [AlbumSummary], namespace: MetadataNamespace,
+                                            currentRun: String, admission: MetadataStoreAdmission) throws {
+        try metadataWrite { db in
+            try admit(admission, namespace: namespace, db)
+            try AlbumSummariesRecord(namespace: namespace.key, payload: albums, validatedRun: currentRun,
+                                     revision: admission.revision, accessed: Date().timeIntervalSince1970)
+                .insert(db, onConflict: .replace)
+        }
+    }
+
+    public func invalidateMetadataAlbumSummaries(_ namespace: MetadataNamespace, admission: MetadataStoreAdmission) throws {
+        try metadataWrite { db in
+            try admitLifetime(admission, namespace: namespace)
+            try AlbumSummariesRecord.filter(key: namespace.key).updateAll(db) { $0.validatedRun.set(to: nil) }
+            try advanceMetadataLocalRevision(db, namespace)
+        }
+    }
+
+    // MARK: Collection catalogs
 
     public func metadataCatalog(_ key: CollectionKey) throws -> StoredCollectionCatalog? {
-        let statement = try prepare("SELECT catalog,presentation_revision,validated_run FROM collection_state WHERE namespace=? AND collection=?")
-        defer { sqlite3_finalize(statement) }
-        bind(key.namespace.key, at: 1, in: statement); bind(key.collection.rawValue, at: 2, in: statement)
-        guard sqlite3_step(statement) == SQLITE_ROW, let data = metadataBlob(statement, 0) else { return nil }
-        return StoredCollectionCatalog(catalog: try JSONDecoder().decode(CollectionDayCatalog.self, from: data),
-                                       presentationRevision: sqlite3_column_int64(statement, 1), validatedRun: columnString(statement, 2))
+        try database.read { try metadataCatalog($0, key) }
+    }
+    private func metadataCatalog(_ db: Database, _ key: CollectionKey) throws -> StoredCollectionCatalog? {
+        try CollectionStateRecord.row(key).fetchOne(db).map {
+            StoredCollectionCatalog(catalog: $0.catalog, presentationRevision: $0.presentationRevision, validatedRun: $0.validatedRun)
+        }
     }
     public func metadataDayGeneration(_ key: CollectionKey, day: CaptureDay) throws -> Int64? {
-        let statement = try prepare("SELECT membership_generation FROM collection_days WHERE namespace=? AND collection=? AND day=?")
-        defer { sqlite3_finalize(statement) }
-        bind(key.namespace.key, at: 1, in: statement); bind(key.collection.rawValue, at: 2, in: statement); bind(day.id, at: 3, in: statement)
-        return sqlite3_step(statement) == SQLITE_ROW ? sqlite3_column_int64(statement, 0) : nil
+        try database.read { try CollectionDayRecord.row(key, day: day.id).fetchOne($0)?.membershipGeneration }
     }
 
     /// Catalog presentation changes never stamp unaffected days with a new generation.
     public func storeMetadataCatalog(_ catalog: CollectionDayCatalog, key: CollectionKey,
                                      validatedRun: String, admission: MetadataStoreAdmission, invalidateMembership: Bool = false) throws {
-        try metadataTransaction {
-            try admit(admission, namespace: key.namespace)
-            let prior = try metadataCatalog(key)
+        try metadataWrite { db in
+            try admit(admission, namespace: key.namespace, db)
+            let prior = try metadataCatalog(db, key)
             let old = Dictionary(uniqueKeysWithValues: (prior?.catalog.days ?? []).map { ($0.day, $0.count) })
             let nextDays = Set(catalog.days.map(\.day))
             for entry in prior?.catalog.days ?? [] where !nextDays.contains(entry.day) {
-                try deleteMetadataDay(key, day: entry.day)
+                try deleteMetadataDay(db, key, day: entry.day)
             }
             var changed = prior == nil || prior?.catalog.completeness != catalog.completeness || old.count != catalog.days.count
+            let stored = Dictionary(uniqueKeysWithValues: try CollectionDayRecord.all(key).fetchAll(db).map { ($0.day, $0) })
             for entry in catalog.days {
                 if old[entry.day] != entry.count { changed = true }
-                let statement = try prepare("""
-                INSERT INTO collection_days VALUES (?,?,?,?,1)
-                ON CONFLICT(namespace,collection,day) DO UPDATE SET
-                membership_generation=membership_generation + CASE WHEN item_count!=excluded.item_count OR \(invalidateMembership ? 1 : 0)=1 THEN 1 ELSE 0 END,
-                item_count=excluded.item_count
-                """)
-                bind(key.namespace.key, at: 1, in: statement); bind(key.collection.rawValue, at: 2, in: statement)
-                bind(entry.day.id, at: 3, in: statement); sqlite3_bind_int64(statement, 4, Int64(entry.count))
-                try metadataStep(statement)
+                let existing = stored[entry.day.id]
+                let advance = existing == nil || existing?.itemCount != entry.count || invalidateMembership
+                try CollectionDayRecord(namespace: key.namespace.key, collection: key.collection.rawValue, day: entry.day.id,
+                                        itemCount: entry.count, membershipGeneration: (existing?.membershipGeneration ?? 0) + (advance ? 1 : 0)).upsert(db)
             }
-            let revision = (prior?.presentationRevision ?? 0) + (changed ? 1 : 0)
-            let statement = try prepare("INSERT OR REPLACE INTO collection_state VALUES (?,?,?,?,?,?)")
-            bind(key.namespace.key, at: 1, in: statement); bind(key.collection.rawValue, at: 2, in: statement)
-            metadataBind(try JSONEncoder().encode(catalog), at: 3, in: statement)
-            sqlite3_bind_int64(statement, 4, revision); bind(validatedRun, at: 5, in: statement)
-            sqlite3_bind_int64(statement, 6, admission.resetEpoch); try metadataStep(statement)
+            try CollectionStateRecord(namespace: key.namespace.key, collection: key.collection.rawValue, catalog: catalog,
+                                      presentationRevision: (prior?.presentationRevision ?? 0) + (changed ? 1 : 0),
+                                      validatedRun: validatedRun, epoch: admission.resetEpoch).insert(db, onConflict: .replace)
         }
     }
 
+    // MARK: Day pages
+
     public func metadataPage(_ address: DayPageAddress, namespace: MetadataNamespace,
                              currentRun: String) throws -> PhotoPageSnapshot? {
-        let query = try prepare("""
-        SELECT actual_count,day_count,day_generation,revision,epoch,validated_run
-        FROM day_pages WHERE namespace=? AND collection=? AND day=? AND page_offset=? AND capacity=? AND sort_order=?
-        """)
-        bindMetadataAddress(address, namespace: namespace, statement: query)
-        guard sqlite3_step(query) == SQLITE_ROW else { sqlite3_finalize(query); return nil }
-        let count = Int(sqlite3_column_int64(query, 0)), dayCount = Int(sqlite3_column_int64(query, 1))
-        let dayGeneration = sqlite3_column_int64(query, 2), revision = sqlite3_column_int64(query, 3), epoch = sqlite3_column_int64(query, 4)
-        let run = columnString(query, 5)
-        sqlite3_finalize(query)
-        guard count > 0, count <= address.capacity, revision >= 0 else { throw CacheError.storage }
-        let state = try metadataState(namespace)
-        let key = CollectionKey(namespace: namespace, collection: address.collection)
-        let currentDay = try metadataDayGeneration(key, day: address.day)
-        let catalog = try metadataCatalog(key)
-        let catalogCount = catalog?.catalog.days.first { $0.day == address.day }?.count
-        var membershipVerified = run == currentRun && epoch == state.resetEpoch && currentDay == dayGeneration && catalogCount == dayCount
-        let statement = try prepare("""
-        SELECT p.ordinal,p.item_id,d.payload,d.content_epoch,d.annotation_run
-        FROM page_items p LEFT JOIN item_details d ON d.namespace=p.namespace AND d.item_id=p.item_id
-        WHERE p.namespace=? AND p.collection=? AND p.day=? AND p.page_offset=? AND p.capacity=? AND p.sort_order=?
-        ORDER BY p.ordinal
-        """)
-        defer { sqlite3_finalize(statement) }
-        bindMetadataAddress(address, namespace: namespace, statement: statement)
-        var slots: [PhotoItemSlot] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            guard Int(sqlite3_column_int64(statement, 0)) == slots.count else { throw CacheError.storage }
-            let id = sqlite3_column_int64(statement, 1)
-            let item = try metadataBlob(statement, 2).map { try JSONDecoder().decode(PhotoItem.self, from: $0) }
-            guard item == nil || item?.id == id else { throw CacheError.storage }
-            if let item {
-                let time = address.collection.membershipTime(for: item)
-                if time.flatMap({ try? CaptureDay(time: $0) }) != address.day { membershipVerified = false }
+        try metadataWrite(enforceBudget: false) { db in
+            guard let page = try DayPageRecord.page(address, namespace).fetchOne(db) else { return nil }
+            guard page.actualCount > 0, page.actualCount <= address.capacity, page.revision >= 0 else { throw CacheError.storage }
+            let state = try metadataState(db, namespace)
+            // The day row carries the catalog's count for this day; reading it avoids decoding the whole catalog.
+            let day = try CollectionDayRecord.row(CollectionKey(namespace: namespace, collection: address.collection), day: address.day.id).fetchOne(db)
+            var membershipVerified = page.validatedRun == currentRun && page.epoch == state.resetEpoch
+                && day?.membershipGeneration == page.dayGeneration && day?.itemCount == page.dayCount
+            let members = try PageItemRecord.page(address, namespace).order { $0.ordinal }.fetchAll(db)
+            let ids = members.map(\.itemID)
+            let details = try itemDetails(db, namespace, ids: ids)
+            var slots: [PhotoItemSlot] = []
+            for member in members {
+                guard member.ordinal == slots.count else { throw CacheError.storage }
+                let detail = details[member.itemID]
+                guard detail == nil || detail?.payload.id == member.itemID else { throw CacheError.storage }
+                if let item = detail?.payload {
+                    let time = address.collection.membershipTime(for: item)
+                    if time.flatMap({ try? CaptureDay(time: $0) }) != address.day { membershipVerified = false }
+                }
+                let detailVerified = detail?.contentEpoch == state.resetEpoch && detail?.annotationRun == currentRun
+                slots.append(PhotoItemSlot(itemID: member.itemID, item: detail?.payload, verified: membershipVerified && detailVerified))
             }
-            let detailVerified = sqlite3_column_int64(statement, 3) == state.resetEpoch && columnString(statement, 4) == currentRun
-            slots.append(PhotoItemSlot(itemID: id, item: item, verified: membershipVerified && detailVerified))
+            guard slots.count == page.actualCount else { throw CacheError.storage }
+            let now = Date().timeIntervalSince1970
+            try DayPageRecord.page(address, namespace).updateAll(db) { $0.accessed.set(to: now) }
+            try ItemDetailRecord.filter { $0.namespace == namespace.key && ids.contains($0.itemID) }.updateAll(db) { $0.accessed.set(to: now) }
+            return PhotoPageSnapshot(address: address, membershipRevision: UInt64(page.revision), membershipVerified: membershipVerified,
+                                     slots: slots.map { PhotoItemSlot(itemID: $0.itemID, item: $0.item, verified: membershipVerified && $0.verified) })
         }
-        guard slots.count == count else { throw CacheError.storage }
-        let touch = try prepare("UPDATE day_pages SET accessed=?7 WHERE namespace=?1 AND collection=?2 AND day=?3 AND page_offset=?4 AND capacity=?5 AND sort_order=?6")
-        bindMetadataAddress(address, namespace: namespace, statement: touch)
-        sqlite3_bind_double(touch, 7, Date().timeIntervalSince1970); try metadataStep(touch)
-        let details = try prepare("UPDATE item_details SET accessed=?7 WHERE namespace=?1 AND item_id IN (SELECT item_id FROM page_items WHERE namespace=?1 AND collection=?2 AND day=?3 AND page_offset=?4 AND capacity=?5 AND sort_order=?6)")
-        bindMetadataAddress(address, namespace: namespace, statement: details)
-        sqlite3_bind_double(details, 7, Date().timeIntervalSince1970); try metadataStep(details)
-        return PhotoPageSnapshot(address: address, membershipRevision: UInt64(revision), membershipVerified: membershipVerified,
-                                 slots: slots.map { PhotoItemSlot(itemID: $0.itemID, item: $0.item, verified: membershipVerified && $0.verified) })
     }
 
     /// Membership and combined details commit together. Identity/location profiles do not overwrite full details.
@@ -370,300 +269,250 @@ extension DiskCache {
                   guard let time = page.address.collection.membershipTime(for: item) else { return false }
                   return try CaptureDay(time: time) == page.address.day
               }) else { throw CollectionCatalogError.invalidCoverage }
-        try metadataTransaction {
-            try admit(admission, namespace: namespace)
+        try metadataWrite { db in
+            try admit(admission, namespace: namespace, db)
             let key = CollectionKey(namespace: namespace, collection: page.address.collection)
-            guard let expectedDay = try metadataDayGeneration(key, day: page.address.day),
+            guard let expectedDay = try CollectionDayRecord.row(key, day: page.address.day.id).fetchOne(db)?.membershipGeneration,
                   expectedDay >= 0, UInt64(expectedDay) == page.membershipGeneration else { throw MetadataAdmissionError.superseded }
-            for item in items { try storeMetadataItem(item, profile: profile, namespace: namespace, currentRun: currentRun, epoch: admission.resetEpoch, revision: admission.revision) }
-            try storeMetadataMembership(page, ids: items.map(\.id), namespace: namespace, currentRun: currentRun, admission: admission)
-
+            for item in items { try storeMetadataItem(db, item, profile: profile, namespace: namespace, currentRun: currentRun, epoch: admission.resetEpoch, revision: admission.revision) }
+            try storeMetadataMembership(db, page, ids: items.map(\.id), namespace: namespace, currentRun: currentRun, admission: admission)
         }
     }
 
-    private func storeMetadataMembership(_ page: DayPageRead, ids: [Int64], namespace: MetadataNamespace,
+    private func storeMetadataMembership(_ db: Database, _ page: DayPageRead, ids: [Int64], namespace: MetadataNamespace,
                                          currentRun: String, admission: MetadataStoreAdmission) throws {
-            let old = try prepare("SELECT revision FROM day_pages WHERE namespace=? AND collection=? AND day=? AND page_offset=? AND capacity=? AND sort_order=?")
-            bindMetadataAddress(page.address, namespace: namespace, statement: old)
-            let revision = (sqlite3_step(old) == SQLITE_ROW ? sqlite3_column_int64(old, 0) : 0) + 1
-            sqlite3_finalize(old)
-            try deleteMetadataPage(page.address, namespace: namespace)
-            let statement = try prepare("INSERT INTO day_pages VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-            bindMetadataAddress(page.address, namespace: namespace, statement: statement)
-            sqlite3_bind_int64(statement, 7, Int64(page.count)); sqlite3_bind_int64(statement, 8, Int64(page.dayCount))
-            sqlite3_bind_int64(statement, 9, Int64(page.membershipGeneration)); sqlite3_bind_int64(statement, 10, revision)
-            sqlite3_bind_int64(statement, 11, admission.resetEpoch); bind(currentRun, at: 12, in: statement)
-            sqlite3_bind_int64(statement, 13, Int64(ids.count * 16 + 128)); sqlite3_bind_double(statement, 14, Date().timeIntervalSince1970)
-            try metadataStep(statement)
-            for (ordinal, id) in ids.enumerated() {
-                let statement = try prepare("INSERT INTO page_items VALUES (?,?,?,?,?,?,?,?)")
-                bindMetadataAddress(page.address, namespace: namespace, statement: statement)
-                sqlite3_bind_int64(statement, 7, Int64(ordinal)); sqlite3_bind_int64(statement, 8, id)
-                try metadataStep(statement)
-            }
+        let address = page.address
+        let revision = (try DayPageRecord.page(address, namespace).fetchOne(db)?.revision ?? 0) + 1
+        try deleteMetadataPage(db, address, namespace: namespace)
+        try DayPageRecord(namespace: namespace.key, collection: address.collection.rawValue, day: address.day.id,
+                          pageOffset: address.offset, capacity: address.capacity, sortOrder: address.order.rawValue,
+                          actualCount: page.count, dayCount: page.dayCount, dayGeneration: Int64(page.membershipGeneration),
+                          revision: revision, epoch: admission.resetEpoch, validatedRun: currentRun,
+                          accessed: Date().timeIntervalSince1970).insert(db)
+        for (ordinal, id) in ids.enumerated() {
+            try PageItemRecord(namespace: namespace.key, collection: address.collection.rawValue, day: address.day.id,
+                               pageOffset: address.offset, capacity: address.capacity, sortOrder: address.order.rawValue,
+                               ordinal: ordinal, itemID: id).insert(db)
+        }
     }
+
     public func storeMetadataIdentityPage(_ page: DayPageRead, entries: [DayTimelineEntry], namespace: MetadataNamespace,
                                           currentRun: String, admission: MetadataStoreAdmission) throws {
         guard entries.count == page.count, Set(entries.map(\.id)).count == entries.count,
               try entries.allSatisfy({ try CaptureDay(time: $0.time) == page.address.day }) else { throw CollectionCatalogError.invalidCoverage }
-        try metadataTransaction {
-            try admit(admission, namespace: namespace)
-            let generation = try metadataDayGeneration(CollectionKey(namespace: namespace, collection: page.address.collection), day: page.address.day)
-            guard generation == Int64(page.membershipGeneration) else { throw MetadataAdmissionError.superseded }
-            for entry in entries {
-                let coverage = try prepare("UPDATE metadata_state SET inventory_complete=0 WHERE namespace=? AND NOT EXISTS (SELECT 1 FROM item_index WHERE namespace=? AND item_id=? AND capture_time=? AND epoch=? AND profile!='identityAndTime')")
-                bind(namespace.key, at: 1, in: coverage); bind(namespace.key, at: 2, in: coverage)
-                sqlite3_bind_int64(coverage, 3, entry.id); sqlite3_bind_int64(coverage, 4, entry.time); sqlite3_bind_int64(coverage, 5, admission.resetEpoch); try metadataStep(coverage)
-                let statement = try prepare("""
-                INSERT INTO item_index VALUES (?,?,?,NULL,'identityAndTime',-1,?)
-                ON CONFLICT(namespace,item_id) DO UPDATE SET
-                  epoch=CASE WHEN capture_time!=excluded.capture_time THEN -1 ELSE epoch END,
-                  capture_time=excluded.capture_time,identity_epoch=excluded.identity_epoch
-                """)
-                bind(namespace.key, at: 1, in: statement); sqlite3_bind_int64(statement, 2, entry.id)
-                sqlite3_bind_int64(statement, 3, entry.time); sqlite3_bind_int64(statement, 4, admission.resetEpoch); try metadataStep(statement)
-                let dirty = try prepare("UPDATE item_details SET content_epoch=-1 WHERE namespace=? AND item_id=? AND json_extract(payload,'$.time')!=?")
-                bind(namespace.key, at: 1, in: dirty); sqlite3_bind_int64(dirty, 2, entry.id); sqlite3_bind_int64(dirty, 3, entry.time); try metadataStep(dirty)
+        try metadataWrite { db in
+            try admit(admission, namespace: namespace, db)
+            let key = CollectionKey(namespace: namespace, collection: page.address.collection)
+            guard try CollectionDayRecord.row(key, day: page.address.day.id).fetchOne(db)?.membershipGeneration == Int64(page.membershipGeneration) else {
+                throw MetadataAdmissionError.superseded
             }
-            try storeMetadataMembership(page, ids: entries.map(\.id), namespace: namespace, currentRun: currentRun, admission: admission)
+            let identityOnly = ItemFieldProfile.identityAndTime.rawValue
+            for entry in entries {
+                let known = try ItemIndexRecord.row(namespace, entry.id).fetchOne(db)
+                let currentLocation = known.map { $0.captureTime == entry.time && $0.epoch == admission.resetEpoch && $0.profile != identityOnly } ?? false
+                if !currentLocation { try markInventoryIncomplete(db, namespace.key) }
+                var index = known ?? ItemIndexRecord(namespace: namespace.key, itemID: entry.id, captureTime: entry.time, projection: nil,
+                                                     profile: identityOnly, epoch: -1, identityEpoch: admission.resetEpoch)
+                if index.captureTime != entry.time { index.epoch = -1 }
+                index.captureTime = entry.time
+                index.identityEpoch = admission.resetEpoch
+                try index.upsert(db)
+                if var detail = try ItemDetailRecord.row(namespace, entry.id).fetchOne(db), detail.payload.time != entry.time {
+                    detail.contentEpoch = -1
+                    try detail.update(db, columns: [ItemDetailRecord.Columns.contentEpoch])
+                }
+            }
+            try storeMetadataMembership(db, page, ids: entries.map(\.id), namespace: namespace, currentRun: currentRun, admission: admission)
         }
     }
 
-    private func storeMetadataItem(_ item: PhotoItem, profile: ItemFieldProfile, namespace: MetadataNamespace,
+    private func storeMetadataItem(_ db: Database, _ item: PhotoItem, profile: ItemFieldProfile, namespace: MetadataNamespace,
                                    currentRun: String, epoch: Int64, revision: Int64) throws {
         _ = try CaptureDay(time: item.time)
-        let known = try prepare("SELECT capture_time FROM item_index WHERE namespace=? AND item_id=?")
-        bind(namespace.key, at: 1, in: known); sqlite3_bind_int64(known, 2, item.id)
-        let existed = sqlite3_step(known) == SQLITE_ROW
-        let changedTime = existed && sqlite3_column_int64(known, 0) != item.time
-        sqlite3_finalize(known)
-        if !existed || (profile == .identityAndTime && changedTime) {
-            let coverage = try prepare("UPDATE metadata_state SET inventory_complete=0 WHERE namespace=?")
-            bind(namespace.key, at: 1, in: coverage); try metadataStep(coverage)
+        let known = try ItemIndexRecord.row(namespace, item.id).fetchOne(db)
+        if known == nil || (profile == .identityAndTime && known?.captureTime != item.time) {
+            try markInventoryIncomplete(db, namespace.key)
         }
         // Only a requested GPS profile may replace the compact projection with absent GPS.
-        let statement = try prepare("""
-        INSERT INTO item_index VALUES (?,?,?,?,?,?,?) ON CONFLICT(namespace,item_id) DO UPDATE SET
-        capture_time=excluded.capture_time,
-        projection=CASE WHEN excluded.profile='identityAndTime' THEN projection ELSE excluded.projection END,
-        profile=CASE WHEN excluded.profile='identityAndTime' THEN profile ELSE excluded.profile END,
-        epoch=CASE WHEN excluded.profile='identityAndTime' THEN CASE WHEN capture_time!=excluded.capture_time THEN -1 ELSE epoch END ELSE excluded.epoch END,
-        identity_epoch=excluded.identity_epoch
-        """)
-        bind(namespace.key, at: 1, in: statement); sqlite3_bind_int64(statement, 2, item.id); sqlite3_bind_int64(statement, 3, item.time)
-        metadataBind(profile == .identityAndTime ? nil : try JSONEncoder().encode(MetadataIndexItem(id: item.id, time: item.time, coordinate: item.coordinate, thumbnail: item.additional?.thumbnail)), at: 4, in: statement)
-        bind(profile.rawValue, at: 5, in: statement); sqlite3_bind_int64(statement, 6, profile == .identityAndTime ? -1 : epoch); sqlite3_bind_int64(statement, 7, epoch); try metadataStep(statement)
+        var index: ItemIndexRecord
+        if profile == .identityAndTime, let known {
+            index = known
+            if known.captureTime != item.time { index.epoch = -1 }
+            index.captureTime = item.time
+            index.identityEpoch = epoch
+        } else {
+            index = ItemIndexRecord(namespace: namespace.key, itemID: item.id, captureTime: item.time,
+                                    projection: profile == .identityAndTime ? nil
+                                        : MetadataIndexItem(id: item.id, time: item.time, coordinate: item.coordinate, thumbnail: item.additional?.thumbnail),
+                                    profile: profile.rawValue, epoch: profile == .identityAndTime ? -1 : epoch, identityEpoch: epoch)
+        }
+        try index.upsert(db)
         guard profile == .fullPage else {
-            let prior = try prepare("SELECT payload FROM item_details WHERE namespace=? AND item_id=?")
-            bind(namespace.key, at: 1, in: prior); sqlite3_bind_int64(prior, 2, item.id)
-            let bytes = sqlite3_step(prior) == SQLITE_ROW ? metadataBlob(prior, 0) : nil
-            sqlite3_finalize(prior)
-            if let bytes, let full = try? JSONDecoder().decode(PhotoItem.self, from: bytes),
-               full.time != item.time || (profile == .locations && (full.coordinate != item.coordinate || full.additional?.thumbnail != item.additional?.thumbnail)) {
-                let dirty = try prepare("UPDATE item_details SET content_epoch=-1 WHERE namespace=? AND item_id=?")
-                bind(namespace.key, at: 1, in: dirty); sqlite3_bind_int64(dirty, 2, item.id); try metadataStep(dirty)
+            if var full = try ItemDetailRecord.row(namespace, item.id).fetchOne(db),
+               full.payload.time != item.time || (profile == .locations && (full.payload.coordinate != item.coordinate || full.payload.additional?.thumbnail != item.additional?.thumbnail)) {
+                full.contentEpoch = -1
+                try full.update(db, columns: [ItemDetailRecord.Columns.contentEpoch])
             }
             return
         }
-        let bytes = try JSONEncoder().encode(item)
-        let detail = try prepare("INSERT OR REPLACE INTO item_details VALUES (?,?,?,?,?,?,?,?)")
-        bind(namespace.key, at: 1, in: detail); sqlite3_bind_int64(detail, 2, item.id); metadataBind(bytes, at: 3, in: detail)
-        sqlite3_bind_int64(detail, 4, epoch); bind(currentRun, at: 5, in: detail); sqlite3_bind_int64(detail, 6, revision)
-        sqlite3_bind_int64(detail, 7, Int64(bytes.count)); sqlite3_bind_double(detail, 8, Date().timeIntervalSince1970)
-        try metadataStep(detail)
+        try ItemDetailRecord(namespace: namespace.key, itemID: item.id, payload: item, contentEpoch: epoch, annotationRun: currentRun,
+                             revision: revision, accessed: Date().timeIntervalSince1970).insert(db, onConflict: .replace)
     }
+
+    // MARK: Item details
 
     public func metadataDetails(_ namespace: MetadataNamespace, ids: [Int64], currentRun: String) throws -> [Int64: PhotoItemSlot] {
         guard ids.count <= 2000 else { throw CollectionCatalogError.exceedsLimit }
-        let state = try metadataState(namespace)
-        var result: [Int64: PhotoItemSlot] = [:]
-        for id in ids {
-            let query = try prepare("SELECT payload,content_epoch,annotation_run FROM item_details WHERE namespace=? AND item_id=?")
-            bind(namespace.key, at: 1, in: query); sqlite3_bind_int64(query, 2, id)
-            if sqlite3_step(query) == SQLITE_ROW, let bytes = metadataBlob(query, 0) {
-                let item = try JSONDecoder().decode(PhotoItem.self, from: bytes)
-                result[id] = PhotoItemSlot(itemID: id, item: item,
-                                          verified: sqlite3_column_int64(query, 1) == state.resetEpoch && columnString(query, 2) == currentRun)
+        return try database.read { db in
+            let state = try metadataState(db, namespace)
+            return try itemDetails(db, namespace, ids: ids).mapValues {
+                PhotoItemSlot(itemID: $0.itemID, item: $0.payload, verified: $0.contentEpoch == state.resetEpoch && $0.annotationRun == currentRun)
             }
-            sqlite3_finalize(query)
+        }
+    }
+    private func itemDetails(_ db: Database, _ namespace: MetadataNamespace, ids: [Int64]) throws -> [Int64: ItemDetailRecord] {
+        var result: [Int64: ItemDetailRecord] = [:]
+        for start in stride(from: 0, to: ids.count, by: 500) {
+            let batch = Array(ids[start..<min(start + 500, ids.count)])
+            for record in try ItemDetailRecord.filter({ $0.namespace == namespace.key && batch.contains($0.itemID) }).fetchAll(db) {
+                result[record.itemID] = record
+            }
         }
         return result
     }
+
     public func storeMetadataDetails(_ items: [PhotoItem], namespace: MetadataNamespace,
                                      currentRun: String, admission: MetadataStoreAdmission) throws -> Set<CaptureDay> {
-        try metadataTransaction {
-            try admit(admission, namespace: namespace)
+        try metadataWrite { db in
+            try admit(admission, namespace: namespace, db)
             var dirtyDays: Set<CaptureDay> = []
             for item in items {
-                let query = try prepare("SELECT payload,content_epoch FROM item_details WHERE namespace=? AND item_id=?")
-                bind(namespace.key, at: 1, in: query); sqlite3_bind_int64(query, 2, item.id)
-                if sqlite3_step(query) == SQLITE_ROW, sqlite3_column_int64(query, 1) == admission.resetEpoch,
-                   let bytes = metadataBlob(query, 0) {
-                    let old = try JSONDecoder().decode(PhotoItem.self, from: bytes)
-                    if old.withFavorite(false) != item.withFavorite(false) {
-                        dirtyDays.insert(try CaptureDay(time: old.time)); dirtyDays.insert(try CaptureDay(time: item.time))
-                    }
+                if let old = try ItemDetailRecord.row(namespace, item.id).fetchOne(db), old.contentEpoch == admission.resetEpoch,
+                   old.payload.withFavorite(false) != item.withFavorite(false) {
+                    dirtyDays.insert(try CaptureDay(time: old.payload.time)); dirtyDays.insert(try CaptureDay(time: item.time))
                 }
-                sqlite3_finalize(query)
-                try storeMetadataItem(item, profile: .fullPage, namespace: namespace, currentRun: currentRun,
+                try storeMetadataItem(db, item, profile: .fullPage, namespace: namespace, currentRun: currentRun,
                                       epoch: admission.resetEpoch, revision: admission.revision)
             }
             if !dirtyDays.isEmpty {
-                for day in dirtyDays {
-                    let statement = try prepare("UPDATE collection_days SET membership_generation=membership_generation+1 WHERE namespace=? AND day=?")
-                    bind(namespace.key, at: 1, in: statement); bind(day.id, at: 2, in: statement); try metadataStep(statement)
-                }
-                let catalog = try prepare("UPDATE collection_state SET validated_run=NULL WHERE namespace=?")
-                bind(namespace.key, at: 1, in: catalog); try metadataStep(catalog)
-                try advanceMetadataLocalRevision(namespace)
+                let days = dirtyDays.map(\.id)
+                try CollectionDayRecord.filter { $0.namespace == namespace.key && days.contains($0.day) }
+                    .updateAll(db) { $0.membershipGeneration += 1 }
+                try CollectionStateRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+                try advanceMetadataLocalRevision(db, namespace)
             }
             return dirtyDays
         }
     }
+
     public func metadataCollectionReferences(_ namespace: MetadataNamespace, collection: PhotoCollectionDescriptor, ids: [Int64]) throws -> [TimelineSection] {
         guard ids.count <= 100 else { throw CollectionCatalogError.exceedsLimit }
         guard !ids.isEmpty else { return [] }
-        let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
-        let statement = try prepare("""
-        SELECT DISTINCT d.day,d.page_offset,d.actual_count,d.day_count
-        FROM page_items p JOIN day_pages d ON d.namespace=p.namespace AND d.collection=p.collection AND d.day=p.day
-          AND d.page_offset=p.page_offset AND d.capacity=p.capacity AND d.sort_order=p.sort_order
-        WHERE p.namespace=? AND p.collection=? AND p.item_id IN (\(placeholders))
-        """)
-        defer { sqlite3_finalize(statement) }
-        bind(namespace.key, at: 1, in: statement)
-        bind(collection.rawValue, at: 2, in: statement)
-        for (offset, id) in ids.enumerated() { sqlite3_bind_int64(statement, Int32(offset + 3), id) }
-        var sections: [TimelineSection] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            guard let raw = columnString(statement, 0) else { throw CacheError.storage }
-            let parts = raw.split(separator: "-").compactMap { Int($0) }
-            guard parts.count == 3 else { throw CacheError.storage }
-            let day = try CaptureDay(year: parts[0], month: parts[1], day: parts[2])
-            sections.append(TimelineSection(offset: Int(sqlite3_column_int64(statement, 1)), limit: Int(sqlite3_column_int64(statement, 2)),
-                                            list: [TimelineDay(year: day.year, month: day.month, day: day.day, itemCount: Int(sqlite3_column_int64(statement, 3)))]))
+        return try database.read { db in
+            let members = try PageItemRecord.filter {
+                $0.namespace == namespace.key && $0.collection == collection.rawValue && ids.contains($0.itemID)
+            }.fetchAll(db)
+            struct Reference: Hashable { let day: String; let offset: Int; let count: Int; let dayCount: Int }
+            var seen = Set<Reference>()
+            var sections: [TimelineSection] = []
+            for member in members {
+                guard let page = try DayPageRecord.page(of: member).fetchOne(db),
+                      seen.insert(Reference(day: page.day, offset: page.pageOffset, count: page.actualCount, dayCount: page.dayCount)).inserted
+                else { continue }
+                let parts = page.day.split(separator: "-").compactMap { Int($0) }
+                guard parts.count == 3 else { throw CacheError.storage }
+                let day = try CaptureDay(year: parts[0], month: parts[1], day: parts[2])
+                sections.append(TimelineSection(offset: page.pageOffset, limit: page.actualCount,
+                                                list: [TimelineDay(year: day.year, month: day.month, day: day.day, itemCount: page.dayCount)]))
+            }
+            return sections
         }
-        return sections
     }
+
+    // MARK: Item index and locations
 
     public func metadataItemTimes(_ namespace: MetadataNamespace, ids: [Int64]) throws -> [MetadataIndexItem] {
         guard ids.count <= 2000 else { throw CollectionCatalogError.exceedsLimit }
-        let epoch = try metadataState(namespace).resetEpoch
-        var result: [MetadataIndexItem] = []
-        for start in stride(from: 0, to: ids.count, by: 100) {
-            let batch = Array(ids[start..<min(start + 100, ids.count)])
-            let placeholders = Array(repeating: "?", count: batch.count).joined(separator: ",")
-            let statement = try prepare("SELECT item_id,capture_time FROM item_index WHERE namespace=? AND identity_epoch=? AND item_id IN (\(placeholders))")
-            bind(namespace.key, at: 1, in: statement)
-            sqlite3_bind_int64(statement, 2, epoch)
-            for (offset, id) in batch.enumerated() { sqlite3_bind_int64(statement, Int32(offset + 3), id) }
-            while sqlite3_step(statement) == SQLITE_ROW {
-                result.append(MetadataIndexItem(id: sqlite3_column_int64(statement, 0), time: sqlite3_column_int64(statement, 1), coordinate: nil, thumbnail: nil))
-            }
-            sqlite3_finalize(statement)
+        return try database.read { db in
+            let epoch = try metadataState(db, namespace).resetEpoch
+            return try ItemIndexRecord.filter { $0.namespace == namespace.key && $0.identityEpoch == epoch && ids.contains($0.itemID) }
+                .fetchAll(db).map { MetadataIndexItem(id: $0.itemID, time: $0.captureTime, coordinate: nil, thumbnail: nil) }
         }
-        return result
     }
 
     public func metadataInventory(_ namespace: MetadataNamespace) throws -> [MetadataIndexItem] {
-        let statement = try prepare("SELECT item_id,capture_time,projection FROM item_index WHERE namespace=? ORDER BY capture_time DESC,item_id")
-        defer { sqlite3_finalize(statement) }
-        bind(namespace.key, at: 1, in: statement)
-        var result: [MetadataIndexItem] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            if let data = metadataBlob(statement, 2) {
-                let projection = try JSONDecoder().decode(MetadataIndexItem.self, from: data)
-                result.append(MetadataIndexItem(id: sqlite3_column_int64(statement, 0), time: sqlite3_column_int64(statement, 1),
-                                                coordinate: projection.coordinate, thumbnail: projection.thumbnail))
-            } else {
-                result.append(MetadataIndexItem(id: sqlite3_column_int64(statement, 0), time: sqlite3_column_int64(statement, 1), coordinate: nil, thumbnail: nil))
+        try database.read { db in
+            try ItemIndexRecord.filter { $0.namespace == namespace.key }.order { [$0.captureTime.desc, $0.itemID] }.fetchAll(db).map {
+                MetadataIndexItem(id: $0.itemID, time: $0.captureTime, coordinate: $0.projection?.coordinate, thumbnail: $0.projection?.thumbnail)
             }
         }
-        return result
     }
 
     public func metadataLocationProjection(_ namespace: MetadataNamespace, currentOnly: Bool = false) throws -> (state: MetadataStoreVersion, records: [PhotoLocationRecord]) {
         (try metadataState(namespace), currentOnly ? try metadataCurrentLocations(namespace) : try metadataCachedLocations(namespace))
     }
     public func metadataCachedLocations(_ namespace: MetadataNamespace) throws -> [PhotoLocationRecord] {
-        let statement = try prepare("SELECT item_id,capture_time,projection FROM item_index WHERE namespace=? AND projection IS NOT NULL")
-        defer { sqlite3_finalize(statement) }
-        bind(namespace.key, at: 1, in: statement)
-        var records: [PhotoLocationRecord] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            guard let data = metadataBlob(statement, 2) else { continue }
-            let projection = try JSONDecoder().decode(MetadataIndexItem.self, from: data)
-            if let coordinate = projection.coordinate {
-                records.append(PhotoLocationRecord(id: sqlite3_column_int64(statement, 0), time: sqlite3_column_int64(statement, 1), coordinate: coordinate, thumbnail: projection.thumbnail))
+        try database.read { db in
+            locations(try ItemIndexRecord.filter { $0.namespace == namespace.key && $0.projection != nil }.fetchAll(db))
+        }.sorted { $0.time > $1.time || ($0.time == $1.time && $0.id < $1.id) }
+    }
+    public func metadataCurrentLocations(_ namespace: MetadataNamespace) throws -> [PhotoLocationRecord] {
+        let identityOnly = ItemFieldProfile.identityAndTime.rawValue
+        return try database.read { db in
+            let epoch = try metadataState(db, namespace).resetEpoch
+            return locations(try ItemIndexRecord.filter {
+                $0.namespace == namespace.key && $0.epoch == epoch && $0.profile != identityOnly
+            }.fetchAll(db))
+        }.sorted { $0.time > $1.time }
+    }
+    private func locations(_ records: [ItemIndexRecord]) -> [PhotoLocationRecord] {
+        records.compactMap { record in
+            record.projection?.coordinate.map {
+                PhotoLocationRecord(id: record.itemID, time: record.captureTime, coordinate: $0, thumbnail: record.projection?.thumbnail)
             }
         }
-        return records.sorted { $0.time > $1.time || ($0.time == $1.time && $0.id < $1.id) }
     }
+
     public func stageMetadataInventory(_ items: [PhotoItem], job: UUID, namespace: MetadataNamespace,
                                       admission: MetadataStoreAdmission) throws {
         guard items.count <= 1000 else { throw CollectionCatalogError.exceedsLimit }
-        try metadataTransaction {
-            try admit(admission, namespace: namespace)
+        try metadataWrite { db in
+            try admit(admission, namespace: namespace, db)
             for item in items {
                 _ = try CaptureDay(time: item.time)
-                let statement = try prepare("INSERT INTO metadata_inventory_staging VALUES (?,?,?,?,?)")
-                bind(job.uuidString, at: 1, in: statement); bind(namespace.key, at: 2, in: statement)
-                sqlite3_bind_int64(statement, 3, item.id); sqlite3_bind_int64(statement, 4, item.time)
-                metadataBind(try JSONEncoder().encode(MetadataIndexItem(id: item.id, time: item.time, coordinate: item.coordinate, thumbnail: item.additional?.thumbnail)), at: 5, in: statement)
-                try metadataStep(statement)
+                try InventoryStagingRecord(job: job.uuidString, namespace: namespace.key, itemID: item.id, captureTime: item.time,
+                                           projection: MetadataIndexItem(id: item.id, time: item.time, coordinate: item.coordinate, thumbnail: item.additional?.thumbnail))
+                    .insert(db)
             }
         }
     }
     public func discardMetadataInventoryStage(_ job: UUID) throws {
-        let statement = try prepare("DELETE FROM metadata_inventory_staging WHERE job=?")
-        bind(job.uuidString, at: 1, in: statement); try metadataStep(statement)
+        try database.write { try discardMetadataInventoryStage($0, job) }
+    }
+    private func discardMetadataInventoryStage(_ db: Database, _ job: UUID) throws {
+        try InventoryStagingRecord.filter { $0.job == job.uuidString }.deleteAll(db)
     }
     public func commitMetadataInventory(_ job: UUID, namespace: MetadataNamespace, catalog: CollectionDayCatalog,
                                        cursor: DiffCursor?, admission: MetadataStoreAdmission) throws {
-        try metadataTransaction {
-            try admit(admission, namespace: namespace)
-            let count = try prepare("SELECT COUNT(*) FROM metadata_inventory_staging WHERE job=? AND namespace=?")
-            bind(job.uuidString, at: 1, in: count); bind(namespace.key, at: 2, in: count)
-            let actual = sqlite3_step(count) == SQLITE_ROW ? Int(sqlite3_column_int64(count, 0)) : -1
-            sqlite3_finalize(count)
-            guard catalog.completeness == .complete, actual == catalog.itemCount else { throw CollectionCatalogError.invalidCoverage }
-            let grouped = try prepare("SELECT strftime('%Y-%m-%d',capture_time,'unixepoch'),COUNT(*) FROM metadata_inventory_staging WHERE job=? AND namespace=? GROUP BY 1")
-            bind(job.uuidString, at: 1, in: grouped); bind(namespace.key, at: 2, in: grouped)
+        try metadataWrite { db in
+            try admit(admission, namespace: namespace, db)
+            let staged = try InventoryStagingRecord.filter { $0.job == job.uuidString && $0.namespace == namespace.key }.fetchAll(db)
+            guard catalog.completeness == .complete, staged.count == catalog.itemCount else { throw CollectionCatalogError.invalidCoverage }
             var dayCounts: [String: Int] = [:]
-            while sqlite3_step(grouped) == SQLITE_ROW {
-                if let day = columnString(grouped, 0) { dayCounts[day] = Int(sqlite3_column_int64(grouped, 1)) }
-            }
-            sqlite3_finalize(grouped)
+            for record in staged { dayCounts[try CaptureDay(time: record.captureTime).id, default: 0] += 1 }
             guard dayCounts == Dictionary(uniqueKeysWithValues: catalog.days.map { ($0.day.id, $0.count) }) else { throw CollectionCatalogError.invalidCoverage }
-            let delete = try prepare("DELETE FROM item_index WHERE namespace=?")
-            bind(namespace.key, at: 1, in: delete); try metadataStep(delete)
-            let insert = try prepare("INSERT INTO item_index SELECT namespace,item_id,capture_time,projection,'locations',?,? FROM metadata_inventory_staging WHERE job=? AND namespace=?")
-            sqlite3_bind_int64(insert, 1, admission.resetEpoch); sqlite3_bind_int64(insert, 2, admission.resetEpoch)
-            bind(job.uuidString, at: 3, in: insert); bind(namespace.key, at: 4, in: insert); try metadataStep(insert)
-            let state = try metadataState(namespace)
-            let statement = try prepare("INSERT OR REPLACE INTO metadata_state VALUES (?,?,?,?,1)")
-            bind(namespace.key, at: 1, in: statement); sqlite3_bind_int64(statement, 2, state.revision + 1)
-            sqlite3_bind_int64(statement, 3, state.resetEpoch); metadataBind(try cursor.map { try JSONEncoder().encode($0) }, at: 4, in: statement)
-            try metadataStep(statement)
-            try discardMetadataInventoryStage(job)
+            try ItemIndexRecord.filter { $0.namespace == namespace.key }.deleteAll(db)
+            for record in staged {
+                try ItemIndexRecord(namespace: namespace.key, itemID: record.itemID, captureTime: record.captureTime, projection: record.projection,
+                                    profile: ItemFieldProfile.locations.rawValue, epoch: admission.resetEpoch, identityEpoch: admission.resetEpoch).insert(db)
+            }
+            let state = try metadataState(db, namespace)
+            try writeState(db, namespace, revision: state.revision + 1, resetEpoch: state.resetEpoch, cursor: cursor, inventoryComplete: true)
+            try discardMetadataInventoryStage(db, job)
         }
     }
 
-    public func metadataCurrentLocations(_ namespace: MetadataNamespace) throws -> [PhotoLocationRecord] {
-        let state = try metadataState(namespace)
-        let statement = try prepare("SELECT item_id,capture_time,projection FROM item_index WHERE namespace=? AND epoch=? AND profile!='identityAndTime'")
-        defer { sqlite3_finalize(statement) }
-        bind(namespace.key, at: 1, in: statement); sqlite3_bind_int64(statement, 2, state.resetEpoch)
-        var records: [PhotoLocationRecord] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            guard let data = metadataBlob(statement, 2) else { continue }
-            let projection = try JSONDecoder().decode(MetadataIndexItem.self, from: data)
-            if let coordinate = projection.coordinate {
-                records.append(PhotoLocationRecord(id: sqlite3_column_int64(statement, 0), time: sqlite3_column_int64(statement, 1), coordinate: coordinate, thumbnail: projection.thumbnail))
-            }
-        }
-        return records.sorted { $0.time > $1.time }
-    }
+    // MARK: Source changes and local mutations
 
     /// Source advancement and every dependent invalidation share this transaction.
     /// A reset enrolls only later reads; future empty intervals cannot revive old rows.
@@ -674,52 +523,35 @@ extension DiskCache {
         guard Set(replacements.map(\.id)).count == replacements.count,
               Set(deletedIDs).count == deletedIDs.count,
               Set(replacements.map(\.id)).isDisjoint(with: deletedIDs) else { throw CollectionCatalogError.invalidCoverage }
-        try metadataTransaction {
-            try admit(admission, namespace: namespace)
-            let prior = try metadataState(namespace)
+        try metadataWrite { db in
+            try admit(admission, namespace: namespace, db)
+            let prior = try metadataState(db, namespace)
             let changed = invalidateAll || !replacements.isEmpty || !deletedIDs.isEmpty
             let revision = prior.revision + (changed ? 1 : 0)
             let epoch = prior.resetEpoch + (invalidateAll ? 1 : 0)
-            if invalidateAll {
-                let statement = try prepare("UPDATE collection_days SET membership_generation=membership_generation+1 WHERE namespace=?")
-                bind(namespace.key, at: 1, in: statement); try metadataStep(statement)
-            } else {
-                for day in affectedDays {
-                    let statement = try prepare("UPDATE collection_days SET membership_generation=membership_generation+1 WHERE namespace=? AND day=?")
-                    bind(namespace.key, at: 1, in: statement); bind(day.id, at: 2, in: statement); try metadataStep(statement)
-                }
-            }
+            let namespaceDays = CollectionDayRecord.filter { $0.namespace == namespace.key }
+            let days = affectedDays.map(\.id)
+            try (invalidateAll ? namespaceDays : namespaceDays.filter { days.contains($0.day) })
+                .updateAll(db) { $0.membershipGeneration += 1 }
             if changed {
-                let statement = try prepare("UPDATE collection_state SET validated_run=NULL WHERE namespace=?")
-                bind(namespace.key, at: 1, in: statement); try metadataStep(statement)
-                let albums = try prepare("UPDATE album_summaries SET validated_run=NULL WHERE namespace=?")
-                bind(namespace.key, at: 1, in: albums); try metadataStep(albums)
+                try CollectionStateRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+                try AlbumSummariesRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
             }
-            for id in deletedIDs {
-                for table in ["item_index", "item_details"] {
-                    let statement = try prepare("DELETE FROM \(table) WHERE namespace=? AND item_id=?")
-                    bind(namespace.key, at: 1, in: statement); sqlite3_bind_int64(statement, 2, id); try metadataStep(statement)
-                }
-            }
+            try deleteItems(db, namespace, ids: deletedIDs)
             for item in replacements {
-                try storeMetadataItem(item, profile: .fullPage, namespace: namespace, currentRun: currentRun, epoch: epoch, revision: revision)
+                try storeMetadataItem(db, item, profile: .fullPage, namespace: namespace, currentRun: currentRun, epoch: epoch, revision: revision)
             }
-            let statement = try prepare("INSERT OR REPLACE INTO metadata_state VALUES (?,?,?,?,?)")
-            bind(namespace.key, at: 1, in: statement); sqlite3_bind_int64(statement, 2, revision)
-            sqlite3_bind_int64(statement, 3, epoch); metadataBind(try cursor.map { try JSONEncoder().encode($0) }, at: 4, in: statement)
-            sqlite3_bind_int(statement, 5, !invalidateAll && prior.inventoryComplete ? 1 : 0)
-            try metadataStep(statement)
+            try writeState(db, namespace, revision: revision, resetEpoch: epoch, cursor: cursor,
+                           inventoryComplete: !invalidateAll && prior.inventoryComplete)
         }
     }
 
     public func invalidateMetadataCollection(_ key: CollectionKey, admission: MetadataStoreAdmission) throws {
-        try metadataTransaction {
+        try metadataWrite { db in
             try admitLifetime(admission, namespace: key.namespace)
-            let catalog = try prepare("UPDATE collection_state SET validated_run=NULL WHERE namespace=? AND collection=?")
-            bind(key.namespace.key, at: 1, in: catalog); bind(key.collection.rawValue, at: 2, in: catalog); try metadataStep(catalog)
-            let days = try prepare("UPDATE collection_days SET membership_generation=membership_generation+1 WHERE namespace=? AND collection=?")
-            bind(key.namespace.key, at: 1, in: days); bind(key.collection.rawValue, at: 2, in: days); try metadataStep(days)
-            try advanceMetadataLocalRevision(key.namespace)
+            try CollectionStateRecord.row(key).updateAll(db) { $0.validatedRun.set(to: nil) }
+            try CollectionDayRecord.all(key).updateAll(db) { $0.membershipGeneration += 1 }
+            try advanceMetadataLocalRevision(db, key.namespace)
         }
     }
 
@@ -728,194 +560,219 @@ extension DiskCache {
     /// application this keeps the cursor and does not require a tombstone.
     public func invalidateMetadataAfterDeletion(namespace: MetadataNamespace, deletedIDs: [Int64],
                                                 admission: MetadataStoreAdmission) throws {
-        try metadataTransaction {
+        try metadataWrite { db in
             try admitLifetime(admission, namespace: namespace)
-            for table in ["item_index", "item_details"] {
-                for id in Set(deletedIDs) {
-                    let statement = try prepare("DELETE FROM \(table) WHERE namespace=? AND item_id=?")
-                    bind(namespace.key, at: 1, in: statement); sqlite3_bind_int64(statement, 2, id); try metadataStep(statement)
-                }
-            }
-            for table in ["collection_state", "album_summaries", "folder_directories"] + CollectionIndexKind.allCases.map(\.summaryTable) {
-                let statement = try prepare("UPDATE \(table) SET validated_run=NULL WHERE namespace=?")
-                bind(namespace.key, at: 1, in: statement); try metadataStep(statement)
-            }
-            let days = try prepare("UPDATE collection_days SET membership_generation=membership_generation+1 WHERE namespace=?")
-            bind(namespace.key, at: 1, in: days); try metadataStep(days)
-            try advanceMetadataLocalRevision(namespace)
+            try deleteItems(db, namespace, ids: Array(Set(deletedIDs)))
+            try CollectionStateRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try AlbumSummariesRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try FolderDirectoryRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try CollectionSummaryRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try CollectionDayRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.membershipGeneration += 1 }
+            try advanceMetadataLocalRevision(db, namespace)
         }
     }
 
     public func applyMetadataFavoriteValues(_ values: [Int64: Bool], namespace: MetadataNamespace,
                                             currentRun: String, admission: MetadataStoreAdmission) throws {
-        try metadataTransaction {
+        try metadataWrite { db in
             try admitLifetime(admission, namespace: namespace)
             for (id, favorite) in values {
-                try patchMetadataDetail(namespace: namespace, itemID: id, annotationRun: currentRun) { $0.withFavorite(favorite) }
+                try patchMetadataDetail(db, namespace: namespace, itemID: id, annotationRun: currentRun) { $0.withFavorite(favorite) }
             }
             if let space = namespace.scope.space {
-                let collection = PhotoCollectionDescriptor.favorites(space)
-                let catalog = try prepare("UPDATE collection_state SET validated_run=NULL WHERE namespace=? AND collection=?")
-                bind(namespace.key, at: 1, in: catalog); bind(collection.rawValue, at: 2, in: catalog); try metadataStep(catalog)
-                let days = try prepare("UPDATE collection_days SET membership_generation=membership_generation+1 WHERE namespace=? AND collection=?")
-                bind(namespace.key, at: 1, in: days); bind(collection.rawValue, at: 2, in: days); try metadataStep(days)
+                let favorites = CollectionKey(namespace: namespace, collection: .favorites(space))
+                try CollectionStateRecord.row(favorites).updateAll(db) { $0.validatedRun.set(to: nil) }
+                try CollectionDayRecord.all(favorites).updateAll(db) { $0.membershipGeneration += 1 }
             }
-            try advanceMetadataLocalRevision(namespace)
+            try advanceMetadataLocalRevision(db, namespace)
         }
     }
     public func applyMetadataRotationValues(_ values: [Int64: PhotoItem], namespace: MetadataNamespace,
                                             admission: MetadataStoreAdmission) throws {
-        try metadataTransaction {
+        try metadataWrite { db in
             try admitLifetime(admission, namespace: namespace)
             for (id, replacement) in values {
-                try patchMetadataDetail(namespace: namespace, itemID: id) { $0.withRotationMetadata(from: replacement) }
-                let query = try prepare("SELECT capture_time,projection FROM item_index WHERE namespace=? AND item_id=?")
-                bind(namespace.key, at: 1, in: query); sqlite3_bind_int64(query, 2, id)
-                if sqlite3_step(query) == SQLITE_ROW {
-                    let time = sqlite3_column_int64(query, 0)
-                    let prior = try metadataBlob(query, 1).map { try JSONDecoder().decode(MetadataIndexItem.self, from: $0) }
-                    let projection = MetadataIndexItem(id: id, time: time, coordinate: prior?.coordinate, thumbnail: replacement.additional?.thumbnail)
-                    let update = try prepare("UPDATE item_index SET projection=? WHERE namespace=? AND item_id=?")
-                    metadataBind(try JSONEncoder().encode(projection), at: 1, in: update)
-                    bind(namespace.key, at: 2, in: update); sqlite3_bind_int64(update, 3, id); try metadataStep(update)
+                try patchMetadataDetail(db, namespace: namespace, itemID: id) { $0.withRotationMetadata(from: replacement) }
+                if var index = try ItemIndexRecord.row(namespace, id).fetchOne(db) {
+                    index.projection = MetadataIndexItem(id: id, time: index.captureTime, coordinate: index.projection?.coordinate,
+                                                         thumbnail: replacement.additional?.thumbnail)
+                    try index.update(db, columns: [ItemIndexRecord.Columns.projection])
                 }
-                sqlite3_finalize(query)
             }
-            try advanceMetadataLocalRevision(namespace)
+            try advanceMetadataLocalRevision(db, namespace)
         }
     }
-    private func patchMetadataDetail(namespace: MetadataNamespace, itemID: Int64, annotationRun: String? = nil,
+    private func patchMetadataDetail(_ db: Database, namespace: MetadataNamespace, itemID: Int64, annotationRun: String? = nil,
                                      transform: (PhotoItem) -> PhotoItem) throws {
-        let query = try prepare("SELECT payload FROM item_details WHERE namespace=? AND item_id=?")
-        bind(namespace.key, at: 1, in: query); sqlite3_bind_int64(query, 2, itemID)
-        let bytes = sqlite3_step(query) == SQLITE_ROW ? metadataBlob(query, 0) : nil
-        sqlite3_finalize(query)
-        guard let bytes else { return }
-        let item = transform(try JSONDecoder().decode(PhotoItem.self, from: bytes))
-        let encoded = try JSONEncoder().encode(item)
-        let statement = try prepare("UPDATE item_details SET payload=?,cost=?,revision=revision+1,annotation_run=COALESCE(?,annotation_run) WHERE namespace=? AND item_id=?")
-        metadataBind(encoded, at: 1, in: statement); sqlite3_bind_int64(statement, 2, Int64(encoded.count))
-        bind(annotationRun, at: 3, in: statement); bind(namespace.key, at: 4, in: statement); sqlite3_bind_int64(statement, 5, itemID); try metadataStep(statement)
-    }
-    private func advanceMetadataLocalRevision(_ namespace: MetadataNamespace) throws {
-        let prior = try metadataState(namespace)
-        let statement = try prepare("INSERT OR REPLACE INTO metadata_state VALUES (?,?,?,?,?)")
-        bind(namespace.key, at: 1, in: statement); sqlite3_bind_int64(statement, 2, prior.revision + 1)
-        sqlite3_bind_int64(statement, 3, prior.resetEpoch)
-        metadataBind(try prior.cursor.map { try JSONEncoder().encode($0) }, at: 4, in: statement)
-        sqlite3_bind_int(statement, 5, prior.inventoryComplete ? 1 : 0); try metadataStep(statement)
+        guard var detail = try ItemDetailRecord.row(namespace, itemID).fetchOne(db) else { return }
+        detail.payload = transform(detail.payload)
+        detail.revision += 1
+        if let annotationRun { detail.annotationRun = annotationRun }
+        try detail.update(db)
     }
 
     public func evictMetadataDetails(namespace: MetadataNamespace, itemIDs: [Int64]) throws {
-        try metadataTransaction {
-            for id in itemIDs {
-                let statement = try prepare("DELETE FROM item_details WHERE namespace=? AND item_id=?")
-                bind(namespace.key, at: 1, in: statement); sqlite3_bind_int64(statement, 2, id); try metadataStep(statement)
-            }
+        try database.write { db in
+            try ItemDetailRecord.filter { $0.namespace == namespace.key && itemIDs.contains($0.itemID) }.deleteAll(db)
         }
     }
+
+    // MARK: Budget and eviction
+
     public func metadataStorageCost() throws -> Int64 {
-        guard try normalizedMetadataExists() else { return 0 }
-        let query = try prepare("SELECT (SELECT COALESCE(SUM(cost),0) FROM item_details)+(SELECT COALESCE(SUM(cost),0) FROM day_pages)+(SELECT COALESCE(SUM(COALESCE(LENGTH(projection),0)+64),0) FROM item_index)+(SELECT COALESCE(SUM(LENGTH(catalog)+128),0) FROM collection_state)+(SELECT COALESCE(SUM(cost),0) FROM album_summaries)")
-        defer { sqlite3_finalize(query) }
-        guard sqlite3_step(query) == SQLITE_ROW else { throw CacheError.storage }
-        return sqlite3_column_int64(query, 0)
+        try database.read { try metadataStorageCost($0) }
+    }
+    /// Approximate stored bytes per row kind; eviction compares these against the budget.
+    func metadataStorageCost(_ db: Database) throws -> Int64 {
+        guard metadataInitialized else { return 0 }
+        func total<Record: TableRecord>(_ record: Record.Type, _ cost: SQLExpression) throws -> Int64 {
+            try Int64.fetchOne(db, Record.select(sum(cost) ?? 0)) ?? 0
+        }
+        return try total(ItemDetailRecord.self, length(ItemDetailRecord.Columns.payload))
+            + total(DayPageRecord.self, DayPageRecord.Columns.actualCount * 16 + 128)
+            + total(ItemIndexRecord.self, (length(ItemIndexRecord.Columns.projection) ?? 0) + 64)
+            + total(CollectionStateRecord.self, length(CollectionStateRecord.Columns.catalog) + 128)
+            + total(AlbumSummariesRecord.self, length(AlbumSummariesRecord.Columns.payload))
     }
 
-    private func normalizedMetadataExists() throws -> Bool {
-        let query = try prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata_state'")
-        defer { sqlite3_finalize(query) }
-        return sqlite3_step(query) == SQLITE_ROW
+    private enum EvictionVictim {
+        case detail(ItemDetailRecord), page(DayPageRecord), index(ItemIndexRecord), collection(CollectionStateRecord), albums(AlbumSummariesRecord)
     }
-    /// Eviction preserves page slots when details leave, and removes reverse references
-    /// together with a membership row. The compact inventory has Map's retention priority.
+
+    /// Eviction preserves page slots when details leave, and removes membership items
+    /// together with their page. The compact inventory has Map's retention priority.
     func trimNormalizedMetadata(throughRank: Int) throws -> Bool {
-        guard try normalizedMetadataExists() else { return false }
         let pageRank = CachePriorityPolicy.evictionRank(for: .metadataPage)
         let indexRank = CachePriorityPolicy.evictionRank(for: .locationIndex)
         let catalogRank = CachePriorityPolicy.evictionRank(for: .activeTimeline)
-        let query = try prepare("""
-        SELECT table_name,row_id,rank FROM (
-          SELECT 'item_details' AS table_name,rowid AS row_id,\(pageRank) AS rank,accessed FROM item_details
-          UNION ALL SELECT 'day_pages',rowid,\(pageRank),accessed FROM day_pages
-          UNION ALL SELECT 'item_index',rowid,\(indexRank),0 FROM item_index
-          UNION ALL SELECT 'collection_state',rowid,\(catalogRank),0 FROM collection_state
-          UNION ALL SELECT 'album_summaries',rowid,\(catalogRank),accessed FROM album_summaries
-        ) WHERE rank<=? ORDER BY rank,accessed LIMIT 1
-        """)
-        sqlite3_bind_int64(query, 1, Int64(throughRank))
-        guard sqlite3_step(query) == SQLITE_ROW, let table = columnString(query, 0) else { sqlite3_finalize(query); return false }
-        let row = sqlite3_column_int64(query, 1)
-        sqlite3_finalize(query)
-        try metadataTransaction(enforceBudget: false) {
-            if table == "collection_state" {
-                let revision = try prepare("UPDATE metadata_state SET revision=revision+1 WHERE namespace=(SELECT namespace FROM collection_state WHERE rowid=?)")
-                sqlite3_bind_int64(revision, 1, row); try metadataStep(revision)
-                for dependent in ["page_items", "day_pages", "collection_days"] {
-                    let deletion = try prepare("DELETE FROM \(dependent) WHERE EXISTS (SELECT 1 FROM collection_state c WHERE c.rowid=? AND c.namespace=\(dependent).namespace AND c.collection=\(dependent).collection)")
-                    sqlite3_bind_int64(deletion, 1, row); try metadataStep(deletion)
-                }
-            } else if table == "day_pages" {
-                let references = try prepare("""
-                DELETE FROM page_items WHERE EXISTS (
-                  SELECT 1 FROM day_pages p WHERE p.rowid=? AND p.namespace=page_items.namespace
-                  AND p.collection=page_items.collection AND p.day=page_items.day AND p.page_offset=page_items.page_offset
-                  AND p.capacity=page_items.capacity AND p.sort_order=page_items.sort_order)
-                """)
-                sqlite3_bind_int64(references, 1, row); try metadataStep(references)
-            } else if table == "item_index" {
-                let dirty = try prepare("UPDATE metadata_state SET inventory_complete=0 WHERE namespace=(SELECT namespace FROM item_index WHERE rowid=?)")
-                sqlite3_bind_int64(dirty, 1, row); try metadataStep(dirty)
+        return try metadataWrite(enforceBudget: false) { db in
+            guard metadataInitialized else { return false }
+            var candidates: [(rank: Int, accessed: Double, victim: EvictionVictim)] = []
+            if pageRank <= throughRank {
+                if let detail = try ItemDetailRecord.order(ItemDetailRecord.Columns.accessed).fetchOne(db) { candidates.append((pageRank, detail.accessed, .detail(detail))) }
+                if let page = try DayPageRecord.order(DayPageRecord.Columns.accessed).fetchOne(db) { candidates.append((pageRank, page.accessed, .page(page))) }
             }
-            let statement = try prepare("DELETE FROM \(table) WHERE rowid=?")
-            sqlite3_bind_int64(statement, 1, row); try metadataStep(statement)
+            if indexRank <= throughRank, let index = try ItemIndexRecord.fetchOne(db) { candidates.append((indexRank, 0, .index(index))) }
+            if catalogRank <= throughRank {
+                if let state = try CollectionStateRecord.fetchOne(db) { candidates.append((catalogRank, 0, .collection(state))) }
+                if let albums = try AlbumSummariesRecord.order(AlbumSummariesRecord.Columns.accessed).fetchOne(db) { candidates.append((catalogRank, albums.accessed, .albums(albums))) }
+            }
+            guard let victim = candidates.min(by: { ($0.rank, $0.accessed) < ($1.rank, $1.accessed) })?.victim else { return false }
+            switch victim {
+            case .detail(let detail): try detail.delete(db)
+            case .page(let page):
+                try PageItemRecord.page(of: page).deleteAll(db)
+                try page.delete(db)
+            case .index(let index):
+                try markInventoryIncomplete(db, index.namespace)
+                try index.delete(db)
+            case .collection(let state):
+                try MetadataStateRecord.filter(key: state.namespace).updateAll(db) { $0.revision += 1 }
+                let namespace = state.namespace, collection = state.collection
+                try PageItemRecord.filter { $0.namespace == namespace && $0.collection == collection }.deleteAll(db)
+                try DayPageRecord.filter { $0.namespace == namespace && $0.collection == collection }.deleteAll(db)
+                try CollectionDayRecord.filter { $0.namespace == namespace && $0.collection == collection }.deleteAll(db)
+                try state.delete(db)
+            case .albums(let albums): try albums.delete(db)
+            }
+            return true
         }
-        return true
     }
 
-    private func deleteMetadataDay(_ key: CollectionKey, day: CaptureDay) throws {
-        for table in ["page_items", "day_pages", "collection_days"] {
-            let statement = try prepare("DELETE FROM \(table) WHERE namespace=? AND collection=? AND day=?")
-            bind(key.namespace.key, at: 1, in: statement); bind(key.collection.rawValue, at: 2, in: statement); bind(day.id, at: 3, in: statement)
-            try metadataStep(statement)
+    // MARK: Helpers
+
+    private func deleteItems(_ db: Database, _ namespace: MetadataNamespace, ids: [Int64]) throws {
+        guard !ids.isEmpty else { return }
+        try ItemIndexRecord.filter { $0.namespace == namespace.key && ids.contains($0.itemID) }.deleteAll(db)
+        try ItemDetailRecord.filter { $0.namespace == namespace.key && ids.contains($0.itemID) }.deleteAll(db)
+    }
+    private func deleteMetadataDay(_ db: Database, _ key: CollectionKey, day: CaptureDay) throws {
+        let namespace = key.namespace.key, collection = key.collection.rawValue
+        try PageItemRecord.filter { $0.namespace == namespace && $0.collection == collection && $0.day == day.id }.deleteAll(db)
+        try DayPageRecord.filter { $0.namespace == namespace && $0.collection == collection && $0.day == day.id }.deleteAll(db)
+        try CollectionDayRecord.row(key, day: day.id).deleteAll(db)
+    }
+    private func deleteMetadataPage(_ db: Database, _ address: DayPageAddress, namespace: MetadataNamespace) throws {
+        try PageItemRecord.page(address, namespace).deleteAll(db)
+        try DayPageRecord.page(address, namespace).deleteAll(db)
+    }
+    private func metadataWrite<Value>(enforceBudget: Bool = true, _ operation: (Database) throws -> Value) throws -> Value {
+        var value: Value?
+        try database.inTransaction(.immediate) { db in
+            value = try operation(db)
+            return .commit
         }
+        if enforceBudget { try trim() }
+        return value!
     }
-    private func deleteMetadataPage(_ address: DayPageAddress, namespace: MetadataNamespace) throws {
-        for table in ["page_items", "day_pages"] {
-            let statement = try prepare("DELETE FROM \(table) WHERE namespace=? AND collection=? AND day=? AND page_offset=? AND capacity=? AND sort_order=?")
-            bindMetadataAddress(address, namespace: namespace, statement: statement); try metadataStep(statement)
-        }
+}
+
+// MARK: - Keyed requests
+
+private extension ItemIndexRecord {
+    static func row(_ namespace: MetadataNamespace, _ id: Int64) -> QueryInterfaceRequest<Self> {
+        filter { $0.namespace == namespace.key && $0.itemID == id }
     }
-    private func bindMetadataAddress(_ address: DayPageAddress, namespace: MetadataNamespace, statement: OpaquePointer?) {
-        bind(namespace.key, at: 1, in: statement); bind(address.collection.rawValue, at: 2, in: statement)
-        bind(address.day.id, at: 3, in: statement); sqlite3_bind_int64(statement, 4, Int64(address.offset))
-        sqlite3_bind_int64(statement, 5, Int64(address.capacity)); bind(address.order.rawValue, at: 6, in: statement)
+}
+private extension ItemDetailRecord {
+    static func row(_ namespace: MetadataNamespace, _ id: Int64) -> QueryInterfaceRequest<Self> {
+        filter { $0.namespace == namespace.key && $0.itemID == id }
     }
-    private func metadataBind(_ data: Data?, at index: Int32, in statement: OpaquePointer?) {
-        guard let data else { sqlite3_bind_null(statement, index); return }
-        _ = data.withUnsafeBytes { sqlite3_bind_blob(statement, index, $0.baseAddress, Int32($0.count), unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }
+}
+private extension CollectionStateRecord {
+    static func row(_ key: CollectionKey) -> QueryInterfaceRequest<Self> {
+        filter { $0.namespace == key.namespace.key && $0.collection == key.collection.rawValue }
     }
-    private func metadataBlob(_ statement: OpaquePointer?, _ index: Int32) -> Data? {
-        guard let bytes = sqlite3_column_blob(statement, index) else { return nil }
-        return Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, index)))
+}
+private extension CollectionDayRecord {
+    static func all(_ key: CollectionKey) -> QueryInterfaceRequest<Self> {
+        filter { $0.namespace == key.namespace.key && $0.collection == key.collection.rawValue }
     }
-    private func metadataStep(_ statement: OpaquePointer?) throws {
-        defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_DONE else { throw CacheError.storage }
+    static func row(_ key: CollectionKey, day: String) -> QueryInterfaceRequest<Self> {
+        all(key).filter { $0.day == day }
     }
-    private func metadataSQL(_ sql: String) throws {
-        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw CacheError.storage }
+}
+/// A day page is identified by six columns, shared by `day_pages` and `page_items`.
+private func dayPageKey(namespace: String, collection: String, day: String, offset: Int, capacity: Int, order: String) -> SQLExpression {
+    typealias C = DayPageRecord.Columns
+    let terms: [SQLExpression] = [C.namespace == namespace, C.collection == collection, C.day == day,
+                                  C.pageOffset == offset, C.capacity == capacity, C.sortOrder == order]
+    return terms.joined(operator: .and)
+}
+private func dayPageKey(_ address: DayPageAddress, _ namespace: MetadataNamespace) -> SQLExpression {
+    dayPageKey(namespace: namespace.key, collection: address.collection.rawValue, day: address.day.id,
+               offset: address.offset, capacity: address.capacity, order: address.order.rawValue)
+}
+private extension DayPageRecord {
+    static func page(_ address: DayPageAddress, _ namespace: MetadataNamespace) -> QueryInterfaceRequest<Self> {
+        filter(dayPageKey(address, namespace))
     }
-    private func metadataTransaction<Value>(enforceBudget: Bool = true, _ operation: () throws -> Value) throws -> Value {
-        try metadataSQL("BEGIN IMMEDIATE")
-        do {
-            let value = try operation()
-            try metadataSQL("COMMIT")
-            if enforceBudget { try trim() }
-            return value
-        } catch {
-            try? metadataSQL("ROLLBACK")
-            throw error
-        }
+    static func page(of member: PageItemRecord) -> QueryInterfaceRequest<Self> {
+        filter(dayPageKey(namespace: member.namespace, collection: member.collection, day: member.day,
+                          offset: member.pageOffset, capacity: member.capacity, order: member.sortOrder))
+    }
+}
+private extension PageItemRecord {
+    static func page(_ address: DayPageAddress, _ namespace: MetadataNamespace) -> QueryInterfaceRequest<Self> {
+        filter(dayPageKey(address, namespace))
+    }
+    static func page(of page: DayPageRecord) -> QueryInterfaceRequest<Self> {
+        filter(dayPageKey(namespace: page.namespace, collection: page.collection, day: page.day,
+                          offset: page.pageOffset, capacity: page.capacity, order: page.sortOrder))
+    }
+}
+private extension CollectionSummaryRecord {
+    static func row(_ namespace: MetadataNamespace, _ kind: CollectionIndexKind) -> QueryInterfaceRequest<Self> {
+        filter { $0.namespace == namespace.key && $0.kind == kind.rawValue }
+    }
+}
+private extension FolderDirectoryRecord {
+    static func row(_ namespace: MetadataNamespace, _ id: Int64) -> QueryInterfaceRequest<Self> {
+        filter { $0.namespace == namespace.key && $0.folderID == id }
+    }
+}
+private extension FilterOptionCatalogRecord {
+    static func row(_ key: CollectionKey) -> QueryInterfaceRequest<Self> {
+        filter { $0.namespace == key.namespace.key && $0.collection == key.collection.rawValue }
     }
 }

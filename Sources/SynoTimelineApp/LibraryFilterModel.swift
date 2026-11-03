@@ -34,6 +34,7 @@ final class LibraryFilterModel: ObservableObject {
     private var installingRegistration: LibraryFilterRegistration?
     private var applyToken = UUID()
     private var needsInitialBatch = false
+    private var networkAllowed: Bool?
 
     var isActive: Bool { activeCollection != nil }
     var isReady: Bool { controller != nil }
@@ -71,17 +72,24 @@ final class LibraryFilterModel: ObservableObject {
             metadataRevision = nil
             Task { await previousController?.shutdown() }
         }
-        guard let source, let snapshot = library.snapshot(for: source),
-              library.timelineVerified(for: source), let repository = library.repository else { return }
+        guard let source, let snapshot = library.snapshot(for: source), let repository = library.repository else { return }
+        let verified = library.timelineVerified(for: source)
         let next = LibraryIndex(snapshot: snapshot).fingerprint
-        guard fingerprint != next || metadataRevision != library.metadataInvalidationRevision else { return }
+        let rebuild = fingerprint != next || metadataRevision != library.metadataInvalidationRevision
+        if !rebuild, let controller, networkAllowed != verified {
+            networkAllowed = verified
+            Task { await controller.setNetworkAllowed(verified) }
+        }
+        guard rebuild else { return }
         let previousController = controller
         observer?.cancel()
-        clear()
+        detachActiveFilter()
         Task { await previousController?.shutdown() }
         fingerprint = next
         metadataRevision = library.metadataInvalidationRevision
-        let controller = LibraryFilterController(repository: repository, snapshot: snapshot, sourceCollection: source)
+        networkAllowed = verified
+        let controller = LibraryFilterController(repository: repository, snapshot: snapshot, sourceCollection: source,
+                                                 networkAllowed: verified)
         self.controller = controller
         observer = Task { [weak self] in
             for await event in await controller.observe() {
@@ -90,6 +98,7 @@ final class LibraryFilterModel: ObservableObject {
             }
         }
         Task { await controller.indexCachedPages() }
+        if !committed.isEmpty { start(committed, on: controller) }
     }
 
     func apply() {
@@ -109,6 +118,10 @@ final class LibraryFilterModel: ObservableObject {
         if filter.isEmpty { clear(); isPresented = false; return }
         committed = filter
         isPresented = false
+        start(filter, on: controller)
+    }
+
+    private func start(_ filter: LibraryFilter, on controller: LibraryFilterController) {
         let token = UUID()
         applyToken = token
         needsInitialBatch = true
@@ -122,13 +135,7 @@ final class LibraryFilterModel: ObservableObject {
     }
 
     func clear() {
-        applyToken = UUID()
-        needsInitialBatch = false
-        if let descriptor = activeCollection, let repository = library?.repository {
-            Task { await repository.unregisterLibraryFilter(descriptor) }
-            library?.unregisterSessionCollection(descriptor)
-        }
-        activeCollection = nil
+        detachActiveFilter()
         committed = LibraryFilter()
         draft = LibraryFilter()
         megapixelsMin = ""; megapixelsMax = ""; sizeMin = ""; sizeMax = ""
@@ -136,6 +143,16 @@ final class LibraryFilterModel: ObservableObject {
         apertureMin = ""; apertureMax = ""; shutterMin = ""; shutterMax = ""
         sizeMinUnit = .MB; sizeMaxUnit = .MB
         validationErrors = [:]
+    }
+
+    private func detachActiveFilter() {
+        applyToken = UUID()
+        needsInitialBatch = false
+        if let descriptor = activeCollection, let repository = library?.repository {
+            Task { await repository.unregisterLibraryFilter(descriptor) }
+            library?.unregisterSessionCollection(descriptor)
+        }
+        activeCollection = nil
         installedRegistration = nil
         installingRegistration = nil
         lastEdgeDemand = nil

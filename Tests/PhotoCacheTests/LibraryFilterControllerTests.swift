@@ -7,25 +7,29 @@ final class LibraryFilterControllerTests: XCTestCase {
     func testClearingFilterStopsContinuousScheduling() async throws {
         let root = temporaryTestRoot("FilterContinuousStop")
         defer { try? FileManager.default.removeItem(at: root) }
-        let snapshot = TimelineSnapshot(sections: sections(12))
+        let snapshot = TimelineSnapshot(sections: sections(150))
         let transport = ScannerTransport(snapshot: snapshot, pages: [:], delay: .milliseconds(150))
         let controller = LibraryFilterController(repository: try repository(transport: transport, root: root), snapshot: snapshot, sourceCollection: .library(.personal))
         _ = await controller.apply(LibraryFilter(cameras: ["Match"]))
         await controller.indexCachedPages()
         await controller.startContinuousScan()
-        let started = await waitUntil { await transport.requestCount() >= 2 }
+        let started = await waitUntil { await transport.requestCount() >= 1 }
         XCTAssertTrue(started)
         await controller.unregisterFilter()
-        try await Task.sleep(for: .milliseconds(400))
+        try await Task.sleep(for: .milliseconds(600))
+        let settled = await transport.requestCount()
+        try await Task.sleep(for: .milliseconds(600))
         let calls = await transport.requestCount()
-        XCTAssertEqual(calls, 2)
+        let sections = await transport.totalCalls()
+        XCTAssertEqual(calls, settled)
+        XCTAssertLessThan(sections, 150, "stopping must prevent later groups")
         await controller.shutdown()
     }
 
     func testContinuousScanPassesBatchBoundaryAndSkipsFailures() async throws {
         let root = temporaryTestRoot("FilterContinuous")
         defer { try? FileManager.default.removeItem(at: root) }
-        let source = sections(12)
+        let source = sections(60)
         let snapshot = TimelineSnapshot(sections: source)
         var pages: [Int: [PhotoItem]] = [:]
         for index in source.indices {
@@ -38,7 +42,7 @@ final class LibraryFilterControllerTests: XCTestCase {
         await controller.startContinuousScan()
         let finished = await waitUntil {
             let progress = (await controller.currentEvent()).progress
-            return progress.verified + progress.failed == 12
+            return progress.verified + progress.failed == 60
         }
         XCTAssertTrue(finished)
         let event = await controller.currentEvent()
@@ -51,6 +55,52 @@ final class LibraryFilterControllerTests: XCTestCase {
         XCTAssertLessThanOrEqual(maximum, 2)
         await controller.shutdown()
     }
+
+    func testContinuousScanMergesDaysIntoFewRequests() async throws {
+        let root = temporaryTestRoot("FilterContinuousMerge")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = sections(40)
+        let snapshot = TimelineSnapshot(sections: source)
+        var pages: [Int: [PhotoItem]] = [:]
+        for index in source.indices {
+            pages[index] = [try item(Int64(index + 1), day: 1_713_571_200 - Int64(index * 86_400), camera: "Match")]
+        }
+        let transport = ScannerTransport(snapshot: snapshot, pages: pages)
+        let controller = LibraryFilterController(repository: try repository(transport: transport, root: root), snapshot: snapshot, sourceCollection: .library(.personal))
+        _ = await controller.apply(LibraryFilter(cameras: ["Match"]))
+        await controller.indexCachedPages()
+        await controller.startContinuousScan()
+        let finished = await waitUntil { (await controller.currentEvent()).progress.verified == 40 }
+        XCTAssertTrue(finished)
+        let requests = await transport.requestCount()
+        XCTAssertLessThanOrEqual(requests, 4)
+        await controller.shutdown()
+    }
+
+    func testNetworkScanWaitsForNetworkPermission() async throws {
+        let root = temporaryTestRoot("FilterNetworkPermission")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = sections(6)
+        let snapshot = TimelineSnapshot(sections: source)
+        var pages: [Int: [PhotoItem]] = [:]
+        for index in source.indices {
+            pages[index] = [try item(Int64(index + 1), day: 1_713_571_200 - Int64(index * 86_400), camera: "Match")]
+        }
+        let transport = ScannerTransport(snapshot: snapshot, pages: pages)
+        let controller = LibraryFilterController(repository: try repository(transport: transport, root: root), snapshot: snapshot,
+                                                 sourceCollection: .library(.personal), networkAllowed: false)
+        _ = await controller.apply(LibraryFilter(cameras: ["Match"]))
+        await controller.indexCachedPages()
+        await controller.startContinuousScan()
+        try await Task.sleep(for: .milliseconds(200))
+        let idle = await transport.requestCount()
+        XCTAssertEqual(idle, 0)
+        await controller.setNetworkAllowed(true)
+        let finished = await waitUntil { (await controller.currentEvent()).progress.verified == 6 }
+        XCTAssertTrue(finished)
+        await controller.shutdown()
+    }
+
     private func item(_ id: Int64, day: Int64, camera: String) throws -> PhotoItem {
         try JSONDecoder().decode(PhotoItem.self, from: Data("""
         {"id":\(id),"filename":"\(id).JPG","time":\(day),"type":"photo",
@@ -59,9 +109,12 @@ final class LibraryFilterControllerTests: XCTestCase {
     }
 
     private func sections(_ count: Int) -> [TimelineSection] {
-        (0..<count).map { index in
-            TimelineSection(offset: 0, limit: 1,
-                list: [TimelineDay(year: 2024, month: 4, day: 20 - index, itemCount: 1)])
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return (0..<count).map { index in
+            let parts = calendar.dateComponents([.year, .month, .day], from: Date(timeIntervalSince1970: TimeInterval(1_713_571_200 - index * 86_400)))
+            return TimelineSection(offset: 0, limit: 1,
+                list: [TimelineDay(year: parts.year!, month: parts.month!, day: parts.day!, itemCount: 1)])
         }
     }
 
