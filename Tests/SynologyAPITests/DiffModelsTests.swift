@@ -19,6 +19,13 @@ final class DiffModelsTests: XCTestCase {
             XCTAssertFalse(diff.isEmpty); XCTAssertFalse(diff.isBoundedTerminal)
         }
     }
+    func testUnsupportedEntriesAreSummarizedByStructureWithoutValues() throws {
+        let diff = try decode(#"{"diff_version":1,"version_time":2,"item":{"modify":[{"id":7}],"delete":[],"merge":[{"from":5,"to":7,"name":"secret.jpg"}],"move":[]},"similar":[],"has_next":false}"#)
+        XCTAssertFalse(diff.isBoundedTerminal)
+        XCTAssertEqual(diff.unsupportedCounts, ["merge": 1])
+        XCTAssertEqual(diff.unsupportedShapes, ["merge {from:int,name:string,to:int} ints=2 inModify=1 inDelete=0"])
+        XCTAssertFalse(diff.summary.contains("secret"))
+    }
     func testMalformedMissingAndUnknownShapesFailClosed() {
         for body in [
             #"{"diff_version":1,"version_time":2,"item":{"modify":[],"delete":[],"merge":[],"move":[]},"similar":[]}"#,
