@@ -194,6 +194,7 @@ struct LibraryBrowserView: View {
     var contentTopInset: CGFloat = 0
     var hidesEmptyCollectionState = false
     var customHeader: BrowserHeaderConfiguration?
+    var uploadFolderName: String?
     var onOpenPhoto: (PhotoViewerOpenRequest) -> Void = { _ in }
     var onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void = { _ in }
     @EnvironmentObject private var library: LibraryModel
@@ -224,10 +225,11 @@ struct LibraryBrowserView: View {
         switch collection {
         case .library(let space): destination = .timeline(space)
         case .album(let id): destination = .album(id)
+        case .folder(let id, let space): destination = .folder(id, space: space)
         default: return nil
         }
         guard let repository = library.repository else { return nil }
-        return PhotoUploadDrop(destination: destination, repository: repository) { [weak library] in await library?.reload() }
+        return PhotoUploadDrop(destination: destination, destinationName: uploadFolderName, repository: repository) { [weak library] in await library?.reload() }
     }
     private var browserHeader: BrowserHeaderConfiguration? { customHeader ?? albumHeader }
     private var shouldHideEmptyCollectionState: Bool {
@@ -388,6 +390,7 @@ struct LibraryBrowserView: View {
             }
         }
         .background(FileUploadTarget(upload: upload))
+        .onDisappear { PhotoUploadManager.shared.cancelThumbnailPolling() }
         .background(Color(nsColor: .textBackgroundColor))
         .onChange(of: library.snapshotRevision(for: collection)) { _, _ in
             guard let timeline = library.snapshot(for: collection)?.timeline,

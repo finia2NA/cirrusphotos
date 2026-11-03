@@ -11,7 +11,7 @@ enum CacheSchema {
         MetadataStateRecord.databaseTableName, ItemIndexRecord.databaseTableName, ItemDetailRecord.databaseTableName,
         CollectionStateRecord.databaseTableName, CollectionDayRecord.databaseTableName, DayPageRecord.databaseTableName,
         PageItemRecord.databaseTableName, CollectionSummaryRecord.databaseTableName, FolderDirectoryRecord.databaseTableName,
-        AlbumSummariesRecord.databaseTableName, FilterOptionCatalogRecord.databaseTableName, InventoryStagingRecord.databaseTableName
+        FolderCoverRecord.databaseTableName, AlbumSummariesRecord.databaseTableName, FilterOptionCatalogRecord.databaseTableName, InventoryStagingRecord.databaseTableName
     ]
 
     static func createMediaTables(_ db: Database) throws {
@@ -87,6 +87,10 @@ enum CacheSchema {
             t.column(.validatedRun, .text, nullable: true)
         }
         try table(FolderDirectoryRecord.self, db, key: [.namespace, .folderID]) { t in
+            t.column(.namespace, .text); t.column(.folderID, .integer); t.column(.payload, .text)
+            t.column(.validatedRun, .text, nullable: true)
+        }
+        try table(FolderCoverRecord.self, db, key: [.namespace, .folderID]) { t in
             t.column(.namespace, .text); t.column(.folderID, .integer); t.column(.payload, .text)
             t.column(.validatedRun, .text, nullable: true)
         }
@@ -425,6 +429,17 @@ struct FolderDirectoryRecord: Codable, FetchableRecord, PersistableRecord {
     var namespace: String
     var folderID: Int64
     var payload: FolderDirectory
+    var validatedRun: String?
+    enum CodingKeys: String, CodingKey, ColumnExpression { case namespace, payload, folderID = "folder_id", validatedRun = "validated_run" }
+    typealias Columns = CodingKeys
+}
+
+/// The thumbnails last derived for a folder card. Reused for display until the current run recomputes them.
+struct FolderCoverRecord: Codable, FetchableRecord, PersistableRecord {
+    static let databaseTableName = "folder_covers"
+    var namespace: String
+    var folderID: Int64
+    var payload: [ThumbnailInfo]
     var validatedRun: String?
     enum CodingKeys: String, CodingKey, ColumnExpression { case namespace, payload, folderID = "folder_id", validatedRun = "validated_run" }
     typealias Columns = CodingKeys

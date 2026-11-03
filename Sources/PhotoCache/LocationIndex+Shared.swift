@@ -77,6 +77,9 @@ extension CachedPhotosRepository {
                         task = job.task
                     }
                     else {
+                        let cause = "inventoryComplete=\(projection.state.inventoryComplete) inventoryCurrent=\(metadata.sharedLocations.current) "
+                            + "sourceCurrent=\(metadataSourceCurrent(.shared)) sourceUnavailable=\(metadata[source: .shared].sourceUnavailable)"
+                        SynologyDiagnostics.diff.notice("shared Map scan: \(cause, privacy: .public)")
                         let id = UUID()
                         task = Task {
                             defer {

@@ -62,20 +62,29 @@ enum SelectionDragRegistry {
     }
 }
 
-@MainActor
-final class SelectionPromiseWriter: NSObject, @preconcurrency NSPasteboardWriting {
-    private let provider: NSFilePromiseProvider?
+/// A file promise that also carries an in-process handle type. The provider itself must be the
+/// pasteboard writer for Finder to fulfil the promise; wrapping it in another writer is rejected.
+final class LocalHandlePromiseProvider: NSFilePromiseProvider {
+    var localType: NSPasteboard.PasteboardType?
+    var nonce: UUID?
+    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+        super.writableTypes(for: pasteboard) + (localType.map { [$0] } ?? [])
+    }
+    override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        type == localType ? nonce?.uuidString : super.pasteboardPropertyList(forType: type)
+    }
+    override func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
+        type == localType ? [] : super.writingOptions(forType: type, pasteboard: pasteboard)
+    }
+}
+
+/// Local handle without a file promise, for items that cannot be exported.
+final class LocalHandleWriter: NSObject, NSPasteboardWriting {
+    private let type: NSPasteboard.PasteboardType
     private let nonce: UUID
-    init(provider: NSFilePromiseProvider?, nonce: UUID) { self.provider = provider; self.nonce = nonce }
-    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
-        (provider?.writableTypes(for: pasteboard) ?? []) + [SelectionDragRegistry.type]
-    }
-    func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
-        type == SelectionDragRegistry.type ? nonce.uuidString : provider?.pasteboardPropertyList(forType: type)
-    }
-    func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
-        type == SelectionDragRegistry.type ? [] : (provider?.writingOptions(forType: type, pasteboard: pasteboard) ?? [])
-    }
+    init(type: NSPasteboard.PasteboardType, nonce: UUID) { self.type = type; self.nonce = nonce }
+    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] { [type] }
+    func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? { nonce.uuidString }
 }
 
 /// Accepts only in-process selection handles; never requests a promised file.
@@ -120,22 +129,6 @@ struct AlbumMembershipTarget: NSViewRepresentable {
             path.lineWidth = 2; path.stroke()
         }
         override func mouseDown(with event: NSEvent) { nextResponder?.mouseDown(with: event) }
-    }
-}
-
-@MainActor
-final class AlbumPromiseWriter: NSObject, @preconcurrency NSPasteboardWriting {
-    private let provider: NSFilePromiseProvider?
-    private let nonce: UUID
-    init(provider: NSFilePromiseProvider?, nonce: UUID) { self.provider = provider; self.nonce = nonce }
-    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
-        (provider?.writableTypes(for: pasteboard) ?? []) + [AlbumDragRegistry.type]
-    }
-    func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
-        type == AlbumDragRegistry.type ? nonce.uuidString : provider?.pasteboardPropertyList(forType: type)
-    }
-    func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
-        type == AlbumDragRegistry.type ? [] : (provider?.writingOptions(forType: type, pasteboard: pasteboard) ?? [])
     }
 }
 

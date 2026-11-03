@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Unattended, filesystem-driven Map/Diff experiments for the phototest account.
 
-No NAS mutation APIs are used. See docs/captures/MAP_DIFF_RUNNER.md.
+No NAS mutation APIs are used. See docs/capturefindings/README.md.
 """
 from __future__ import annotations
 

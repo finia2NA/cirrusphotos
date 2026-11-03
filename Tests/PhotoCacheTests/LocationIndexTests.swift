@@ -10,13 +10,16 @@ private actor InventoryTransport: TestPhotosTransport {
     let supported: Bool
     let offline: Bool
     let changeOnCall: Int?
+    let changedIDs: [Int64]
     var scans = 0
     var changes = 0
     var catalogs = 0
     var failScan = false
     func setScanFailure() { failScan = true }
-    init(items: [PhotoItem], count: Int? = nil, supported: Bool = true, offline: Bool = false, changeOnCall: Int? = nil) {
+    init(items: [PhotoItem], count: Int? = nil, supported: Bool = true, offline: Bool = false, changeOnCall: Int? = nil,
+         changedIDs: [Int64] = [2]) {
         self.items = items; catalogCount = count ?? items.count; self.supported = supported; self.offline = offline; self.changeOnCall = changeOnCall
+        self.changedIDs = changedIDs
     }
     func login(credentials: SynologyCredentials) async throws { if offline { throw SynologyAPIError.transport("fixture offline") } }
     func diffVersion(space: PhotoSpace) async throws -> DiffCursor {
@@ -25,7 +28,7 @@ private actor InventoryTransport: TestPhotosTransport {
     }
     func changes(since cursor: DiffCursor, space: PhotoSpace) async throws -> PhotoDiff {
         changes += 1
-        return .init(cursor: .init(diffVersion: Int64(changes + 1), versionTime: Int64(changes + 1)), modifiedItemIDs: changeOnCall == changes ? [2] : [], deletedItemIDs: [])
+        return .init(cursor: .init(diffVersion: Int64(changes + 1), versionTime: Int64(changes + 1)), modifiedItemIDs: changeOnCall == changes ? changedIDs : [], deletedItemIDs: [])
     }
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
         catalogs += 1
@@ -81,6 +84,19 @@ final class LocationIndexTests: XCTestCase, @unchecked Sendable {
         let counts = await transport.counts()
         XCTAssertEqual(counts.scans, 0); XCTAssertEqual(counts.catalogs, 0); XCTAssertEqual(counts.changes, 1)
         XCTAssertTrue(output.contains { if case .cached = $0 { true } else { false } })
+    }
+    func testDiffAddingAnItemKeepsTheInventoryWithoutAScan() async throws {
+        let root = temporaryTestRoot("inventory-diff-add"); defer { try? FileManager.default.removeItem(at: root) }
+        let first = try repository(root: root, transport: InventoryTransport(items: [item(1, located: true)]))
+        _ = await events(first)
+        let transport = try InventoryTransport(items: [item(1, located: true), item(3, located: true)], changeOnCall: 1, changedIDs: [3])
+        let second = try repository(root: root, transport: transport)
+        let output = await events(second)
+        XCTAssertEqual(completed(output)?.map(\.id).sorted(), [1, 3])
+        let state = try await second.store.metadataState(second.personalMetadataNamespace)
+        XCTAssertTrue(state.inventoryComplete)
+        let counts = await transport.counts()
+        XCTAssertEqual(counts.scans, 0)
     }
     func testOfflineKeepsCachedPinsWithoutClaimingCompleteCurrentCoverage() async throws {
         let root = temporaryTestRoot("inventory-offline"); defer { try? FileManager.default.removeItem(at: root) }

@@ -19,6 +19,10 @@ final class PhotoUploadTests: XCTestCase {
         XCTAssertEqual(album.action, "ignore")
         XCTAssertEqual(album.id, 11)
         XCTAssertEqual(album.unitID, 12)
+        for space in [PhotoSpace.personal, .shared] {
+            let folder = try await client.uploadPhoto(at: url, destination: .folder(1568, space: space), progress: { _ in })
+            XCTAssertEqual(folder.id, 13)
+        }
     }
 }
 
@@ -49,6 +53,18 @@ private final class UploadFixtureProtocol: URLProtocol, @unchecked Sendable {
             let text = String(decoding: body, as: UTF8.self)
             XCTAssertTrue(text.contains("name=\"file\""))
             XCTAssertTrue(text.contains("name=\"duplicate\"\r\n\r\n\"ignore\""))
+            if query.first(where: { $0.name == "method" })?.value == "upload_to_folder" {
+                XCTAssertTrue(text.contains("name=\"method\"\r\n\r\nupload_to_folder"))
+                XCTAssertTrue(text.contains("name=\"target_folder_id\"\r\n\r\n1568"))
+                XCTAssertFalse(text.contains("name=\"folder\""))
+                XCTAssertFalse(text.contains("name=\"uploadDestination\""))
+                XCTAssertTrue(["SYNO.Foto.Upload.Item", "SYNO.FotoTeam.Upload.Item"].contains(api))
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: Data(#"{"success":true,"data":{"action":"new","id":13,"unit_id":14}}"#.utf8))
+                client?.urlProtocolDidFinishLoading(self)
+                return
+            }
             XCTAssertTrue(text.contains("name=\"folder\"\r\n\r\n[\"PhotoLibrary\"]"))
             if api == "SYNO.FotoTeam.Upload.Item" {
                 XCTAssertTrue(text.contains("name=\"uploadDestination\"\r\n\r\n\"timeline\""))

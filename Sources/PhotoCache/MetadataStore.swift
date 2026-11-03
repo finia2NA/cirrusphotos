@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import OSLog
 import SynologyAPI
 import TimelineCore
 
@@ -112,8 +113,13 @@ extension DiskCache {
         try writeState(db, namespace, revision: prior.revision + 1, resetEpoch: prior.resetEpoch,
                        cursor: prior.cursor, inventoryComplete: prior.inventoryComplete, proofRun: prior.proofRun)
     }
-    private func markInventoryIncomplete(_ db: Database, _ namespace: String) throws {
-        try MetadataStateRecord.filter(key: namespace).updateAll(db) { $0.inventoryComplete.set(to: false) }
+    private func markInventoryIncomplete(_ db: Database, _ namespace: String, cause: @autoclosure () -> String) throws {
+        let cleared = try MetadataStateRecord.filter { $0.namespace == namespace && $0.inventoryComplete }
+            .updateAll(db) { $0.inventoryComplete.set(to: false) }
+        if cleared > 0 {
+            let scope = namespace.split(separator: "|").last.map(String.init) ?? "?", reason = cause()
+            SynologyDiagnostics.diff.notice("\(scope, privacy: .public) inventory marked incomplete: \(reason, privacy: .public)")
+        }
     }
 
     // MARK: Summaries
@@ -159,8 +165,37 @@ extension DiskCache {
     public func storeMetadataFolderDirectory(_ value: FolderDirectory, namespace: MetadataNamespace, id: Int64, currentRun: String, admission: MetadataStoreAdmission) throws {
         try metadataWrite { db in
             try admit(admission, namespace: namespace, db)
+            let previous = try FolderDirectoryRecord.row(namespace, id).fetchOne(db)?.payload
             try FolderDirectoryRecord(namespace: namespace.key, folderID: id, payload: value, validatedRun: currentRun)
                 .insert(db, onConflict: .replace)
+            // A changed listing can change the folder's cover and those of its ancestors, nothing else.
+            if let previous, previous != value {
+                var affected: Set<Int64> = [id]
+                var parent = value.folder.parent
+                while affected.count < 64, affected.insert(parent).inserted,
+                      let next = try FolderDirectoryRecord.row(namespace, parent).fetchOne(db) { parent = next.payload.folder.parent }
+                try FolderCoverRecord.filter { $0.namespace == namespace.key && affected.contains($0.folderID) }
+                    .updateAll(db) { $0.validatedRun.set(to: nil) }
+            }
+        }
+    }
+
+    public func metadataFolderCovers(_ namespace: MetadataNamespace, id: Int64) throws -> (covers: [ThumbnailInfo], validatedRun: String?)? {
+        try database.read { try FolderCoverRecord.row(namespace, id).fetchOne($0) }.map { ($0.payload, $0.validatedRun) }
+    }
+    public func storeMetadataFolderCovers(_ covers: [ThumbnailInfo], namespace: MetadataNamespace, id: Int64, currentRun: String,
+                                          admission: MetadataStoreAdmission) throws {
+        // Derived display data: it needs reset fencing, not revision fencing, and holds no media to trim.
+        try metadataWrite(enforceBudget: false) { db in
+            try admitLifetime(admission, namespace: namespace)
+            try FolderCoverRecord(namespace: namespace.key, folderID: id, payload: covers, validatedRun: currentRun)
+                .insert(db, onConflict: .replace)
+        }
+    }
+    public func invalidateMetadataFolderCovers(namespace: MetadataNamespace, admission: MetadataStoreAdmission) throws {
+        try metadataWrite(enforceBudget: false) { db in
+            try admitLifetime(admission, namespace: namespace)
+            try FolderCoverRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
         }
     }
 
@@ -292,7 +327,10 @@ extension DiskCache {
             let key = CollectionKey(namespace: namespace, collection: page.address.collection)
             guard let expectedDay = try CollectionDayRecord.row(key, day: page.address.day.id).fetchOne(db)?.membershipGeneration,
                   expectedDay >= 0, UInt64(expectedDay) == page.membershipGeneration else { throw MetadataAdmissionError.superseded }
-            for item in items { try storeMetadataItem(db, item, profile: profile, namespace: namespace, currentRun: currentRun, epoch: admission.resetEpoch, revision: admission.revision) }
+            for item in items {
+                try storeMetadataItem(db, item, profile: profile, namespace: namespace, currentRun: currentRun, epoch: admission.resetEpoch,
+                                      revision: admission.revision, origin: "\(profile.rawValue) page \(page.address.collection.rawValue)")
+            }
             try storeMetadataMembership(db, page, ids: items.map(\.id), namespace: namespace, currentRun: currentRun, admission: admission)
         }
     }
@@ -328,7 +366,12 @@ extension DiskCache {
             for entry in entries {
                 let known = try ItemIndexRecord.row(namespace, entry.id).fetchOne(db)
                 let currentLocation = known.map { $0.captureTime == entry.time && $0.epoch == admission.resetEpoch && $0.profile != identityOnly } ?? false
-                if !currentLocation { try markInventoryIncomplete(db, namespace.key) }
+                if !currentLocation {
+                    let reason = known.map { "identity page \(page.address.collection.rawValue) lists an item with profile \($0.profile), "
+                        + "epoch \($0.epoch) of \(admission.resetEpoch), time changed \($0.captureTime != entry.time)" }
+                        ?? "identity page \(page.address.collection.rawValue) lists an unindexed item"
+                    try markInventoryIncomplete(db, namespace.key, cause: reason)
+                }
                 var index = known ?? ItemIndexRecord(namespace: namespace.key, itemID: entry.id, captureTime: entry.time, projection: nil,
                                                      profile: identityOnly, epoch: -1, identityEpoch: admission.resetEpoch)
                 if index.captureTime != entry.time { index.epoch = -1 }
@@ -344,12 +387,15 @@ extension DiskCache {
         }
     }
 
+    /// `origin` names the writer for diagnostics; nil marks an applied Diff interval, which
+    /// accounts for every item it adds, so it keeps a complete inventory complete.
     private func storeMetadataItem(_ db: Database, _ item: PhotoItem, profile: ItemFieldProfile, namespace: MetadataNamespace,
-                                   currentRun: String, epoch: Int64, revision: Int64) throws {
+                                   currentRun: String, epoch: Int64, revision: Int64, origin: String?) throws {
         _ = try CaptureDay(time: item.time)
         let known = try ItemIndexRecord.row(namespace, item.id).fetchOne(db)
-        if known == nil || (profile == .identityAndTime && known?.captureTime != item.time) {
-            try markInventoryIncomplete(db, namespace.key)
+        if let origin, known == nil || (profile == .identityAndTime && known?.captureTime != item.time) {
+            try markInventoryIncomplete(db, namespace.key, cause: known == nil ? "\(origin) stored an unindexed item"
+                                        : "\(origin) changed an item's capture time")
         }
         // Only a requested GPS profile may replace the compact projection with absent GPS.
         var index: ItemIndexRecord
@@ -475,7 +521,7 @@ extension DiskCache {
                     dirtyDays.insert(try CaptureDay(time: old.payload.time)); dirtyDays.insert(try CaptureDay(time: item.time))
                 }
                 try storeMetadataItem(db, item, profile: .fullPage, namespace: namespace, currentRun: currentRun,
-                                      epoch: admission.resetEpoch, revision: admission.revision)
+                                      epoch: admission.resetEpoch, revision: admission.revision, origin: "detail read")
             }
             if !dirtyDays.isEmpty {
                 let days = dirtyDays.map(\.id)
@@ -638,7 +684,8 @@ extension DiskCache {
             }
             try deleteItems(db, namespace, ids: deletedIDs)
             for item in replacements {
-                try storeMetadataItem(db, item, profile: .fullPage, namespace: namespace, currentRun: currentRun, epoch: epoch, revision: revision)
+                try storeMetadataItem(db, item, profile: .fullPage, namespace: namespace, currentRun: currentRun, epoch: epoch, revision: revision,
+                                      origin: nil)
             }
             if !favorites.isEmpty, !invalidateAll { try applyFavoriteEvents(db, favorites, namespace: namespace, currentRun: currentRun) }
             try writeState(db, namespace, revision: revision, resetEpoch: epoch, cursor: cursor,
@@ -686,6 +733,7 @@ extension DiskCache {
             try CollectionStateRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
             try AlbumSummariesRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
             try FolderDirectoryRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try FolderCoverRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
             try CollectionSummaryRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
             try CollectionDayRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.membershipGeneration += 1 }
             try advanceMetadataLocalRevision(db, namespace)
@@ -702,6 +750,7 @@ extension DiskCache {
             try CollectionStateRecord.updateAll(db) { $0.validatedRun.set(to: nil) }
             try AlbumSummariesRecord.updateAll(db) { $0.validatedRun.set(to: nil) }
             try FolderDirectoryRecord.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try FolderCoverRecord.updateAll(db) { $0.validatedRun.set(to: nil) }
             try CollectionSummaryRecord.updateAll(db) { $0.validatedRun.set(to: nil) }
             try DayPageRecord.updateAll(db) { $0.validatedRun.set(to: nil) }
             try ItemDetailRecord.updateAll(db) { $0.annotationRun.set(to: nil) }
@@ -801,7 +850,7 @@ extension DiskCache {
                 try PageItemRecord.page(of: page).deleteAll(db)
                 try page.delete(db)
             case .index(let index):
-                try markInventoryIncomplete(db, index.namespace)
+                try markInventoryIncomplete(db, index.namespace, cause: "cache budget evicted an item index row")
                 try index.delete(db)
             case .collection(let state):
                 try MetadataStateRecord.filter(key: state.namespace).updateAll(db) { $0.revision += 1 }
@@ -919,6 +968,11 @@ private extension CollectionSummaryRecord {
     }
 }
 private extension FolderDirectoryRecord {
+    static func row(_ namespace: MetadataNamespace, _ id: Int64) -> QueryInterfaceRequest<Self> {
+        filter { $0.namespace == namespace.key && $0.folderID == id }
+    }
+}
+private extension FolderCoverRecord {
     static func row(_ namespace: MetadataNamespace, _ id: Int64) -> QueryInterfaceRequest<Self> {
         filter { $0.namespace == namespace.key && $0.folderID == id }
     }

@@ -14,13 +14,14 @@ extension CachedPhotosRepository {
         switch destination {
         case .timeline(let target): space = target
         case .album: space = .personal
+        case .folder(_, let target): space = target
         }
         try await reconcileMetadataSource(for: .library(space))
-        try await invalidateUploadLibrary(space)
+        try await invalidateUploadCollection(.library(space))
         let result: Result<PhotoUploadResult, Error>
         do {
             switch destination {
-            case .timeline:
+            case .timeline, .folder:
                 result = .success(try await client.uploadPhoto(at: url, destination: destination, progress: progress))
             case .album(let id):
                 let value = try await performAlbumMutation(albumID: id) { repository in
@@ -34,7 +35,8 @@ extension CachedPhotosRepository {
                 result = .success(value)
             }
         } catch { result = .failure(error) }
-        let refresh = Task { try await self.refreshAfterUpload(space) }
+        let folder = destination.folderCollection
+        let refresh = Task { try await self.refreshAfterUpload(space, folder: folder) }
         do { try await refresh.value }
         catch {
             if case .success = result { throw RepositoryError.unconfirmed("The upload finished, but the library could not be refreshed. Check the library before retrying.") }
@@ -42,8 +44,35 @@ extension CachedPhotosRepository {
         return try result.get()
     }
 
-    private func invalidateUploadLibrary(_ space: PhotoSpace) async throws {
-        let collection = PhotoCollectionDescriptor.library(space)
+    /// Delays between checks for the generated thumbnails of freshly uploaded items. The schedule
+    /// ends after about 70 seconds; a NAS that is still busy then is left to the next refresh.
+    public static let uploadThumbnailPollDelays: [Duration] = [.seconds(3), .seconds(5), .seconds(10), .seconds(20), .seconds(30)]
+
+    /// The NAS generates thumbnails after an upload, so the refresh that follows it usually
+    /// records them as not ready. Reads the items by ID on a bounded schedule and, once every
+    /// thumbnail is ready, re-reads the affected collections. Returns whether that happened.
+    /// Cancellation ends the schedule; failed checks are skipped.
+    public func refreshWhenUploadedThumbnailsAreReady(
+        itemIDs: [Int64], destination: PhotoUploadDestination,
+        delays: [Duration] = CachedPhotosRepository.uploadThumbnailPollDelays
+    ) async throws -> Bool {
+        let ids = Array(Set(itemIDs))
+        guard !ids.isEmpty, ids.count <= 1_000 else { return false }
+        for delay in delays {
+            try await Task.sleep(for: delay)
+            guard let items = try? await client.items(ids: ids, space: destination.space),
+                  items.count == ids.count,
+                  items.allSatisfy({ item in
+                      guard let thumbnail = item.additional?.thumbnail else { return false }
+                      return ThumbnailSize.allCases.allSatisfy(thumbnail.isReady)
+                  }) else { continue }
+            try await refreshAfterUpload(destination.space, folder: destination.folderCollection)
+            return true
+        }
+        return false
+    }
+
+    private func invalidateUploadCollection(_ collection: PhotoCollectionDescriptor) async throws {
         metadata.mutationEpochs[collection, default: 0] &+= 1
         metadata.timelineJobs.removeValue(forKey: collection)?.task.cancel()
         metadata.collectionRecoveries.removeValue(forKey: collection)?.task.cancel()
@@ -53,11 +82,33 @@ extension CachedPhotosRepository {
         publishMetadataInvalidation(collection: collection)
     }
 
-    private func refreshAfterUpload(_ space: PhotoSpace) async throws {
-        try await invalidateUploadLibrary(space)
+    /// A folder upload also changes the space library, so both are invalidated and re-read.
+    private func refreshAfterUpload(_ space: PhotoSpace, folder: PhotoCollectionDescriptor?) async throws {
+        let library = PhotoCollectionDescriptor.library(space)
+        try await invalidateUploadCollection(library)
+        if let folder { try await invalidateUploadCollection(folder) }
+        if folder != nil {
+            let namespace = metadataNamespace(for: library)
+            try? await store.invalidateMetadataFolderCovers(namespace: namespace, admission: try await store.metadataAdmission(namespace))
+        }
         try await reconcileMetadataSource(space: space, force: true)
-        let collection = PhotoCollectionDescriptor.library(space)
-        let snapshot = try await verifiedTimelineSnapshot(collection: collection)
-        publishTimelineProjection(snapshot, collection: collection)
+        for collection in [library] + [folder].compactMap({ $0 }) {
+            let snapshot = try await verifiedTimelineSnapshot(collection: collection)
+            publishTimelineProjection(snapshot, collection: collection)
+        }
+    }
+}
+
+private extension PhotoUploadDestination {
+    var space: PhotoSpace {
+        switch self {
+        case .timeline(let space), .folder(_, let space): space
+        case .album: .personal
+        }
+    }
+
+    var folderCollection: PhotoCollectionDescriptor? {
+        if case .folder(let id, let space) = self { return .folder(id, space: space) }
+        return nil
     }
 }

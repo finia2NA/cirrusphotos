@@ -330,7 +330,8 @@ struct DownloadsToolbarControl: View {
     @ObservedObject private var downloads = PhotoDownloadManager.shared
     var body: some View {
         Button { downloads.isPresented.toggle() } label: {
-            Image(systemName: downloads.hasActiveJobs ? "arrow.down.circle.fill" : "arrow.down.circle")
+            Label("Downloads", systemImage: downloads.hasActiveJobs ? "arrow.down.circle.fill" : "arrow.down.circle")
+                .labelStyle(.iconOnly)
         }
             .help("Downloads")
             .accessibilityLabel("Downloads")

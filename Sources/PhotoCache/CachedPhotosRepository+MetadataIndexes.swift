@@ -5,7 +5,7 @@ extension CachedPhotosRepository {
     /// Finite index/directory reads share admission, cached delivery and subscriber
     /// ownership. Each caller retains its typed storage and NAS fetch contract.
     func metadataIndex<Key: Hashable & Sendable, Value: Sendable>(
-        key: Key, space: PhotoSpace, name: String, guardsPeopleMutations: Bool = false,
+        key: Key, space: PhotoSpace, name: String, guardsPeopleMutations: Bool = false, priority: RequestPriority = .visible,
         jobs: (WritableKeyPath<MetadataEngineState, [Key: SharedJob<Value>]> & Sendable),
         cached: @escaping @Sendable (DiskCache, MetadataNamespace) async throws -> (Value, String?)?,
         fetch: @escaping @Sendable (any PhotosTransport) async throws -> Value,
@@ -38,7 +38,7 @@ extension CachedPhotosRepository {
                             try await connect()
                             try await reconcileMetadataSource(for: .library(space))
                             let admission = try await store.metadataAdmission(namespace)
-                            let value = try await metadataReadRequest(priority: .visible, id: id) { try await fetch(client) }
+                            let value = try await metadataReadRequest(priority: priority, id: id) { try await fetch(client) }
                             try Task.checkCancellation()
                             guard isAdmitted(epoch), metadata[keyPath: jobs][key]?.id == id else { throw MetadataAdmissionError.superseded }
                             try await persist(store, namespace, value, validation, admission)

@@ -141,7 +141,7 @@ struct AppShellView: View {
         .background(DownloadCloseGuard().frame(width: 0, height: 0))
         .toolbar(removing: .title)
         .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
-        .toolbar { applicationToolbar }
+        .toolbar(id: "main") { applicationToolbar.customizationBehavior(.disabled) }
         .onExitCommand {
             model.navigateBack()
         }
@@ -499,10 +499,12 @@ struct AppShellView: View {
         if restoredPath != folderPath { folderPath = restoredPath; return }
         let id = folderPath.last ?? 0
         folderDirectory = nil; folderDirectoryRequest = id; folderError = nil
+        let started = ContinuousClock.now
         for await event in await repository.folderDirectory(id: id, space: selectedSpace) {
             guard !Task.isCancelled, id == (folderPath.last ?? 0) else { return }
             switch event {
-            case .value(let directory, _):
+            case .value(let directory, let verified):
+                SynologyDiagnostics.folders.info("directory folder=\(id, privacy: .public) children=\(directory.children.count, privacy: .public) verified=\(verified, privacy: .public) elapsed=\(String(describing: ContinuousClock.now - started), privacy: .public)")
                 folderDirectory = directory
                 model.ensureCollectionLoaded(PhotoCollectionDescriptor.folder(directory.folder.id, space: selectedSpace))
             case .failure(let message): folderError = message.localizedDescription
@@ -524,6 +526,7 @@ struct AppShellView: View {
                     bridge: browserBridge, pinnedAlbumIDs: albumPresentation.pinnedIDs, contentTopInset: topInset,
                     hidesEmptyCollectionState: !directory.children.isEmpty,
                     customHeader: folderHeader(directory.children),
+                    uploadFolderName: directory.folder.displayName,
                     onOpenPhoto: openPhoto,
                     onRestorationAnchorChanged: { anchor in
                         guard !collection.isSessionDerived else { return }
@@ -783,133 +786,38 @@ struct AppShellView: View {
                                     selectOnCompletion: selectOnCompletion)
     }
 
+    /// Items keep one stable id across navigation states so AppKit reuses them instead of
+    /// recreating the toolbar when a viewer or collection opens or closes.
     @ToolbarContentBuilder
-    private var applicationToolbar: some ToolbarContent {
-        if selectedDestination == .personalLibrary && viewer == nil {
-            if showsFolders && !folderPath.isEmpty {
-                ToolbarItem(placement: .navigation) {
-                    Button(action: folderBack) {
-                        Image(systemName: "chevron.left")
-                            .frame(width: ToolbarMetrics.controlHeight, height: ToolbarMetrics.controlHeight)
-                            .contentShape(.circle)
-                    }
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: Circle())
-                    .accessibilityLabel("Back to Parent Folder")
-                    .help("Back to Parent Folder")
-                }
-                .sharedBackgroundVisibility(.hidden)
-            }
-            spaceSelectorToolbar
-            ToolbarItem(placement: .navigation) {
-                Button { showsFolders.toggle() } label: {
-                    Image(systemName: showsFolders ? "photo.on.rectangle" : "folder")
-                }
-                .help(showsFolders ? "Show Timeline" : "Browse Folders")
-                .accessibilityLabel(showsFolders ? "Show Timeline" : "Browse Folders")
-            }
-        }
-        if let viewer {
-            ToolbarItem(placement: .navigation) {
-                Button(action: closeViewer) {
+    private var applicationToolbar: some CustomizableToolbarContent {
+        leadingToolbar
+        titleToolbar
+        primaryToolbar
+        statusToolbar
+    }
+
+    @ToolbarContentBuilder
+    private var leadingToolbar: some CustomizableToolbarContent {
+        let inViewer = viewer != nil
+        let collection = inViewer ? nil : selectedCollection
+        let isVideo = viewer?.state?.item?.isVideo == true
+
+        if let (label, action) = toolbarBackAction {
+            ToolbarItem(id: "back", placement: .navigation) {
+                Button(action: action) {
                     Image(systemName: "chevron.left")
-                        .frame(width: ToolbarMetrics.controlHeight,
-                               height: ToolbarMetrics.controlHeight)
+                        .frame(width: ToolbarMetrics.controlHeight, height: ToolbarMetrics.controlHeight)
                         .contentShape(.circle)
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: Circle())
-                .accessibilityLabel("Back to Library")
-                .help("Back to Library")
+                .accessibilityLabel(label)
+                .help(label)
             }
             .sharedBackgroundVisibility(.hidden)
-            if viewer.state?.item?.isVideo != true {
-                ToolbarItem(placement: .navigation) {
-                    ViewerZoomControl(viewer: viewer)
-                }
-            }
-            ToolbarItem(placement: .principal) {
-                ViewerToolbarTitle(viewer: viewer)
-            }
-            .sharedBackgroundVisibility(.hidden)
-            ToolbarSpacer(.flexible, placement: .primaryAction)
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button { model.showsFilmstrip.toggle() } label: {
-                    Image(systemName: model.showsFilmstrip ? "film.fill" : "film")
-                        .foregroundStyle(model.showsFilmstrip ? Color.accentColor : Color.primary)
-                }
-                .help(model.showsFilmstrip ? "Hide Filmstrip" : "Show Filmstrip")
-                .accessibilityLabel(model.showsFilmstrip ? "Hide Filmstrip" : "Show Filmstrip")
-                Button { model.showsHistogram.toggle() } label: {
-                    Image(systemName: "chart.bar.xaxis")
-                        .foregroundStyle(model.showsHistogram ? Color.accentColor : Color.primary)
-                }
-                .help(model.showsHistogram ? "Hide Histogram" : "Show Histogram")
-                .accessibilityLabel(model.showsHistogram ? "Hide Histogram" : "Show Histogram")
-                Button { model.showsHighlightPeaking.toggle() } label: {
-                    Image(systemName: "circle.lefthalf.striped.horizontal")
-                        .foregroundStyle(model.showsHighlightPeaking ? Color.accentColor : Color.primary)
-                }
-                .help(model.showsHighlightPeaking ? "Hide Highlight Peaking" : "Show Highlight Peaking")
-                .accessibilityLabel(model.showsHighlightPeaking ? "Hide Highlight Peaking" : "Show Highlight Peaking")
-                if viewer.state?.item?.isVideo == true {
-                    Button { preferences.videoMuted.toggle() } label: {
-                        Image(systemName: preferences.videoMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    }
-                    .help(preferences.videoMuted ? "Unmute Video" : "Mute Video")
-                    .accessibilityLabel(preferences.videoMuted ? "Unmute Video" : "Mute Video")
-                }
-                if viewer.state?.item?.isVideo != true {
-                    ViewerRotationControls(viewer: viewer)
-                        .frame(height: ToolbarMetrics.controlHeight)
-                }
-                ViewerFavoriteControl(viewer: viewer)
-                    .frame(height: ToolbarMetrics.controlHeight)
-                InfoPanelToolbarControl()
-                    .frame(height: ToolbarMetrics.controlHeight)
-            }
-            ToolbarSpacer(.fixed, placement: .primaryAction)
-        } else if let collection = selectedCollection {
-            collectionToolbar(collection)
-        } else {
-            if selectedDestination != .albums { collectionBackToolbar }
-            // Personal Library already adds the selector at the top of this builder.
-            if selectedDestination != .albums && selectedDestination != .personalLibrary { spaceSelectorToolbar }
-            if showsCardGrid {
-                ToolbarItem(placement: .navigation) {
-                    LibrarySizeControl(value: $preferences.itemsPerRow)
-                }
-            }
-            ToolbarItem(placement: .principal) {
-                Color.clear
-                    .frame(width: 1, height: 1)
-                    .accessibilityHidden(true)
-            }
-            .sharedBackgroundVisibility(.hidden)
-            ToolbarSpacer(.flexible, placement: .primaryAction)
-            if selectedDestination == .albums {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(action: model.beginEmptyAlbumCreation) {
-                        Image(systemName: "plus")
-                    }
-                    .help("New Album")
-                    .accessibilityLabel("New Album")
-                    .disabled(model.repository == nil || model.albumOperation != nil)
-                }
-            }
         }
-
-        ToolbarItem(placement: .primaryAction) { UploadsToolbarControl() }
-        ToolbarItem(placement: .primaryAction) { DownloadsToolbarControl() }
-        ToolbarItem(placement: .primaryAction) {
-            ConnectionToolbarItem()
-        }
-    }
-
-    @ToolbarContentBuilder
-    private var spaceSelectorToolbar: some ToolbarContent {
-        if selectedDestination != .albums {
-            ToolbarItem(placement: .navigation) {
+        if !inViewer && selectedDestination != .albums {
+            ToolbarItem(id: "space", placement: .navigation) {
                 Picker("Space", selection: $navigation.selectedSpace) {
                     Text("Personal Space").tag(PhotoSpace.personal)
                     Text("Shared Space").tag(PhotoSpace.shared)
@@ -918,32 +826,149 @@ struct AppShellView: View {
                 .fixedSize()
             }
         }
-    }
-
-    @ToolbarContentBuilder
-    private func collectionToolbar(_ collection: PhotoCollectionDescriptor) -> some ToolbarContent {
-            collectionBackToolbar
-            if selectedDestination != .personalLibrary { spaceSelectorToolbar }
-            ToolbarItem(placement: .navigation) {
+        if !inViewer && selectedDestination == .personalLibrary {
+            ToolbarItem(id: "folders", placement: .navigation) {
+                Button { showsFolders.toggle() } label: {
+                    Image(systemName: showsFolders ? "photo.on.rectangle" : "folder")
+                }
+                .help(showsFolders ? "Show Timeline" : "Browse Folders")
+                .accessibilityLabel(showsFolders ? "Show Timeline" : "Browse Folders")
+            }
+        }
+        if let viewer, !isVideo {
+            ToolbarItem(id: "zoom", placement: .navigation) {
+                ViewerZoomControl(viewer: viewer)
+            }
+        }
+        if !inViewer && (collection != nil || showsCardGrid) {
+            ToolbarItem(id: "size", placement: .navigation) {
                 LibrarySizeControl(value: $preferences.itemsPerRow)
             }
-            ToolbarItem(placement: .navigation) {
+        }
+        if collection != nil {
+            ToolbarItem(id: "shape", placement: .navigation) {
                 BrowserThumbnailShapeControl(preferences: preferences)
                     .frame(height: ToolbarMetrics.controlHeight)
             }
-            collectionTitleToolbar
-            ToolbarSpacer(.flexible, placement: .primaryAction)
-            ToolbarItemGroup(placement: .primaryAction) {
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var titleToolbar: some CustomizableToolbarContent {
+        ToolbarItem(id: "title", placement: .principal) {
+            toolbarTitle(collection: viewer == nil ? selectedCollection : nil)
+        }
+        .sharedBackgroundVisibility(.hidden)
+    }
+
+    @ToolbarContentBuilder
+    private var primaryToolbar: some CustomizableToolbarContent {
+        let inViewer = viewer != nil
+        let collection = inViewer ? nil : selectedCollection
+        let isVideo = viewer?.state?.item?.isVideo == true
+
+        ToolbarSpacer(.flexible, placement: .primaryAction)
+        if let viewer {
+            ToolbarItem(id: "overlays", placement: .primaryAction) {
+                ViewerOverlayControls(model: model)
+            }
+            .sharedBackgroundVisibility(.hidden)
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+            if isVideo {
+                ToolbarItem(id: "mute", placement: .primaryAction) {
+                    Button { preferences.videoMuted.toggle() } label: {
+                        Label(preferences.videoMuted ? "Unmute Video" : "Mute Video",
+                              systemImage: preferences.videoMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .labelStyle(.iconOnly)
+                    }
+                    .help(preferences.videoMuted ? "Unmute Video" : "Mute Video")
+                    .accessibilityLabel(preferences.videoMuted ? "Unmute Video" : "Mute Video")
+                }
+            } else {
+                ToolbarItem(id: "rotate", placement: .primaryAction) {
+                    ViewerRotationControls(viewer: viewer)
+                        .frame(height: ToolbarMetrics.controlHeight)
+                }
+            }
+            ToolbarItem(id: "favorite", placement: .primaryAction) {
+                ViewerFavoriteControl(viewer: viewer)
+                    .frame(height: ToolbarMetrics.controlHeight)
+            }
+        } else if let collection {
+            ToolbarItem(id: "filter", placement: .primaryAction) {
                 LibraryFilterToolbarControl()
                     .frame(height: ToolbarMetrics.controlHeight)
+            }
+            ToolbarItem(id: "rotate", placement: .primaryAction) {
                 BrowserRotationControls(model: model)
                     .frame(height: ToolbarMetrics.controlHeight)
+            }
+            ToolbarItem(id: "favorite", placement: .primaryAction) {
                 BrowserFavoriteControl(model: model, collection: collection)
                     .frame(height: ToolbarMetrics.controlHeight)
+            }
+        } else if selectedDestination == .albums {
+            ToolbarItem(id: "newAlbum", placement: .primaryAction) {
+                Button(action: model.beginEmptyAlbumCreation) {
+                    Label("New Album", systemImage: "plus")
+                        .labelStyle(.iconOnly)
+                }
+                .help("New Album")
+                .accessibilityLabel("New Album")
+                .disabled(model.repository == nil || model.albumOperation != nil)
+            }
+        }
+        if inViewer || collection != nil {
+            ToolbarItem(id: "info", placement: .primaryAction) {
                 InfoPanelToolbarControl()
                     .frame(height: ToolbarMetrics.controlHeight)
             }
             ToolbarSpacer(.fixed, placement: .primaryAction)
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var statusToolbar: some CustomizableToolbarContent {
+        ToolbarItem(id: "uploads", placement: .primaryAction) { UploadsToolbarControl() }
+        ToolbarItem(id: "downloads", placement: .primaryAction) { DownloadsToolbarControl() }
+        ToolbarItem(id: "connection", placement: .primaryAction) { ConnectionToolbarItem() }
+    }
+
+    /// The single leading back button: closes the viewer, goes up a folder, or leaves the opened collection.
+    private var toolbarBackAction: (String, () -> Void)? {
+        if viewer != nil { return ("Back to Library", closeViewer) }
+        if selectedDestination == .personalLibrary && showsFolders && !folderPath.isEmpty {
+            return ("Back to Parent Folder", folderBack)
+        }
+        return selectedDestination == .albums ? nil : collectionBackAction
+    }
+
+    @ViewBuilder
+    private func toolbarTitle(collection: PhotoCollectionDescriptor?) -> some View {
+        if let viewer {
+            ViewerToolbarTitle(viewer: viewer)
+        } else if collection != nil, selectedDestination == .personalLibrary && showsFolders {
+            Text(folderDirectory?.folder.displayName ?? "Folders").font(.headline).lineLimit(1)
+        } else if collection != nil, let kind = selectedDestination.indexKind {
+            Text(indexEntries[kind]?.first(where: { $0.id == openedIndexEntryID })?.name ?? IndexOverviewStyle(kind).singular)
+                .font(.headline).lineLimit(1)
+        } else if collection != nil, isAlbumBrowser {
+            Text(sourceCollection.flatMap { model.albumName(for: $0) } ?? "Album")
+                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        } else if collection != nil, isMapFilterBrowser {
+            Text(mapFilterCount == 1 ? "1 Photo at This Location"
+                                     : "\(mapFilterCount) Photos at This Location")
+                .font(.headline)
+                .lineLimit(1)
+        } else if collection != nil, libraryFilter.isActive {
+            Text(libraryFilter.statusText).font(.headline).lineLimit(1)
+        } else {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityHidden(true)
+        }
     }
 
     /// Whether the current destination lists cards (albums, people, subjects, tags, folders) sized by the thumbnail slider.
@@ -959,64 +984,6 @@ struct AppShellView: View {
         if isAlbumBrowser { return ("Back to Albums", closeAlbum) }
         if isMapFilterBrowser { return ("Back to Map", closeMapFilter) }
         return nil
-    }
-
-    @ToolbarContentBuilder
-    private var collectionBackToolbar: some ToolbarContent {
-        if let (label, action) = collectionBackAction {
-            ToolbarItem(placement: .navigation) {
-                Button(action: action) {
-                    Image(systemName: "chevron.left")
-                        .frame(width: ToolbarMetrics.controlHeight, height: ToolbarMetrics.controlHeight)
-                        .contentShape(.circle)
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: Circle())
-                .accessibilityLabel(label).help(label)
-            }.sharedBackgroundVisibility(.hidden)
-        }
-    }
-
-    @ToolbarContentBuilder
-    private var collectionTitleToolbar: some ToolbarContent {
-            if selectedDestination == .personalLibrary && showsFolders {
-                ToolbarItem(placement: .principal) { Text(folderDirectory?.folder.displayName ?? "Folders").font(.headline).lineLimit(1) }
-                .sharedBackgroundVisibility(.hidden)
-            } else if let kind = selectedDestination.indexKind {
-                ToolbarItem(placement: .principal) {
-                    Text(indexEntries[kind]?.first(where: { $0.id == openedIndexEntryID })?.name ?? IndexOverviewStyle(kind).singular)
-                        .font(.headline).lineLimit(1)
-                }
-                .sharedBackgroundVisibility(.hidden)
-            } else if isAlbumBrowser {
-                ToolbarItem(placement: .principal) {
-                    Text(sourceCollection.flatMap { model.albumName(for: $0) } ?? "Album")
-                        .font(.headline)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .sharedBackgroundVisibility(.hidden)
-            } else if isMapFilterBrowser {
-                ToolbarItem(placement: .principal) {
-                    Text(mapFilterCount == 1 ? "1 Photo at This Location"
-                                             : "\(mapFilterCount) Photos at This Location")
-                        .font(.headline)
-                        .lineLimit(1)
-                }
-                .sharedBackgroundVisibility(.hidden)
-            } else if libraryFilter.isActive {
-                ToolbarItem(placement: .principal) {
-                    Text(libraryFilter.statusText).font(.headline).lineLimit(1)
-                }
-                .sharedBackgroundVisibility(.hidden)
-            } else {
-                ToolbarItem(placement: .principal) {
-                    Color.clear
-                        .frame(width: 1, height: 1)
-                        .accessibilityHidden(true)
-                }
-                .sharedBackgroundVisibility(.hidden)
-            }
     }
 
 }

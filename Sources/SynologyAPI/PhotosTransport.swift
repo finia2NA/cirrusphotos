@@ -114,6 +114,7 @@ public struct PhotoDownloadResponse: Sendable {
 public enum PhotoUploadDestination: Sendable {
     case timeline(PhotoSpace)
     case album(Int64)
+    case folder(Int64, space: PhotoSpace)
 }
 
 public struct PhotoUploadResult: Sendable, Decodable {

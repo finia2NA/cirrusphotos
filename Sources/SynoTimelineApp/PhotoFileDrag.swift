@@ -56,17 +56,19 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
         let fileType: UTType = payload.forcesArchive || payload.count > 1 ? .zip :
             (UTType(filenameExtension: URL(fileURLWithPath: payload.filename).pathExtension) ?? .data)
         let delegate = PhotoPromiseDelegate(payload: payload)
-        let provider = NSFilePromiseProvider(fileType: fileType.identifier, delegate: delegate)
+        let provider = LocalHandlePromiseProvider(fileType: fileType.identifier, delegate: delegate)
         provider.userInfo = delegate
         let writer: NSPasteboardWriting
         if let albumCollection {
             let nonce = AlbumDragRegistry.register(collection: albumCollection, namespace: payload.repository.namespace)
             source.localNonce = nonce
-            writer = AlbumPromiseWriter(provider: promisesFile ? provider : nil, nonce: nonce)
+            provider.localType = AlbumDragRegistry.type; provider.nonce = nonce
+            writer = promisesFile ? provider : LocalHandleWriter(type: AlbumDragRegistry.type, nonce: nonce)
         } else if let localSelection {
             let nonce = SelectionDragRegistry.register(localSelection)
             source.selectionNonce = nonce
-            writer = SelectionPromiseWriter(provider: promisesFile ? provider : nil, nonce: nonce)
+            provider.localType = SelectionDragRegistry.type; provider.nonce = nonce
+            writer = promisesFile ? provider : LocalHandleWriter(type: SelectionDragRegistry.type, nonce: nonce)
         } else { writer = provider }
         let item = NSDraggingItem(pasteboardWriter: writer)
         let image = dragPreview(images: Array(previews.prefix(20)), count: payload.count,

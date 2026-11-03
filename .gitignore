@@ -32,10 +32,7 @@ xcuserdata/
 timeline.xctimeline
 playground.xcworkspace/
 
-# Private, resumable Map/Diff experiment data (contains opaque IDs/cursors).
-docs/captures/map-diff-run-*/
-docs/captures/.map-diff-run.lock
-
-# Private mobile API capture evidence.
-docs/captures/android-photos-session-*/
+# Private capture evidence: HARs, runner output, Android proxy captures.
+# Sanitized summaries live in docs/capturefindings/.
+docs/captures/
 .env.test

@@ -148,5 +148,28 @@ final class SharedCollectionIndexesTests: XCTestCase {
         XCTAssertEqual(covers.map(\.unitID), [30, 40, 50, 60])
         let own = await repository.folderCovers(for: try folder(9, parent: 1, cover: 90), space: .personal)
         XCTAssertEqual(own.map(\.unitID), [90])
+        // A folder with its own photo and a subfolder shows its own cover first, then the subfolder's.
+        let mixed = try folder(8, parent: 0, cover: 10)
+        let mixedAdmission = try await repository.store.metadataAdmission(namespace)
+        try await repository.store.storeMetadataFolderDirectory(
+            FolderDirectory(folder: mixed, children: [try folder(3, parent: 8, cover: 30), try folder(4, parent: 8, cover: 40)]),
+            namespace: namespace, id: 8, currentRun: repository.runID, admission: mixedAdmission)
+        let withOwn = await repository.folderCovers(for: mixed, space: .personal)
+        XCTAssertEqual(withOwn.map(\.unitID), [10, 30, 40])
+        // Results persist: they are readable without recomputing, and a changed listing withdraws them.
+        let stored = await repository.cachedFolderCovers(for: top, space: .personal)
+        XCTAssertEqual(stored?.map(\.unitID), [30, 40, 50, 60])
+        let admission = try await repository.store.metadataAdmission(namespace)
+        try await repository.store.storeMetadataFolderDirectory(
+            FolderDirectory(folder: top, children: [try folder(2, parent: 1), try folder(3, parent: 1, cover: 31)]),
+            namespace: namespace, id: 1, currentRun: repository.runID, admission: admission)
+        // The unrelated folder keeps its result for this run; the changed folder's was withdrawn.
+        let unrelated = try await repository.store.metadataFolderCovers(namespace, id: 8)
+        let run = await repository.runID
+        XCTAssertEqual(unrelated?.validatedRun, run)
+        let withdrawn = try await repository.store.metadataFolderCovers(namespace, id: 1)
+        XCTAssertNil(withdrawn?.validatedRun)
+        let recomputed = await repository.folderCovers(for: top, space: .personal)
+        XCTAssertEqual(recomputed.map(\.unitID), [31, 40, 50, 60])
     }
 }

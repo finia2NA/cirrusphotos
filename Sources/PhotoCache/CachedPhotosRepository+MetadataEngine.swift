@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import SynologyAPI
 
 extension CachedPhotosRepository {
@@ -27,6 +28,10 @@ extension CachedPhotosRepository {
         try await store.initializeMetadataStore()
         try requireAdmission(epoch)
         metadata.initialized = true
+        for space in PhotoSpace.allCases {
+            guard let state = try? await store.metadataState(metadataNamespace(for: space)) else { continue }
+            SynologyDiagnostics.diff.notice("\(space.rawValue, privacy: .public) stored at launch: inventoryComplete=\(state.inventoryComplete, privacy: .public) cursor=\(state.cursor != nil, privacy: .public)")
+        }
     }
 
     /// Every destination of a space joins this source job. Personal Space also reads the
@@ -56,6 +61,7 @@ extension CachedPhotosRepository {
             }
             do {
                 guard let cursor = prior.cursor else {
+                    SynologyDiagnostics.diff.notice("\(space.rawValue, privacy: .public) has no stored cursor; starting a new reset epoch")
                     let boundary = try await metadataSourceRequest { try await client.diffVersion(space: space) }
                     try requireMetadataEngineAdmission(space, epoch: epoch, id: id)
                     try await store.applyMetadataChanges(namespace: namespace, cursor: boundary, replacements: [], deletedIDs: [], affectedDays: [],
@@ -69,7 +75,8 @@ extension CachedPhotosRepository {
                 let favoriteEvents = try await events(since: cursor)
                 try requireMetadataEngineAdmission(space, epoch: epoch, id: id)
                 guard interval.isBoundedTerminal, favoriteEvents.isBoundedTerminal else {
-                    try await recoverMetadataSource(space, admission: admission, epoch: epoch, id: id)
+                    try await recoverMetadataSource(space, reason: "interval not bounded and terminal: items \(interval.summary) events \(favoriteEvents.summary)",
+                                                    admission: admission, epoch: epoch, id: id)
                     return
                 }
                 if interval.isEmpty && favoriteEvents.isEmpty {
@@ -85,7 +92,8 @@ extension CachedPhotosRepository {
                     let ids = Array(interval.modifiedItemIDs[start..<end])
                     let items = try await metadataSourceRequest { try await client.items(ids: ids, space: space) }
                     guard items.count == ids.count, Set(items.map(\.id)) == Set(ids) else {
-                        try await recoverMetadataSource(space, admission: admission, epoch: epoch, id: id)
+                        try await recoverMetadataSource(space, reason: "item lookup returned \(Set(items.map(\.id)).intersection(ids).count) of \(ids.count) modified items",
+                                                        admission: admission, epoch: epoch, id: id)
                         return
                     }
                     replacements.append(contentsOf: items)
@@ -102,7 +110,8 @@ extension CachedPhotosRepository {
                 let fence = try await metadataSourceRequest { try await client.changes(since: interval.cursor, space: space) }
                 let eventFence = try await events(since: interval.cursor)
                 guard fence.isEmpty, eventFence.isEmpty else {
-                    try await recoverMetadataSource(space, admission: admission, epoch: epoch, id: id)
+                    try await recoverMetadataSource(space, reason: "changes arrived while applying: items \(fence.summary) events \(eventFence.summary)",
+                                                    admission: admission, epoch: epoch, id: id)
                     return
                 }
                 try requireMetadataEngineAdmission(space, epoch: epoch, id: id)
@@ -111,6 +120,7 @@ extension CachedPhotosRepository {
                                                      affectedDays: candidate.affectedDays, invalidateAll: candidate.invalidateAll,
                                                      favorites: favorites, proven: true, currentRun: runID, admission: admission)
                 try await finishReconciliation(space, namespace: namespace, epoch: epoch, id: id)
+                SynologyDiagnostics.diff.info("\(space.rawValue, privacy: .public) applied items \(interval.summary, privacy: .public) events \(favoriteEvents.summary, privacy: .public)")
                 let unknownFavorite = favoriteDays.count < favorites.count
                 publishMetadataInvalidation(space: space, days: candidate.invalidateAll || unknownFavorite ? nil : candidate.affectedDays.union(favoriteDays))
                 await publishLocationChanges(space, items: candidate.replacements, deletedIDs: candidate.deletedIDs)
@@ -119,13 +129,13 @@ extension CachedPhotosRepository {
                 if let api = error as? SynologyAPIError {
                     switch api {
                     case .api(let code) where [102, 103, 104, 105].contains(code):
-                        try await disableMetadataSource(space, admission: admission, epoch: epoch, id: id)
+                        try await disableMetadataSource(space, reason: "feed rejected with API error \(code)", admission: admission, epoch: epoch, id: id)
                     case .api(700), .invalidResponse, .responseTooLarge:
-                        try await recoverMetadataSource(space, admission: admission, epoch: epoch, id: id)
+                        try await recoverMetadataSource(space, reason: "feed read failed: \(api)", admission: admission, epoch: epoch, id: id)
                     default: throw error
                     }
                 } else if error is DecodingError || error is CollectionCatalogError {
-                    try await recoverMetadataSource(space, admission: admission, epoch: epoch, id: id)
+                    try await recoverMetadataSource(space, reason: "feed could not be applied: \(error)", admission: admission, epoch: epoch, id: id)
                 } else { throw error }
             }
         }
@@ -168,7 +178,8 @@ extension CachedPhotosRepository {
             throw error
         }
     }
-    private func disableMetadataSource(_ space: PhotoSpace, admission: MetadataStoreAdmission, epoch: UInt64, id: UUID) async throws {
+    private func disableMetadataSource(_ space: PhotoSpace, reason: String, admission: MetadataStoreAdmission, epoch: UInt64, id: UUID) async throws {
+        SynologyDiagnostics.diff.notice("\(space.rawValue, privacy: .public) Diff disabled for this run, cached metadata invalidated: \(reason, privacy: .public)")
         let namespace = metadataNamespace(for: space)
         try requireMetadataEngineAdmission(space, epoch: epoch, id: id)
         try await store.applyMetadataChanges(namespace: namespace, cursor: nil, replacements: [], deletedIDs: [], affectedDays: [],
@@ -185,14 +196,17 @@ extension CachedPhotosRepository {
         guard isAdmitted(epoch),
               metadata[source: space].reconciliationID == id, !Task.isCancelled else { throw MetadataAdmissionError.superseded }
     }
-    private func recoverMetadataSource(_ space: PhotoSpace, admission: MetadataStoreAdmission, epoch: UInt64, id: UUID) async throws {
+    /// Every recovery invalidates all cached metadata of the space, including its complete
+    /// inventory, so the next Map open rescans the whole space.
+    private func recoverMetadataSource(_ space: PhotoSpace, reason: String, admission: MetadataStoreAdmission, epoch: UInt64, id: UUID) async throws {
+        SynologyDiagnostics.diff.notice("\(space.rawValue, privacy: .public) Diff reset, cached metadata invalidated: \(reason, privacy: .public)")
         let fresh: DiffCursor
         do { fresh = try await metadataSourceRequest { try await client.diffVersion(space: space) } }
         catch {
             try requireMetadataEngineAdmission(space, epoch: epoch, id: id)
             // A rejected interval has already lost its authority. Failure to obtain
             // a fresh boundary must not preserve its old complete-inventory proof.
-            try await disableMetadataSource(space, admission: admission, epoch: epoch, id: id)
+            try await disableMetadataSource(space, reason: "no fresh cursor after rejecting the interval: \(error)", admission: admission, epoch: epoch, id: id)
             return
         }
         try requireMetadataEngineAdmission(space, epoch: epoch, id: id)
@@ -247,12 +261,14 @@ extension CachedPhotosRepository {
                             throw CollectionCatalogError.invalidCoverage
                         }
                         metadata.inventoryCurrent = true
+                        SynologyDiagnostics.diff.notice("personal Map scan committed \(scanned, privacy: .public) items")
                         await publishStoredLocationProjection()
                         return projection.records
                     }
                 }
                 throw CollectionCatalogError.exceedsLimit
             } catch {
+                SynologyDiagnostics.diff.notice("personal Map scan ended without commit after \(scanned, privacy: .public) of \(total, privacy: .public) items: \(String(describing: error), privacy: .public)")
                 try? await store.discardMetadataInventoryStage(id)
                 throw error
             }

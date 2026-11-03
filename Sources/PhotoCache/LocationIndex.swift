@@ -147,6 +147,9 @@ extension CachedPhotosRepository {
                         guard isAdmitted(epoch), !Task.isCancelled else { throw CancellationError() }
                         continuation.yield(.completed(acceptLocationRecords(records, space: .personal), verified: true))
                     } else {
+                        let cause = "inventoryComplete=\(state.inventoryComplete) inventoryCurrent=\(metadata.inventoryCurrent) "
+                            + "sourceCurrent=\(metadataSourceCurrent(.personal)) sourceUnavailable=\(metadata[source: .personal].sourceUnavailable)"
+                        SynologyDiagnostics.diff.notice("personal Map scan: \(cause, privacy: .public)")
                         _ = try await verifiedTimelineSnapshot(collection: .library(.personal))
                         let task = registerLocationIndexScan(subscriber: subscriber)
                         let records = try await task.value

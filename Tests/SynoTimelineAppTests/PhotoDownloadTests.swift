@@ -303,24 +303,24 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.dng\",\"time\":1,\"type\":\"photo\"}".utf8))
         let payload = PhotoDragPayload(repository: repository, source: .item(photo, collection: .library(.personal)), count: 1, filename: "a.dng")
         let delegate = PhotoPromiseDelegate(payload: payload)
-        let provider = NSFilePromiseProvider(fileType: UTType.data.identifier, delegate: delegate)
+        let provider = LocalHandlePromiseProvider(fileType: UTType.data.identifier, delegate: delegate)
         provider.userInfo = delegate
         XCTAssertEqual(delegate.filePromiseProvider(provider, fileNameForType: UTType.data.identifier), "a.dng")
+        let plainTypes = NSFilePromiseProvider(fileType: UTType.data.identifier, delegate: delegate)
+            .writableTypes(for: NSPasteboard(name: .init("test.\(UUID())")))
         let nonce = AlbumDragRegistry.register(collection: .album(7), namespace: repository.namespace)
-        let writer = AlbumPromiseWriter(provider: provider, nonce: nonce)
+        provider.localType = AlbumDragRegistry.type; provider.nonce = nonce
         let pasteboard = NSPasteboard(name: .init("test.\(UUID())"))
         defer { AlbumDragRegistry.remove(nonce); pasteboard.releaseGlobally() }
-        let types = writer.writableTypes(for: pasteboard)
+        let types = provider.writableTypes(for: pasteboard)
         XCTAssertTrue(types.contains(AlbumDragRegistry.type))
-        XCTAssertTrue(Set(provider.writableTypes(for: pasteboard)).isSubset(of: Set(types)))
-        XCTAssertEqual(writer.pasteboardPropertyList(forType: AlbumDragRegistry.type) as? String, nonce.uuidString)
+        XCTAssertTrue(Set(plainTypes).isSubset(of: Set(types)))
+        XCTAssertEqual(provider.pasteboardPropertyList(forType: AlbumDragRegistry.type) as? String, nonce.uuidString)
         XCTAssertEqual(AlbumDragRegistry.album(nonce.uuidString, namespace: repository.namespace), .album(7))
-        let selectionWriter = SelectionPromiseWriter(provider: provider, nonce: nonce)
-        let selectionTypes = selectionWriter.writableTypes(for: pasteboard)
-        XCTAssertTrue(selectionTypes.contains(SelectionDragRegistry.type))
-        XCTAssertFalse(selectionTypes.contains(AlbumDragRegistry.type))
-        XCTAssertTrue(Set(provider.writableTypes(for: pasteboard)).isSubset(of: Set(selectionTypes)))
-        XCTAssertEqual(SelectionPromiseWriter(provider: nil, nonce: nonce).writableTypes(for: pasteboard), [SelectionDragRegistry.type])
+        provider.localType = SelectionDragRegistry.type
+        XCTAssertFalse(provider.writableTypes(for: pasteboard).contains(AlbumDragRegistry.type))
+        XCTAssertTrue(provider.writableTypes(for: pasteboard).contains(SelectionDragRegistry.type))
+        XCTAssertEqual(LocalHandleWriter(type: SelectionDragRegistry.type, nonce: nonce).writableTypes(for: pasteboard), [SelectionDragRegistry.type])
 
         let before = await transport.downloadedIDs
         XCTAssertTrue(before.isEmpty)

@@ -11,6 +11,7 @@ final class PhotoUploadManager: ObservableObject {
     @Published private(set) var active = false
     @Published private(set) var progress: Double?
     private var task: Task<Void, Never>?
+    private var thumbnailPolls: [UUID: Task<Void, Never>] = [:]
 
     static func fileURLs(_ sender: NSDraggingInfo) -> [URL] {
         guard sender.draggingPasteboard.availableType(from: [SelectionDragRegistry.type, AlbumDragRegistry.type]) == nil else { return [] }
@@ -18,12 +19,13 @@ final class PhotoUploadManager: ObservableObject {
     }
 
     func start(_ urls: [URL], repository: CachedPhotosRepository, destination: PhotoUploadDestination,
-               finished: @escaping @MainActor () async -> Void) -> Bool {
+               destinationName: String? = nil, finished: @escaping @MainActor () async -> Void) -> Bool {
         guard !active, !urls.isEmpty else { return false }
         let access = urls.map { $0.startAccessingSecurityScopedResource() }
         active = true
         presented = true
-        status = "Preparing upload…"
+        let suffix = destinationName.map { " to \($0)" } ?? ""
+        status = "Preparing upload\(suffix)…"
         task = Task { [self] in
             defer {
                 for (url, started) in zip(urls, access) where started { url.stopAccessingSecurityScopedResource() }
@@ -32,28 +34,49 @@ final class PhotoUploadManager: ObservableObject {
             }
             var errors: [String] = []
             var completed = 0
+            var uploadedIDs: [Int64] = []
             for (index, url) in urls.enumerated() {
                 if Task.isCancelled { break }
-                status = "Uploading \(index + 1) of \(urls.count): \(url.lastPathComponent)"
+                status = "Uploading \(index + 1) of \(urls.count)\(suffix): \(url.lastPathComponent)"
                 progress = nil
                 do {
-                    _ = try await repository.uploadPhoto(at: url, destination: destination) { [weak self] transfer in
+                    let uploaded = try await repository.uploadPhoto(at: url, destination: destination) { [weak self] transfer in
                         Task { @MainActor in
                             guard let total = transfer.totalBytes, total > 0 else { return }
                             self?.progress = Double(transfer.completedBytes) / Double(total)
                         }
                     }
                     completed += 1
+                    uploadedIDs.append(uploaded.id)
                 } catch is CancellationError { break }
                 catch { errors.append("\(url.lastPathComponent): \(reportedFailure(error, operation: "Upload"))") }
             }
             progress = nil
             if Task.isCancelled { status = "Upload cancelled. Check the destination before retrying." }
-            else if errors.isEmpty { status = "Processed \(completed) \(completed == 1 ? "photo" : "photos")." }
-            else { status = "Processed \(completed) of \(urls.count).\n" + errors.joined(separator: "\n") }
+            else if errors.isEmpty { status = "Processed \(completed) \(completed == 1 ? "photo" : "photos")\(suffix)." }
+            else { status = "Processed \(completed) of \(urls.count)\(suffix).\n" + errors.joined(separator: "\n") }
             await finished()
+            if !Task.isCancelled { pollThumbnails(of: uploadedIDs, repository: repository, destination: destination, finished: finished) }
         }
         return true
+    }
+
+    /// The NAS generates thumbnails after the transfer. The bounded poll ends on completion, on
+    /// its own schedule, or when the browser that started it goes away.
+    private func pollThumbnails(of ids: [Int64], repository: CachedPhotosRepository, destination: PhotoUploadDestination,
+                                finished: @escaping @MainActor () async -> Void) {
+        guard !ids.isEmpty else { return }
+        let key = UUID()
+        thumbnailPolls[key] = Task { [weak self] in
+            defer { self?.thumbnailPolls[key] = nil }
+            let ready = (try? await repository.refreshWhenUploadedThumbnailsAreReady(itemIDs: ids, destination: destination)) ?? false
+            if ready, !Task.isCancelled { await finished() }
+        }
+    }
+
+    func cancelThumbnailPolling() {
+        thumbnailPolls.values.forEach { $0.cancel() }
+        thumbnailPolls.removeAll()
     }
 
     func cancel() { task?.cancel() }
@@ -62,7 +85,10 @@ final class PhotoUploadManager: ObservableObject {
 struct UploadsToolbarControl: View {
     @ObservedObject private var uploads = PhotoUploadManager.shared
     var body: some View {
-        Button { uploads.presented.toggle() } label: { Image(systemName: uploads.active ? "arrow.up.circle.fill" : "arrow.up.circle") }
+        Button { uploads.presented.toggle() } label: {
+            Label("Uploads", systemImage: uploads.active ? "arrow.up.circle.fill" : "arrow.up.circle")
+                .labelStyle(.iconOnly)
+        }
             .help("Uploads")
             .accessibilityLabel("Uploads")
             .popover(isPresented: $uploads.presented) {
@@ -83,6 +109,7 @@ struct UploadsToolbarControl: View {
 @MainActor
 struct PhotoUploadDrop {
     let destination: PhotoUploadDestination
+    var destinationName: String?
     let repository: CachedPhotosRepository
     let finished: @MainActor () async -> Void
 
@@ -92,7 +119,7 @@ struct PhotoUploadDrop {
 
     func perform(_ sender: NSDraggingInfo) -> Bool {
         PhotoUploadManager.shared.start(PhotoUploadManager.fileURLs(sender), repository: repository,
-                                        destination: destination, finished: finished)
+                                        destination: destination, destinationName: destinationName, finished: finished)
     }
 }
 

@@ -5,6 +5,7 @@ import XCTest
 
 private actor UploadRefreshTransport: TestPhotosTransport {
     var catalogCalls = 0
+    var folderCatalogCalls = 0
     var shouldFail = false
     func setFailure(_ value: Bool) { shouldFail = value }
     func login(credentials: SynologyCredentials) async throws {}
@@ -16,7 +17,24 @@ private actor UploadRefreshTransport: TestPhotosTransport {
         if shouldFail { throw SynologyAPIError.transport("uncertain fixture") }
         return try JSONDecoder().decode(PhotoUploadResult.self, from: Data(#"{"action":"new","id":1,"unit_id":2}"#.utf8))
     }
+    func readFolderCatalogBatch(folderID: Int64, offset: Int, limit: Int, space: PhotoSpace) async throws -> [DayTimelineEntry] {
+        folderCatalogCalls += 1
+        return []
+    }
+    var readyAfter = 2
+    var itemReads = 0
+    func setReadyAfter(_ value: Int) { readyAfter = value }
+    func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] {
+        itemReads += 1
+        let state = itemReads >= readyAfter ? "ready" : "pending"
+        return try ids.map { id in
+            try JSONDecoder().decode(PhotoItem.self, from: Data(
+                #"{"id":\#(id),"filename":"a.png","time":1,"type":"photo","additional":{"thumbnail":{"unit_id":2,"cache_key":"k","sm":"\#(state)","m":"\#(state)","xl":"\#(state)"}}}"#.utf8))
+        }
+    }
+    func reads() -> Int { itemReads }
     func calls() -> Int { catalogCalls }
+    func folderCalls() -> Int { folderCatalogCalls }
 }
 
 private actor AlbumUploadTransport: TestPhotosTransport {
@@ -77,5 +95,56 @@ final class PhotoUploadRefreshTests: XCTestCase, @unchecked Sendable {
         } catch { }
         let afterFailure = await transport.calls()
         XCTAssertGreaterThan(afterFailure, after)
+    }
+    func testFolderUploadRefreshesTheFolderAndItsLibrary() async throws {
+        let root = temporaryTestRoot("upload-folder")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = UploadRefreshTransport()
+        let repository = try CachedPhotosRepository(credentials: .init(username: "fixture", password: "fixture"), cacheRoot: root, transport: transport)
+        _ = try await repository.verifiedTimelineSnapshot(collection: .library(.shared))
+        _ = try await repository.verifiedTimelineSnapshot(collection: .folder(1568, space: .shared))
+        let libraryBefore = await transport.calls()
+        let foldersBefore = await transport.folderCalls()
+        _ = try await repository.uploadPhoto(at: URL(fileURLWithPath: "/fixture.png"), destination: .folder(1568, space: .shared), progress: { _ in })
+        let foldersAfter = await transport.folderCalls()
+        let libraryAfter = await transport.calls()
+        XCTAssertGreaterThan(foldersAfter, foldersBefore)
+        XCTAssertGreaterThan(libraryAfter, libraryBefore)
+        await transport.setFailure(true)
+        do {
+            _ = try await repository.uploadPhoto(at: URL(fileURLWithPath: "/fixture.png"), destination: .folder(1568, space: .shared), progress: { _ in })
+            XCTFail("Expected uncertain upload failure")
+        } catch { }
+        let foldersFailed = await transport.folderCalls()
+        XCTAssertGreaterThan(foldersFailed, foldersAfter)
+    }
+
+    func testThumbnailPollRefreshesOnceReadyAndStopsOnItsSchedule() async throws {
+        let root = temporaryTestRoot("upload-thumbnail-poll")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = UploadRefreshTransport()
+        let repository = try CachedPhotosRepository(credentials: .init(username: "fixture", password: "fixture"), cacheRoot: root, transport: transport)
+        _ = try await repository.verifiedTimelineSnapshot(collection: .folder(1568, space: .shared))
+        let destination = PhotoUploadDestination.folder(1568, space: .shared)
+        let delays = Array(repeating: Duration.milliseconds(1), count: 4)
+        let foldersBefore = await transport.folderCalls()
+        let ready = try await repository.refreshWhenUploadedThumbnailsAreReady(itemIDs: [1], destination: destination, delays: delays)
+        XCTAssertTrue(ready)
+        let readsWhenReady = await transport.reads()
+        XCTAssertEqual(readsWhenReady, 2)
+        let foldersAfter = await transport.folderCalls()
+        XCTAssertGreaterThan(foldersAfter, foldersBefore)
+
+        await transport.setReadyAfter(100)
+        let never = try await repository.refreshWhenUploadedThumbnailsAreReady(itemIDs: [1], destination: destination, delays: delays)
+        XCTAssertFalse(never)
+        let readsAfterNever = await transport.reads()
+        XCTAssertEqual(readsAfterNever, readsWhenReady + delays.count)
+        let foldersNever = await transport.folderCalls()
+        XCTAssertEqual(foldersNever, foldersAfter)
+
+        let task = Task { try await repository.refreshWhenUploadedThumbnailsAreReady(itemIDs: [1], destination: destination, delays: [.seconds(60)]) }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Expected cancellation") } catch is CancellationError {}
     }
 }

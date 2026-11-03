@@ -304,8 +304,14 @@ final class LibraryModel: ObservableObject {
                                               reason: TimelineUpdateReason = .authoritativeLoad) {
         guard let repository, collectionFetchTasks[collection] == nil else { return }
         collectionFetchTasks[collection] = Task { [weak self] in
+            let started = ContinuousClock.now
+            var events = 0
             for await event in await repository.timeline(collection: collection) {
                 guard !Task.isCancelled else { return }
+                if let folder = collection.folderID {
+                    events += 1
+                    SynologyDiagnostics.folders.info("timeline folder=\(folder, privacy: .public) event=\(events, privacy: .public) elapsed=\(String(describing: ContinuousClock.now - started), privacy: .public)")
+                }
                 await self?.receive(event, collection: collection, reason: reason)
             }
         }

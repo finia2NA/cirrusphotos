@@ -52,15 +52,23 @@ public actor SynologyClient: PhotosTransport {
             throw SynologyAPIError.unsupported("Only local image files can be uploaded.")
         }
         let api: String
-        let target: (String, String)
+        let method: String
+        let target: [(String, String)]
         switch destination {
         case .timeline(let space):
             api = Self.api("Upload.Item", space)
-            target = ("uploadDestination", "\"timeline\"")
+            method = "upload"
+            target = [("uploadDestination", "\"timeline\""), ("folder", "[\"PhotoLibrary\"]")]
         case .album(let id):
             guard id > 0 else { throw SynologyAPIError.invalidResponse }
             api = "SYNO.Foto.Upload.Item"
-            target = ("album_id", String(id))
+            method = "upload"
+            target = [("album_id", String(id)), ("folder", "[\"PhotoLibrary\"]")]
+        case .folder(let id, let space):
+            guard id > 0 else { throw SynologyAPIError.invalidResponse }
+            api = Self.api("Upload.Item", space)
+            method = "upload_to_folder"
+            target = [("target_folder_id", String(id))]
         }
         let boundary = "SynoTimeline-\(UUID().uuidString)"
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -75,7 +83,7 @@ public actor SynologyClient: PhotosTransport {
             func field(_ key: String, _ value: String) throws {
                 try write("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(key)\"\r\n\r\n\(value)\r\n")
             }
-            try field("api", api); try field("method", "upload"); try field("version", "8")
+            try field("api", api); try field("method", method); try field("version", "8")
             try write("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(name)\"\r\nContent-Type: \(mime)\r\n\r\n")
             let input = try FileHandle(forReadingFrom: url)
             defer { try? input.close() }
@@ -84,12 +92,11 @@ public actor SynologyClient: PhotosTransport {
                 try output.write(contentsOf: chunk)
             }
             try write("\r\n")
-            try field(target.0, target.1)
+            for (key, value) in target { try field(key, value) }
             try field("duplicate", "\"ignore\"")
             let encodedName = String(data: try JSONEncoder().encode(name), encoding: .utf8)!
             try field("name", encodedName)
             try field("mtime", String(modified))
-            try field("folder", "[\"PhotoLibrary\"]")
             try write("--\(boundary)--\r\n")
             try output.close()
           } catch {
@@ -101,7 +108,7 @@ public actor SynologyClient: PhotosTransport {
         try Task.checkCancellation()
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
         components.path = "/webapi/entry.cgi/\(api)"
-        components.queryItems = [URLQueryItem(name: "api", value: api), URLQueryItem(name: "method", value: "upload"), URLQueryItem(name: "version", value: "8")]
+        components.queryItems = [URLQueryItem(name: "api", value: api), URLQueryItem(name: "method", value: method), URLQueryItem(name: "version", value: "8")]
         guard let requestURL = components.url else { throw SynologyAPIError.invalidResponse }
         var request = URLRequest(url: requestURL)
         request.httpMethod = "POST"

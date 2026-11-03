@@ -14,10 +14,23 @@ public struct PhotoDiff: Sendable, Equatable {
     public let deletedItemIDs: [Int64]
     public let hasNext: Bool
     public let hasUnsupportedActivity: Bool
+    /// Entry counts of the non-empty categories that make `hasUnsupportedActivity` true.
+    public let unsupportedCounts: [String: Int]
+    /// Distinct structures of the first unsupported entries, without values.
+    public let unsupportedShapes: [String]
     public init(cursor: DiffCursor, modifiedItemIDs: [Int64], deletedItemIDs: [Int64],
-                hasNext: Bool = false, hasUnsupportedActivity: Bool = false) {
+                hasNext: Bool = false, hasUnsupportedActivity: Bool = false, unsupportedCounts: [String: Int] = [:],
+                unsupportedShapes: [String] = []) {
         self.cursor = cursor; self.modifiedItemIDs = modifiedItemIDs; self.deletedItemIDs = deletedItemIDs
-        self.hasNext = hasNext; self.hasUnsupportedActivity = hasUnsupportedActivity
+        self.hasNext = hasNext; self.hasUnsupportedActivity = hasUnsupportedActivity || !unsupportedCounts.isEmpty
+        self.unsupportedCounts = unsupportedCounts; self.unsupportedShapes = unsupportedShapes
+    }
+    /// A one-line description for diagnostics; it contains counts only, no item IDs.
+    public var summary: String {
+        let overlap = Set(modifiedItemIDs).intersection(deletedItemIDs).count
+        let unsupported = unsupportedCounts.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ",")
+        return "modify=\(modifiedItemIDs.count) delete=\(deletedItemIDs.count) overlap=\(overlap) hasNext=\(hasNext) unsupported=[\(unsupported)]"
+            + (unsupportedShapes.isEmpty ? "" : " shapes=[\(unsupportedShapes.joined(separator: "; "))]")
     }
     public var isEmpty: Bool { modifiedItemIDs.isEmpty && deletedItemIDs.isEmpty && !hasNext && !hasUnsupportedActivity }
     public var isBoundedTerminal: Bool {
@@ -40,8 +53,18 @@ public struct UserEventDiff: Sendable, Equatable {
     public let favorites: [FavoriteEvent]
     public let hasNext: Bool
     public let hasUnsupportedActivity: Bool
-    public init(cursor: DiffCursor, favorites: [FavoriteEvent], hasNext: Bool = false, hasUnsupportedActivity: Bool = false) {
-        self.cursor = cursor; self.favorites = favorites; self.hasNext = hasNext; self.hasUnsupportedActivity = hasUnsupportedActivity
+    /// Counts of the event types that make `hasUnsupportedActivity` true.
+    public let unsupportedEventTypes: [String: Int]
+    public init(cursor: DiffCursor, favorites: [FavoriteEvent], hasNext: Bool = false, hasUnsupportedActivity: Bool = false,
+                unsupportedEventTypes: [String: Int] = [:]) {
+        self.cursor = cursor; self.favorites = favorites; self.hasNext = hasNext
+        self.hasUnsupportedActivity = hasUnsupportedActivity || !unsupportedEventTypes.isEmpty
+        self.unsupportedEventTypes = unsupportedEventTypes
+    }
+    /// A one-line description for diagnostics; it contains counts only, no item IDs.
+    public var summary: String {
+        let unsupported = unsupportedEventTypes.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ",")
+        return "favorites=\(favorites.reduce(0) { $0 + $1.itemIDs.count }) hasNext=\(hasNext) unsupported=[\(unsupported)]"
     }
     public var isEmpty: Bool { favorites.isEmpty && !hasNext && !hasUnsupportedActivity }
     public var isBoundedTerminal: Bool {
@@ -68,18 +91,18 @@ struct UserEventDiffData: Decodable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         var favorites: [FavoriteEvent] = []
-        var unsupported = false
+        var unsupported: [String: Int] = [:]
         for event in try container.decode([Event].self, forKey: .list) {
             switch (event.eventType, event.targetIDs) {
             case ("favorite_add", let ids?): favorites.append(.init(itemIDs: ids, favorite: true))
             case ("favorite_delete", let ids?): favorites.append(.init(itemIDs: ids, favorite: false))
-            default: unsupported = true
+            default: unsupported[event.eventType, default: 0] += 1
             }
         }
         value = UserEventDiff(cursor: DiffCursor(diffVersion: try container.decode(Int64.self, forKey: .diffVersion),
                                                  versionTime: try container.decode(Int64.self, forKey: .versionTime)),
                               favorites: favorites, hasNext: try container.decode(Bool.self, forKey: .hasNext),
-                              hasUnsupportedActivity: unsupported)
+                              unsupportedEventTypes: unsupported)
     }
 }
 
@@ -106,7 +129,18 @@ struct PhotoDiffData: Decodable {
                                             versionTime: try container.decode(Int64.self, forKey: .versionTime)),
                           modifiedItemIDs: item.modify.map(\.id), deletedItemIDs: item.delete,
                           hasNext: try container.decode(Bool.self, forKey: .hasNext),
-                          hasUnsupportedActivity: !item.merge.isEmpty || !item.move.isEmpty || !similar.isEmpty)
+                          unsupportedCounts: ["merge": item.merge.count, "move": item.move.count, "similar": similar.count].filter { $0.value > 0 },
+                          unsupportedShapes: Self.shapes(item: item, similar: similar))
+    }
+    private static func shapes(item: ItemChanges, similar: [OpaqueChange]) -> [String] {
+        let modified = Set(item.modify.map(\.id)), deleted = Set(item.delete)
+        let entries = item.merge.map { ("merge", $0) } + item.move.map { ("move", $0) } + similar.map { ("similar", $0) }
+        var seen: [String] = []
+        for (category, entry) in entries.prefix(20) {
+            let description = entry.describe(category, modified: modified, deleted: deleted)
+            if !seen.contains(description) { seen.append(description) }
+        }
+        return seen
     }
 }
 private struct ItemChanges: Decodable {
@@ -129,16 +163,31 @@ private struct ItemChanges: Decodable {
     }
 }
 private struct ItemModify: Decodable { let id: Int64 }
+/// An activity entry the reconciler does not apply. It keeps only the entry's structure
+/// (key names and value types) and its integer leaves, for diagnostics.
 private struct OpaqueChange: Decodable {
+    let shape: String
+    let integers: [Int64]
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        if container.decodeNil() { return }
-        if (try? container.decode([String: OpaqueChange].self)) != nil { return }
-        if (try? container.decode([OpaqueChange].self)) != nil { return }
-        if (try? container.decode(String.self)) != nil { return }
-        if (try? container.decode(Double.self)) != nil { return }
-        if (try? container.decode(Bool.self)) != nil { return }
+        if container.decodeNil() { shape = "null"; integers = []; return }
+        if let object = try? container.decode([String: OpaqueChange].self) {
+            let fields = object.sorted { $0.key < $1.key }
+            shape = "{" + fields.map { "\($0.key):\($0.value.shape)" }.joined(separator: ",") + "}"
+            integers = fields.flatMap(\.value.integers); return
+        }
+        if let array = try? container.decode([OpaqueChange].self) {
+            shape = "[\(array.count)x\(array.first?.shape ?? "")]"; integers = array.flatMap(\.integers); return
+        }
+        if (try? container.decode(String.self)) != nil { shape = "string"; integers = []; return }
+        if let number = try? container.decode(Int64.self) { shape = "int"; integers = [number]; return }
+        if (try? container.decode(Double.self)) != nil { shape = "number"; integers = []; return }
+        if (try? container.decode(Bool.self)) != nil { shape = "bool"; integers = []; return }
         throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid activity value")
+    }
+    /// The structure plus how many integer leaves name an item modified or deleted in the same interval.
+    func describe(_ category: String, modified: Set<Int64>, deleted: Set<Int64>) -> String {
+        "\(category) \(shape) ints=\(integers.count) inModify=\(integers.filter(modified.contains).count) inDelete=\(integers.filter(deleted.contains).count)"
     }
 }
 private struct AnyCodingKey: CodingKey {

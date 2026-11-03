@@ -268,20 +268,22 @@ struct ConnectionToolbarItem: View {
             Group {
                 switch library.authenticationStatus {
                 case .notStarted:
-                    Image(systemName: "circle.dotted")
-                    Text(library.error(for: .library(.personal)) == nil ? "Opening library…" : "Library unavailable")
+                    Label(library.error(for: .library(.personal)) == nil ? "Opening library…" : "Library unavailable",
+                          systemImage: "circle.dotted")
                 case .loggingIn:
                     ProgressView().controlSize(.mini)
                     Text("Logging in…")
                 case .signedIn:
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                    Text(library.error(for: .library(.personal)) == nil ? "Connected" : "Metadata unavailable")
+                    Label(library.error(for: .library(.personal)) == nil ? "Connected" : "Metadata unavailable",
+                          systemImage: "checkmark.circle.fill")
+                        .symbolRenderingMode(.multicolor)
                         .help(library.error(for: .library(.personal)) ?? "Signed in")
                 case .failed(let message):
-                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
-                    Text("Login failed").help(message)
+                    Label("Login failed", systemImage: "exclamationmark.circle.fill")
+                        .help(message)
                 }
             }
+            .labelStyle(.titleAndIcon)
             .foregroundStyle(.secondary)
 
             if library.authenticationStatus != .signedIn || library.error(for: .library(.personal)) != nil {
@@ -343,10 +345,10 @@ struct LibraryCommands: Commands {
                 .disabled(!model.canCloseViewer)
             Toggle("Show Highlight Peaking", isOn: $model.showsHighlightPeaking)
                 .disabled(!model.canCloseViewer)
-        }
-        CommandMenu("Library") {
             Toggle("Show Focus Edges", isOn: $model.showsFocusEdges)
                 .disabled(!model.canCloseViewer)
+        }
+        CommandMenu("Library") {
             Button("Back") { model.navigateBack() }
                 .keyboardShortcut(.cancelAction)
                 .disabled(!model.canNavigateBack)
@@ -431,5 +433,60 @@ struct LibraryCommands: Commands {
             }
             .disabled(!timelineSectionLoad.canPresent)
         }
+    }
+}
+
+/// Filmstrip, histogram, highlight peaking and focus-edge overlays in their own glass pill,
+/// separate from the viewer's action buttons.
+struct ViewerOverlayControls: View {
+    @ObservedObject var model: LibraryModel
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button { model.showsFilmstrip.toggle() } label: {
+                Label(model.showsFilmstrip ? "Hide Filmstrip" : "Show Filmstrip",
+                      systemImage: model.showsFilmstrip ? "film.fill" : "film")
+                    .labelStyle(.iconOnly)
+                        .frame(width: 34, height: ToolbarMetrics.controlHeight)
+                        .contentShape(Rectangle())
+                    .foregroundStyle(model.showsFilmstrip ? Color.accentColor : Color.primary)
+            }
+            .help(model.showsFilmstrip ? "Hide Filmstrip" : "Show Filmstrip")
+            .accessibilityLabel(model.showsFilmstrip ? "Hide Filmstrip" : "Show Filmstrip")
+            Button { model.showsHistogram.toggle() } label: {
+                Label(model.showsHistogram ? "Hide Histogram" : "Show Histogram",
+                      systemImage: "chart.bar.xaxis")
+                    .labelStyle(.iconOnly)
+                        .frame(width: 34, height: ToolbarMetrics.controlHeight)
+                        .contentShape(Rectangle())
+                    .foregroundStyle(model.showsHistogram ? Color.accentColor : Color.primary)
+            }
+            .help(model.showsHistogram ? "Hide Histogram" : "Show Histogram")
+            .accessibilityLabel(model.showsHistogram ? "Hide Histogram" : "Show Histogram")
+            Button { model.showsHighlightPeaking.toggle() } label: {
+                Label(model.showsHighlightPeaking ? "Hide Highlight Peaking" : "Show Highlight Peaking",
+                      systemImage: "circle.lefthalf.striped.horizontal")
+                    .labelStyle(.iconOnly)
+                        .frame(width: 34, height: ToolbarMetrics.controlHeight)
+                        .contentShape(Rectangle())
+                    .foregroundStyle(model.showsHighlightPeaking ? Color.accentColor : Color.primary)
+            }
+            .help(model.showsHighlightPeaking ? "Hide Highlight Peaking" : "Show Highlight Peaking")
+            .accessibilityLabel(model.showsHighlightPeaking ? "Hide Highlight Peaking" : "Show Highlight Peaking")
+            Button { model.showsFocusEdges.toggle() } label: {
+                Label(model.showsFocusEdges ? "Hide Focus Edges" : "Show Focus Edges",
+                      systemImage: "scope")
+                    .labelStyle(.iconOnly)
+                        .frame(width: 34, height: ToolbarMetrics.controlHeight)
+                        .contentShape(Rectangle())
+                    .foregroundStyle(model.showsFocusEdges ? Color.accentColor : Color.primary)
+            }
+            .help(model.showsFocusEdges ? "Hide Focus Edges" : "Show Focus Edges")
+            .accessibilityLabel(model.showsFocusEdges ? "Hide Focus Edges" : "Show Focus Edges")
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 6)
+        .frame(height: ToolbarMetrics.controlHeight)
+        .glassEffect(.regular, in: Capsule())
     }
 }

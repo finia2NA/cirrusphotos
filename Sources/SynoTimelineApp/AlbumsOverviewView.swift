@@ -230,7 +230,9 @@ struct FolderCoverView: View {
         }
         .task(id: folder) {
             guard let repository else { return }
-            covers = await repository.folderCovers(for: folder, space: space)
+            if covers.isEmpty, let cached = await repository.cachedFolderCovers(for: folder, space: space) { covers = cached }
+            let fresh = await repository.folderCovers(for: folder, space: space)
+            if !Task.isCancelled, fresh != covers { covers = fresh }
         }
     }
 
