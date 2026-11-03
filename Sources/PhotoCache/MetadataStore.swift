@@ -31,6 +31,7 @@ public struct MetadataStoreVersion: Equatable, Sendable {
     public let resetEpoch: Int64
     public let cursor: DiffCursor?
     public let inventoryComplete: Bool
+    public let proofRun: String?
 }
 public struct StoredCollectionCatalog: Sendable {
     public let catalog: CollectionDayCatalog
@@ -48,7 +49,7 @@ public struct MetadataStoreAdmission: Sendable {
 /// Typed record access on the existing cache actor. No transaction suspends.
 /// The normalized format is initialized explicitly when the engine enrolls it.
 extension DiskCache {
-    static let metadataFormatVersion = 6
+    static let metadataFormatVersion = 8
 
     public func initializeMetadataStore() throws {
         try database.inTransaction(.immediate) { db in
@@ -78,10 +79,10 @@ extension DiskCache {
     }
     func metadataState(_ db: Database, _ namespace: MetadataNamespace) throws -> MetadataStoreVersion {
         guard let state = try MetadataStateRecord.fetchOne(db, key: namespace.key) else {
-            return MetadataStoreVersion(revision: 0, resetEpoch: 0, cursor: nil, inventoryComplete: false)
+            return MetadataStoreVersion(revision: 0, resetEpoch: 0, cursor: nil, inventoryComplete: false, proofRun: nil)
         }
         return MetadataStoreVersion(revision: state.revision, resetEpoch: state.resetEpoch, cursor: state.cursor,
-                                    inventoryComplete: state.inventoryComplete)
+                                    inventoryComplete: state.inventoryComplete, proofRun: state.proofRun)
     }
     public func metadataAdmission(_ namespace: MetadataNamespace) throws -> MetadataStoreAdmission {
         let state = try metadataState(namespace)
@@ -102,14 +103,14 @@ extension DiskCache {
               metadataGeneration == admission.metadataGeneration else { throw MetadataAdmissionError.superseded }
     }
     private func writeState(_ db: Database, _ namespace: MetadataNamespace, revision: Int64, resetEpoch: Int64,
-                            cursor: DiffCursor?, inventoryComplete: Bool) throws {
+                            cursor: DiffCursor?, inventoryComplete: Bool, proofRun: String?) throws {
         try MetadataStateRecord(namespace: namespace.key, revision: revision, resetEpoch: resetEpoch, cursor: cursor,
-                                inventoryComplete: inventoryComplete).insert(db, onConflict: .replace)
+                                inventoryComplete: inventoryComplete, proofRun: proofRun).insert(db, onConflict: .replace)
     }
     private func advanceMetadataLocalRevision(_ db: Database, _ namespace: MetadataNamespace) throws {
         let prior = try metadataState(db, namespace)
         try writeState(db, namespace, revision: prior.revision + 1, resetEpoch: prior.resetEpoch,
-                       cursor: prior.cursor, inventoryComplete: prior.inventoryComplete)
+                       cursor: prior.cursor, inventoryComplete: prior.inventoryComplete, proofRun: prior.proofRun)
     }
     private func markInventoryIncomplete(_ db: Database, _ namespace: String) throws {
         try MetadataStateRecord.filter(key: namespace).updateAll(db) { $0.inventoryComplete.set(to: false) }
@@ -226,6 +227,20 @@ extension DiskCache {
 
     // MARK: Day pages
 
+    /// Content is proven when this run's Diff reconciliation accounted for every change since
+    /// the stored cursor. Membership additionally needs this run's day catalog for a collection
+    /// whose membership the Personal feeds describe; changed days already carry new generations.
+    private func changeProof(_ db: Database, _ key: CollectionKey, state: MetadataStoreVersion,
+                             currentRun: String) throws -> (content: Bool, membership: Bool) {
+        let content = state.proofRun == currentRun
+        guard content, key.collection.membershipProvenByPersonalChanges else { return (content, false) }
+        let catalog = try Row.fetchOne(db, CollectionStateRecord.row(key)
+            .select(CollectionStateRecord.Columns.validatedRun, CollectionStateRecord.Columns.epoch))
+        let membership = catalog.map { $0[CollectionStateRecord.Columns.validatedRun] as String? == currentRun
+            && $0[CollectionStateRecord.Columns.epoch] as Int64 == state.resetEpoch } ?? false
+        return (content, membership)
+    }
+
     public func metadataPage(_ address: DayPageAddress, namespace: MetadataNamespace,
                              currentRun: String) throws -> PhotoPageSnapshot? {
         try metadataWrite(enforceBudget: false) { db in
@@ -233,8 +248,10 @@ extension DiskCache {
             guard page.actualCount > 0, page.actualCount <= address.capacity, page.revision >= 0 else { throw CacheError.storage }
             let state = try metadataState(db, namespace)
             // The day row carries the catalog's count for this day; reading it avoids decoding the whole catalog.
-            let day = try CollectionDayRecord.row(CollectionKey(namespace: namespace, collection: address.collection), day: address.day.id).fetchOne(db)
-            var membershipVerified = page.validatedRun == currentRun && page.epoch == state.resetEpoch
+            let key = CollectionKey(namespace: namespace, collection: address.collection)
+            let day = try CollectionDayRecord.row(key, day: address.day.id).fetchOne(db)
+            let proof = try changeProof(db, key, state: state, currentRun: currentRun)
+            var membershipVerified = (page.validatedRun == currentRun || proof.membership) && page.epoch == state.resetEpoch
                 && day?.membershipGeneration == page.dayGeneration && day?.itemCount == page.dayCount
             let members = try PageItemRecord.page(address, namespace).order { $0.ordinal }.fetchAll(db)
             let ids = members.map(\.itemID)
@@ -248,7 +265,7 @@ extension DiskCache {
                     let time = address.collection.membershipTime(for: item)
                     if time.flatMap({ try? CaptureDay(time: $0) }) != address.day { membershipVerified = false }
                 }
-                let detailVerified = detail?.contentEpoch == state.resetEpoch && detail?.annotationRun == currentRun
+                let detailVerified = detail?.contentEpoch == state.resetEpoch && (detail?.annotationRun == currentRun || proof.content)
                 slots.append(PhotoItemSlot(itemID: member.itemID, item: detail?.payload, verified: membershipVerified && detailVerified))
             }
             guard slots.count == page.actualCount else { throw CacheError.storage }
@@ -368,6 +385,7 @@ extension DiskCache {
         guard metadataInitialized else { return [] }
         return try database.read { db in
             let state = try metadataState(db, namespace)
+            let proof = try changeProof(db, CollectionKey(namespace: namespace, collection: collection), state: state, currentRun: currentRun)
             let dayIDs = days.map { $0.map(\.id) }
             var pageRequest = DayPageRecord.filter { $0.namespace == namespace.key && $0.collection == collection.rawValue }
             var memberRequest = PageItemRecord.filter { $0.namespace == namespace.key && $0.collection == collection.rawValue }
@@ -404,7 +422,7 @@ extension DiskCache {
                     .sorted { $0.ordinal < $1.ordinal }
                 guard pageMembers.count == page.actualCount, pageMembers.indices.allSatisfy({ pageMembers[$0].ordinal == $0 }) else { continue }
                 let dayRow = dayRows[page.day]
-                var membershipVerified = page.validatedRun == currentRun && page.epoch == state.resetEpoch
+                var membershipVerified = (page.validatedRun == currentRun || proof.membership) && page.epoch == state.resetEpoch
                     && dayRow?.membershipGeneration == page.dayGeneration && dayRow?.itemCount == page.dayCount
                 var detailsVerified = true
                 var entries: [MetadataFilterEntry] = []
@@ -412,7 +430,7 @@ extension DiskCache {
                     guard let record = facets[member.itemID] else { detailsVerified = false; continue }
                     let time = record.facets.membershipTime(in: collection)
                     if time.flatMap({ try? CaptureDay(time: $0) }) != day { membershipVerified = false }
-                    if !(record.contentEpoch == state.resetEpoch && record.annotationRun == currentRun) { detailsVerified = false }
+                    if !(record.contentEpoch == state.resetEpoch && (record.annotationRun == currentRun || proof.content)) { detailsVerified = false }
                     entries.append(MetadataFilterEntry(ordinal: member.ordinal, itemID: member.itemID, time: time, values: record.facets.values))
                 }
                 result.append(MetadataFilterPage(address: address, entries: entries, verified: membershipVerified && detailsVerified))
@@ -427,8 +445,10 @@ extension DiskCache {
         guard ids.count <= 2000 else { throw CollectionCatalogError.exceedsLimit }
         return try database.read { db in
             let state = try metadataState(db, namespace)
+            let proven = state.proofRun == currentRun
             return try itemDetails(db, namespace, ids: ids).mapValues {
-                PhotoItemSlot(itemID: $0.itemID, item: $0.payload, verified: $0.contentEpoch == state.resetEpoch && $0.annotationRun == currentRun)
+                PhotoItemSlot(itemID: $0.itemID, item: $0.payload,
+                              verified: $0.contentEpoch == state.resetEpoch && ($0.annotationRun == currentRun || proven))
             }
         }
     }
@@ -502,6 +522,18 @@ extension DiskCache {
         }
     }
 
+    /// Days of every cached page, in any collection of the namespace, that lists one of the IDs.
+    public func metadataReferencedDays(_ namespace: MetadataNamespace, ids: [Int64]) throws -> [Int64: Set<CaptureDay>] {
+        guard ids.count <= 2000 else { throw CollectionCatalogError.exceedsLimit }
+        return try database.read { db in
+            var result: [Int64: Set<CaptureDay>] = [:]
+            for member in try PageItemRecord.filter({ $0.namespace == namespace.key && ids.contains($0.itemID) }).fetchAll(db) {
+                if let day = CaptureDay(id: member.day) { result[member.itemID, default: []].insert(day) }
+            }
+            return result
+        }
+    }
+
     public func metadataInventory(_ namespace: MetadataNamespace) throws -> [MetadataIndexItem] {
         try database.read { db in
             try ItemIndexRecord.filter { $0.namespace == namespace.key }.order { [$0.captureTime.desc, $0.itemID] }.fetchAll(db).map {
@@ -569,7 +601,8 @@ extension DiskCache {
                                     profile: ItemFieldProfile.locations.rawValue, epoch: admission.resetEpoch, identityEpoch: admission.resetEpoch).insert(db)
             }
             let state = try metadataState(db, namespace)
-            try writeState(db, namespace, revision: state.revision + 1, resetEpoch: state.resetEpoch, cursor: cursor, inventoryComplete: true)
+            try writeState(db, namespace, revision: state.revision + 1, resetEpoch: state.resetEpoch, cursor: cursor, inventoryComplete: true,
+                           proofRun: state.proofRun)
             try discardMetadataInventoryStage(db, job)
         }
     }
@@ -578,9 +611,12 @@ extension DiskCache {
 
     /// Source advancement and every dependent invalidation share this transaction.
     /// A reset enrolls only later reads; future empty intervals cannot revive old rows.
+    /// `favorites` holds the final value of each favorite event in the interval; `proven`
+    /// records that this run's feeds account for every change since the stored cursor.
     public func applyMetadataChanges(namespace: MetadataNamespace, cursor: DiffCursor?,
                                      replacements: [PhotoItem], deletedIDs: [Int64],
                                      affectedDays: Set<CaptureDay>, invalidateAll: Bool,
+                                     favorites: [Int64: Bool] = [:], proven: Bool = false,
                                      currentRun: String, admission: MetadataStoreAdmission) throws {
         guard Set(replacements.map(\.id)).count == replacements.count,
               Set(deletedIDs).count == deletedIDs.count,
@@ -588,7 +624,7 @@ extension DiskCache {
         try metadataWrite { db in
             try admit(admission, namespace: namespace, db)
             let prior = try metadataState(db, namespace)
-            let changed = invalidateAll || !replacements.isEmpty || !deletedIDs.isEmpty
+            let changed = invalidateAll || !replacements.isEmpty || !deletedIDs.isEmpty || !favorites.isEmpty
             let revision = prior.revision + (changed ? 1 : 0)
             let epoch = prior.resetEpoch + (invalidateAll ? 1 : 0)
             let namespaceDays = CollectionDayRecord.filter { $0.namespace == namespace.key }
@@ -603,9 +639,30 @@ extension DiskCache {
             for item in replacements {
                 try storeMetadataItem(db, item, profile: .fullPage, namespace: namespace, currentRun: currentRun, epoch: epoch, revision: revision)
             }
+            if !favorites.isEmpty, !invalidateAll { try applyFavoriteEvents(db, favorites, namespace: namespace, currentRun: currentRun) }
             try writeState(db, namespace, revision: revision, resetEpoch: epoch, cursor: cursor,
-                           inventoryComplete: !invalidateAll && prior.inventoryComplete)
+                           inventoryComplete: !invalidateAll && prior.inventoryComplete,
+                           proofRun: proven && !invalidateAll ? currentRun : nil)
         }
+    }
+
+    /// Patches favorite flags and marks only the Favorites days that can contain the
+    /// items. An item without a known capture time invalidates all of Favorites.
+    private func applyFavoriteEvents(_ db: Database, _ favorites: [Int64: Bool], namespace: MetadataNamespace,
+                                     currentRun: String) throws {
+        guard let space = namespace.scope.space else { return }
+        let key = CollectionKey(namespace: namespace, collection: .favorites(space))
+        var days: Set<String> = []
+        var unknown = false
+        for (id, favorite) in favorites {
+            try patchMetadataDetail(db, namespace: namespace, itemID: id, annotationRun: currentRun) { $0.withFavorite(favorite) }
+            if let time = try ItemIndexRecord.row(namespace, id).fetchOne(db)?.captureTime {
+                days.insert(try CaptureDay(time: time).id)
+            } else { unknown = true }
+        }
+        let favoriteDays = CollectionDayRecord.all(key)
+        try (unknown ? favoriteDays : favoriteDays.filter { days.contains($0.day) }).updateAll(db) { $0.membershipGeneration += 1 }
+        if unknown { try CollectionStateRecord.row(key).updateAll(db) { $0.validatedRun.set(to: nil) } }
     }
 
     public func invalidateMetadataCollection(_ key: CollectionKey, admission: MetadataStoreAdmission) throws {
@@ -631,6 +688,23 @@ extension DiskCache {
             try CollectionSummaryRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
             try CollectionDayRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.membershipGeneration += 1 }
             try advanceMetadataLocalRevision(db, namespace)
+        }
+    }
+
+    /// Keeps every stored row readable but withdraws all current-run validation and
+    /// Diff proof. Dropping the cursor makes the next reconciliation start a new reset
+    /// epoch, so every page and detail is read again before it counts as verified.
+    public func withdrawMetadataValidation() throws {
+        try metadataWrite { db in
+            guard metadataInitialized else { return }
+            try MetadataStateRecord.updateAll(db) { [$0.cursor.set(to: nil), $0.proofRun.set(to: nil), $0.revision += 1] }
+            try CollectionStateRecord.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try AlbumSummariesRecord.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try FolderDirectoryRecord.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try CollectionSummaryRecord.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try DayPageRecord.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try ItemDetailRecord.updateAll(db) { $0.annotationRun.set(to: nil) }
+            try CollectionDayRecord.updateAll(db) { $0.membershipGeneration += 1 }
         }
     }
 
@@ -851,5 +925,18 @@ private extension FolderDirectoryRecord {
 private extension FilterOptionCatalogRecord {
     static func row(_ key: CollectionKey) -> QueryInterfaceRequest<Self> {
         filter { $0.namespace == key.namespace.key && $0.collection == key.collection.rawValue }
+    }
+}
+
+extension PhotoCollectionDescriptor {
+    /// Collections whose membership the Personal item and favorite-event feeds fully describe:
+    /// folder moves and tag edits arrive as item modifications. Album members have no resolved
+    /// origin space, People and Subjects assignments are not shown to appear in the feeds, and
+    /// Recently Added groups by indexed day, so those keep per-run reads.
+    var membershipProvenByPersonalChanges: Bool {
+        switch self {
+        case .library(.personal), .favorites(.personal), .folder(_, .personal), .tag(_, .personal): return true
+        default: return false
+        }
     }
 }

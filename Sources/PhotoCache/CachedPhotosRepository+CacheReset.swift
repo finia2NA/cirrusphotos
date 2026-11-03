@@ -18,6 +18,14 @@ extension CachedPhotosRepository {
         _ = try await resetCache(scope: .metadata)
     }
 
+    /// Keeps cached metadata visible while treating all of it as unverified, so it is
+    /// read again on demand and by the background sync. An escape hatch for stale data.
+    public func revalidateAllMetadata() async throws {
+        try await initializeMetadataEngine()
+        try await store.withdrawMetadataValidation()
+        try await supersedeMetadataState()
+    }
+
     public func clearCache() async throws {
         _ = try await resetCache(scope: .all)
     }

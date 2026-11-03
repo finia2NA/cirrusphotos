@@ -26,6 +26,19 @@ private actor EngineTransport: TestPhotosTransport {
     }
     func counts() -> (Int, Int) { (versionCalls, changeCalls) }
 }
+private actor FavoriteEventTransport: TestPhotosTransport {
+    let unsupported: Bool
+    init(unsupported: Bool) { self.unsupported = unsupported }
+    func diffVersion() async throws -> DiffCursor { DiffCursor(diffVersion: 100, versionTime: 100) }
+    func changes(since cursor: DiffCursor) async throws -> PhotoDiff {
+        PhotoDiff(cursor: .init(diffVersion: 2, versionTime: 2), modifiedItemIDs: [], deletedItemIDs: [])
+    }
+    func userEvents(since cursor: DiffCursor) async throws -> UserEventDiff {
+        guard cursor.diffVersion == 1 else { return UserEventDiff(cursor: .init(diffVersion: 2, versionTime: 2), favorites: []) }
+        return UserEventDiff(cursor: .init(diffVersion: 2, versionTime: 2), favorites: [.init(itemIDs: [5], favorite: true)],
+                             hasUnsupportedActivity: unsupported)
+    }
+}
 final class MetadataEngineTests: XCTestCase, @unchecked Sendable {
     private func repository(_ transport: EngineTransport, root: URL) throws -> CachedPhotosRepository {
         try CachedPhotosRepository(credentials: .init(username: "fixture", password: "fixture", otpSecret: nil), cacheRoot: root, transport: transport)
@@ -51,6 +64,28 @@ final class MetadataEngineTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(counts.0, 0); XCTAssertEqual(counts.1, 1)
         let state = try await repository.store.metadataState(repository.personalMetadataNamespace)
         XCTAssertEqual(state.cursor, .init(diffVersion: 2, versionTime: 2))
+        let run = await repository.runID
+        XCTAssertEqual(state.proofRun, run, "An empty terminal interval proves cached content")
+    }
+    func testFavoriteEventsAdvanceTheCursorWithProofAndUnknownEventsRecover() async throws {
+        for unsupported in [false, true] {
+            let root = temporaryTestRoot("engine-favorite-events")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let repository = try CachedPhotosRepository(credentials: .init(username: "fixture", password: "fixture", otpSecret: nil), cacheRoot: root,
+                                                        transport: FavoriteEventTransport(unsupported: unsupported))
+            let old = try await seedCheckpoint(repository)
+            try await repository.reconcileMetadataSource()
+            let state = try await repository.store.metadataState(repository.personalMetadataNamespace)
+            if unsupported {
+                XCTAssertEqual(state.resetEpoch, old.resetEpoch + 1); XCTAssertNil(state.proofRun)
+            } else {
+                XCTAssertEqual(state.resetEpoch, old.resetEpoch)
+                XCTAssertEqual(state.cursor, .init(diffVersion: 2, versionTime: 2))
+                let run = await repository.runID
+                XCTAssertEqual(state.proofRun, run)
+                XCTAssertEqual(state.revision, old.revision + 1, "Favorite changes supersede in-flight writes")
+            }
+        }
     }
     func testRejectedPartialOversizedIntervalsRecoverOnceAndUnsupportedInvalidatesWithoutProof() async throws {
         for mode in [EngineTransport.Mode.partial, .tooLarge, .rejected, .unsupported] {

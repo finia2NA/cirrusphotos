@@ -40,6 +40,27 @@ final class LibraryFilterTests: XCTestCase {
         XCTAssertTrue(filter.matches(video))
     }
 
+    func testFilenameTextSearchIgnoresCaseAndDiacritics() throws {
+        let value = try item(filename: "Café_DSCF4417.JPG")
+        XCTAssertTrue(LibraryFilter(filename: .init("dscf44")).matches(value))
+        XCTAssertTrue(LibraryFilter(filename: .init(" cafe ")).matches(value))
+        XCTAssertFalse(LibraryFilter(filename: .init("dscf45")).matches(value))
+        XCTAssertTrue(LibraryFilter(filename: .init("   ")).isEmpty, "whitespace-only text is no criterion")
+        XCTAssertEqual(LibraryFilter(filename: .init("x")).activeCriterionCount, 1)
+    }
+
+    func testFilenameRegularExpressionMatchesAnywhereWithoutCase() throws {
+        let value = try item(filename: "DSCF4417.JPG")
+        XCTAssertTrue(LibraryFilter(filename: .init(#"^dscf\d{4}\.jpg$"#, mode: .regularExpression)).matches(value))
+        XCTAssertTrue(LibraryFilter(filename: .init("44", mode: .regularExpression)).matches(value))
+        XCTAssertFalse(LibraryFilter(filename: .init(#"^IMG_"#, mode: .regularExpression)).matches(value))
+        XCTAssertFalse(LibraryFilter(filename: .init("(?-i)dscf", mode: .regularExpression)).matches(value))
+        let invalid = FilenameSearch("[", mode: .regularExpression)
+        XCTAssertFalse(invalid.isValid)
+        XCTAssertFalse(LibraryFilter(filename: invalid).matches(value))
+        XCTAssertNotEqual(FilenameSearch("a"), FilenameSearch("a", mode: .regularExpression))
+    }
+
     func testPureParsersRejectMalformedAndNonPositiveValues() {
         XCTAssertEqual(LibraryFilterParsing.firstPositiveNumber("ISO 1250"), 1250)
         XCTAssertEqual(LibraryFilterParsing.firstPositiveNumber("9.0 mm"), 9)

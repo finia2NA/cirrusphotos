@@ -125,6 +125,9 @@ public extension TestPhotosTransport {
     func changes(since cursor: DiffCursor) async throws -> PhotoDiff {
         throw UnexpectedTransportCall("changes")
     }
+    func userEvents(since cursor: DiffCursor) async throws -> UserEventDiff {
+        UserEventDiff(cursor: cursor, favorites: [])
+    }
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] {
         throw UnexpectedTransportCall("items")
     }

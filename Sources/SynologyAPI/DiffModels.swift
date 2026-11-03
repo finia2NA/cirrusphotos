@@ -26,6 +26,63 @@ public struct PhotoDiff: Sendable, Equatable {
         Set(modifiedItemIDs).isDisjoint(with: deletedItemIDs)
     }
 }
+/// One favorite toggle from the v7 `list_user_event` feed.
+public struct FavoriteEvent: Sendable, Equatable {
+    public let itemIDs: [Int64]
+    public let favorite: Bool
+    public init(itemIDs: [Int64], favorite: Bool) { self.itemIDs = itemIDs; self.favorite = favorite }
+}
+
+/// The observed v7 `list_user_event` interval. Only favorite events are understood;
+/// any other event type marks the interval unsupported.
+public struct UserEventDiff: Sendable, Equatable {
+    public let cursor: DiffCursor
+    public let favorites: [FavoriteEvent]
+    public let hasNext: Bool
+    public let hasUnsupportedActivity: Bool
+    public init(cursor: DiffCursor, favorites: [FavoriteEvent], hasNext: Bool = false, hasUnsupportedActivity: Bool = false) {
+        self.cursor = cursor; self.favorites = favorites; self.hasNext = hasNext; self.hasUnsupportedActivity = hasUnsupportedActivity
+    }
+    public var isEmpty: Bool { favorites.isEmpty && !hasNext && !hasUnsupportedActivity }
+    public var isBoundedTerminal: Bool {
+        !hasNext && !hasUnsupportedActivity && favorites.reduce(0) { $0 + $1.itemIDs.count } <= 2000
+    }
+}
+
+struct UserEventDiffData: Decodable {
+    let value: UserEventDiff
+    private enum CodingKeys: String, CodingKey {
+        case diffVersion = "diff_version", versionTime = "version_time", list
+        case hasNext = "has_next"
+    }
+    private struct Event: Decodable {
+        let eventType: String
+        let targetIDs: [Int64]?
+        enum CodingKeys: String, CodingKey { case eventType = "event_type", targetIDs = "target_id" }
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            eventType = try container.decode(String.self, forKey: .eventType)
+            targetIDs = try? container.decode([Int64].self, forKey: .targetIDs)
+        }
+    }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        var favorites: [FavoriteEvent] = []
+        var unsupported = false
+        for event in try container.decode([Event].self, forKey: .list) {
+            switch (event.eventType, event.targetIDs) {
+            case ("favorite_add", let ids?): favorites.append(.init(itemIDs: ids, favorite: true))
+            case ("favorite_delete", let ids?): favorites.append(.init(itemIDs: ids, favorite: false))
+            default: unsupported = true
+            }
+        }
+        value = UserEventDiff(cursor: DiffCursor(diffVersion: try container.decode(Int64.self, forKey: .diffVersion),
+                                                 versionTime: try container.decode(Int64.self, forKey: .versionTime)),
+                              favorites: favorites, hasNext: try container.decode(Bool.self, forKey: .hasNext),
+                              hasUnsupportedActivity: unsupported)
+    }
+}
+
 struct DiffVersionData: Decodable {
     let cursor: DiffCursor
     init(from decoder: Decoder) throws { cursor = try DiffCursor(from: decoder) }

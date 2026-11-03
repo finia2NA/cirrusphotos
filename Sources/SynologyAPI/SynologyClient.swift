@@ -578,6 +578,13 @@ public actor SynologyClient: PhotosTransport {
         return data.value
     }
 
+    public func userEvents(since cursor: DiffCursor) async throws -> UserEventDiff {
+        let data: UserEventDiffData = try await call("SYNO.Foto.Browse.Diff", version: 7, method: "list_user_event", [
+            "diff_version": String(cursor.diffVersion), "version_time": String(cursor.versionTime)],
+            maximumBytes: Self.diffResponseLimit)
+        return data.value
+    }
+
     private static func additionalParameter(
         for fields: [String] = PhotosRequestFields.pageAdditional
     ) -> String {

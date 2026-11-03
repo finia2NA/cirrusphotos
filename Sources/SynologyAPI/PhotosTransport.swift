@@ -171,6 +171,8 @@ public protocol PhotosTransport: Sendable {
     func readPersonalInventoryBatch(offset: Int, limit: Int) async throws -> [PhotoItem]
     func diffVersion() async throws -> DiffCursor
     func changes(since cursor: DiffCursor) async throws -> PhotoDiff
+    /// Personal Space `Diff.list_user_event` v7: favorite changes, which the item feed omits.
+    func userEvents(since cursor: DiffCursor) async throws -> UserEventDiff
 
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem]
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse

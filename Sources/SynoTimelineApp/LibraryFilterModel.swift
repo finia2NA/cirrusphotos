@@ -15,6 +15,7 @@ final class LibraryFilterModel: ObservableObject {
         currentSectionLabel: nil, matchCount: nil, state: .idle, failures: [])
     @Published private(set) var activeCollection: PhotoCollectionDescriptor?
     @Published private(set) var validationErrors: [String: String] = [:]
+    @Published var filenameText = ""; @Published var filenameUsesRegularExpression = false
     @Published var megapixelsMin = ""; @Published var megapixelsMax = ""
     @Published var sizeMin = ""; @Published var sizeMax = ""
     @Published var sizeMinUnit: SizeUnit = .MB; @Published var sizeMaxUnit: SizeUnit = .MB
@@ -33,7 +34,6 @@ final class LibraryFilterModel: ObservableObject {
     private var installedRegistration: LibraryFilterRegistration?
     private var installingRegistration: LibraryFilterRegistration?
     private var applyToken = UUID()
-    private var needsInitialBatch = false
     private var networkAllowed: Bool?
 
     var isActive: Bool { activeCollection != nil }
@@ -109,6 +109,7 @@ final class LibraryFilterModel: ObservableObject {
             return
         }
         var filter = draft
+        filter.filename = filenameSearch
         filter.megapixels = range(megapixelsMin, megapixelsMax, parser: parsePositive)
         filter.bytes = byteRange()
         filter.iso = range(isoMin, isoMax, parser: parsePositiveInteger)
@@ -124,7 +125,6 @@ final class LibraryFilterModel: ObservableObject {
     private func start(_ filter: LibraryFilter, on controller: LibraryFilterController) {
         let token = UUID()
         applyToken = token
-        needsInitialBatch = true
         Task {
             let registration = await controller.apply(filter)
             guard applyToken == token else { return }
@@ -138,6 +138,7 @@ final class LibraryFilterModel: ObservableObject {
         detachActiveFilter()
         committed = LibraryFilter()
         draft = LibraryFilter()
+        filenameText = ""; filenameUsesRegularExpression = false
         megapixelsMin = ""; megapixelsMax = ""; sizeMin = ""; sizeMax = ""
         isoMin = ""; isoMax = ""; focalMin = ""; focalMax = ""
         apertureMin = ""; apertureMax = ""; shutterMin = ""; shutterMax = ""
@@ -147,7 +148,6 @@ final class LibraryFilterModel: ObservableObject {
 
     private func detachActiveFilter() {
         applyToken = UUID()
-        needsInitialBatch = false
         if let descriptor = activeCollection, let repository = library?.repository {
             Task { await repository.unregisterLibraryFilter(descriptor) }
             library?.unregisterSessionCollection(descriptor)
@@ -178,10 +178,6 @@ final class LibraryFilterModel: ObservableObject {
         progress = event.progress
         if let registration = event.registration, activeCollection == registration.descriptor {
             await install(registration)
-            if needsInitialBatch && !event.progress.isDiscoveringCachedPages {
-                needsInitialBatch = false
-                await controller?.startContinuousScan()
-            }
         }
     }
 
@@ -230,6 +226,7 @@ final class LibraryFilterModel: ObservableObject {
 
     private func validateFields() -> [String: String] {
         var errors: [String: String] = [:]
+        if !filenameSearch.isValid { errors["Filename"] = "Enter a valid regular expression." }
         validate("Megapixels", megapixelsMin, megapixelsMax, parser: parsePositive, into: &errors)
         validate("Size", sizeMin, sizeMax, parser: parsePositive, into: &errors)
         validate("ISO", isoMin, isoMax, parser: parsePositiveInteger, into: &errors)
@@ -237,6 +234,10 @@ final class LibraryFilterModel: ObservableObject {
         validate("Aperture", apertureMin, apertureMax, parser: parseAperture, into: &errors)
         validate("Shutter Speed", shutterMin, shutterMax, parser: parseShutter, into: &errors)
         return errors
+    }
+
+    private var filenameSearch: FilenameSearch {
+        FilenameSearch(filenameText, mode: filenameUsesRegularExpression ? .regularExpression : .text)
     }
 
     private func validate(_ name: String, _ minimum: String, _ maximum: String,

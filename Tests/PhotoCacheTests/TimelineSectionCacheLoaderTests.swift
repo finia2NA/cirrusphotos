@@ -65,4 +65,28 @@ final class TimelineSectionCacheLoaderTests: XCTestCase, @unchecked Sendable {
         let finalCalls = await transport.stats()
         XCTAssertEqual(finalCalls.requests.count, 2)
     }
+    func testLoadUnverifiedFinishesVerifiedPagesWithoutRequestsAndRefetchesOthers() async throws {
+        let root = temporaryTestRoot("warmer-unverified"); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = try BatchedMetadataTransport(days: 4)
+        let repository = try CachedPhotosRepository(credentials: .init(username: "warmer", password: "unused"), cacheRoot: root, transport: transport)
+        let snapshot = try await repository.verifiedTimelineSnapshot(collection: .favorites(.personal))
+        let first = TimelineSectionCacheLoader(repository: repository, collection: .favorites(.personal), snapshot: snapshot)
+        await first.loadUnverified()
+        let initial = await finished(first)
+        XCTAssertEqual(initial.verified, 4)
+        let fetched = await transport.stats()
+        let again = TimelineSectionCacheLoader(repository: repository, collection: .favorites(.personal), snapshot: snapshot)
+        await again.loadUnverified()
+        let repeated = await finished(again)
+        XCTAssertEqual(repeated.verified, 4)
+        let afterRepeat = await transport.stats()
+        XCTAssertEqual(afterRepeat.requests.count, fetched.requests.count, "Pages verified this run need no request")
+        try await repository.store.evictMetadataDetails(namespace: repository.personalMetadataNamespace, itemIDs: [1])
+        let repair = TimelineSectionCacheLoader(repository: repository, collection: .favorites(.personal), snapshot: snapshot)
+        await repair.loadUnverified()
+        let repaired = await finished(repair)
+        XCTAssertEqual(repaired.verified, 4); XCTAssertEqual(repaired.cached, 0)
+        let details = await transport.detailCallCount()
+        XCTAssertEqual(details, 1, "Only the unverified page's missing detail is fetched")
+    }
 }

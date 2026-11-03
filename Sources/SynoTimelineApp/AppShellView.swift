@@ -8,6 +8,7 @@ struct AppShellView: View {
     @EnvironmentObject private var infoPanel: InfoPanelModel
     @EnvironmentObject private var libraryFilter: LibraryFilterModel
     @EnvironmentObject private var timelineSectionLoad: TimelineSectionLoadModel
+    @EnvironmentObject private var metadataSync: MetadataSyncModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismissWindow) private var dismissWindow
     @ObservedObject var navigation: NavigationModel
@@ -149,6 +150,8 @@ struct AppShellView: View {
             updateBackHandler()
             libraryFilter.configure(library: model, source: sourceCollection)
             timelineSectionLoad.configure(library: model, filter: libraryFilter)
+            metadataSync.configure(library: model)
+            metadataSync.setFocus(sourceCollection)
             updateTimelineSectionLoadSource()
         }
         .onChange(of: selectedDestination) { _, _ in
@@ -182,6 +185,7 @@ struct AppShellView: View {
         .onChange(of: sourceCollection) { _, _ in
             if let collection = sourceCollection { model.ensureCollectionLoaded(collection) }
             libraryFilter.configure(library: model, source: sourceCollection)
+            metadataSync.setFocus(sourceCollection)
             updateTimelineSectionLoadSource()
         }
         .onChange(of: sourceSnapshotRevision) { _, _ in

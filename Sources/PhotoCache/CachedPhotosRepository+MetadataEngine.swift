@@ -61,15 +61,18 @@ extension CachedPhotosRepository {
                     metadata.reconciled = true
                     return
                 }
+                // Favorite events are read after the item feed from the same cursor, so they
+                // cover at least the item interval; the fence below covers everything after it.
                 let interval = try await metadataSourceRequest { try await client.changes(since: cursor) }
+                let events = try await metadataSourceRequest { try await client.userEvents(since: cursor) }
                 try requireMetadataEngineAdmission(epoch: epoch, id: id)
-                guard interval.isBoundedTerminal else {
+                guard interval.isBoundedTerminal, events.isBoundedTerminal else {
                     try await recoverMetadataSource(admission: admission, epoch: epoch, id: id)
                     return
                 }
-                if interval.isEmpty {
+                if interval.isEmpty && events.isEmpty {
                     try await store.applyMetadataChanges(namespace: personalMetadataNamespace, cursor: interval.cursor, replacements: [], deletedIDs: [], affectedDays: [],
-                                                         invalidateAll: false, currentRun: runID, admission: admission)
+                                                         invalidateAll: false, proven: true, currentRun: runID, admission: admission)
                     let committed = try await store.metadataState(personalMetadataNamespace)
                     try requireMetadataEngineAdmission(epoch: epoch, id: id)
                     metadata.revision = committed.revision
@@ -88,10 +91,18 @@ extension CachedPhotosRepository {
                     }
                     replacements.append(contentsOf: items)
                 }
+                let known = Set(old.map(\.id))
+                let unknown = (interval.modifiedItemIDs + interval.deletedItemIDs).filter { !known.contains($0) }
+                let referenced = try await store.metadataReferencedDays(personalMetadataNamespace, ids: unknown)
                 let candidate = try MetadataChangeApplication.prepare(diff: interval, oldInventory: old,
-                                                                      inventoryComplete: prior.inventoryComplete, lookup: replacements)
-                let fence = interval.isEmpty ? interval : try await metadataSourceRequest { try await client.changes(since: interval.cursor) }
-                guard fence.isEmpty else {
+                                                                      referencedDays: referenced, lookup: replacements)
+                var favorites: [Int64: Bool] = [:]
+                for event in events.favorites { for itemID in event.itemIDs { favorites[itemID] = event.favorite } }
+                let favoriteDays = Set(try await store.metadataItemTimes(personalMetadataNamespace, ids: Array(favorites.keys))
+                    .compactMap { try? CaptureDay(time: $0.time) })
+                let fence = try await metadataSourceRequest { try await client.changes(since: interval.cursor) }
+                let eventFence = try await metadataSourceRequest { try await client.userEvents(since: interval.cursor) }
+                guard fence.isEmpty, eventFence.isEmpty else {
                     try await recoverMetadataSource(admission: admission, epoch: epoch, id: id)
                     return
                 }
@@ -99,12 +110,13 @@ extension CachedPhotosRepository {
                 try await store.applyMetadataChanges(namespace: personalMetadataNamespace, cursor: fence.cursor,
                                                      replacements: candidate.replacements, deletedIDs: candidate.deletedIDs,
                                                      affectedDays: candidate.affectedDays, invalidateAll: candidate.invalidateAll,
-                                                     currentRun: runID, admission: admission)
+                                                     favorites: favorites, proven: true, currentRun: runID, admission: admission)
                 let committed = try await store.metadataState(personalMetadataNamespace)
                 try requireMetadataEngineAdmission(epoch: epoch, id: id)
                 metadata.revision = committed.revision
                 metadata.reconciled = true
-                publishMetadataInvalidation(days: candidate.invalidateAll ? nil : candidate.affectedDays)
+                let unknownFavorite = favoriteDays.count < favorites.count
+                publishMetadataInvalidation(days: candidate.invalidateAll || unknownFavorite ? nil : candidate.affectedDays.union(favoriteDays))
                 publishLocationItemChanges(candidate.replacements, deletedIDs: candidate.deletedIDs, coverageChanged: true)
             } catch {
                 try requireMetadataEngineAdmission(epoch: epoch, id: id)
@@ -199,8 +211,10 @@ extension CachedPhotosRepository {
                         guard scanned == total else { throw CollectionCatalogError.invalidCoverage }
                         var fenceCursor = prior.cursor
                         if let cursor = prior.cursor, !metadata.sourceUnavailable {
+                            // Advancing the shared cursor must not skip favorite events.
                             let fence = try await metadataReadRequest(priority: .prefetch, id: id) { try await client.changes(since: cursor) }
-                            guard fence.isEmpty else {
+                            let eventFence = try await metadataReadRequest(priority: .prefetch, id: id) { try await client.userEvents(since: cursor) }
+                            guard fence.isEmpty, eventFence.isEmpty else {
                                 let boundary = try await metadataReadRequest(priority: .prefetch, id: id) { try await client.diffVersion() }
                                 try await store.applyMetadataChanges(namespace: personalMetadataNamespace, cursor: boundary, replacements: [], deletedIDs: [], affectedDays: [],
                                                                      invalidateAll: true, currentRun: runID, admission: admission)

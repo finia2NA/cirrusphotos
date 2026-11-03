@@ -10,7 +10,7 @@ final class MetadataChangeApplicationTests: XCTestCase {
     }
     func testKnownUnlocatedDeletionStillInvalidatesItsOldDay() throws {
         let old = MetadataIndexItem(id: 1, time: 1_704_067_200, coordinate: nil, thumbnail: nil)
-        let candidate = try MetadataChangeApplication.prepare(diff: .init(cursor: cursor, modifiedItemIDs: [], deletedItemIDs: [1]), oldInventory: [old], inventoryComplete: false, lookup: [])
+        let candidate = try MetadataChangeApplication.prepare(diff: .init(cursor: cursor, modifiedItemIDs: [], deletedItemIDs: [1]), oldInventory: [old], referencedDays: [:], lookup: [])
         XCTAssertEqual(candidate.affectedDays, [try CaptureDay(time: old.time)])
         XCTAssertFalse(candidate.invalidateAll)
     }
@@ -18,19 +18,23 @@ final class MetadataChangeApplicationTests: XCTestCase {
         let old = MetadataIndexItem(id: 1, time: 1_704_067_200, coordinate: nil, thumbnail: nil)
         let moved = try item(1, time: old.time + 86_400)
         let diff = PhotoDiff(cursor: cursor, modifiedItemIDs: [1], deletedItemIDs: [])
-        let candidate = try MetadataChangeApplication.prepare(diff: diff, oldInventory: [old], inventoryComplete: false, lookup: [moved])
+        let candidate = try MetadataChangeApplication.prepare(diff: diff, oldInventory: [old], referencedDays: [:], lookup: [moved])
         XCTAssertEqual(candidate.affectedDays.count, 2)
-        let unchangedDay = try MetadataChangeApplication.prepare(diff: diff, oldInventory: [old], inventoryComplete: false, lookup: [item(1, time: old.time)])
+        let unchangedDay = try MetadataChangeApplication.prepare(diff: diff, oldInventory: [old], referencedDays: [:], lookup: [item(1, time: old.time)])
         XCTAssertEqual(unchangedDay.affectedDays.count, 1)
     }
-    func testSparseAbsenceIsUnknownAndCompleteAbsenceCanBeAddition() throws {
+    func testUnindexedIDsInvalidateOnlyTheCachedPagesThatListThem() throws {
         let new = try item(5, time: 1_704_067_200)
-        let diff = PhotoDiff(cursor: cursor, modifiedItemIDs: [5], deletedItemIDs: [])
-        XCTAssertTrue(try MetadataChangeApplication.prepare(diff: diff, oldInventory: [], inventoryComplete: false, lookup: [new]).invalidateAll)
-        XCTAssertFalse(try MetadataChangeApplication.prepare(diff: diff, oldInventory: [], inventoryComplete: true, lookup: [new]).invalidateAll)
+        let diff = PhotoDiff(cursor: cursor, modifiedItemIDs: [5], deletedItemIDs: [6])
+        let addition = try MetadataChangeApplication.prepare(diff: diff, oldInventory: [], referencedDays: [:], lookup: [new])
+        XCTAssertFalse(addition.invalidateAll)
+        XCTAssertEqual(addition.affectedDays, [try CaptureDay(time: new.time)])
+        let listed = try CaptureDay(year: 2020, month: 5, day: 1), deletedDay = try CaptureDay(year: 2019, month: 1, day: 1)
+        let evicted = try MetadataChangeApplication.prepare(diff: diff, oldInventory: [], referencedDays: [5: [listed], 6: [deletedDay]], lookup: [new])
+        XCTAssertEqual(evicted.affectedDays, [try CaptureDay(time: new.time), listed, deletedDay])
     }
     func testPartialAndMissingLookupNeverImplyTombstones() throws {
-        XCTAssertThrowsError(try MetadataChangeApplication.prepare(diff: .init(cursor: cursor, modifiedItemIDs: [5], deletedItemIDs: []), oldInventory: [], inventoryComplete: true, lookup: []))
-        XCTAssertThrowsError(try MetadataChangeApplication.prepare(diff: .init(cursor: cursor, modifiedItemIDs: [], deletedItemIDs: [], hasNext: true), oldInventory: [], inventoryComplete: true, lookup: []))
+        XCTAssertThrowsError(try MetadataChangeApplication.prepare(diff: .init(cursor: cursor, modifiedItemIDs: [5], deletedItemIDs: []), oldInventory: [], referencedDays: [:], lookup: []))
+        XCTAssertThrowsError(try MetadataChangeApplication.prepare(diff: .init(cursor: cursor, modifiedItemIDs: [], deletedItemIDs: [], hasNext: true), oldInventory: [], referencedDays: [:], lookup: []))
     }
 }

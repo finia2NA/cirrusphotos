@@ -11,6 +11,7 @@ struct SynoTimelineApp: App {
     @StateObject private var infoPanel = InfoPanelModel()
     @StateObject private var libraryFilter = LibraryFilterModel()
     @StateObject private var timelineSectionLoad = TimelineSectionLoadModel()
+    @StateObject private var metadataSync = MetadataSyncModel()
 
     init() {
         let preferences = AppPreferences()
@@ -26,6 +27,7 @@ struct SynoTimelineApp: App {
                 .environmentObject(infoPanel)
                 .environmentObject(libraryFilter)
                 .environmentObject(timelineSectionLoad)
+                .environmentObject(metadataSync)
                 .frame(minWidth: 560, minHeight: 420)
                 .task { await model.load() }
         }

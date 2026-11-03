@@ -816,6 +816,43 @@ The separate [third runner](captures/MAP_DIFF_MOBILE_RUNNER.md), `make test-map-
 
 A subsequent bounded Android refresh returned all 5,012 test tombstones in one terminal v7 `list` response (`has_next=false`). A read-only replay matched both the capture and exact known-ID set, then fenced empty; the final inventory had one original item. Deletion response length must not be assumed to share the observed 2,000-modification page behavior. Modification continuation remains unobserved. The initial product plan now deliberately handles only bounded terminal intervals and rebuilds for partial/large intervals, so another bulk capture is not a prerequisite. See [follow-up evidence](captures/ANDROID_MAP_DIFF_CAPTURE_2026-10-26.md#bounded-follow-up-after-the-third-run).
 
+### Annotation and album coverage (2026-11-03)
+
+A probe on the disposable `phototest` account took a fresh `get_version` v7 cursor before each reversible write on one existing photo and then read all three v7 feeds from that cursor. The three feeds share the cursor pair.
+
+| Write | `list` v7 `item.modify` | `get` v7 `album.modify` | `list_user_event` v7 |
+| --- | --- | --- | --- |
+| `Browse.Item set_favorite` on/off | absent | none | `{"event_type": "favorite_add"/"favorite_delete", "target_id": [id]}` |
+| `Browse.Item set rotate_action` | present; `orientation` and `thumb_version` changed | none | none |
+| `Browse.Item set description` | present with the new `description` | none | none |
+| `NormalAlbum create` with the item, `delete_item` | absent | the album's full summary row (`item_count` changed) | none |
+
+- Each write advanced the cursor, and each feed was terminal (`has_next=false`).
+- `list` rows carry `additional.favorite: null` even though `favorite` was requested, so the item feed never establishes favorite state.
+- `list_user_event` is the favorite feed. `get` reports which albums changed but not which items; a changed album needs its membership read again.
+- A second probe on `phototest` used the mount and item writes:
+
+  | Change | Result |
+  | --- | --- |
+  | JPEG added to a folder | `list` modification with its `folder_id` |
+  | File moved to another folder | same ID, `list` modification with the new `folder_id`; `item.move` stays empty |
+  | `Browse.Item set rating` (v7, `{id: [...], rating: n}`) | `list` modification with the new `additional.rating` |
+  | `GeneralTag create` (v1, `name`) then `Browse.Item add_tag` / `remove_tag` (v7, `{id: [...], tag: [tag_id]}`) | `list` modification with the new `additional.tag` |
+  | Parent folder renamed on the filesystem | no item change and no cursor advance within 2 minutes |
+  | Folder removed | `list` tombstone and a `get` `item.delete` |
+
+  The probe left an unused `diffprobe` general tag on `phototest`.
+- **Not tested:**
+  - People and Subjects changes; `phototest` has no people and one generated subject.
+  - Album deletion in `album.delete`.
+  - Mixing these feeds with more than one change per interval.
+- `SYNO.FotoTeam.Browse.Diff get_version` v7 returned error 801 for `phototest`, which has no Shared Space access.
+- **Shared Space (main account, read-only):**
+  - What works: `SYNO.FotoTeam.Browse.Diff` v1–v7 is advertised, and v7 `get_version`, `list` and `get` succeed. `list` returns the same `item`/`similar`/`has_next` shape as Personal; `get` returns `item` and `album` groups.
+  - What doesn't: `list_user_event` is rejected with error 103, and a fabricated older cursor is rejected with error 700.
+  - The Shared Space cursor is independent of the Personal cursor.
+  - Whether Shared edits and Shared favorites appear in these feeds is untested, because no writes were made.
+
 ## Error and refresh behavior
 
 - A failed section request should leave the section descriptor intact and expose a retry state.

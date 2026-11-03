@@ -108,7 +108,6 @@ public actor LibraryFilterController {
     private var invalidationTask: Task<Void, Never>?
     private var stopped = false
     private var scheduler: Task<Void, Never>?
-    private var continuousScan = false
     private var pending: [QueuedRead] = []
     private var activeIndices = Set<Int>()
     private var lastDemand: (direction: LibraryFilterScanDirection, sources: [Int], generation: UInt64)?
@@ -167,7 +166,6 @@ public actor LibraryFilterController {
 
     public func apply(_ filter: LibraryFilter) -> LibraryFilterRegistration {
         startCacheDiscovery()
-        continuousScan = false
         pending.removeAll()
         activeFilter = filter
         descriptor = .libraryFilter(UUID(), scope: sourceCollection.contentScope)
@@ -215,20 +213,10 @@ public actor LibraryFilterController {
         guard allowed != networkAllowed else { return }
         networkAllowed = allowed
         guard allowed, !stopped else { return }
-        if continuousScan { refillContinuousScan() } else if !pending.isEmpty { startSchedulerIfNeeded() }
-    }
-
-    public func startContinuousScan() {
-        guard activeFilter != nil, !stopped else { return }
-        continuousScan = true
-        refillContinuousScan()
-    }
-
-    private func refillContinuousScan() {
-        guard continuousScan, activeFilter != nil else { return }
-        let capacity = max(0, Self.scanGroupSize - pending.count - activeIndices.count)
-        guard capacity > 0 else { return }
-        enqueue(states.indices.filter { states[$0] != .failed }, useCachedPages: true, limit: capacity)
+        // The source timeline is now verified this run, so Diff-proven cached pages
+        // can be reread as verified without a request.
+        if cacheDiscoveryTask == nil { startCacheDiscovery(reconcile: true) }
+        if !pending.isEmpty { startSchedulerIfNeeded() }
     }
 
     public func retryFailed() {
@@ -239,7 +227,6 @@ public actor LibraryFilterController {
     }
 
     public func unregisterFilter() {
-        continuousScan = false
         pending.removeAll()
         activeFilter = nil
         descriptor = nil
@@ -440,7 +427,6 @@ public actor LibraryFilterController {
             }
             scanDirty = false
             if groupChanged { publish() }
-            refillContinuousScan()
         }
         activeIndices.removeAll()
         scheduler = nil

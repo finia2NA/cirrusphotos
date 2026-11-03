@@ -33,4 +33,19 @@ final class DiffModelsTests: XCTestCase {
         XCTAssertFalse(PhotoDiff(cursor: cursor, modifiedItemIDs: [1], deletedItemIDs: [1]).isBoundedTerminal)
         XCTAssertEqual(try JSONDecoder().decode(DiffCursor.self, from: JSONEncoder().encode(cursor)), cursor)
     }
+    func testObservedUserEventsDecodeFavoritesAndRejectOtherEvents() throws {
+        func events(_ list: String) throws -> UserEventDiff {
+            let body = "{\"success\":true,\"data\":{\"diff_version\":5,\"version_time\":6,\"has_next\":false,\"list\":\(list)}}"
+            return try XCTUnwrap(JSONDecoder().decode(APIEnvelope<UserEventDiffData>.self, from: Data(body.utf8)).data).value
+        }
+        let favorites = try events(#"[{"event_type":"favorite_add","target_id":[7,8]},{"event_type":"favorite_delete","target_id":[7]}]"#)
+        XCTAssertEqual(favorites.favorites, [.init(itemIDs: [7, 8], favorite: true), .init(itemIDs: [7], favorite: false)])
+        XCTAssertEqual(favorites.cursor, DiffCursor(diffVersion: 5, versionTime: 6))
+        XCTAssertTrue(favorites.isBoundedTerminal)
+        XCTAssertTrue(try events("[]").isEmpty)
+        let unknown = try events(#"[{"event_type":"share_album","target_id":[3]}]"#)
+        XCTAssertFalse(unknown.isEmpty); XCTAssertFalse(unknown.isBoundedTerminal)
+        let malformed = try events(#"[{"event_type":"favorite_add","target_id":"7"}]"#)
+        XCTAssertFalse(malformed.isBoundedTerminal)
+    }
 }

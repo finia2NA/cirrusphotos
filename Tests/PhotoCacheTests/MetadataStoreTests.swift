@@ -358,4 +358,99 @@ final class MetadataStoreTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(facetRecord?.facets, ItemFacets(payload))
         XCTAssertNil(facetRecord?.annotationRun)
     }
+    func testDiffProofVerifiesUntouchedCachedPagesInALaterRun() async throws {
+        let (store, root) = try await open()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let page = try await seed(store)
+        let other = try CaptureDay(year: 2024, month: 1, day: 2)
+        let key = CollectionKey(namespace: namespace, collection: .library(.personal))
+        let catalog = try CollectionDayCatalog(days: [.init(day: page.address.day, count: 3), .init(day: other, count: 1)], completeness: .complete)
+
+        var admission = try await store.metadataAdmission(namespace)
+        try await store.applyMetadataChanges(namespace: namespace, cursor: .init(diffVersion: 2, versionTime: 2), replacements: [], deletedIDs: [],
+                                             affectedDays: [], invalidateAll: false, currentRun: "next", admission: admission)
+        admission = try await store.metadataAdmission(namespace)
+        try await store.storeMetadataCatalog(catalog, key: key, validatedRun: "next", admission: admission)
+        let unproven = try await store.metadataPage(page.address, namespace: namespace, currentRun: "next")
+        XCTAssertEqual(unproven?.verified, false, "Without a proven reconciliation a page needs this run's read")
+
+        admission = try await store.metadataAdmission(namespace)
+        try await store.applyMetadataChanges(namespace: namespace, cursor: .init(diffVersion: 3, versionTime: 3), replacements: [], deletedIDs: [],
+                                             affectedDays: [], invalidateAll: false, proven: true, currentRun: "next", admission: admission)
+        let proven = try await store.metadataPage(page.address, namespace: namespace, currentRun: "next")
+        XCTAssertEqual(proven?.verified, true)
+        let filterPages = try await store.metadataFilterPages(namespace, collection: .library(.personal), days: nil, currentRun: "next")
+        XCTAssertEqual(filterPages.map(\.verified), [true])
+        let details = try await store.metadataDetails(namespace, ids: [1], currentRun: "next")
+        XCTAssertEqual(details[1]?.verified, true)
+
+        // A touched day loses the proof; a run without this run's catalog never had it.
+        admission = try await store.metadataAdmission(namespace)
+        try await store.applyMetadataChanges(namespace: namespace, cursor: .init(diffVersion: 4, versionTime: 4), replacements: [], deletedIDs: [],
+                                             affectedDays: [page.address.day], invalidateAll: false, proven: true, currentRun: "next", admission: admission)
+        admission = try await store.metadataAdmission(namespace)
+        try await store.storeMetadataCatalog(catalog, key: key, validatedRun: "next", admission: admission)
+        let touched = try await store.metadataPage(page.address, namespace: namespace, currentRun: "next")
+        XCTAssertEqual(touched?.verified, false)
+        let laterRun = try await store.metadataPage(page.address, namespace: namespace, currentRun: "later")
+        XCTAssertEqual(laterRun?.verified, false)
+    }
+    func testFavoriteEventsPatchDetailsAndMarkOnlyTheirFavoritesDays() async throws {
+        let (store, root) = try await open()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let favorites = try await seed(store, collection: .favorites(.personal))
+        let other = try CaptureDay(year: 2024, month: 1, day: 2)
+        let otherPage = try DayPageRead(address: .init(collection: .favorites(.personal), day: other, offset: 0), dayCount: 1, membershipGeneration: 1)
+        let key = CollectionKey(namespace: namespace, collection: .favorites(.personal))
+        let catalog = try CollectionDayCatalog(days: [.init(day: favorites.address.day, count: 3), .init(day: other, count: 1)], completeness: .complete)
+        var admission = try await store.metadataAdmission(namespace)
+        try await store.storeMetadataCatalog(catalog, key: key, validatedRun: "run", admission: admission)
+        try await store.storeMetadataPage(otherPage, items: [item(9, day: other)], profile: .fullPage, namespace: namespace, currentRun: "run", admission: admission)
+
+        admission = try await store.metadataAdmission(namespace)
+        try await store.applyMetadataChanges(namespace: namespace, cursor: .init(diffVersion: 2, versionTime: 2), replacements: [], deletedIDs: [],
+                                             affectedDays: [], invalidateAll: false, favorites: [2: false], proven: true,
+                                             currentRun: "next", admission: admission)
+        admission = try await store.metadataAdmission(namespace)
+        let generation = try await store.metadataDayGeneration(key, day: favorites.address.day) ?? 0
+        let otherGeneration = try await store.metadataDayGeneration(key, day: other) ?? 0
+        let refreshed = try CollectionDayCatalog(days: [.init(day: favorites.address.day, count: 2), .init(day: other, count: 1)], completeness: .complete)
+        try await store.storeMetadataCatalog(refreshed, key: key, validatedRun: "next", admission: admission)
+
+        XCTAssertGreaterThan(generation, 1, "The favorite's day must be reread")
+        XCTAssertEqual(otherGeneration, 1)
+        let changed = try await store.metadataPage(favorites.address, namespace: namespace, currentRun: "next")
+        XCTAssertEqual(changed?.verified, false)
+        let untouched = try await store.metadataPage(otherPage.address, namespace: namespace, currentRun: "next")
+        XCTAssertEqual(untouched?.verified, true)
+        let details = try await store.metadataDetails(namespace, ids: [2], currentRun: "next")
+        XCTAssertEqual(details[2]?.item?.additional?.favorite, false)
+        XCTAssertEqual(details[2]?.verified, true)
+    }
+    func testWithdrawingValidationKeepsRowsButRequiresNewReads() async throws {
+        let (store, root) = try await open()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let page = try await seed(store)
+        let admission = try await store.metadataAdmission(namespace)
+        try await store.applyMetadataChanges(namespace: namespace, cursor: .init(diffVersion: 2, versionTime: 2), replacements: [], deletedIDs: [],
+                                             affectedDays: [], invalidateAll: false, proven: true, currentRun: "run", admission: admission)
+        let before = try await store.metadataPage(page.address, namespace: namespace, currentRun: "run")
+        XCTAssertEqual(before?.verified, true)
+        try await store.withdrawMetadataValidation()
+        let state = try await store.metadataState(namespace)
+        XCTAssertNil(state.cursor); XCTAssertNil(state.proofRun)
+        let after = try await store.metadataPage(page.address, namespace: namespace, currentRun: "run")
+        XCTAssertEqual(after?.slots.compactMap(\.item).count, 3, "Cached rows stay readable")
+        XCTAssertEqual(after?.verified, false)
+        let details = try await store.metadataDetails(namespace, ids: [1], currentRun: "run")
+        XCTAssertEqual(details[1]?.verified, false)
+    }
+    func testReferencedDaysListEveryCachedPageThatHoldsAnID() async throws {
+        let (store, root) = try await open()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = try await seed(store)
+        _ = try await seed(store, collection: .favorites(.personal))
+        let days = try await store.metadataReferencedDays(namespace, ids: [2, 99])
+        XCTAssertEqual(days, [2: [library.address.day]])
+    }
 }

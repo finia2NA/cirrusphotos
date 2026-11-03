@@ -21,7 +21,44 @@ public struct OptionalNumericRange<Value: Comparable & Sendable>: Equatable, Sen
     }
 }
 
+/// A filename criterion: a case- and diacritic-insensitive substring, or a
+/// case-insensitive regular expression matched anywhere in the filename.
+public struct FilenameSearch: Equatable, Sendable {
+    public enum Mode: Sendable { case text, regularExpression }
+    public let text: String
+    public let mode: Mode
+    private let key: String
+    private let expression: NSRegularExpression?
+
+    public init(_ text: String = "", mode: Mode = .text) {
+        self.text = text
+        self.mode = mode
+        key = LibraryFilterParsing.searchKey(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        expression = mode == .regularExpression && !text.isEmpty
+            ? try? NSRegularExpression(pattern: text, options: [.caseInsensitive]) : nil
+    }
+
+    public var isEmpty: Bool { mode == .text ? key.isEmpty : text.isEmpty }
+    /// False for a regular expression that does not compile.
+    public var isValid: Bool { mode == .text || text.isEmpty || expression != nil }
+
+    func matches(filename: String?, key filenameKey: String?) -> Bool {
+        guard !isEmpty else { return true }
+        switch mode {
+        case .text:
+            guard let filenameKey else { return false }
+            return filenameKey.contains(key)
+        case .regularExpression:
+            guard let expression, let filename else { return false }
+            return expression.firstMatch(in: filename, range: NSRange(filename.startIndex..., in: filename)) != nil
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool { lhs.text == rhs.text && lhs.mode == rhs.mode }
+}
+
 public struct LibraryFilter: Equatable, Sendable {
+    public var filename: FilenameSearch
     public var mediaKinds: Set<PhotoMediaKind>
     public var cameras: Set<String>
     public var lenses: Set<String>
@@ -33,7 +70,7 @@ public struct LibraryFilter: Equatable, Sendable {
     public var aperture: OptionalNumericRange<Double>
     public var exposureSeconds: OptionalNumericRange<Double>
 
-    public init(mediaKinds: Set<PhotoMediaKind> = [], cameras: Set<String> = [],
+    public init(filename: FilenameSearch = .init(), mediaKinds: Set<PhotoMediaKind> = [], cameras: Set<String> = [],
                 lenses: Set<String> = [], extensions: Set<String> = [],
                 megapixels: OptionalNumericRange<Double> = .init(),
                 bytes: OptionalNumericRange<Int64> = .init(),
@@ -41,6 +78,7 @@ public struct LibraryFilter: Equatable, Sendable {
                 focalLengthMM: OptionalNumericRange<Double> = .init(),
                 aperture: OptionalNumericRange<Double> = .init(),
                 exposureSeconds: OptionalNumericRange<Double> = .init()) {
+        self.filename = filename
         self.mediaKinds = mediaKinds
         self.cameras = cameras
         self.lenses = lenses
@@ -54,13 +92,13 @@ public struct LibraryFilter: Equatable, Sendable {
     }
 
     public var isEmpty: Bool {
-        mediaKinds.isEmpty && cameras.isEmpty && lenses.isEmpty && extensions.isEmpty &&
+        filename.isEmpty && mediaKinds.isEmpty && cameras.isEmpty && lenses.isEmpty && extensions.isEmpty &&
             megapixels.isEmpty && bytes.isEmpty && iso.isEmpty && focalLengthMM.isEmpty &&
             aperture.isEmpty && exposureSeconds.isEmpty
     }
 
     public var activeCriterionCount: Int {
-        [!mediaKinds.isEmpty, !cameras.isEmpty, !lenses.isEmpty, !extensions.isEmpty,
+        [!filename.isEmpty, !mediaKinds.isEmpty, !cameras.isEmpty, !lenses.isEmpty, !extensions.isEmpty,
          !megapixels.isEmpty, !bytes.isEmpty, !iso.isEmpty, !focalLengthMM.isEmpty,
          !aperture.isEmpty, !exposureSeconds.isEmpty].filter { $0 }.count
     }
@@ -70,6 +108,7 @@ public struct LibraryFilter: Equatable, Sendable {
     }
 
     func matches(_ values: LibraryFilterValues) -> Bool {
+        if !filename.matches(filename: values.filename, key: values.filenameKey) { return false }
         if !mediaKinds.isEmpty && !mediaKinds.contains(values.mediaKind) { return false }
         if !matches(cameras, value: values.camera, normalizer: LibraryFilterParsing.lookupKey) { return false }
         if !matches(lenses, value: values.lens, normalizer: LibraryFilterParsing.lookupKey) { return false }
@@ -89,6 +128,9 @@ public struct LibraryFilter: Equatable, Sendable {
 }
 
 struct LibraryFilterValues: Equatable, Sendable {
+    let filename: String?
+    /// `filename` folded for plain-text search.
+    let filenameKey: String?
     let mediaKind: PhotoMediaKind
     let camera: String?
     let lens: String?
@@ -100,14 +142,17 @@ struct LibraryFilterValues: Equatable, Sendable {
     let aperture: Double?
     let exposureSeconds: Double?
 
-    init(mediaKind: PhotoMediaKind, camera: String?, lens: String?, fileExtension: String?, megapixels: Double?,
+    init(filename: String?, filenameKey: String?, mediaKind: PhotoMediaKind, camera: String?, lens: String?, fileExtension: String?, megapixels: Double?,
          bytes: Int64?, iso: Double?, focalLengthMM: Double?, aperture: Double?, exposureSeconds: Double?) {
+        self.filename = filename; self.filenameKey = filenameKey
         self.mediaKind = mediaKind; self.camera = camera; self.lens = lens; self.fileExtension = fileExtension
         self.megapixels = megapixels; self.bytes = bytes; self.iso = iso; self.focalLengthMM = focalLengthMM
         self.aperture = aperture; self.exposureSeconds = exposureSeconds
     }
 
     init(_ item: PhotoItem) {
+        filename = item.filename
+        filenameKey = item.filename.map(LibraryFilterParsing.searchKey)
         mediaKind = item.mediaKind
         camera = LibraryFilterParsing.displayString(item.additional?.exif?.camera)
         lens = LibraryFilterParsing.displayString(item.additional?.exif?.lens)
@@ -134,6 +179,10 @@ enum LibraryFilterParsing {
     static func lookupKey(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
             .folding(options: [.caseInsensitive], locale: locale)
+    }
+
+    static func searchKey(_ value: String) -> String {
+        value.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: locale)
     }
 
     static func extensionKey(_ value: String) -> String {

@@ -42,6 +42,8 @@ public actor TimelineSectionCacheLoader {
     private struct QueuedRead: Sendable {
         let index: Int
         let useCachedPages: Bool
+        /// Counts a complete cached page as done without checking whether it is verified.
+        var acceptsUnverifiedCache = true
     }
 
     private struct ReadResult: Sendable {
@@ -93,6 +95,18 @@ public actor TimelineSectionCacheLoader {
         wasCancelled = false
         enqueue(states.indices.filter { states[$0] != .verified && states[$0] != .cached },
                 useCachedPages: useCachedPages)
+    }
+
+    /// Reads every page that is not verified this run. Verified cached pages, including
+    /// pages proven unchanged by Diff reconciliation, finish without a network request.
+    public func loadUnverified() {
+        guard scheduler == nil else { return }
+        wasCancelled = false
+        for index in states.indices where states[index] != .verified {
+            guard !activeIndices.contains(index), !pending.contains(where: { $0.index == index }) else { continue }
+            pending.append(.init(index: index, useCachedPages: true, acceptsUnverifiedCache: false))
+        }
+        startSchedulerIfNeeded()
     }
 
     public func cancel() async {
@@ -183,7 +197,7 @@ public actor TimelineSectionCacheLoader {
                 let section = snapshot.sections[read.index]
                 let collection = collection
                 tasks.addTask { [repository] in
-                    if read.useCachedPages {
+                    if read.useCachedPages && read.acceptsUnverifiedCache {
                         for await event in await repository.page(
                             section, collection: collection, useCachedPages: true,
                             allowNetwork: false, priority: .prefetch

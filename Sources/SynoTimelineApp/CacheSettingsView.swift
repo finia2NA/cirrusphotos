@@ -66,7 +66,15 @@ struct CacheSettingsView: View {
                 Button("Clear Cache") { Task { await library.clearCache() } }
                     .disabled(library.cacheResetInProgress)
             }
-            if library.cacheResetInProgress { ProgressView("Clearing cache…") }
+            HStack {
+                Text("Cached metadata is checked against the NAS")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Revalidate Metadata") { Task { await library.revalidateAllMetadata() } }
+                    .disabled(library.cacheResetInProgress)
+                    .help("Keep cached metadata but treat it as unverified, so every timeline and section is read from the NAS again.")
+            }
+            if library.cacheResetInProgress { ProgressView("Updating cache…") }
             if let error = library.cacheResetError {
                 Text(error).foregroundStyle(.red)
             }

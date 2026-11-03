@@ -42,6 +42,7 @@ enum CacheSchema {
         try table(MetadataStateRecord.self, db, key: [.namespace]) { t in
             t.column(.namespace, .text); t.column(.revision, .integer); t.column(.resetEpoch, .integer)
             t.column(.cursor, .text, nullable: true); t.column(.inventoryComplete, .boolean)
+            t.column(.proofRun, .text, nullable: true)
         }
         try table(ItemIndexRecord.self, db, key: [.namespace, .itemID]) { t in
             t.column(.namespace, .text); t.column(.itemID, .integer); t.column(.captureTime, .integer)
@@ -53,6 +54,7 @@ enum CacheSchema {
             t.column(.contentEpoch, .integer); t.column(.annotationRun, .text, nullable: true)
             t.column(.revision, .integer); t.column(.accessed, .double)
             let facets = TableBuilder<ItemFacets.CodingKeys>(table: t.table)
+            facets.column(.filename, .text, nullable: true); facets.column(.filenameKey, .text, nullable: true)
             facets.column(.captureTime, .integer); facets.column(.indexedTime, .integer, nullable: true)
             facets.column(.mediaKind, .text); facets.column(.camera, .text, nullable: true)
             facets.column(.lens, .text, nullable: true); facets.column(.fileExtension, .text, nullable: true)
@@ -161,8 +163,11 @@ struct MetadataStateRecord: Codable, FetchableRecord, PersistableRecord {
     var resetEpoch: Int64
     var cursor: DiffCursor?
     var inventoryComplete: Bool
+    /// The run whose Diff reconciliation proved unchanged cached content current.
+    var proofRun: String?
     enum CodingKeys: String, CodingKey, ColumnExpression {
         case namespace, revision, cursor, resetEpoch = "reset_epoch", inventoryComplete = "inventory_complete"
+        case proofRun = "proof_run"
     }
     typealias Columns = CodingKeys
 }
@@ -189,6 +194,8 @@ struct ItemIndexRecord: Codable, FetchableRecord, PersistableRecord {
 struct ItemFacets: Codable, Equatable, Sendable {
     var captureTime: Int64
     var indexedTime: Int64?
+    var filename: String?
+    var filenameKey: String?
     var mediaKind: String
     var camera: String?
     var lens: String?
@@ -200,14 +207,23 @@ struct ItemFacets: Codable, Equatable, Sendable {
     var aperture: Double?
     var exposure: Double?
     enum CodingKeys: String, CodingKey, ColumnExpression, CaseIterable {
-        case camera, lens, megapixels, bytes, iso, aperture, exposure
-        case captureTime = "capture_time", indexedTime = "indexed_time", mediaKind = "media_kind"
+        case filename, camera, lens, megapixels, bytes, iso, aperture, exposure
+        case filenameKey = "filename_key", captureTime = "capture_time", indexedTime = "indexed_time", mediaKind = "media_kind"
         case fileExtension = "file_extension", focalLength = "focal_length"
+    }
+
+    init(captureTime: Int64, indexedTime: Int64?, filename: String?, filenameKey: String?, mediaKind: String, camera: String?, lens: String?, fileExtension: String?,
+         megapixels: Double?, bytes: Int64?, iso: Double?, focalLength: Double?, aperture: Double?, exposure: Double?) {
+        self.captureTime = captureTime; self.indexedTime = indexedTime; self.mediaKind = mediaKind
+        self.filename = filename; self.filenameKey = filenameKey
+        self.camera = camera; self.lens = lens; self.fileExtension = fileExtension; self.megapixels = megapixels
+        self.bytes = bytes; self.iso = iso; self.focalLength = focalLength; self.aperture = aperture; self.exposure = exposure
     }
 
     init(_ item: PhotoItem) {
         let values = LibraryFilterValues(item)
         captureTime = item.time; indexedTime = item.indexedTime; mediaKind = Self.mediaKindKey(values.mediaKind)
+        filename = values.filename; filenameKey = values.filenameKey
         camera = values.camera; lens = values.lens; fileExtension = values.fileExtension
         megapixels = values.megapixels; bytes = values.bytes; iso = values.iso
         focalLength = values.focalLengthMM; aperture = values.aperture; exposure = values.exposureSeconds
@@ -232,7 +248,7 @@ struct ItemFacets: Codable, Equatable, Sendable {
         case let key where key.hasPrefix("other:"): kind = .unknown(String(key.dropFirst("other:".count)))
         case let key: kind = .unknown(key)
         }
-        return LibraryFilterValues(mediaKind: kind, camera: camera, lens: lens, fileExtension: fileExtension, megapixels: megapixels,
+        return LibraryFilterValues(filename: filename, filenameKey: filenameKey, mediaKind: kind, camera: camera, lens: lens, fileExtension: fileExtension, megapixels: megapixels,
                                    bytes: bytes, iso: iso, focalLengthMM: focalLength, aperture: aperture, exposureSeconds: exposure)
     }
 
@@ -299,6 +315,17 @@ struct ItemFacetRecord: Decodable, FetchableRecord, TableRecord {
         itemID = try values.decode(Int64.self, forKey: .itemID); contentEpoch = try values.decode(Int64.self, forKey: .contentEpoch)
         annotationRun = try values.decodeIfPresent(String.self, forKey: .annotationRun)
         facets = try ItemFacets(from: decoder)
+    }
+    /// Discovery reads every row of a namespace; reading columns directly avoids the Decodable overhead.
+    init(row: Row) throws {
+        typealias C = ItemDetailRecord.Columns
+        typealias F = ItemFacets.CodingKeys
+        itemID = row[C.itemID]; contentEpoch = row[C.contentEpoch]; annotationRun = row[C.annotationRun]
+        facets = ItemFacets(captureTime: row[F.captureTime], indexedTime: row[F.indexedTime],
+                            filename: row[F.filename], filenameKey: row[F.filenameKey], mediaKind: row[F.mediaKind],
+                            camera: row[F.camera], lens: row[F.lens], fileExtension: row[F.fileExtension],
+                            megapixels: row[F.megapixels], bytes: row[F.bytes], iso: row[F.iso],
+                            focalLength: row[F.focalLength], aperture: row[F.aperture], exposure: row[F.exposure])
     }
 }
 
@@ -369,6 +396,16 @@ struct PageItemRecord: Codable, FetchableRecord, PersistableRecord {
         case pageOffset = "page_offset", sortOrder = "sort_order", itemID = "item_id"
     }
     typealias Columns = CodingKeys
+    init(namespace: String, collection: String, day: String, pageOffset: Int, capacity: Int, sortOrder: String, ordinal: Int, itemID: Int64) {
+        self.namespace = namespace; self.collection = collection; self.day = day; self.pageOffset = pageOffset
+        self.capacity = capacity; self.sortOrder = sortOrder; self.ordinal = ordinal; self.itemID = itemID
+    }
+    /// Filter discovery reads a whole collection's members; reading columns directly avoids the Decodable overhead.
+    init(row: Row) throws {
+        namespace = row[Columns.namespace]; collection = row[Columns.collection]; day = row[Columns.day]
+        pageOffset = row[Columns.pageOffset]; capacity = row[Columns.capacity]; sortOrder = row[Columns.sortOrder]
+        ordinal = row[Columns.ordinal]; itemID = row[Columns.itemID]
+    }
 }
 
 /// People, subject and tag indexes. The payload keeps the server's JSON shape,

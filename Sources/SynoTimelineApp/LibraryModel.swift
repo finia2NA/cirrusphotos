@@ -606,6 +606,18 @@ final class LibraryModel: ObservableObject {
         }
     }
 
+    func revalidateAllMetadata() async {
+        guard let repository, !cacheResetInProgress else { return }
+        cacheResetInProgress = true
+        cacheResetError = nil
+        defer { cacheResetInProgress = false }
+        do {
+            try await repository.revalidateAllMetadata()
+        } catch {
+            cacheResetError = reportedFailure(error, operation: "Metadata revalidation")
+        }
+    }
+
     func handleMetadataInvalidation(_ revision: UInt64) {
         guard revision > metadataInvalidationRevision else { return }
         albumsTask?.cancel()

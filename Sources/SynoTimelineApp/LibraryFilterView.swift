@@ -4,6 +4,7 @@ import SynologyAPI
 
 struct LibraryFilterToolbarControl: View {
     @EnvironmentObject private var filter: LibraryFilterModel
+    @EnvironmentObject private var metadataSync: MetadataSyncModel
 
     var body: some View {
         Button { filter.draft = filter.committed; filter.isPresented.toggle() } label: {
@@ -13,7 +14,7 @@ struct LibraryFilterToolbarControl: View {
                     : "line.3.horizontal.decrease.circle")
         }
         .disabled(!filter.isReady)
-        .popover(isPresented: $filter.isPresented) { LibraryFilterView().environmentObject(filter) }
+        .popover(isPresented: $filter.isPresented) { LibraryFilterView().environmentObject(filter).environmentObject(metadataSync) }
         .accessibilityLabel("Filter Photos")
         .accessibilityValue(filter.isActive ? "\(filter.activeCount) active filters" : "No active filters")
         .help(filter.isReady ? "Filter Photos" : "Filter Photos (metadata loading)")
@@ -22,11 +23,14 @@ struct LibraryFilterToolbarControl: View {
 
 struct LibraryFilterView: View {
     @EnvironmentObject private var filter: LibraryFilterModel
+    @EnvironmentObject private var metadataSync: MetadataSyncModel
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Filter Photos").font(.headline)
+                FilenameSearchField(text: $filter.filenameText,
+                                    usesRegularExpression: $filter.filenameUsesRegularExpression)
                 HStack {
                     mediaToggle("Photo", .photo)
                     mediaToggle("Video", .video)
@@ -52,6 +56,9 @@ struct LibraryFilterView: View {
                     }
                     Text(filter.coverageText).font(.caption).foregroundStyle(.secondary)
                 }
+                if let status = backgroundLoadingStatus {
+                    Text(status).font(.caption).foregroundStyle(.secondary)
+                }
                 HStack {
                     Button("Clear") { filter.clear(); filter.isPresented = false }
                     Spacer()
@@ -65,6 +72,18 @@ struct LibraryFilterView: View {
         }
         .frame(width: 430)
         .frame(maxHeight: 640)
+    }
+
+    /// Background sync status for this filter's source timeline only.
+    private var backgroundLoadingStatus: String? {
+        guard let source = filter.sourceCollection, let sync = metadataSync.collections[source] else { return nil }
+        switch sync.state {
+        case .queued: return "Waiting to load metadata in the background"
+        case .running: return "Loading metadata in the background: \(sync.verified) of \(sync.total) sections"
+        case .done:
+            let missing = sync.total - sync.verified
+            return missing > 0 ? "\(missing) sections could not be loaded yet; retrying automatically" : nil
+        }
     }
 
     private func mediaToggle(_ title: String, _ kind: PhotoMediaKind) -> some View {
@@ -94,6 +113,32 @@ struct LibraryFilterView: View {
             TextField("Max", text: $filter.sizeMax).textFieldStyle(.roundedBorder)
             Picker("", selection: $filter.sizeMaxUnit) { ForEach(LibraryFilterModel.SizeUnit.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden()
         }
+    }
+}
+
+private struct FilenameSearchField: View {
+    @Binding var text: String
+    @Binding var usesRegularExpression: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField(usesRegularExpression ? "Filename regular expression" : "Filename", text: $text)
+                .textFieldStyle(.plain)
+                .font(usesRegularExpression ? .body.monospaced() : .body)
+            Button { usesRegularExpression.toggle() } label: {
+                Text(".*").font(.body.monospaced().weight(.semibold))
+                    .foregroundStyle(usesRegularExpression ? Color.accentColor : .secondary)
+            }
+            .buttonStyle(.borderless)
+            .help(usesRegularExpression ? "Search as Plain Text" : "Search with a Regular Expression")
+            .accessibilityLabel("Regular Expression")
+            .accessibilityValue(usesRegularExpression ? "On" : "Off")
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.separator))
     }
 }
 
