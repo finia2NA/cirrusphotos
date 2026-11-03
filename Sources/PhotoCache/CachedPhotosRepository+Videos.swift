@@ -20,8 +20,11 @@ extension CachedPhotosRepository {
               offset <= Int64.max - Int64(length) - Self.videoWindowSize else { throw SynologyAPIError.invalidResponse }
         let end = offset + Int64(length)
         let consistency = VideoStreamConsistency()
-        let deliver: @Sendable (VideoPlaybackData) async throws -> Void = { value in
-            try await consistency.check(value)
+        let deliver: @Sendable (VideoPlaybackData) async throws -> Void = { [self] value in
+            do { try await consistency.check(value) } catch let changed as VideoResourceChanged {
+                await purgeVideoSegments(resource, totalLength: changed.totalLength)
+                throw RepositoryError.stale("This video changed on the NAS. Reopen it to play the current version.")
+            }
             try await receive(value)
         }
         var cursor = offset
@@ -137,6 +140,20 @@ extension CachedPhotosRepository {
         return segment
     }
 
+    /// Drops every cached segment of a rendition whose validators disagree, so the
+    /// next request refetches it. Runs unstructured so a cancelled player request
+    /// cannot leave the purge half done.
+    private func purgeVideoSegments(_ resource: VideoPlaybackResource, totalLength: Int64) async {
+        let count = (totalLength + Self.videoSegmentSize - 1) / Self.videoSegmentSize
+        let namespace = namespace
+        let store = store
+        await Task {
+            for index in 0..<count {
+                try? await store.remove(CacheKey.videoSegment(namespace: namespace, resource: resource, index: index))
+            }
+        }.value
+    }
+
     private func finishVideoWindow(key: String, id: UUID) {
         if imageWork.videoWindowJobs[key]?.id == id { imageWork.videoWindowJobs[key] = nil }
         cancelIdleLogin()
@@ -179,14 +196,24 @@ extension CachedPhotosRepository {
     }
 }
 
+struct VideoResourceChanged: Error {
+    let totalLength: Int64
+}
+
+/// Detects a cached or fetched byte range whose ETag, Last-Modified or total
+/// length differs from the rest of the same stream.
 private actor VideoStreamConsistency {
     private var etag: String?
     private var lastModified: String?
+    private var totalLength: Int64?
 
     func check(_ value: VideoPlaybackData) throws {
-        if let etag, let incoming = value.etag, etag != incoming { throw SynologyAPIError.invalidResponse }
-        if let lastModified, let incoming = value.lastModified, lastModified != incoming { throw SynologyAPIError.invalidResponse }
+        let largest = max(totalLength ?? 0, value.totalLength)
+        if let etag, let incoming = value.etag, etag != incoming { throw VideoResourceChanged(totalLength: largest) }
+        if let lastModified, let incoming = value.lastModified, lastModified != incoming { throw VideoResourceChanged(totalLength: largest) }
+        if let totalLength, totalLength != value.totalLength { throw VideoResourceChanged(totalLength: largest) }
         if etag == nil { etag = value.etag }
         if lastModified == nil { lastModified = value.lastModified }
+        totalLength = value.totalLength
     }
 }

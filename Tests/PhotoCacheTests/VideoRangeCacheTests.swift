@@ -104,15 +104,50 @@ final class VideoRangeCacheTests: XCTestCase {
         let cachedCallCount = await transport.callCount()
         XCTAssertEqual(cachedCallCount, 1)
     }
+
+    func testChangedValidatorPurgesCachedSegmentsAndRefetches() async throws {
+        let root = temporaryTestRoot("VideoValidatorChange")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let size = CachedPhotosRepository.videoSegmentSize
+        let transport = VideoRangeTestTransport(totalLength: size * 2, etag: "v1")
+        let repository = try CachedPhotosRepository(
+            credentials: SynologyCredentials(username: "video", password: "unused", otpSecret: "unused"),
+            baseURL: URL(string: "https://photos.invalid")!, budget: 8 * 1_024 * 1_024,
+            cacheRoot: root, transport: transport)
+        let resource = VideoPlaybackResource(scope: .space(.personal), unitID: 9, cacheKey: "revision", filename: nil,
+                                             variant: .converted(.medium))
+        try await repository.streamVideoData(resource, offset: 0, length: Int(size)) { _ in }
+
+        await transport.setETag("v2")
+        do {
+            try await repository.streamVideoData(resource, offset: 0, length: Int(size) * 2) { _ in }
+            XCTFail("Mixed validators must fail the stream")
+        } catch let error as RepositoryError {
+            guard case .stale = error else { return XCTFail("Expected stale, got \(error)") }
+        }
+        do {
+            try await repository.streamVideoData(resource, offset: 0, length: 1, allowNetwork: false) { _ in }
+            XCTFail("Segments cached under the old validator must be purged")
+        } catch { }
+
+        let refetched = VideoDataCollector()
+        try await repository.streamVideoData(resource, offset: 0, length: Int(size) * 2) { await refetched.append($0.data) }
+        let refetchedBytes = await refetched.data
+        XCTAssertEqual(refetchedBytes, VideoRangeTestTransport.bytes(in: 0...(size * 2 - 1)))
+    }
 }
 
 private actor VideoRangeTestTransport: TestPhotosTransport {
     let totalLength: Int64
+    private var etag: String
     private var ranges: [ClosedRange<Int64>] = []
 
-    init(totalLength: Int64) {
+    init(totalLength: Int64, etag: String = "revision") {
         self.totalLength = totalLength
+        self.etag = etag
     }
+
+    func setETag(_ value: String) { etag = value }
 
     func streamVideoRange(_ resource: VideoPlaybackResource, range: ClosedRange<Int64>,
                           receive: @escaping @Sendable (VideoRangeEvent) async throws -> Void) async throws {
@@ -120,7 +155,7 @@ private actor VideoRangeTestTransport: TestPhotosTransport {
         let delivered = range.lowerBound...upper
         ranges.append(delivered)
         try await receive(.header(VideoRangeHeader(range: delivered, totalLength: totalLength,
-                                                  contentType: "video/mp4", etag: "revision", lastModified: nil)))
+                                                  contentType: "video/mp4", etag: etag, lastModified: nil)))
         try await receive(.bytes(offset: delivered.lowerBound, data: Self.bytes(in: delivered)))
     }
 
