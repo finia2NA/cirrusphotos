@@ -52,7 +52,7 @@ final class AlbumPresentationStoreTests: XCTestCase {
         XCTAssertFalse(restored.albumsExpanded)
         XCTAssertEqual(restored.sort, .newest)
         XCTAssertEqual(restored.pinnedIDs, [1, 2])
-        XCTAssertEqual(AlbumsOverviewView.columnCount(width: 448), 2)
+        XCTAssertEqual(CardGrid.cardWidth(width: 448, count: 2), 190)
     }
 
     func testIncomingPinsKeepOwnerIdentityAndExistingPreferences() {

@@ -9,31 +9,30 @@ struct AlbumsOverviewView: View {
     @ObservedObject var presentation: AlbumPresentationStore
     var contentTopInset: CGFloat = 0
     @EnvironmentObject private var model: LibraryModel
+    @EnvironmentObject private var preferences: AppPreferences
 
     var body: some View {
         Group {
             if !model.albums.isEmpty || model.albumsVerified {
-                GeometryReader { geometry in
-                    let count = Self.columnCount(width: geometry.size.width)
-                    let columns = Array(repeating: GridItem(.flexible(maximum: 240), spacing: 20, alignment: .leading), count: count)
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 28) {
-                            HStack {
-                                Spacer()
-                                Picker("Sort Albums", selection: Binding(get: { presentation.sort }, set: { presentation.setSort($0) })) {
-                                    ForEach(AlbumOverviewSort.allCases, id: \.self) { value in
-                                        Text(value.title).tag(value)
-                                    }
-                                }.pickerStyle(.menu).fixedSize()
-                            }
-                            ForEach(AlbumOverviewSection.allCases, id: \.self) { group in
-                                section(group, columns: columns, count: count)
-                            }
+                let count = preferences.itemsPerRow
+                let columns = CardGrid.columns(count)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 28) {
+                        HStack {
+                            Spacer()
+                            Picker("Sort Albums", selection: Binding(get: { presentation.sort }, set: { presentation.setSort($0) })) {
+                                ForEach(AlbumOverviewSort.allCases, id: \.self) { value in
+                                    Text(value.title).tag(value)
+                                }
+                            }.pickerStyle(.menu).fixedSize()
                         }
-                        .padding(24)
-                        .padding(.top, contentTopInset)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        ForEach(AlbumOverviewSection.allCases, id: \.self) { group in
+                            section(group, columns: columns, count: count)
+                        }
                     }
+                    .padding(24)
+                    .padding(.top, contentTopInset)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             } else if let error = model.albumListError {
                 ContentUnavailableView {
@@ -49,10 +48,6 @@ struct AlbumsOverviewView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
     }
-    static func columnCount(width: CGFloat) -> Int {
-        max(1, Int((max(0, width - 48) + 20) / 200))
-    }
-
     private func section(_ group: AlbumOverviewSection, columns: [GridItem], count: Int) -> some View {
         let albums = presentation.section(model.albums, section: group)
         let expanded = presentation.expanded(group)
@@ -205,6 +200,45 @@ struct AlbumCoverView: View {
             case .failure:
                 break
             }
+        }
+    }
+}
+
+/// Cover of a folder card: the folder's own cover, or a 2×2 tile of representative descendants.
+struct FolderCoverView: View {
+    let folder: FolderSummary
+    let repository: CachedPhotosRepository?
+    let space: PhotoSpace
+    @State private var covers: [ThumbnailInfo] = []
+
+    var body: some View {
+        let collection = PhotoCollectionDescriptor.library(space)
+        Group {
+            if covers.count < 2 {
+                AlbumCoverView(thumbnail: covers.first ?? folder.thumbnail, repository: repository, collection: collection, placeholderSymbol: "folder")
+            } else {
+                Color.clear
+                    .aspectRatio(1, contentMode: .fit)
+                    .overlay {
+                        Grid(horizontalSpacing: 2, verticalSpacing: 2) {
+                            GridRow { tile(0, collection); tile(1, collection) }
+                            GridRow { tile(2, collection); tile(3, collection) }
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+        }
+        .task(id: folder) {
+            guard let repository else { return }
+            covers = await repository.folderCovers(for: folder, space: space)
+        }
+    }
+
+    @ViewBuilder private func tile(_ index: Int, _ collection: PhotoCollectionDescriptor) -> some View {
+        if index < covers.count {
+            AlbumCoverView(thumbnail: covers[index], repository: repository, collection: collection, cornerRadius: 0, maxPixel: 256)
+        } else {
+            Color.secondary.opacity(0.12).aspectRatio(1, contentMode: .fit)
         }
     }
 }

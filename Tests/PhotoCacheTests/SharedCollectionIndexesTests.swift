@@ -123,4 +123,30 @@ final class SharedCollectionIndexesTests: XCTestCase {
             XCTAssertEqual(folderName, space.rawValue)
         }
     }
+    func testFolderCoversSearchCachedDescendantsBreadthFirst() async throws {
+        let root = temporaryTestRoot("folder-covers")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = try CachedPhotosRepository(credentials: .init(username: "fixture", password: "unused"), cacheRoot: root, transport: SharedIndexTransport())
+        try await repository.initializeMetadataEngine()
+        let namespace = await repository.metadataNamespace(for: .library(.personal))
+        func folder(_ id: Int64, parent: Int64, cover: Int64? = nil) throws -> FolderSummary {
+            let thumbnail = cover.map { #", "additional": {"thumbnail": [{"unit_id": \#($0), "cache_key": "k\#($0)"}]}"# } ?? ""
+            return try JSONDecoder().decode(FolderSummary.self, from: Data(#"{"id": \#(id), "name": "/f\#(id)", "parent": \#(parent)\#(thumbnail)}"#.utf8))
+        }
+        let top = try folder(1, parent: 0)
+        let directories: [Int64: [FolderSummary]] = [
+            1: [try folder(2, parent: 1), try folder(3, parent: 1, cover: 30)],
+            2: [try folder(4, parent: 2, cover: 40), try folder(5, parent: 2, cover: 50), try folder(6, parent: 2, cover: 60), try folder(7, parent: 2, cover: 70)],
+        ]
+        for (id, children) in directories {
+            let parent = id == 1 ? top : try folder(id, parent: 1)
+            let admission = try await repository.store.metadataAdmission(namespace)
+            try await repository.store.storeMetadataFolderDirectory(FolderDirectory(folder: parent, children: children), namespace: namespace, id: id, currentRun: repository.runID, admission: admission)
+        }
+        let covers = await repository.folderCovers(for: top, space: .personal)
+        // The shallow leaf comes first, then the leaves under the nested folder, capped at four.
+        XCTAssertEqual(covers.map(\.unitID), [30, 40, 50, 60])
+        let own = await repository.folderCovers(for: try folder(9, parent: 1, cover: 90), space: .personal)
+        XCTAssertEqual(own.map(\.unitID), [90])
+    }
 }

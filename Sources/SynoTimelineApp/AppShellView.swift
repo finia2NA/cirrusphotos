@@ -461,7 +461,7 @@ struct AppShellView: View {
                 if let error = indexErrors[kind] { Text(error).font(.caption).foregroundStyle(.secondary) }
                 if entries.isEmpty { ContentUnavailableView("No \(style.title)", systemImage: style.symbol) }
                 else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140, maximum: 220), spacing: 20)], alignment: .leading, spacing: 20) {
+                    LazyVGrid(columns: CardGrid.columns(preferences.itemsPerRow), alignment: .leading, spacing: CardGrid.spacing) {
                         ForEach(entries) { entry in
                             Button { openIndexEntry(entry, kind: kind) } label: {
                                 VStack(alignment: .leading, spacing: 6) {
@@ -536,27 +536,30 @@ struct AppShellView: View {
 
     private func folderHeader(_ children: [FolderSummary]) -> BrowserHeaderConfiguration? {
         guard !children.isEmpty else { return nil }
-        return BrowserHeaderConfiguration(identity: AnyHashable(children), height: { width in
-            let count = AlbumsOverviewView.columnCount(width: width)
-            let cardWidth = min(240, max(0, (width - 48 - CGFloat(count - 1) * 20) / CGFloat(count)))
+        let count = preferences.itemsPerRow
+        return BrowserHeaderConfiguration(identity: AnyHashable(FolderHeaderIdentity(children: children, count: count)), height: { width in
+            let cardWidth = CardGrid.cardWidth(width: width, count: count)
             let rows = (children.count + count - 1) / count
-            return 48 + CGFloat(rows) * (cardWidth + 26) + CGFloat(rows - 1) * 20
-        }, content: { repository, width in
-            let count = AlbumsOverviewView.columnCount(width: width)
-            let columns = Array(repeating: GridItem(.flexible(maximum: 240), spacing: 20, alignment: .leading), count: count)
-            return AnyView(LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
+            return 2 * CardGrid.padding + CGFloat(rows) * (cardWidth + 26) + CGFloat(rows - 1) * CardGrid.spacing
+        }, content: { repository, _ in
+            AnyView(LazyVGrid(columns: CardGrid.columns(count), alignment: .leading, spacing: CardGrid.spacing) {
                 ForEach(children) { child in
                     Button {
                         folderPath.append(child.id)
                     } label: {
                         VStack(alignment: .leading, spacing: 6) {
-                            AlbumCoverView(thumbnail: child.thumbnail, repository: repository, collection: PhotoCollectionDescriptor.library(selectedSpace), placeholderSymbol: "folder")
+                            FolderCoverView(folder: child, repository: repository, space: selectedSpace)
                             Text(child.displayName).font(.headline).lineLimit(1).frame(height: 20, alignment: .top)
                         }
                     }.buttonStyle(.plain)
                 }
-            }.padding(24).frame(maxWidth: .infinity, alignment: .topLeading))
+            }.padding(CardGrid.padding).frame(maxWidth: .infinity, alignment: .topLeading))
         })
+    }
+
+    private struct FolderHeaderIdentity: Hashable {
+        let children: [FolderSummary]
+        let count: Int
     }
 
     private func configureAlbumPresentation() {
@@ -871,6 +874,11 @@ struct AppShellView: View {
             if selectedDestination != .albums { collectionBackToolbar }
             // Personal Library already adds the selector at the top of this builder.
             if selectedDestination != .albums && selectedDestination != .personalLibrary { spaceSelectorToolbar }
+            if showsCardGrid {
+                ToolbarItem(placement: .navigation) {
+                    LibrarySizeControl(value: $preferences.itemsPerRow)
+                }
+            }
             ToolbarItem(placement: .principal) {
                 Color.clear
                     .frame(width: 1, height: 1)
@@ -935,6 +943,12 @@ struct AppShellView: View {
                     .frame(height: ToolbarMetrics.controlHeight)
             }
             ToolbarSpacer(.fixed, placement: .primaryAction)
+    }
+
+    /// Whether the current destination lists cards (albums, people, subjects, tags, folders) sized by the thumbnail slider.
+    private var showsCardGrid: Bool {
+        selectedDestination == .albums || selectedDestination.indexKind != nil
+            || (selectedDestination == .personalLibrary && showsFolders)
     }
 
     private var collectionBackAction: (String, () -> Void)? {
