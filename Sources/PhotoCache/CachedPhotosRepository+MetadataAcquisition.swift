@@ -69,7 +69,7 @@ extension CachedPhotosRepository {
                   mutationEpoch == metadata.mutationEpochs[collection, default: 0] else { throw MetadataAdmissionError.superseded }
             let committed = try await store.metadataState(metadataNamespace(for: collection))
             guard epoch == metadata.admissionEpoch, metadata.collectionRecoveries[collection]?.id == id else { throw MetadataAdmissionError.superseded }
-            if collection.contentScope == .space(.personal) { metadata.revision = committed.revision }
+            if let space = collection.contentScope.space { metadata[source: space].revision = committed.revision }
             metadata.timelineJobs.removeValue(forKey: collection)?.task.cancel()
             publishMetadataInvalidation(collection: collection)
             return try await verifiedTimelineSnapshot(collection: collection)

@@ -5,13 +5,13 @@ import XCTest
 
 private actor SharedTimelineTransport: TestPhotosTransport {
     var offline = false
-    var diffCalls = 0
+    var personalDiffCalls = 0
     var catalogs: [PhotoCollectionDescriptor] = []
     var pages: [PhotoCollectionDescriptor] = []
     var thumbnailSpaces: [PhotoSpace] = []
     func setOffline() { offline = true }
-    func diffVersion() async throws -> DiffCursor {
-        diffCalls += 1
+    func diffVersion(space: PhotoSpace) async throws -> DiffCursor {
+        if space == .personal { personalDiffCalls += 1 }
         throw SynologyAPIError.api(103)
     }
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
@@ -53,8 +53,8 @@ final class SharedTimelineTests: XCTestCase, @unchecked Sendable {
             if case .value(let page, let verified) = event, verified { shared = page }
         }
         XCTAssertEqual(shared?.slots.first?.item?.filename, "shared.jpg")
-        let diffCalls = await transport.diffCalls
-        XCTAssertEqual(diffCalls, 0)
+        let diffCalls = await transport.personalDiffCalls
+        XCTAssertEqual(diffCalls, 0, "Shared Space never joins the Personal feed")
         // Same item ID, day and account must not resolve to a Shared Space row.
         let personalNamespace = await repository.metadataNamespace(for: .library(.personal))
         let sharedNamespace = await repository.metadataNamespace(for: .library(.shared))

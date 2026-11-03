@@ -9,11 +9,11 @@ private actor EngineTransport: TestPhotosTransport {
     var mode: Mode
     enum Mode: Sendable { case empty, partial, tooLarge, rejected, unsupported, offline }
     init(_ mode: Mode) { self.mode = mode }
-    func diffVersion() async throws -> DiffCursor {
+    func diffVersion(space: PhotoSpace) async throws -> DiffCursor {
         versionCalls += 1
         return DiffCursor(diffVersion: 100, versionTime: 100)
     }
-    func changes(since cursor: DiffCursor) async throws -> PhotoDiff {
+    func changes(since cursor: DiffCursor, space: PhotoSpace) async throws -> PhotoDiff {
         changeCalls += 1
         switch mode {
         case .empty: return PhotoDiff(cursor: .init(diffVersion: 2, versionTime: 2), modifiedItemIDs: [], deletedItemIDs: [])
@@ -29,8 +29,8 @@ private actor EngineTransport: TestPhotosTransport {
 private actor FavoriteEventTransport: TestPhotosTransport {
     let unsupported: Bool
     init(unsupported: Bool) { self.unsupported = unsupported }
-    func diffVersion() async throws -> DiffCursor { DiffCursor(diffVersion: 100, versionTime: 100) }
-    func changes(since cursor: DiffCursor) async throws -> PhotoDiff {
+    func diffVersion(space: PhotoSpace) async throws -> DiffCursor { DiffCursor(diffVersion: 100, versionTime: 100) }
+    func changes(since cursor: DiffCursor, space: PhotoSpace) async throws -> PhotoDiff {
         PhotoDiff(cursor: .init(diffVersion: 2, versionTime: 2), modifiedItemIDs: [], deletedItemIDs: [])
     }
     func userEvents(since cursor: DiffCursor) async throws -> UserEventDiff {

@@ -54,7 +54,7 @@ extension CachedPhotosRepository {
         catch { outcome.failure = error }
         let confirmed = outcome.remaining.map { Set(ids).subtracting($0).sorted() } ?? []
         do {
-            if space == .personal { try await reconcileMetadataSource(force: true) }
+            try await reconcileMetadataSource(space: space, force: true)
             let namespace = metadataNamespace(for: space)
             let admission = try await store.metadataAdmission(namespace)
             try await store.invalidateMetadataAfterDeletion(namespace: namespace, deletedIDs: confirmed, admission: admission)

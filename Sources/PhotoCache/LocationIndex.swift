@@ -70,7 +70,7 @@ extension CachedPhotosRepository {
             return
         }
         let state = projection.state, records = projection.records
-        let verified = state.inventoryComplete && (metadata.inventoryCurrent || (metadata.reconciled && !metadata.sourceUnavailable))
+        let verified = state.inventoryComplete && (metadata.inventoryCurrent || metadataSourceCurrent(.personal))
         let byID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
         metadata.locations.projectionLoaded = true
         guard metadata.locations.records != byID || metadata.locations.lastPublishedInventoryVerified != verified else { return }
@@ -117,7 +117,7 @@ extension CachedPhotosRepository {
                   let state = try? await store.metadataState(personalMetadataNamespace),
                   isAdmitted(epoch) else { return }
             let records = metadata.locations.records.values.sorted { $0.time > $1.time || ($0.time == $1.time && $0.id < $1.id) }
-            let verified = state.inventoryComplete && (metadata.inventoryCurrent || (metadata.reconciled && !metadata.sourceUnavailable))
+            let verified = state.inventoryComplete && (metadata.inventoryCurrent || metadataSourceCurrent(.personal))
             metadata.locations.lastPublishedInventoryVerified = verified
             let value = LocationIndexValue(records: records, revision: LocationIndexRevision(metadata.locations.revision, space: .personal))
             for observer in metadata.locations.projectionObservers.values { observer.yield(.completed(value, verified: verified)) }
@@ -142,7 +142,7 @@ extension CachedPhotosRepository {
                     try await reconcileMetadataSource()
                     let projection = try await store.metadataLocationProjection(personalMetadataNamespace, currentOnly: true)
                     let state = projection.state
-                    if (metadata.inventoryCurrent && state.inventoryComplete) || (metadata.reconciled && !metadata.sourceUnavailable && state.inventoryComplete) {
+                    if (metadata.inventoryCurrent && state.inventoryComplete) || (metadataSourceCurrent(.personal) && state.inventoryComplete) {
                         let records = projection.records
                         guard isAdmitted(epoch), !Task.isCancelled else { throw CancellationError() }
                         continuation.yield(.completed(acceptLocationRecords(records, space: .personal), verified: true))

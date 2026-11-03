@@ -118,11 +118,11 @@ public extension TestPhotosTransport {
     func readPersonalInventoryBatch(offset: Int, limit: Int) async throws -> [PhotoItem] {
         throw UnexpectedTransportCall("readPersonalInventoryBatch")
     }
-    func diffVersion() async throws -> DiffCursor {
+    func diffVersion(space: PhotoSpace) async throws -> DiffCursor {
         // Unsupported Diff versions make the repository fall back to authoritative reads.
         throw SynologyAPIError.api(103)
     }
-    func changes(since cursor: DiffCursor) async throws -> PhotoDiff {
+    func changes(since cursor: DiffCursor, space: PhotoSpace) async throws -> PhotoDiff {
         throw UnexpectedTransportCall("changes")
     }
     func userEvents(since cursor: DiffCursor) async throws -> UserEventDiff {

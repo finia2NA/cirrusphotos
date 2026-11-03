@@ -12,7 +12,7 @@ private actor SharedIndexTransport: TestPhotosTransport {
     var diffCalls = 0
     var peopleCalls: [PhotoSpace: Int] = [:]
     func setOffline() { offline = true }
-    func diffVersion() async throws -> DiffCursor { diffCalls += 1; throw SynologyAPIError.api(103) }
+    func diffVersion(space: PhotoSpace) async throws -> DiffCursor { if space == .personal { diffCalls += 1 }; throw SynologyAPIError.api(103) }
     func collectionIndex(_ kind: CollectionIndexKind, space: PhotoSpace) async throws -> [CollectionIndexEntry] {
         guard kind == .person else { throw UnexpectedTransportCall("collectionIndex") }
         peopleCalls[space, default: 0] += 1

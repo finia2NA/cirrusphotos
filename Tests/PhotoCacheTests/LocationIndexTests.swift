@@ -19,11 +19,11 @@ private actor InventoryTransport: TestPhotosTransport {
         self.items = items; catalogCount = count ?? items.count; self.supported = supported; self.offline = offline; self.changeOnCall = changeOnCall
     }
     func login(credentials: SynologyCredentials) async throws { if offline { throw SynologyAPIError.transport("fixture offline") } }
-    func diffVersion() async throws -> DiffCursor {
+    func diffVersion(space: PhotoSpace) async throws -> DiffCursor {
         guard supported else { throw SynologyAPIError.api(103) }
         return .init(diffVersion: 1, versionTime: 1)
     }
-    func changes(since cursor: DiffCursor) async throws -> PhotoDiff {
+    func changes(since cursor: DiffCursor, space: PhotoSpace) async throws -> PhotoDiff {
         changes += 1
         return .init(cursor: .init(diffVersion: Int64(changes + 1), versionTime: Int64(changes + 1)), modifiedItemIDs: changeOnCall == changes ? [2] : [], deletedItemIDs: [])
     }

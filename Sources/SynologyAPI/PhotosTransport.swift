@@ -169,8 +169,9 @@ public protocol PhotosTransport: Sendable {
     /// date bounds, `additional` from `PhotosRequestFields.locationScanAdditional`.
     /// Returns at most `limit` items newest-first; an empty or short page ends the scan.
     func readPersonalInventoryBatch(offset: Int, limit: Int) async throws -> [PhotoItem]
-    func diffVersion() async throws -> DiffCursor
-    func changes(since cursor: DiffCursor) async throws -> PhotoDiff
+    /// `Browse.Diff` for Personal Space, `FotoTeam.Browse.Diff` for Shared Space; each space has its own cursor.
+    func diffVersion(space: PhotoSpace) async throws -> DiffCursor
+    func changes(since cursor: DiffCursor, space: PhotoSpace) async throws -> PhotoDiff
     /// Personal Space `Diff.list_user_event` v7: favorite changes, which the item feed omits.
     func userEvents(since cursor: DiffCursor) async throws -> UserEventDiff
 

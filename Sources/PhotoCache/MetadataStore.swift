@@ -227,13 +227,14 @@ extension DiskCache {
 
     // MARK: Day pages
 
-    /// Content is proven when this run's Diff reconciliation accounted for every change since
-    /// the stored cursor. Membership additionally needs this run's day catalog for a collection
-    /// whose membership the Personal feeds describe; changed days already carry new generations.
+    /// Content is proven when this run's Diff reconciliation of the namespace's space accounted
+    /// for every change since the stored cursor. Membership additionally needs this run's day
+    /// catalog for a collection whose membership the feeds describe; changed days already carry
+    /// new generations.
     private func changeProof(_ db: Database, _ key: CollectionKey, state: MetadataStoreVersion,
                              currentRun: String) throws -> (content: Bool, membership: Bool) {
         let content = state.proofRun == currentRun
-        guard content, key.collection.membershipProvenByPersonalChanges else { return (content, false) }
+        guard content, key.collection.membershipProvenByChanges else { return (content, false) }
         let catalog = try Row.fetchOne(db, CollectionStateRecord.row(key)
             .select(CollectionStateRecord.Columns.validatedRun, CollectionStateRecord.Columns.epoch))
         let membership = catalog.map { $0[CollectionStateRecord.Columns.validatedRun] as String? == currentRun
@@ -929,13 +930,14 @@ private extension FilterOptionCatalogRecord {
 }
 
 extension PhotoCollectionDescriptor {
-    /// Collections whose membership the Personal item and favorite-event feeds fully describe:
-    /// folder moves and tag edits arrive as item modifications. Album members have no resolved
-    /// origin space, People and Subjects assignments are not shown to appear in the feeds, and
-    /// Recently Added groups by indexed day, so those keep per-run reads.
-    var membershipProvenByPersonalChanges: Bool {
+    /// Collections whose membership their space's Diff feeds fully describe: folder moves and
+    /// tag edits arrive as item modifications, and Personal favorites as favorite events. Shared
+    /// Space has no favorite-event feed. Album members have no resolved origin space, People and
+    /// Subjects assignments are not shown to appear in the feeds, and Recently Added groups by
+    /// indexed day, so those keep per-run reads.
+    var membershipProvenByChanges: Bool {
         switch self {
-        case .library(.personal), .favorites(.personal), .folder(_, .personal), .tag(_, .personal): return true
+        case .library, .folder, .tag, .favorites(.personal): return true
         default: return false
         }
     }

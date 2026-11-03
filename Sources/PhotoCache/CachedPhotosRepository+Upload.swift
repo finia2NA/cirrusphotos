@@ -55,7 +55,7 @@ extension CachedPhotosRepository {
 
     private func refreshAfterUpload(_ space: PhotoSpace) async throws {
         try await invalidateUploadLibrary(space)
-        if space == .personal { try await reconcileMetadataSource(force: true) }
+        try await reconcileMetadataSource(space: space, force: true)
         let collection = PhotoCollectionDescriptor.library(space)
         let snapshot = try await verifiedTimelineSnapshot(collection: collection)
         publishTimelineProjection(snapshot, collection: collection)

@@ -562,16 +562,16 @@ public actor SynologyClient: PhotosTransport {
         return data.list
     }
 
-    public func diffVersion() async throws -> DiffCursor {
-        let data: DiffVersionData = try await call("SYNO.Foto.Browse.Diff", version: 7, method: "get_version",
+    public func diffVersion(space: PhotoSpace) async throws -> DiffCursor {
+        let data: DiffVersionData = try await call(Self.api("Browse.Diff", space), version: 7, method: "get_version",
                                                    maximumBytes: Self.diffResponseLimit)
         return data.cursor
     }
 
     private static let diffResponseLimit = 4 * 1_024 * 1_024
 
-    public func changes(since cursor: DiffCursor) async throws -> PhotoDiff {
-        let data: PhotoDiffData = try await call("SYNO.Foto.Browse.Diff", version: 7, method: "list", [
+    public func changes(since cursor: DiffCursor, space: PhotoSpace) async throws -> PhotoDiff {
+        let data: PhotoDiffData = try await call(Self.api("Browse.Diff", space), version: 7, method: "list", [
             "geocoding_accept_language": "enu", "additional": Self.additionalParameter(),
             "diff_version": String(cursor.diffVersion), "version_time": String(cursor.versionTime)],
             maximumBytes: Self.diffResponseLimit)

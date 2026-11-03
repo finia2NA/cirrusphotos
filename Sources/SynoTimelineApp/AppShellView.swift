@@ -868,7 +868,9 @@ struct AppShellView: View {
         } else if let collection = selectedCollection {
             collectionToolbar(collection)
         } else {
-            if selectedDestination != .albums { collectionBackToolbar; spaceSelectorToolbar }
+            if selectedDestination != .albums { collectionBackToolbar }
+            // Personal Library already adds the selector at the top of this builder.
+            if selectedDestination != .albums && selectedDestination != .personalLibrary { spaceSelectorToolbar }
             ToolbarItem(placement: .principal) {
                 Color.clear
                     .frame(width: 1, height: 1)

@@ -26,7 +26,20 @@ private actor SharedMapTransport: TestPhotosTransport {
     func setOffline() { offline = true }
     func setDuplicate() { duplicate = true }
     func setDrift() { drift = true }
-    func diffVersion() async throws -> DiffCursor { diffCalls += 1; throw TestFailure("Personal Diff must not run") }
+    var sharedDiffCalls = 0
+    func diffVersion(space: PhotoSpace) async throws -> DiffCursor {
+        guard space == .shared else { diffCalls += 1; throw TestFailure("Personal Diff must not run") }
+        if offline { throw TestFailure("offline") }
+        return DiffCursor(diffVersion: 1, versionTime: 1)
+    }
+    /// A drifting library keeps reporting a change, so a scan can never be fenced.
+    func changes(since cursor: DiffCursor, space: PhotoSpace) async throws -> PhotoDiff {
+        guard space == .shared else { diffCalls += 1; throw TestFailure("Personal Diff must not run") }
+        sharedDiffCalls += 1
+        if offline { throw TestFailure("offline") }
+        return drift ? PhotoDiff(cursor: .init(diffVersion: cursor.diffVersion + 1, versionTime: cursor.versionTime + 1), modifiedItemIDs: [2], deletedItemIDs: [])
+                     : PhotoDiff(cursor: cursor, modifiedItemIDs: [], deletedItemIDs: [])
+    }
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
         guard collection == .library(.shared) else { throw TestFailure("Wrong map collection") }
         catalogCalls += 1
@@ -97,7 +110,7 @@ final class SharedMapTests: XCTestCase, @unchecked Sendable {
         XCTAssertNotNil(result.completed)
     }
 
-    func testSharedInventoryAndPinUseIsolatedScopeWithoutPersonalDiff() async throws {
+    func testSharedInventoryAndPinUseIsolatedScopeAndTheSharedFeed() async throws {
         let root = temporaryTestRoot("shared-map"); defer { try? FileManager.default.removeItem(at: root) }
         let transport = try SharedMapTransport()
         let repository = try CachedPhotosRepository(credentials: credentials, cacheRoot: root, transport: transport)
@@ -113,7 +126,7 @@ final class SharedMapTests: XCTestCase, @unchecked Sendable {
         XCTAssertTrue(personalInventory.isEmpty)
         let sharedState = try await repository.store.metadataState(shared)
         XCTAssertTrue(sharedState.inventoryComplete)
-        XCTAssertNil(sharedState.cursor)
+        XCTAssertNotNil(sharedState.cursor, "The scan commits the Shared Diff cursor it was fenced with")
 
         let pin = try await repository.registerMapFilter(itemIDs: [1], locationRevision: value.revision)
         let source = await repository.mediaCollection(for: pin.descriptor)
@@ -138,8 +151,8 @@ final class SharedMapTests: XCTestCase, @unchecked Sendable {
         _ = await scan(repository)
         let batchCalls = await transport.batchCalls
         let diffCalls = await transport.diffCalls
-        XCTAssertEqual(batchCalls, 1, "Validate the inventory once per run")
-        XCTAssertEqual(diffCalls, 0)
+        XCTAssertEqual(batchCalls, 1, "The Shared feed keeps the stored inventory current")
+        XCTAssertEqual(diffCalls, 0, "Shared Space never joins the Personal feed")
 
         // The same numeric ID in Personal Space must not replace Shared records
         // or invalidate the existing Shared pin.
@@ -177,6 +190,18 @@ final class SharedMapTests: XCTestCase, @unchecked Sendable {
         } catch { }
         let spaces = await transport.detailSpaces
         XCTAssertTrue(spaces.isEmpty)
+    }
+
+    func testNextRunReusesTheSharedInventoryWithoutAScan() async throws {
+        let root = temporaryTestRoot("shared-map-next-run"); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = try SharedMapTransport()
+        let repository = try CachedPhotosRepository(credentials: credentials, cacheRoot: root, transport: transport)
+        _ = await scan(repository)
+        let reopened = try CachedPhotosRepository(credentials: credentials, cacheRoot: root, transport: transport)
+        let result = await scan(reopened)
+        XCTAssertEqual(result.completed?.records.map(\.id), [1])
+        let batchCalls = await transport.batchCalls
+        XCTAssertEqual(batchCalls, 1, "An empty Shared Diff proves the stored inventory current")
     }
 
     func testSharedInventoryRetainsCachedLocationsWhenNextRunIsOffline() async throws {

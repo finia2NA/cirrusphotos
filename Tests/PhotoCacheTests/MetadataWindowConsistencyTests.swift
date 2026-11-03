@@ -12,8 +12,8 @@ private actor WindowMetadataTransport: TestPhotosTransport {
     func photo(_ id: Int64) throws -> PhotoItem {
         try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":\(id),\"time\":\(day.startTime),\"type\":\"photo\",\"filename\":\"\(edited && id == 1 ? "edited" : "original").jpg\"}".utf8))
     }
-    func diffVersion() async throws -> DiffCursor { .init(diffVersion: 1, versionTime: 1) }
-    func changes(since cursor: DiffCursor) async throws -> PhotoDiff {
+    func diffVersion(space: PhotoSpace) async throws -> DiffCursor { .init(diffVersion: 1, versionTime: 1) }
+    func changes(since cursor: DiffCursor, space: PhotoSpace) async throws -> PhotoDiff {
         let modified: [Int64] = pendingChange ? [1] : []
         pendingChange = false
         return .init(cursor: .init(diffVersion: edited ? 2 : 1, versionTime: edited ? 2 : 1), modifiedItemIDs: modified, deletedItemIDs: [])

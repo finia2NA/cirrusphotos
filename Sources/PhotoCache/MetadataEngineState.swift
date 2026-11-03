@@ -1,6 +1,15 @@
 import Foundation
 import SynologyAPI
 
+/// Reconciliation of one space's Diff feed for the current run.
+struct MetadataSourceState {
+    var reconciliation: Task<Void, Error>?
+    var reconciliationID: UUID?
+    var reconciled = false
+    var sourceUnavailable = false
+    var revision: Int64 = 0
+}
+
 /// Fixed state owned by CachedPhotosRepository, never an independent actor or provider cursor.
 struct MetadataEngineState {
     var expectedPageDemands: [UUID: Set<DayPageAddress>] = [:]
@@ -12,12 +21,9 @@ struct MetadataEngineState {
     var batchJobs: [UUID: Task<Void, Never>] = [:]
     var flushJob: Task<Void, Never>?
     var initialized = false
-    var reconciliation: Task<Void, Error>?
-    var reconciliationID: UUID?
-    var reconciled = false
+    /// One Diff source per space; each space has its own cursor and feed.
+    var sources: [PhotoSpace: MetadataSourceState] = [:]
     var inventoryCurrent = false
-    var sourceUnavailable = false
-    var revision: Int64 = 0
     var directSubscribers: Set<UUID> = []
 
     var collectionObservers: [UUID: MetadataCollectionObserver] = [:]
@@ -46,15 +52,19 @@ struct MetadataEngineState {
     var sharedLocations = SharedLocationState()
     var sessions = SessionCollectionState()
 
+    subscript(source space: PhotoSpace) -> MetadataSourceState {
+        get { sources[space] ?? MetadataSourceState() }
+        set { sources[space] = newValue }
+    }
+
     var hasDemand: Bool {
-        reconciliation != nil || !detailJobs.isEmpty || !pendingPages.isEmpty || !activePages.isEmpty ||
+        sources.values.contains { $0.reconciliation != nil } || !detailJobs.isEmpty || !pendingPages.isEmpty || !activePages.isEmpty ||
             !directSubscribers.isEmpty || !initialSubscribers.isEmpty || !timelineJobs.isEmpty || !pageJobs.isEmpty ||
             albums.listJob != nil || !collectionIndexJobs.isEmpty || !folderJobs.isEmpty || locations.work != nil || sharedLocations.job != nil
     }
     mutating func clearSourceWork() {
-        initialized = false; reconciled = false; sourceUnavailable = false; revision = 0
+        initialized = false; sources.removeAll()
         inventoryCurrent = false; locations.projectionLoaded = false; locations.lastPublishedInventoryVerified = nil
-        reconciliation = nil; reconciliationID = nil
         locations.publicationTask = nil; locations.publicationID = nil
         collectionRecoveries.removeAll(); directSubscribers.removeAll()
     }

@@ -1,4 +1,5 @@
 import MapKit
+import Network
 import PhotoCache
 import SwiftUI
 import SynologyAPI
@@ -35,6 +36,25 @@ final class MapBrowserModel: ObservableObject {
     private var currentCamera: MapCamera?
     private var viewSize: CGSize = .zero
     private var hasFitInitialCamera = false
+    private var retryTask: Task<Void, Never>?
+    private var retryDelay: Duration = MapBrowserModel.firstRetryDelay
+    private let pathMonitor = NWPathMonitor()
+    private var networkAvailable = true
+    private var networkReturns = 0
+    private static let firstRetryDelay: Duration = .seconds(15)
+    private static let maximumRetryDelay: Duration = .seconds(300)
+
+    init() {
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            let available = path.status == .satisfied
+            Task { @MainActor in
+                guard let self else { return }
+                if available && !self.networkAvailable { self.networkReturns += 1 }
+                self.networkAvailable = available
+            }
+        }
+        pathMonitor.start(queue: .main)
+    }
 
     /// Subscribes to the shared location index once. Later calls are ignored unless
     /// `retry()` reset the subscription after a failure.
@@ -64,10 +84,38 @@ final class MapBrowserModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 self?.receive(event)
             }
+            guard !Task.isCancelled else { return }
+            self?.indexFinished()
         }
     }
 
-    deinit { projectionTask?.cancel() }
+    deinit { projectionTask?.cancel(); retryTask?.cancel(); pathMonitor.cancel() }
+
+    private var indexRunning: Bool { indexTask != nil }
+
+    private func indexFinished() {
+        indexTask = nil
+        if status == .ready { retryDelay = Self.firstRetryDelay } else { scheduleAutomaticRetry() }
+    }
+
+    /// Verification is retried without user action whenever the index stream ended
+    /// unverified or failed: after a backoff, or as soon as the network path returns.
+    private func scheduleAutomaticRetry() {
+        guard retryTask == nil, repository != nil else { return }
+        let delay = retryDelay
+        retryDelay = min(retryDelay * 2, Self.maximumRetryDelay)
+        let returns = networkReturns
+        retryTask = Task { [weak self] in
+            let deadline = ContinuousClock.now + delay
+            while !Task.isCancelled, ContinuousClock.now < deadline, self?.networkReturns == returns {
+                try? await Task.sleep(for: .seconds(1))
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.retryTask = nil
+            guard !self.indexRunning, self.status != .ready else { return }
+            self.restartIndex()
+        }
+    }
 
     func stopObservingProjection() {
         projectionTask?.cancel()
@@ -75,6 +123,13 @@ final class MapBrowserModel: ObservableObject {
     }
 
     func retry() {
+        retryDelay = Self.firstRetryDelay
+        restartIndex()
+    }
+
+    private func restartIndex() {
+        retryTask?.cancel()
+        retryTask = nil
         indexTask?.cancel()
         indexTask = nil
         status = .idle
@@ -83,6 +138,9 @@ final class MapBrowserModel: ObservableObject {
 
     /// Releases every metadata-derived value while preserving the user's camera.
     func invalidateMetadata(restart: Bool) {
+        retryTask?.cancel()
+        retryTask = nil
+        retryDelay = Self.firstRetryDelay
         indexTask?.cancel()
         indexTask = nil
         reclusterTask?.cancel()
@@ -153,6 +211,8 @@ final class MapBrowserModel: ObservableObject {
             locationRevision = value.revision
             apply(value.records)
             status = verified ? .ready : .cachedUnverified
+            // A projection change after the index finished can withdraw verification.
+            if !verified && !indexRunning { scheduleAutomaticRetry() }
         case .failure(let message):
             status = .failed(message)
         }

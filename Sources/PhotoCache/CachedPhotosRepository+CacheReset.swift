@@ -113,7 +113,7 @@ extension CachedPhotosRepository {
         for job in metadata.detailJobs.values { job.task.cancel() }
         metadata.detailJobs.removeAll()
         metadata.detailJobByID.removeAll()
-        metadata.reconciliation?.cancel()
+        for source in metadata.sources.values { source.reconciliation?.cancel() }
         metadata.locations.publicationTask?.cancel()
         metadata.clearSourceWork()
         for observer in metadata.collectionPageObservers.values { observer.continuation.finish() }

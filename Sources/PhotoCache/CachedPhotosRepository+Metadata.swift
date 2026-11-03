@@ -261,7 +261,8 @@ extension CachedPhotosRepository {
                               key: String, subscriber: UUID, priority: RequestPriority, forceMembership: Bool) -> Task<PhotoPageSnapshot, Error> {
         let mutationEpoch = metadata.mutationEpochs[collection, default: 0]
         if var job = metadata.pageJobs[key], metadata.pageJobEpochs[key] == mutationEpoch,
-           (metadata.pageJobSourceRevisions[key] == nil || metadata.pageJobSourceRevisions[key] == metadata.revision),
+           (metadata.pageJobSourceRevisions[key] == nil
+            || metadata.pageJobSourceRevisions[key] == collection.contentScope.space.map { metadata[source: $0].revision }),
            !forceMembership || metadata.forcedMembershipJobs.contains(key) {
             job.subscribers.insert(subscriber); metadata.pageJobs[key] = job
             return job.task
@@ -274,7 +275,7 @@ extension CachedPhotosRepository {
             try await reconcileMetadataSource(for: collection)
             _ = try await verifiedTimelineSnapshot(collection: collection)
             guard await metadataTokenIsCurrent(token) else { throw MetadataAdmissionError.superseded }
-            if collection.contentScope == .space(.personal) { metadata.pageJobSourceRevisions[key] = metadata.revision }
+            if let space = collection.contentScope.space { metadata.pageJobSourceRevisions[key] = metadata[source: space].revision }
             var descriptor = section
             var result: PhotoPageSnapshot?
             for attempt in 0..<2 {

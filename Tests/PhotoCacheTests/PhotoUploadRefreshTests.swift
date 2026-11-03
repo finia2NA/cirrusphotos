@@ -25,8 +25,8 @@ private actor AlbumUploadTransport: TestPhotosTransport {
     var albumReads = 0
     func setOwner(_ value: Int64) { owner = value }
     func login(credentials: SynologyCredentials) async throws {}
-    func diffVersion() async throws -> DiffCursor { .init(diffVersion: 1, versionTime: 1) }
-    func changes(since cursor: DiffCursor) async throws -> PhotoDiff { .init(cursor: cursor, modifiedItemIDs: [], deletedItemIDs: []) }
+    func diffVersion(space: PhotoSpace) async throws -> DiffCursor { .init(diffVersion: 1, versionTime: 1) }
+    func changes(since cursor: DiffCursor, space: PhotoSpace) async throws -> PhotoDiff { .init(cursor: cursor, modifiedItemIDs: [], deletedItemIDs: []) }
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
         try CollectionDayCatalog(days: [], completeness: .complete)
     }
