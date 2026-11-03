@@ -129,7 +129,7 @@ class FocusedTests(unittest.TestCase):
         self.assertTrue(observed['file_exists'])
 
     def test_omitted_known_id_is_not_alone_a_deletion_verdict(self):
-        client = focused.FocusedClient({'USER': 'test', 'PW': 'never-sent'}, lambda *args, **kwargs: None)
+        client = focused.FocusedClient({'NAS_URL': 'https://nas.example.invalid', 'USER': 'test', 'PW': 'never-sent'}, lambda *args, **kwargs: None)
         with patch.object(client, 'read', return_value={'list': []}):
             self.assertEqual(client.optional_lookup([1]), [])
         with patch.object(client, 'read', return_value={'list': [{'id': 2}]}):

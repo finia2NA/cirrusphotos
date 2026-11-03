@@ -39,8 +39,9 @@ final class CredentialsTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["RUN_LIVE_SYNOLOGY_TEST"] == "1" else {
             throw XCTSkip("Set RUN_LIVE_SYNOLOGY_TEST=1 to test against Cirrus.")
         }
-        let client = SynologyClient()
-        try await client.login(credentials: CredentialStore.load())
+        let credentials = try CredentialStore.load()
+        let client = try SynologyClient(credentials: credentials)
+        try await client.login(credentials: credentials)
         let initial = try await client.collectionDayCatalog(collection: .library(.personal), initial: true)
         let full = try await client.collectionDayCatalog(collection: .library(.personal), initial: false)
         XCTAssertFalse(initial.days.isEmpty)

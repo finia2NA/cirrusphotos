@@ -5,10 +5,12 @@ import XCTest
 final class LoginTests: XCTestCase {
     func testMissingAndBlankOTPAllowCredentials() throws {
         for suffix in ["", "OTP=\n", "OTP='   '\n"] {
-            let credentials = try CredentialStore.credentials(from: Data("USER=phototest\nPW=test-password\n\(suffix)".utf8))
+            let credentials = try CredentialStore.credentials(from: Data("NAS_URL=https://nas.example.test\nUSER=phototest\nPW=test-password\n\(suffix)".utf8))
             XCTAssertNil(credentials.otpSecret)
         }
         XCTAssertThrowsError(try CredentialStore.credentials(from: Data("USER=phototest\n".utf8)))
+        XCTAssertThrowsError(try CredentialStore.credentials(from: Data("NAS_URL=nas\nUSER=phototest\nPW=x\n".utf8)))
+        XCTAssertThrowsError(try CredentialStore.credentials(from: Data("USER=phototest\nPW=x\n".utf8)))
     }
 
     func testLoginWithoutOTPAndWithConfiguredOTP() async throws {

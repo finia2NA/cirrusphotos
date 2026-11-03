@@ -93,7 +93,7 @@ class RunnerTests(unittest.TestCase):
         self.assertFalse((self.run.root / self.run.filename(2)).exists())
 
     def test_no_mutating_nas_api_is_admitted(self):
-        client = runner.Client({'USER': 'test', 'PW': 'never-sent'}, lambda *_, **__: None)
+        client = runner.Client({'NAS_URL': 'https://nas.example.invalid', 'USER': 'test', 'PW': 'never-sent'}, lambda *_, **__: None)
         with self.assertRaises(runner.ExperimentError):
             client.call('/webapi/entry.cgi', {'api': 'SYNO.Foto.Browse.Item', 'method': 'delete'})
 
@@ -203,7 +203,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_request_telemetry_excludes_authentication_material(self):
         events = []
-        client = runner.Client({'USER': 'synthetic-user', 'PW': 'private-password'},
+        client = runner.Client({'NAS_URL': 'https://nas.example.invalid', 'USER': 'synthetic-user', 'PW': 'private-password'},
                                lambda event, **fields: events.append({'event': event, **fields}))
         payload = {'success': True, 'data': {'sid': 'private-session', 'synotoken': 'private-token'}}
         with patch.object(client.opener, 'open', return_value=io.BytesIO(json.dumps(payload).encode())):
@@ -242,7 +242,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(self.run.client.scans, 1)
 
     def test_overlapping_scan_uses_two_sessions_and_terminal_short_page(self):
-        client = runner.Client({'USER': 'test', 'PW': 'never-sent'}, lambda *_, **__: None)
+        client = runner.Client({'NAS_URL': 'https://nas.example.invalid', 'USER': 'test', 'PW': 'never-sent'}, lambda *_, **__: None)
         client.page = lambda offset, limit, folder_id: [{'id': i} for i in range(offset, min(offset + limit, 1201))]
         class Partner:
             requests = bytes = 0
@@ -255,7 +255,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual([r['id'] for r in rows], list(range(1201)))
 
     def test_lookup_omission_cannot_become_a_tombstone(self):
-        client = runner.Client({'USER': 'test', 'PW': 'never-sent'}, lambda *_, **__: None)
+        client = runner.Client({'NAS_URL': 'https://nas.example.invalid', 'USER': 'test', 'PW': 'never-sent'}, lambda *_, **__: None)
         with patch.object(client, 'read', return_value={'list': [{'id': 1}]}):
             with self.assertRaises(runner.ExperimentError):
                 client.lookup([1, 2])

@@ -28,7 +28,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from test_synology_login import DEFAULT_BASE_URL, SynologyProbe, generate_totp, load_env
+from test_synology_login import SynologyProbe, generate_totp, load_env
 
 PROJECT = Path(__file__).resolve().parent.parent
 MOUNT = Path('/Volumes/homes/phototest/Photos')
@@ -202,7 +202,7 @@ def check_environment():
 
 class Client(SynologyProbe):
     def __init__(self, credentials, log, verify_tls=False):
-        super().__init__(base_url=DEFAULT_BASE_URL, verify_tls=verify_tls)
+        super().__init__(base_url=credentials["NAS_URL"], verify_tls=verify_tls)
         self.credentials = credentials
         self.log = log
         self.verify_tls = verify_tls

@@ -10,7 +10,7 @@
     <key>NSHighResolutionCapable</key><true/>
     <key>NSAppTransportSecurity</key><dict>
         <key>NSExceptionDomains</key><dict>
-            <key>nas.example.com</key><dict>
+            <key>__NAS_HOST__</key><dict>
                 <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>
             </dict>
         </dict>

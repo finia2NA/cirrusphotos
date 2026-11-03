@@ -45,8 +45,9 @@ final class PhotoDownloadTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["RUN_LIVE_SYNOLOGY_TEST"] == "1" else {
             throw XCTSkip("Live download verification is opt-in.")
         }
-        let client = SynologyClient()
-        try await client.login(credentials: CredentialStore.load())
+        let credentials = try CredentialStore.load()
+        let client = try SynologyClient(credentials: credentials)
+        try await client.login(credentials: credentials)
         let items = try await client.items(ids: [284351], space: .personal)
         let item = try XCTUnwrap(items.first)
         let resource = try XCTUnwrap(item.fullImageResource(in: .space(.personal)))
@@ -63,8 +64,9 @@ final class PhotoDownloadTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["RUN_LIVE_SYNOLOGY_TEST"] == "1" else {
             throw XCTSkip("Live download verification is opt-in.")
         }
-        let client = SynologyClient()
-        try await client.login(credentials: CredentialStore.load())
+        let credentials = try CredentialStore.load()
+        let client = try SynologyClient(credentials: credentials)
+        try await client.login(credentials: credentials)
         let items = try await client.items(ids: [129468], space: .personal)
         let item = try XCTUnwrap(items.first)
         let resource = try XCTUnwrap(item.fullImageResource(in: .space(.personal)))
@@ -82,8 +84,9 @@ final class PhotoDownloadTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["RUN_LIVE_SYNOLOGY_TEST"] == "1" else {
             throw XCTSkip("Live download verification is opt-in.")
         }
-        let client = SynologyClient()
-        try await client.login(credentials: CredentialStore.load())
+        let credentials = try CredentialStore.load()
+        let client = try SynologyClient(credentials: credentials)
+        try await client.login(credentials: credentials)
         for ids: [Int64] in [[284351], [284351, 284353]] {
             for kind: PhotoDownloadKind in [.original, .compressedJPEG] {
                 let result = try await client.downloadPhotos(itemIDs: ids, kind: kind, space: .personal, progress: { _ in })

@@ -25,12 +25,18 @@ public actor CachedPhotosRepository {
     var activeMutations: Set<MutationLane> = []
     var avatarTasks: [AvatarIdentity: AvatarWork] = [:]
 
-    public init(credentials: SynologyCredentials, baseURL: URL = SynologyClient.defaultBaseURL,
+    public init(credentials: SynologyCredentials, baseURL: URL? = nil,
                 budget: Int64 = CacheBudget.bytes(at: 0.5), cacheRoot: URL? = nil,
                 transport: (any PhotosTransport)? = nil) throws {
+        let server = baseURL ?? credentials.serverURL
+        if transport == nil, server == nil {
+            throw SynologyAPIError.configuration("The credentials do not name a NAS URL.")
+        }
         self.credentials = credentials
-        namespace = CacheKey.namespace(server: baseURL, account: credentials.username)
-        client = transport ?? SynologyClient(baseURL: baseURL)
+        // A repository with an injected transport and no server URL keys its cache under a placeholder host.
+        let namespaceServer = server ?? URL(string: "https://nas.invalid")!
+        namespace = CacheKey.namespace(server: namespaceServer, account: credentials.username)
+        client = try transport ?? SynologyClient(baseURL: namespaceServer)
         let root: URL
         if let cacheRoot {
             root = cacheRoot

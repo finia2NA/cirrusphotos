@@ -57,7 +57,7 @@ final class RotationTests: XCTestCase {
                                              collection: .library(.personal), itemsByID: [1: original])
         let store = await repository.store
         let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
-            server: SynologyClient.defaultBaseURL, account: "rotation"), section: section, collection: .library(.personal)))
+            server: URL(string: "https://nas.invalid")!, account: "rotation"), section: section, collection: .library(.personal)))
         try await seedMetadataPage([original], section: section, repository: repository)
         try await repository.rotate(action, direction: .clockwise)
         let calls = await transport.rotateCalls
@@ -80,7 +80,7 @@ final class RotationTests: XCTestCase {
                                              collection: .library(.personal), itemsByID: [2: original])
         let store = await repository.store
         let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
-            server: SynologyClient.defaultBaseURL, account: "rotation"), section: section, collection: .library(.personal)))
+            server: URL(string: "https://nas.invalid")!, account: "rotation"), section: section, collection: .library(.personal)))
         try await seedMetadataPage([original], section: section, repository: repository)
         do {
             try await repository.rotate(action, direction: .clockwise)
@@ -108,7 +108,7 @@ final class RotationTests: XCTestCase {
 
         let store = await repository.store
         let sourceKey = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
-            server: SynologyClient.defaultBaseURL, account: "rotation"), section: sourceSection, collection: .library(.personal)))
+            server: URL(string: "https://nas.invalid")!, account: "rotation"), section: sourceSection, collection: .library(.personal)))
         try await seedMetadataPage([original], section: sourceSection, repository: repository)
 
         let built = DayGroupedTimelineBuilder.build(entries: [.init(id: original.id, time: original.time)])
@@ -199,7 +199,7 @@ final class RotationTests: XCTestCase {
                                              collection: .library(.personal), itemsByID: [11: original])
         let store = await repository.store
         let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
-            server: SynologyClient.defaultBaseURL, account: "rotation"), section: section, collection: .library(.personal)))
+            server: URL(string: "https://nas.invalid")!, account: "rotation"), section: section, collection: .library(.personal)))
         try await seedMetadataPage([original], section: section, repository: repository)
         var final: ThumbnailRotationProgress?
         for await progress in await repository.rotateThumbnails(action, direction: .clockwise) { final = progress }
@@ -226,7 +226,7 @@ final class RotationTests: XCTestCase {
                                              collection: .library(.personal), itemsByID: [12: original])
         let store = await repository.store
         let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
-            server: SynologyClient.defaultBaseURL, account: "rotation"), section: section, collection: .library(.personal)))
+            server: URL(string: "https://nas.invalid")!, account: "rotation"), section: section, collection: .library(.personal)))
         try await seedMetadataPage([original], section: section, repository: repository)
         for await _ in await repository.rotateThumbnails(action, direction: .clockwise) {}
         let restored = await transport.restoredUnits

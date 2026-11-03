@@ -14,7 +14,7 @@ final class IncomingAlbumIsolationTests: XCTestCase {
     func testScopedMetadataDoesNotOverwritePersonalOrAnotherOwner() async throws {
         let root = temporaryTestRoot("incoming-isolation")
         defer { try? FileManager.default.removeItem(at: root) }
-        let repository = try CachedPhotosRepository(credentials: .init(username: "test", password: "unused"), cacheRoot: root)
+        let repository = try CachedPhotosRepository(credentials: .init(username: "test", password: "unused"), baseURL: URL(string: "https://nas.invalid")!, cacheRoot: root)
         try await repository.initializeMetadataEngine()
         let store = await repository.store
         let personal = await repository.personalMetadataNamespace

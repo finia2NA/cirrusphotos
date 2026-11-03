@@ -20,9 +20,6 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_BASE_URL = "https://nas.example.com:5001"
-
-
 class ProbeError(RuntimeError):
     pass
 
@@ -50,7 +47,7 @@ def load_env(path: Path) -> dict[str, str]:
             value = value[1:-1]
         values[key] = value
 
-    missing = [key for key in ("USER", "PW") if not values.get(key)]
+    missing = [key for key in ("NAS_URL", "USER", "PW") if not values.get(key)]
     if missing:
         raise ProbeError(f"Missing required dotenv key(s): {', '.join(missing)}")
     return values
@@ -229,7 +226,7 @@ class SynologyProbe:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--base-url", default=None, help="override NAS_URL from the env file")
     parser.add_argument("--env-file", type=Path, default=Path(".env"))
     parser.add_argument(
         "--verify-tls",
@@ -245,7 +242,7 @@ def main() -> int:
         credentials = load_env(args.env_file)
         otp_secret = credentials.get("OTP", "").strip()
         otp_code = generate_totp(otp_secret) if otp_secret else None
-        probe = SynologyProbe(args.base_url, verify_tls=args.verify_tls)
+        probe = SynologyProbe(args.base_url or credentials["NAS_URL"], verify_tls=args.verify_tls)
         advertised = probe.discover()
         photo_apis = sorted(name for name in advertised if name.startswith("SYNO.Foto"))
         print(f"Connected to DSM; discovered {len(photo_apis)} requested Photos APIs.")

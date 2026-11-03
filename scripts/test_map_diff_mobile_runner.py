@@ -19,7 +19,7 @@ def delta(ids=(), deleted=(), **extra):
 
 class ProtocolTests(unittest.TestCase):
     def client(self):
-        return mobile.MobileClient({}, lambda *a, **k: None)
+        return mobile.MobileClient({'NAS_URL': 'https://nas.example.invalid'}, lambda *a, **k: None)
 
     def test_actual_v7_request_and_no_fabricated_album(self):
         c = self.client()

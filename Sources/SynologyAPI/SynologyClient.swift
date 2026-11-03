@@ -33,8 +33,6 @@ private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelega
 }
 
 public actor SynologyClient: PhotosTransport {
-    public static let defaultBaseURL = URL(string: "https://nas.example.com:5001")!
-
     private let baseURL: URL
     private let session: URLSession
     private var sid: String?
@@ -125,7 +123,14 @@ public actor SynologyClient: PhotosTransport {
         return result
     }
 
-    public init(baseURL: URL = defaultBaseURL) {
+    public init(credentials: SynologyCredentials) throws {
+        guard let serverURL = credentials.serverURL else {
+            throw SynologyAPIError.configuration("The credentials do not name a NAS URL.")
+        }
+        self.init(baseURL: serverURL)
+    }
+
+    public init(baseURL: URL) {
         self.baseURL = baseURL
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = HTTPCookieStorage()

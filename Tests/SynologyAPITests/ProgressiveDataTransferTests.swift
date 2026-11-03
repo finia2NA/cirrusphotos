@@ -26,8 +26,9 @@ final class ProgressiveDataTransferTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["RUN_LIVE_SYNOLOGY_TEST"] == "1" else {
             throw XCTSkip("Set RUN_LIVE_SYNOLOGY_TEST=1 to test the Cirrus transfer delegate.")
         }
-        let client = SynologyClient()
-        try await client.login(credentials: CredentialStore.load())
+        let credentials = try CredentialStore.load()
+        let client = try SynologyClient(credentials: credentials)
+        try await client.login(credentials: credentials)
         let items = try await client.items(ids: [239363], space: .personal)
         let item = try XCTUnwrap(items.first)
         let resource = try XCTUnwrap(item.fullImageResource(in: .space(.personal)))

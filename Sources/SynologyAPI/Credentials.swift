@@ -5,10 +5,13 @@ public struct SynologyCredentials: Sendable {
     public let username: String
     public let password: String
     public let otpSecret: String?
+    /// The NAS base URL from `.env`; nil only for credentials built outside the loader.
+    public let serverURL: URL?
 
-    public init(username: String, password: String, otpSecret: String? = nil) {
+    public init(username: String, password: String, otpSecret: String? = nil, serverURL: URL? = nil) {
         self.username = username
         self.password = password
+        self.serverURL = serverURL
         let trimmed = otpSecret?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.otpSecret = trimmed?.isEmpty == false ? trimmed : nil
     }
@@ -33,11 +36,15 @@ public enum CredentialStore {
 
     static func credentials(from data: Data) throws -> SynologyCredentials {
         let values = try parseEnv(data)
-        let missing = ["USER", "PW"].filter { values[$0, default: ""].isEmpty }
+        let missing = ["USER", "PW", "NAS_URL"].filter { values[$0, default: ""].isEmpty }
         guard missing.isEmpty else {
             throw SynologyAPIError.configuration("Missing .env key(s): \(missing.joined(separator: ", "))")
         }
-        return SynologyCredentials(username: values["USER"]!, password: values["PW"]!, otpSecret: values["OTP"])
+        guard let serverURL = URL(string: values["NAS_URL"]!), serverURL.scheme != nil, serverURL.host != nil else {
+            throw SynologyAPIError.configuration("NAS_URL in .env must be a full URL such as https://nas.example.com:5001.")
+        }
+        return SynologyCredentials(username: values["USER"]!, password: values["PW"]!,
+                                   otpSecret: values["OTP"], serverURL: serverURL)
     }
 
     static func parseEnv(_ data: Data) throws -> [String: String] {
