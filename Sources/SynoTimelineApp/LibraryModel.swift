@@ -46,6 +46,7 @@ final class LibraryModel: ObservableObject {
     @Published var showsFilmstrip = false
     @Published var showsHistogram = false
     @Published var showsHighlightPeaking = false
+    @Published var showsFocusEdges = false
     @Published private(set) var canCloseViewer = false
     @Published private(set) var canNavigateBack = false
     @Published private(set) var canOpenSelectedPhoto = false

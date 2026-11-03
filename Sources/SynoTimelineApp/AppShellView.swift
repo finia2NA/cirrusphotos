@@ -390,6 +390,7 @@ struct AppShellView: View {
                                     cropsThumbnailsToSquare: preferences.cropsThumbnailsToSquare,
                                     showsHistogram: model.showsHistogram,
                                     showsHighlightPeaking: model.showsHighlightPeaking,
+                                    showsFocusEdges: model.showsFocusEdges,
                                     onVideoMuteChanged: { preferences.videoMuted = $0 },
                                     onSelectionChanged: followViewer,
                                     onClose: closeViewer,

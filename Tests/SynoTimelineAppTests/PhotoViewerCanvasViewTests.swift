@@ -196,6 +196,19 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         XCTAssertEqual(container.frame, canvas.currentImageLayer.bounds)
     }
 
+    func testFocusOverlayIsIndependentOfHighlightOverlay() throws {
+        let (canvas, window) = makeCanvas()
+        defer { window.orderOut(nil) }
+        let overlay = try XCTUnwrap(try bitmapImage(width: 20, height: 10).cgImage(forProposedRect: nil, context: nil, hints: nil))
+        canvas.setInspectionOverlay(overlay)
+        canvas.setFocusOverlay(overlay)
+        let container = try XCTUnwrap(canvas.currentImageLayer.sublayers?.first)
+        XCTAssertEqual(container.sublayers?.filter { $0.contents != nil }.count, 2)
+        canvas.setFocusOverlay(nil)
+        XCTAssertEqual(container.sublayers?.filter { $0.contents != nil }.count, 1)
+        XCTAssertEqual(container.sublayers?.allSatisfy { $0.frame == container.bounds }, true)
+    }
+
     func testLiveIndicatorTracksDismissalWithoutImplicitLayerAnimations() throws {
         let (canvas, window) = makeCanvas()
         defer { window.orderOut(nil) }

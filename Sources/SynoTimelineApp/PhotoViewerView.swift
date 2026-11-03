@@ -15,9 +15,13 @@ struct PhotoViewerView: View {
     let cropsThumbnailsToSquare: Bool
     let showsHistogram: Bool
     let showsHighlightPeaking: Bool
+    let showsFocusEdges: Bool
     @AppStorage(AppPreferences.Key.viewerHighlightThreshold) private var highlightThreshold = 100.0
+    @AppStorage(AppPreferences.Key.viewerFocusEdgeTolerance) private var focusEdgeTolerance = 1.5
     @State private var inspectionOverlay: CGImage?
     @State private var inspectionGeneration: UInt64?
+    @State private var focusOverlay: CGImage?
+    @State private var focusGeneration: UInt64?
     @State private var histogramOpacity: CGFloat = 1
     @State private var filmstripHeight: CGFloat = 100
     let onVideoMuteChanged: (Bool) -> Void
@@ -33,6 +37,8 @@ struct PhotoViewerView: View {
                               selectionGeneration: viewer.state?.selection.generation ?? 1,
                               inspectionOverlay: showsHighlightPeaking && viewer.state?.item?.isVideo != true &&
                                 viewer.state?.selection.generation == inspectionGeneration ? inspectionOverlay : nil,
+                              focusOverlay: showsFocusEdges && viewer.state?.item?.isVideo != true &&
+                                viewer.state?.selection.generation == focusGeneration ? focusOverlay : nil,
                               zoom: viewer.zoom,
                               toolbarInset: toolbarInset,
                               openingSourceRect: viewer.source.rectInWindowContent(),
@@ -193,6 +199,19 @@ struct PhotoViewerView: View {
             inspectionGeneration = generation
             inspectionOverlay = result
         }
+        .task(id: FocusEdgeRequest(image: viewer.image.map(ObjectIdentifier.init),
+                                   generation: viewer.state?.selection.generation,
+                                   enabled: showsFocusEdges && viewer.state?.item?.isVideo != true,
+                                   tolerance: focusEdgeTolerance)) {
+            guard showsFocusEdges, viewer.state?.item?.isVideo != true,
+                  let generation = viewer.state?.selection.generation,
+                  let source = viewer.image,
+                  let image = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+            let result = await ViewerInspectionEngine.shared.overlay(for: image, module: .focusEdges(widthTolerance: focusEdgeTolerance))
+            guard !Task.isCancelled, let result, viewer.state?.selection.generation == generation else { return }
+            focusGeneration = generation
+            focusOverlay = result
+        }
         .onAppear {
             viewer.setFilmstripEnabled(showsFilmstrip)
             if let state = viewer.state { onSelectionChanged(state) }
@@ -205,6 +224,13 @@ struct PhotoViewerView: View {
             if let state = viewer.state { onSelectionChanged(state) }
         }
     }
+}
+
+private struct FocusEdgeRequest: Equatable {
+    let image: ObjectIdentifier?
+    let generation: UInt64?
+    let enabled: Bool
+    let tolerance: Double
 }
 
 private struct InspectionRequest: Equatable {

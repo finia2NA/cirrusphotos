@@ -55,6 +55,7 @@ struct PhotoViewerCanvas: NSViewRepresentable {
     let image: NSImage?
     let selectionGeneration: UInt64
     var inspectionOverlay: CGImage? = nil
+    var focusOverlay: CGImage? = nil
     let zoom: Double
     let toolbarInset: CGFloat
     let openingSourceRect: CGRect?
@@ -95,6 +96,7 @@ struct PhotoViewerCanvas: NSViewRepresentable {
         view.setImage(image, selectionGeneration: selectionGeneration,
                       openingSourceRectInWindow: openingSourceRect)
         view.setInspectionOverlay(inspectionOverlay)
+        view.setFocusOverlay(focusOverlay)
         view.syncNeighbors(generation: selectionGeneration)
         view.setZoom(CGFloat(zoom))
         view.setVideo(videoConfiguration)

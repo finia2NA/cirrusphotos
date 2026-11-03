@@ -77,6 +77,7 @@ final class PhotoViewerCanvasView: NSView {
     // Every image-relative overlay is attached here and follows the image layer’s transform.
     private let imageOverlayContainer = CALayer()
     private let inspectionLayer = CALayer()
+    private let focusLayer = CALayer()
     private var previousLayer = CALayer()
     private var nextLayer = CALayer()
     private var previousLayerImage: NSImage?
@@ -418,6 +419,7 @@ final class PhotoViewerCanvasView: NSView {
         if imageOverlayContainer.superlayer === imageLayer {
             imageOverlayContainer.frame = imageLayer.bounds
             inspectionLayer.frame = imageOverlayContainer.bounds
+            focusLayer.frame = imageOverlayContainer.bounds
             liveIndicatorLayer.frame.origin = CGPoint(x: 12, y: max(0, imageOverlayContainer.bounds.height - 44))
         }
         for view in [videoView, motionView].compactMap({ $0 }) {
@@ -1186,15 +1188,19 @@ final class PhotoViewerCanvasView: NSView {
 
     // MARK: - Geometry
 
-    func setInspectionOverlay(_ overlay: CGImage?) {
+    func setInspectionOverlay(_ overlay: CGImage?) { setInspectionContents(overlay, in: inspectionLayer) }
+
+    func setFocusOverlay(_ overlay: CGImage?) { setInspectionContents(overlay, in: focusLayer) }
+
+    private func setInspectionContents(_ overlay: CGImage?, in layer: CALayer) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        installImageOverlay(inspectionLayer)
-        inspectionLayer.frame = imageOverlayContainer.bounds
-        inspectionLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
-        inspectionLayer.contentsGravity = .resize
-        inspectionLayer.magnificationFilter = .nearest
-        inspectionLayer.contents = overlay
+        installImageOverlay(layer)
+        layer.frame = imageOverlayContainer.bounds
+        layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        layer.contentsGravity = .resize
+        layer.magnificationFilter = .nearest
+        layer.contents = overlay
         CATransaction.commit()
     }
 

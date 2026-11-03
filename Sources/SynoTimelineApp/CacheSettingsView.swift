@@ -7,6 +7,7 @@ struct CacheSettingsView: View {
     @EnvironmentObject private var preferences: AppPreferences
     @AppStorage(AppPreferences.Key.photoDownloadDirectory) private var downloadDirectory = ""
     @AppStorage(AppPreferences.Key.viewerHighlightThreshold) private var highlightThreshold = 100.0
+    @AppStorage(AppPreferences.Key.viewerFocusEdgeTolerance) private var focusEdgeTolerance = 1.5
 
     var body: some View {
         Form {
@@ -37,6 +38,12 @@ struct CacheSettingsView: View {
                 Text("Highlight peaking threshold")
                 Slider(value: $highlightThreshold, in: 80...100, step: 1)
                 Text("\(Int(highlightThreshold))%")
+                    .frame(width: 45, alignment: .trailing)
+            }
+            HStack {
+                Text("Focus edge tolerance")
+                Slider(value: $focusEdgeTolerance, in: 1...2.5, step: 0.1)
+                Text(String(format: "%.1f×", focusEdgeTolerance))
                     .frame(width: 45, alignment: .trailing)
             }
             Picker("Default video quality", selection: $preferences.videoQuality) {

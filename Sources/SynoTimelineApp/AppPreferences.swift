@@ -18,6 +18,7 @@ final class AppPreferences: ObservableObject {
         static let cacheBudget = "cacheBudget"
         static let photoDownloadDirectory = "photoDownloadDirectory"
         static let viewerHighlightThreshold = "viewerHighlightThreshold"
+        static let viewerFocusEdgeTolerance = "viewerFocusEdgeTolerance"
         static let viewerHistogramShowsColor = "viewerHistogramShowsColor"
         static let warmingIncludesSharedSpace = "warmingIncludesSharedSpace"
     }

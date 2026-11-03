@@ -345,6 +345,8 @@ struct LibraryCommands: Commands {
                 .disabled(!model.canCloseViewer)
         }
         CommandMenu("Library") {
+            Toggle("Show Focus Edges", isOn: $model.showsFocusEdges)
+                .disabled(!model.canCloseViewer)
             Button("Back") { model.navigateBack() }
                 .keyboardShortcut(.cancelAction)
                 .disabled(!model.canNavigateBack)
