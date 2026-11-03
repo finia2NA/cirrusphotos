@@ -34,7 +34,7 @@ extension CachedPhotosRepository {
                 let cached = try? await store.metadataCatalog(CollectionKey(namespace: metadataNamespace(for: collection), collection: collection))
                 guard !Task.isCancelled, isAdmitted(epoch), mutationEpoch == metadata.mutationEpochs[collection, default: 0] else { continuation.finish(); return }
                 let snapshot = cached.flatMap { try? CollectionDayPager.snapshot(catalog: $0.catalog) }
-                let mutationInProgress = (metadata.albums.mutationWriting && collection.albumID != nil && collection.albumID == metadata.albums.mutationID) || metadata.people.mutationCollections.contains(collection)
+                let mutationInProgress = collectionMutationInProgress(collection)
                 if let snapshot {
                     metadata.latestTimelines[collection] = snapshot
                     continuation.yield(.value(snapshot, verified: !mutationInProgress && cached?.validatedRun == validation))
@@ -91,7 +91,7 @@ extension CachedPhotosRepository {
                     let mutationEpoch = metadata.mutationEpochs[collection, default: 0]
                     let cached = useCachedPages ? try await store.metadataPage(address, namespace: metadataNamespace(for: collection), currentRun: runID) : nil
                     guard !Task.isCancelled, isAdmitted(epoch), mutationEpoch == metadata.mutationEpochs[collection, default: 0] else { continuation.finish(); return }
-                    let mutationInProgress = (metadata.albums.mutationWriting && collection.albumID != nil && collection.albumID == metadata.albums.mutationID) || metadata.people.mutationCollections.contains(collection)
+                    let mutationInProgress = collectionMutationInProgress(collection)
                     if let cached {
                         let visible: PhotoPageSnapshot
                         if mutationInProgress {
@@ -118,6 +118,22 @@ extension CachedPhotosRepository {
                 Task { await self.releasePage(key: CacheKey.page(scope: collection.contentScope, namespace: self.namespace, section: section, collection: collection), subscriber: subscriber) }
             }
         }
+    }
+
+    func collectionMutationInProgress(_ collection: PhotoCollectionDescriptor) -> Bool {
+        (metadata.albums.mutationWriting && collection.albumID != nil && collection.albumID == metadata.albums.mutationID) || metadata.people.mutationCollections.contains(collection)
+    }
+
+    /// Cached filter facets of a stored (non-session-derived) collection, or nil when the
+    /// metadata engine was reset or the collection mutated while reading.
+    func cachedFilterPages(collection: PhotoCollectionDescriptor, days: Set<CaptureDay>?) async throws -> [MetadataFilterPage]? {
+        try await initializeMetadataEngine()
+        let epoch = metadata.admissionEpoch
+        let mutationEpoch = metadata.mutationEpochs[collection, default: 0]
+        let pages = try await store.metadataFilterPages(metadataNamespace(for: collection), collection: collection, days: days, currentRun: runID)
+        guard isAdmitted(epoch), mutationEpoch == metadata.mutationEpochs[collection, default: 0] else { return nil }
+        guard collectionMutationInProgress(collection) else { return pages }
+        return pages.map { MetadataFilterPage(address: $0.address, entries: $0.entries, verified: false) }
     }
 
     func applyingFavoriteOverrides(_ page: PhotoPageSnapshot, collection: PhotoCollectionDescriptor) -> PhotoPageSnapshot {

@@ -89,6 +89,7 @@ public actor LibraryFilterController {
     private let sourceFingerprint: String
     private let sourceCollection: PhotoCollectionDescriptor
     private let sourceSnapshot: TimelineSnapshot
+    private let sectionIndexByAddress: [DayPageAddress: Int]
     private var recordsBySection: [Int: [LibraryFilterRecord]] = [:]
     private var cachedCatalog: LibraryFilterCatalog?
     private var persistedCatalog = LibraryFilterCatalog()
@@ -122,6 +123,9 @@ public actor LibraryFilterController {
         self.networkAllowed = networkAllowed
         self.sourceCollection = sourceCollection
         sourceSnapshot = snapshot
+        sectionIndexByAddress = Dictionary(snapshot.sections.enumerated().compactMap { index, section in
+            (try? DayPageAddress(section: section, collection: sourceCollection)).map { ($0, index) }
+        }, uniquingKeysWith: { first, _ in first })
         sourceFingerprint = LibraryIndex(snapshot: snapshot).fingerprint
         states = Array(repeating: .unseen, count: snapshot.sections.count)
     }
@@ -266,6 +270,22 @@ public actor LibraryFilterController {
     }
 
     private func discoverCachedPages() async {
+        if sourceCollection.isSessionDerived { await discoverCachedPagesByReading() }
+        else if let pages = try? await repository.cachedFilterPages(collection: sourceCollection, days: nil) {
+            guard !stopped, !Task.isCancelled else { return }
+            if applyCachedFilterPages(pages) { publish() }
+        }
+        guard !stopped, !Task.isCancelled else { return }
+        cacheDiscoveryComplete = true
+        cachedCatalog = nil
+        persistedCatalog = makeCatalog()
+        await persistCatalog()
+        guard !stopped, !Task.isCancelled else { return }
+        cacheDiscoveryTask = nil
+        publish()
+    }
+
+    private func discoverCachedPagesByReading() async {
         for start in stride(from: 0, to: states.count, by: Self.cacheReadBatchSize) {
             guard !stopped, !Task.isCancelled else { break }
             let indices = Array(start..<min(start + Self.cacheReadBatchSize, states.count))
@@ -280,14 +300,21 @@ public actor LibraryFilterController {
             }
             if changed { publish() }
         }
-        guard !stopped, !Task.isCancelled else { return }
-        cacheDiscoveryComplete = true
-        cachedCatalog = nil
-        persistedCatalog = makeCatalog()
-        await persistCatalog()
-        guard !stopped, !Task.isCancelled else { return }
-        cacheDiscoveryTask = nil
-        publish()
+    }
+
+    private func applyCachedFilterPages(_ pages: [MetadataFilterPage], only indices: Set<Int>? = nil) -> Bool {
+        var changed = false
+        for page in pages {
+            guard let index = sectionIndexByAddress[page.address], indices?.contains(index) ?? true else { continue }
+            let records = page.entries.compactMap { entry -> LibraryFilterRecord? in
+                guard let time = entry.time else { return nil }
+                return LibraryFilterRecord(reference: .init(sourceSectionIndex: index, sourcePageOffset: entry.ordinal,
+                                                            itemID: entry.itemID, sourceVerified: page.verified),
+                                           time: time, values: entry.values)
+            }
+            changed = replace(sectionIndex: index, records: records, verified: page.verified) || changed
+        }
+        return changed
     }
 
     private func observePagesIfNeeded() async {
@@ -341,6 +368,15 @@ public actor LibraryFilterController {
 
     private func receiveCachedPages(_ sections: Set<TimelineSection>) async {
         let indices = sourceSnapshot.sections.indices.filter { sections.contains(sourceSnapshot.sections[$0]) }
+        if !sourceCollection.isSessionDerived {
+            let days = Set(indices.compactMap { index in
+                sourceSnapshot.sections[index].list.first.flatMap { try? CaptureDay(year: $0.year, month: $0.month, day: $0.day) }
+            })
+            guard !days.isEmpty, let pages = try? await repository.cachedFilterPages(collection: sourceCollection, days: days) else { return }
+            guard !stopped, !Task.isCancelled else { return }
+            if applyCachedFilterPages(pages, only: Set(indices)) { publish() }
+            return
+        }
         for start in stride(from: 0, to: indices.count, by: Self.cacheReadBatchSize) {
             guard !stopped, !Task.isCancelled else { return }
             let batch = Array(indices[start..<min(start + Self.cacheReadBatchSize, indices.count)])
@@ -461,6 +497,12 @@ public actor LibraryFilterController {
             return LibraryFilterRecord(reference: .init(sourceSectionIndex: sectionIndex, sourcePageOffset: offset, itemID: item.id, sourceVerified: verified),
                                        time: time, values: LibraryFilterValues(item))
         }
+        return replace(sectionIndex: sectionIndex, records: records, verified: verified)
+    }
+
+    @discardableResult
+    private func replace(sectionIndex: Int, records: [LibraryFilterRecord], verified: Bool) -> Bool {
+        if !verified && states[sectionIndex] == .verified { return false }
         let nextState: LibraryFilterSectionState = verified ? .verified : .provisional
         guard recordsBySection[sectionIndex] != records || states[sectionIndex] != nextState else { return false }
         recordsBySection[sectionIndex] = records

@@ -1,5 +1,6 @@
 import Foundation
 import SQLite3
+import GRDB
 import XCTest
 import SynologyAPI
 @testable import PhotoCache
@@ -262,4 +263,99 @@ final class MetadataStoreTests: XCTestCase, @unchecked Sendable {
         XCTAssertFalse(changed.inventoryComplete)
     }
 
+
+    // MARK: Filter facets
+
+    private func exifItem(_ id: Int64, day: CaptureDay, type: String = "photo", filename: String = "x.jpg", width: Int = 4000) throws -> PhotoItem {
+        try JSONDecoder().decode(PhotoItem.self, from: Data("""
+        {"id":\(id),"time":\(day.startTime),"type":"\(type)","filename":"\(filename)","filesize":2048,
+         "additional":{"resolution":{"width":\(width),"height":3000},
+         "exif":{"camera":"Canon R5","lens":"RF 50mm","iso":"100","aperture":"f/2.8","exposure_time":"1/250","focal_length":"50 mm"}}}
+        """.utf8))
+    }
+    private func seedFacetPage(_ store: DiskCache) async throws -> (DayPageRead, [PhotoItem]) {
+        let day = try CaptureDay(year: 2024, month: 1, day: 1)
+        let catalog = try CollectionDayCatalog(days: [.init(day: day, count: 2)], completeness: .complete)
+        let admission = try await store.metadataAdmission(namespace)
+        try await store.storeMetadataCatalog(catalog, key: .init(namespace: namespace, collection: .library(.personal)), validatedRun: "run", admission: admission)
+        let page = try DayPageRead(address: .init(collection: .library(.personal), day: day, offset: 0), dayCount: 2, membershipGeneration: 1)
+        let items = [try exifItem(1, day: day), try exifItem(2, day: day, type: "video", filename: "clip.mov")]
+        try await store.storeMetadataPage(page, items: items, profile: .fullPage, namespace: namespace, currentRun: "run", admission: admission)
+        return (page, items)
+    }
+
+    func testFacetColumnsMatchFilterValues() async throws {
+        let (store, root) = try await open()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (page, items) = try await seedFacetPage(store)
+        let pages = try await store.metadataFilterPages(namespace, collection: .library(.personal), days: nil, currentRun: "run")
+        XCTAssertEqual(pages.count, 1)
+        XCTAssertEqual(pages[0].address, page.address)
+        XCTAssertEqual(pages[0].entries.map(\.ordinal), [0, 1])
+        XCTAssertEqual(pages[0].entries.map(\.values), items.map(LibraryFilterValues.init))
+        XCTAssertEqual(pages[0].entries.map(\.time), items.map(\.time))
+        XCTAssertEqual(pages[0].entries[0].values.camera, "Canon R5")
+        XCTAssertEqual(pages[0].entries[1].values.mediaKind, .video)
+    }
+
+    func testFacetsFollowFavoriteAndRotationPatches() async throws {
+        let (store, root) = try await open()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (page, _) = try await seedFacetPage(store)
+        let replacement = try exifItem(1, day: page.address.day, width: 1000)
+        try await store.applyMetadataRotationValues([1: replacement], namespace: namespace, admission: store.metadataAdmission(namespace))
+        let pages = try await store.metadataFilterPages(namespace, collection: .library(.personal), days: nil, currentRun: "run")
+        XCTAssertEqual(pages[0].entries[0].values.megapixels, LibraryFilterValues(replacement).megapixels)
+        XCTAssertNotEqual(pages[0].entries[0].values.megapixels, 12)
+    }
+
+    func testEvictedDetailLeavesPageUnverifiedWithoutEntry() async throws {
+        let (store, root) = try await open()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (page, _) = try await seedFacetPage(store)
+        try await store.evictMetadataDetails(namespace: namespace, itemIDs: [1])
+        let pages = try await store.metadataFilterPages(namespace, collection: .library(.personal), days: nil, currentRun: "run")
+        XCTAssertEqual(pages[0].entries.map(\.itemID), [2])
+        XCTAssertFalse(pages[0].verified)
+        let snapshot = try await store.metadataPage(page.address, namespace: namespace, currentRun: "run")
+        XCTAssertEqual(snapshot?.slots.map(\.itemID), [1, 2])
+    }
+
+    func testFilterPageVerificationMatchesMetadataPage() async throws {
+        let (store, root) = try await open()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (page, _) = try await seedFacetPage(store)
+        let collection = PhotoCollectionDescriptor.library(.personal)
+        func both(_ run: String) async throws -> (Bool?, Bool?) {
+            let filter = try await store.metadataFilterPages(namespace, collection: collection, days: nil, currentRun: run).first?.verified
+            return (filter, try await store.metadataPage(page.address, namespace: namespace, currentRun: run)?.verified)
+        }
+        var result = try await both("run")
+        XCTAssertEqual(result.0, true); XCTAssertEqual(result.1, true)
+        result = try await both("other-run")
+        XCTAssertEqual(result.0, false); XCTAssertEqual(result.1, false)
+        try await store.invalidateMetadataCollection(.init(namespace: namespace, collection: collection), admission: store.metadataAdmission(namespace))
+        result = try await both("run")
+        XCTAssertEqual(result.0, false); XCTAssertEqual(result.1, false)
+        let scoped = try await store.metadataFilterPages(namespace, collection: collection, days: [page.address.day], currentRun: "run")
+        XCTAssertEqual(scoped.count, 1)
+        let other = try await store.metadataFilterPages(namespace, collection: collection, days: [CaptureDay(year: 2020, month: 1, day: 1)], currentRun: "run")
+        XCTAssertTrue(other.isEmpty)
+    }
+
+    func testDetailRecordRoundTripsFacets() async throws {
+        let (store, root) = try await open()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let day = try CaptureDay(year: 2024, month: 1, day: 1)
+        let payload = try exifItem(7, day: day)
+        let record = ItemDetailRecord(namespace: "n", itemID: 7, payload: payload, contentEpoch: 0, annotationRun: nil, revision: 1, accessed: 1)
+        let (fetched, facetRecord) = try await store.database.write { db -> (ItemDetailRecord?, ItemFacetRecord?) in
+            try record.insert(db)
+            return (try ItemDetailRecord.fetchOne(db, key: ["namespace": "n", "item_id": 7]),
+                    try ItemFacetRecord.filter(ItemDetailRecord.Columns.itemID == 7).fetchOne(db))
+        }
+        XCTAssertEqual(fetched?.facets, ItemFacets(payload))
+        XCTAssertEqual(facetRecord?.facets, ItemFacets(payload))
+        XCTAssertNil(facetRecord?.annotationRun)
+    }
 }

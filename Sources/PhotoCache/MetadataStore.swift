@@ -48,7 +48,7 @@ public struct MetadataStoreAdmission: Sendable {
 /// Typed record access on the existing cache actor. No transaction suspends.
 /// The normalized format is initialized explicitly when the engine enrolls it.
 extension DiskCache {
-    static let metadataFormatVersion = 5
+    static let metadataFormatVersion = 6
 
     public func initializeMetadataStore() throws {
         try database.inTransaction(.immediate) { db in
@@ -357,6 +357,68 @@ extension DiskCache {
         }
         try ItemDetailRecord(namespace: namespace.key, itemID: item.id, payload: item, contentEpoch: epoch, annotationRun: currentRun,
                              revision: revision, accessed: Date().timeIntervalSince1970).insert(db, onConflict: .replace)
+    }
+
+    // MARK: Filter facets
+
+    /// Applies the verification of `metadataPage` to every stored page of a collection in one read,
+    /// without touching LRU state. Pages `metadataPage` would reject are skipped.
+    func metadataFilterPages(_ namespace: MetadataNamespace, collection: PhotoCollectionDescriptor,
+                             days: Set<CaptureDay>?, currentRun: String) throws -> [MetadataFilterPage] {
+        guard metadataInitialized else { return [] }
+        return try database.read { db in
+            let state = try metadataState(db, namespace)
+            let dayIDs = days.map { $0.map(\.id) }
+            var pageRequest = DayPageRecord.filter { $0.namespace == namespace.key && $0.collection == collection.rawValue }
+            var memberRequest = PageItemRecord.filter { $0.namespace == namespace.key && $0.collection == collection.rawValue }
+            var dayRequest = CollectionDayRecord.filter { $0.namespace == namespace.key && $0.collection == collection.rawValue }
+            if let dayIDs {
+                pageRequest = pageRequest.filter { dayIDs.contains($0.day) }
+                memberRequest = memberRequest.filter { dayIDs.contains($0.day) }
+                dayRequest = dayRequest.filter { dayIDs.contains($0.day) }
+            }
+            let pages = try pageRequest.fetchAll(db)
+            let members = try memberRequest.fetchAll(db)
+            let dayRows = Dictionary(uniqueKeysWithValues: try dayRequest.fetchAll(db).map { ($0.day, $0) })
+            var facets: [Int64: ItemFacetRecord] = [:]
+            let facetRequest = ItemFacetRecord.filter(ItemDetailRecord.Columns.namespace == namespace.key)
+            if dayIDs == nil {
+                for record in try facetRequest.fetchAll(db) { facets[record.itemID] = record }
+            } else {
+                let ids = members.map(\.itemID)
+                for start in stride(from: 0, to: ids.count, by: 500) {
+                    let batch = Array(ids[start..<min(start + 500, ids.count)])
+                    for record in try facetRequest.filter(batch.contains(ItemDetailRecord.Columns.itemID)).fetchAll(db) { facets[record.itemID] = record }
+                }
+            }
+            let membersByPage = Dictionary(grouping: members) {
+                FilterPageKey(day: $0.day, offset: $0.pageOffset, capacity: $0.capacity, order: $0.sortOrder)
+            }
+            var result: [MetadataFilterPage] = []
+            for page in pages {
+                guard page.actualCount > 0, page.actualCount <= page.capacity, page.revision >= 0,
+                      let day = CaptureDay(id: page.day), let order = CollectionOrder(rawValue: page.sortOrder),
+                      let address = try? DayPageAddress(collection: collection, day: day, offset: page.pageOffset, capacity: page.capacity, order: order)
+                else { continue }
+                let pageMembers = (membersByPage[FilterPageKey(day: page.day, offset: page.pageOffset, capacity: page.capacity, order: page.sortOrder)] ?? [])
+                    .sorted { $0.ordinal < $1.ordinal }
+                guard pageMembers.count == page.actualCount, pageMembers.indices.allSatisfy({ pageMembers[$0].ordinal == $0 }) else { continue }
+                let dayRow = dayRows[page.day]
+                var membershipVerified = page.validatedRun == currentRun && page.epoch == state.resetEpoch
+                    && dayRow?.membershipGeneration == page.dayGeneration && dayRow?.itemCount == page.dayCount
+                var detailsVerified = true
+                var entries: [MetadataFilterEntry] = []
+                for member in pageMembers {
+                    guard let record = facets[member.itemID] else { detailsVerified = false; continue }
+                    let time = record.facets.membershipTime(in: collection)
+                    if time.flatMap({ try? CaptureDay(time: $0) }) != day { membershipVerified = false }
+                    if !(record.contentEpoch == state.resetEpoch && record.annotationRun == currentRun) { detailsVerified = false }
+                    entries.append(MetadataFilterEntry(ordinal: member.ordinal, itemID: member.itemID, time: time, values: record.facets.values))
+                }
+                result.append(MetadataFilterPage(address: address, entries: entries, verified: membershipVerified && detailsVerified))
+            }
+            return result.sorted { $0.address.day > $1.address.day || ($0.address.day == $1.address.day && $0.address.offset < $1.address.offset) }
+        }
     }
 
     // MARK: Item details
@@ -706,6 +768,21 @@ extension DiskCache {
         return value!
     }
 }
+
+/// One stored day page of a collection, reduced to filter facets.
+struct MetadataFilterPage: Sendable {
+    let address: DayPageAddress
+    /// Members with stored details, in ordinal order. Members without details are omitted.
+    let entries: [MetadataFilterEntry]
+    let verified: Bool
+}
+struct MetadataFilterEntry: Sendable {
+    let ordinal: Int
+    let itemID: Int64
+    let time: Int64?
+    let values: LibraryFilterValues
+}
+private struct FilterPageKey: Hashable { let day: String; let offset: Int; let capacity: Int; let order: String }
 
 // MARK: - Keyed requests
 

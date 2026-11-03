@@ -18,6 +18,12 @@ public struct CaptureDay: Hashable, Comparable, Codable, Sendable {
         else { throw CollectionCatalogError.invalidDay }
         self.year = year; self.month = month; self.day = day
     }
+    public init?(id: String) {
+        let parts = id.split(separator: "-", omittingEmptySubsequences: false).map { Int($0) }
+        guard parts.count == 3, let year = parts[0], let month = parts[1], let day = parts[2],
+              let value = try? CaptureDay(year: year, month: month, day: day) else { return nil }
+        self = value
+    }
     public init(time: Int64) throws {
         // Bound before converting to Date; Foundation accepts dates outside this schema.
         guard time >= -62_135_596_800, time <= 253_402_300_799 else { throw CollectionCatalogError.invalidDay }

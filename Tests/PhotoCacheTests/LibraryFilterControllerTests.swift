@@ -359,6 +359,27 @@ final class LibraryFilterControllerTests: XCTestCase {
         XCTAssertEqual(calls, 0)
     }
 
+    func testCacheDiscoveryOfManyPagesUsesNoTransport() async throws {
+        let root = temporaryTestRoot("FilterManyCachedPages")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let all = sections(300)
+        let snapshot = TimelineSnapshot(sections: all)
+        let transport = ScannerTransport(snapshot: snapshot, pages: [:])
+        let repository = try repository(transport: transport, root: root)
+        for (index, section) in all.enumerated() {
+            let day = try CaptureDay(year: section.list[0].year, month: section.list[0].month, day: section.list[0].day)
+            try await seedMetadataPage([item(Int64(index + 1), day: day.startTime, camera: index % 2 == 0 ? "Even" : "Odd")],
+                                       section: section, repository: repository)
+        }
+        let controller = LibraryFilterController(repository: repository, snapshot: snapshot, sourceCollection: .library(.personal))
+        await controller.indexCachedPages()
+        let matched = await controller.apply(LibraryFilter(cameras: ["Even"]))
+        XCTAssertEqual(matched.referencesBySection.flatMap { $0 }.count, 150)
+        let calls = await transport.totalCalls()
+        XCTAssertEqual(calls, 0)
+        await controller.shutdown()
+    }
+
     func testLateProvisionalCannotReplaceVerifiedRecords() async throws {
         let root = temporaryTestRoot("FilterVerifiedPrecedence")
         defer { try? FileManager.default.removeItem(at: root) }

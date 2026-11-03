@@ -52,6 +52,13 @@ enum CacheSchema {
             t.column(.namespace, .text); t.column(.itemID, .integer); t.column(.payload, .text)
             t.column(.contentEpoch, .integer); t.column(.annotationRun, .text, nullable: true)
             t.column(.revision, .integer); t.column(.accessed, .double)
+            let facets = TableBuilder<ItemFacets.CodingKeys>(table: t.table)
+            facets.column(.captureTime, .integer); facets.column(.indexedTime, .integer, nullable: true)
+            facets.column(.mediaKind, .text); facets.column(.camera, .text, nullable: true)
+            facets.column(.lens, .text, nullable: true); facets.column(.fileExtension, .text, nullable: true)
+            facets.column(.megapixels, .double, nullable: true); facets.column(.bytes, .integer, nullable: true)
+            facets.column(.iso, .double, nullable: true); facets.column(.focalLength, .double, nullable: true)
+            facets.column(.aperture, .double, nullable: true); facets.column(.exposure, .double, nullable: true)
         }
         try table(CollectionStateRecord.self, db, key: [.namespace, .collection]) { t in
             t.column(.namespace, .text); t.column(.collection, .text); t.column(.catalog, .text)
@@ -177,21 +184,122 @@ struct ItemIndexRecord: Codable, FetchableRecord, PersistableRecord {
     typealias Columns = CodingKeys
 }
 
+/// Scalar filter facets derived from a stored item. Written with every detail row,
+/// so they share its lifetime (eviction, deletion, replacement, reset).
+struct ItemFacets: Codable, Equatable, Sendable {
+    var captureTime: Int64
+    var indexedTime: Int64?
+    var mediaKind: String
+    var camera: String?
+    var lens: String?
+    var fileExtension: String?
+    var megapixels: Double?
+    var bytes: Int64?
+    var iso: Double?
+    var focalLength: Double?
+    var aperture: Double?
+    var exposure: Double?
+    enum CodingKeys: String, CodingKey, ColumnExpression, CaseIterable {
+        case camera, lens, megapixels, bytes, iso, aperture, exposure
+        case captureTime = "capture_time", indexedTime = "indexed_time", mediaKind = "media_kind"
+        case fileExtension = "file_extension", focalLength = "focal_length"
+    }
+
+    init(_ item: PhotoItem) {
+        let values = LibraryFilterValues(item)
+        captureTime = item.time; indexedTime = item.indexedTime; mediaKind = Self.mediaKindKey(values.mediaKind)
+        camera = values.camera; lens = values.lens; fileExtension = values.fileExtension
+        megapixels = values.megapixels; bytes = values.bytes; iso = values.iso
+        focalLength = values.focalLengthMM; aperture = values.aperture; exposure = values.exposureSeconds
+    }
+
+    static func mediaKindKey(_ kind: PhotoMediaKind) -> String {
+        switch kind {
+        case .photo: "photo"
+        case .video: "video"
+        case .livePhoto: "live"
+        case .unknown(let type): "other:" + type
+        }
+    }
+
+    /// Filter values for matching; `.unknown` for an unrecognized stored media kind.
+    var values: LibraryFilterValues {
+        let kind: PhotoMediaKind
+        switch mediaKind {
+        case "photo": kind = .photo
+        case "video": kind = .video
+        case "live": kind = .livePhoto
+        case let key where key.hasPrefix("other:"): kind = .unknown(String(key.dropFirst("other:".count)))
+        case let key: kind = .unknown(key)
+        }
+        return LibraryFilterValues(mediaKind: kind, camera: camera, lens: lens, fileExtension: fileExtension, megapixels: megapixels,
+                                   bytes: bytes, iso: iso, focalLengthMM: focalLength, aperture: aperture, exposureSeconds: exposure)
+    }
+
+    // Mirrors `PhotoCollectionDescriptor.membershipTime(for:)`.
+    func membershipTime(in collection: PhotoCollectionDescriptor) -> Int64? {
+        collection == .recentlyAdded ? indexedTime.map { $0 / 1000 } : captureTime
+    }
+}
+
 /// Canonical full item content. Evictable independently of identity and membership.
+/// The row also carries the payload's `ItemFacets` as flat columns.
 struct ItemDetailRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "item_details"
     var namespace: String
     var itemID: Int64
-    var payload: PhotoItem
+    var payload: PhotoItem { didSet { facets = ItemFacets(payload) } }
     var contentEpoch: Int64
     var annotationRun: String?
     var revision: Int64
     var accessed: Double
+    private(set) var facets: ItemFacets
     enum CodingKeys: String, CodingKey, ColumnExpression {
         case namespace, payload, revision, accessed
         case itemID = "item_id", contentEpoch = "content_epoch", annotationRun = "annotation_run"
     }
     typealias Columns = CodingKeys
+
+    init(namespace: String, itemID: Int64, payload: PhotoItem, contentEpoch: Int64, annotationRun: String?, revision: Int64, accessed: Double) {
+        self.namespace = namespace; self.itemID = itemID; self.payload = payload; self.contentEpoch = contentEpoch
+        self.annotationRun = annotationRun; self.revision = revision; self.accessed = accessed
+        facets = ItemFacets(payload)
+    }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        namespace = try values.decode(String.self, forKey: .namespace); itemID = try values.decode(Int64.self, forKey: .itemID)
+        payload = try values.decode(PhotoItem.self, forKey: .payload); contentEpoch = try values.decode(Int64.self, forKey: .contentEpoch)
+        annotationRun = try values.decodeIfPresent(String.self, forKey: .annotationRun)
+        revision = try values.decode(Int64.self, forKey: .revision); accessed = try values.decode(Double.self, forKey: .accessed)
+        facets = try ItemFacets(from: decoder)
+    }
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(namespace, forKey: .namespace); try values.encode(itemID, forKey: .itemID)
+        try values.encode(payload, forKey: .payload); try values.encode(contentEpoch, forKey: .contentEpoch)
+        try values.encode(annotationRun, forKey: .annotationRun)
+        try values.encode(revision, forKey: .revision); try values.encode(accessed, forKey: .accessed)
+        try facets.encode(to: encoder)
+    }
+}
+
+/// The facet columns of `item_details`, without the payload.
+struct ItemFacetRecord: Decodable, FetchableRecord, TableRecord {
+    static let databaseTableName = ItemDetailRecord.databaseTableName
+    static var databaseSelection: [any SQLSelectable] {
+        let keys: [any SQLSelectable] = [ItemDetailRecord.Columns.itemID, ItemDetailRecord.Columns.contentEpoch, ItemDetailRecord.Columns.annotationRun]
+        return keys + ItemFacets.CodingKeys.allCases.map { $0 as any SQLSelectable }
+    }
+    var itemID: Int64
+    var contentEpoch: Int64
+    var annotationRun: String?
+    var facets: ItemFacets
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: ItemDetailRecord.CodingKeys.self)
+        itemID = try values.decode(Int64.self, forKey: .itemID); contentEpoch = try values.decode(Int64.self, forKey: .contentEpoch)
+        annotationRun = try values.decodeIfPresent(String.self, forKey: .annotationRun)
+        facets = try ItemFacets(from: decoder)
+    }
 }
 
 struct CollectionStateRecord: Codable, FetchableRecord, PersistableRecord {

@@ -100,6 +100,13 @@ struct LibraryFilterValues: Equatable, Sendable {
     let aperture: Double?
     let exposureSeconds: Double?
 
+    init(mediaKind: PhotoMediaKind, camera: String?, lens: String?, fileExtension: String?, megapixels: Double?,
+         bytes: Int64?, iso: Double?, focalLengthMM: Double?, aperture: Double?, exposureSeconds: Double?) {
+        self.mediaKind = mediaKind; self.camera = camera; self.lens = lens; self.fileExtension = fileExtension
+        self.megapixels = megapixels; self.bytes = bytes; self.iso = iso; self.focalLengthMM = focalLengthMM
+        self.aperture = aperture; self.exposureSeconds = exposureSeconds
+    }
+
     init(_ item: PhotoItem) {
         mediaKind = item.mediaKind
         camera = LibraryFilterParsing.displayString(item.additional?.exif?.camera)
