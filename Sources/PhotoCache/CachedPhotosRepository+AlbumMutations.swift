@@ -11,7 +11,7 @@ extension CachedPhotosRepository {
             let user = try await repository.client.currentPhotosUserID()
             let album = try await repository.client.album(id: id)
             guard album.type == "normal", album.ownerUserID == user else {
-                throw SynologyAPIError.unsupported("Only the owner can delete a normal album.")
+                throw RepositoryError.unavailable("Only the owner can delete a normal album.")
             }
             try await repository.client.deleteAlbum(id: id)
         }
@@ -19,16 +19,16 @@ extension CachedPhotosRepository {
 
     public func renameAlbum(id: Int64, name: String) async throws {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw SynologyAPIError.unsupported("Enter an album name.") }
+        guard !trimmed.isEmpty else { throw RepositoryError.invalidInput("Enter an album name.") }
         try await performAlbumMutation(albumID: id) { repository in
             let user = try await repository.client.currentPhotosUserID()
             let album = try await repository.client.album(id: id)
             guard album.type == "normal", album.ownerUserID == user else {
-                throw SynologyAPIError.unsupported("Only the owner can rename a normal album.")
+                throw RepositoryError.unavailable("Only the owner can rename a normal album.")
             }
             try await repository.client.renameAlbum(id: id, name: trimmed)
             guard try await repository.client.album(id: id).name == trimmed else {
-                throw SynologyAPIError.unsupported("The server did not confirm the album name.")
+                throw RepositoryError.unconfirmed("The server did not confirm the album name.")
             }
         }
     }
@@ -70,13 +70,13 @@ extension CachedPhotosRepository {
         let source = mediaCollection(for: selection.authority.originatingCollection)
         let sourceSpace = source.albumID != nil ? try await albumItemSpace(itemIDs: selection.items.map(\.id), collection: source) : source.contentScope.space
         guard sourceSpace == .personal, source.incomingAlbumIdentity == nil else {
-            throw SynologyAPIError.unsupported("Only verified Personal Space items can be added to albums.")
+            throw RepositoryError.unavailable("Only verified Personal Space items can be added to albums.")
         }
         let collection = PhotoCollectionDescriptor.album(id)
         let timeline = try await verifiedTimelineSnapshot(collection: collection)
         let index = LibraryIndex(snapshot: timeline)
         guard let authority = selectionAuthority(collection: collection, snapshot: timeline) else {
-            throw SynologyAPIError.unsupported("The destination album could not be verified. Try again.")
+            throw RepositoryError.stale("The destination album could not be verified. Try again.")
         }
         var destination: ResolvedPhotoSelection?
         if index.totalCount > 0 {
@@ -84,7 +84,7 @@ extension CachedPhotosRepository {
                 timelineFingerprint: index.fingerprint, selectedOrdinals: IndexSet(integersIn: 0..<index.totalCount),
                 knownItemIDsByOrdinal: [:], authority: authority)
             guard let resolved = await SelectionItemResolver(repository: self).resolveWithReceipt(snapshot) else {
-                throw SynologyAPIError.unsupported("The destination album could not be verified. Try again.")
+                throw RepositoryError.stale("The destination album could not be verified. Try again.")
             }
             destination = resolved
         }
@@ -100,7 +100,7 @@ extension CachedPhotosRepository {
         guard !missing.isEmpty else {
             guard await verifySelectionFences(selection.authority, proofs: selection.proofs,
                                               authority, proofs: destination?.proofs ?? []) else {
-                throw SynologyAPIError.unsupported("Album membership changed. Try again.")
+                throw RepositoryError.stale("Album membership changed. Try again.")
             }
             return
         }
@@ -117,21 +117,18 @@ extension CachedPhotosRepository {
     }
 
     func performAlbumMutation<Value: Sendable>(albumID: Int64?, selection: ResolvedPhotoSelection? = nil, destinationAuthority: PhotoSelectionAuthority? = nil, destinationProofs: [SelectionMembershipProof] = [], deleting: Bool = false, operation: @escaping @Sendable (isolated CachedPhotosRepository) async throws -> Value) async throws -> Value {
-        guard !metadata.albumMutationInProgress else {
-            throw SynologyAPIError.unsupported("Another album change is in progress. Try again.")
-        }
-        metadata.albumMutationInProgress = true
-        metadata.albumMutationID = albumID
-        metadata.albumMutationWriting = true
-        defer { metadata.albumMutationInProgress = false; metadata.albumMutationWriting = false; metadata.albumMutationID = nil }
+        try claimMutation(.album, busy: "Another album change is in progress. Try again.")
+        metadata.albums.mutationID = albumID
+        metadata.albums.mutationWriting = true
+        defer { releaseMutation(.album); metadata.albums.mutationWriting = false; metadata.albums.mutationID = nil }
         try await initializeMetadataEngine()
         try await connect()
         try await reconcileMetadataSource()
         // Complete all suspending preparation before the final selection fence.
         // Readers of the destination are already fenced by albumMutationWriting.
-        metadata.albumListEpoch &+= 1
-        metadata.albumListJob?.task.cancel()
-        metadata.albumListJob = nil
+        metadata.albums.listEpoch &+= 1
+        metadata.albums.listJob?.task.cancel()
+        metadata.albums.listJob = nil
         let admission = try await store.metadataAdmission(personalMetadataNamespace)
         try await store.invalidateMetadataAlbumSummaries(personalMetadataNamespace, admission: admission)
         if let selection {
@@ -140,13 +137,13 @@ extension CachedPhotosRepository {
             guard space == .personal, source.incomingAlbumIdentity == nil,
                   !selection.items.isEmpty,
                   await verifySelectionFence(selection.authority, proofs: selection.proofs) else {
-                throw SynologyAPIError.unsupported("The selected items could not be verified. Try again.")
+                throw RepositoryError.stale("The selected items could not be verified. Try again.")
             }
         }
         if let destinationAuthority {
             guard let selection, await verifySelectionFences(selection.authority, proofs: selection.proofs,
                                                               destinationAuthority, proofs: destinationProofs) else {
-                throw SynologyAPIError.unsupported("Album membership changed. Try again.")
+                throw RepositoryError.stale("Album membership changed. Try again.")
             }
         }
         try Task.checkCancellation()
@@ -169,7 +166,7 @@ extension CachedPhotosRepository {
         catch {
             if case .success = result { result = .failure(error) }
         }
-        metadata.albumMutationWriting = false
+        metadata.albums.mutationWriting = false
         let reconciliation = Task { try await self.reconcileAlbumMutation(albumID: albumID, deleting: deleting) }
         do { try await reconciliation.value }
         catch {
@@ -185,20 +182,20 @@ extension CachedPhotosRepository {
         metadata.mutationEpochs[collection, default: 0] &+= 1
         metadata.timelineJobs.removeValue(forKey: collection)?.task.cancel()
         metadata.collectionRecoveries.removeValue(forKey: collection)?.task.cancel()
-        let filterIDs = metadata.libraryFilters.filter { $0.value.registration.sourceCollection == collection }.map(\.key)
+        let filterIDs = metadata.sessions.libraryFilters.filter { $0.value.registration.sourceCollection == collection }.map(\.key)
         for id in filterIDs {
-            if let state = metadata.libraryFilters.removeValue(forKey: id) {
-                metadata.selectionRetentions.removeValue(forKey: state.registration.descriptor)
-                metadata.deferredSelectionUnregisters.remove(state.registration.descriptor)
+            if let state = metadata.sessions.libraryFilters.removeValue(forKey: id) {
+                metadata.sessions.selectionRetentions.removeValue(forKey: state.registration.descriptor)
+                metadata.sessions.deferredUnregisters.remove(state.registration.descriptor)
                 metadata.latestTimelines.removeValue(forKey: state.registration.descriptor)
             }
         }
     }
 
     private func invalidateAlbumMutationState(albumID: Int64?) async throws {
-        metadata.albumListEpoch &+= 1
-        metadata.albumListJob?.task.cancel()
-        metadata.albumListJob = nil
+        metadata.albums.listEpoch &+= 1
+        metadata.albums.listJob?.task.cancel()
+        metadata.albums.listJob = nil
         invalidateAlbumMutationMemory(albumID: albumID)
         if let albumID {
             let collection = PhotoCollectionDescriptor.album(albumID)
@@ -230,13 +227,13 @@ extension CachedPhotosRepository {
             if case .value(let albums, true) = event {
                 verified = true
                 if deleting, let albumID, albums.contains(where: { $0.id == albumID }) {
-                    refreshError = SynologyAPIError.unsupported("The server did not confirm album deletion.")
+                    refreshError = RepositoryError.unconfirmed("The server did not confirm album deletion.")
                 }
             }
-            if case .failure(let message) = event { failure = message }
+            if case .failure(let message) = event { failure = message.localizedDescription }
         }
         if !verified, refreshError == nil {
-            refreshError = SynologyAPIError.unsupported("Album list refresh failed: \(failure ?? "The result was superseded.")")
+            refreshError = RepositoryError.unavailable("Album list refresh failed: \(failure ?? "The result was superseded.")")
         }
         if let refreshError { throw refreshError }
     }

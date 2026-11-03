@@ -29,7 +29,7 @@ extension CachedPhotosRepository {
     func publishSharedLocationItemChanges(_ items: [PhotoItem]) async {
         let epoch = metadata.admissionEpoch
         let state = try? await store.metadataState(metadataNamespace(for: .library(.shared)))
-        guard epoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
+        guard isAdmitted(epoch) else { return }
         if state?.inventoryComplete != true { metadata.sharedLocations.current = false }
         guard metadata.sharedLocations.current || !metadata.sharedLocations.records.isEmpty else { return }
         var records = metadata.sharedLocations.records
@@ -58,7 +58,7 @@ extension CachedPhotosRepository {
                     let epoch = metadata.admissionEpoch
                     let scope = metadataNamespace(for: .library(.shared))
                     let cached = try await store.metadataLocationProjection(scope)
-                    guard epoch == metadata.admissionEpoch, !metadata.resetInProgress, !Task.isCancelled else { throw CancellationError() }
+                    guard isAdmitted(epoch), !Task.isCancelled else { throw CancellationError() }
                     metadata.sharedLocations.current = metadata.sharedLocations.current && cached.state.inventoryComplete
                     if !cached.records.isEmpty || cached.state.inventoryComplete {
                         let value = acceptLocationRecords(cached.records, space: .shared)
@@ -86,10 +86,10 @@ extension CachedPhotosRepository {
                         metadata.sharedLocations.job = SharedJob(id: id, task: task, subscribers: [subscriber])
                     }
                     let records = try await task.value
-                    guard epoch == metadata.admissionEpoch, !metadata.resetInProgress, !Task.isCancelled else { throw CancellationError() }
+                    guard isAdmitted(epoch), !Task.isCancelled else { throw CancellationError() }
                     continuation.yield(.completed(acceptLocationRecords(records, space: .shared), verified: true))
                 } catch {
-                    if !Task.isCancelled { continuation.yield(.failure(error.localizedDescription)) }
+                    if !Task.isCancelled { continuation.yield(.failure(RepositoryError.record(error, operation: "Shared location index").localizedDescription)) }
                 }
                 continuation.finish()
             }

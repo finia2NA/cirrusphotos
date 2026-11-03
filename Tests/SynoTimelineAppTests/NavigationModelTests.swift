@@ -4,24 +4,24 @@ import XCTest
 @testable import SynoTimelineApp
 
 @MainActor
-final class NavigationRestorationTests: XCTestCase {
+final class NavigationModelTests: XCTestCase {
     func testNestedCollectionsRestoreIndependentlyInEachSpace() {
         let (defaults, suite) = defaults()
         defer { defaults.removePersistentDomain(forName: suite) }
-        let store = NavigationRestorationStore(defaults: defaults)
+        let store = NavigationModel(defaults: defaults)
         for space in PhotoSpace.allCases {
-            store.selectSpace(space)
+            store.selectedSpace = space
             _ = store.prepareIndexEntry(.person, namespace: "account")
             _ = store.prepareIndexEntry(.subject, namespace: "account")
             _ = store.prepareIndexEntry(.tag, namespace: "account")
             _ = store.prepareFolders(namespace: "account")
             let id: Int64 = space == .personal ? 1 : 2
-            store.setOpenedIndexEntry(.person, id: id); store.setOpenedIndexEntry(.subject, id: id); store.setOpenedIndexEntry(.tag, id: id)
-            store.setFolders(shown: true, path: [id])
+            store.openedIndexEntries[.person] = id; store.openedIndexEntries[.subject] = id; store.openedIndexEntries[.tag] = id
+            store.showsFolders = true; store.folderPath = [id]
         }
-        let reopened = NavigationRestorationStore(defaults: defaults)
+        let reopened = NavigationModel(defaults: defaults)
         for space in PhotoSpace.allCases {
-            reopened.selectSpace(space)
+            reopened.selectedSpace = space
             let id: Int64 = space == .personal ? 1 : 2
             XCTAssertEqual(reopened.prepareIndexEntry(.person, namespace: "account"), id)
             XCTAssertEqual(reopened.prepareIndexEntry(.subject, namespace: "account"), id)
@@ -33,27 +33,27 @@ final class NavigationRestorationTests: XCTestCase {
     func testFolderModeAndAccountResetStayWithinTheirSpace() {
         let (defaults, suite) = defaults()
         defer { defaults.removePersistentDomain(forName: suite) }
-        let store = NavigationRestorationStore(defaults: defaults)
+        let store = NavigationModel(defaults: defaults)
         _ = store.prepareFolders(namespace: "first")
-        store.setFolders(shown: true, path: [1])
-        store.setOpenedIndexEntry(.person, id: 4)
-        store.selectSpace(.shared)
+        store.showsFolders = true; store.folderPath = [1]
+        store.openedIndexEntries[.person] = 4
+        store.selectedSpace = .shared
         _ = store.prepareFolders(namespace: "first")
-        store.setFolders(shown: false, path: [2])
-        store.setOpenedIndexEntry(.person, id: 5)
-        store.selectSpace(.personal)
+        store.showsFolders = false; store.folderPath = [2]
+        store.openedIndexEntries[.person] = 5
+        store.selectedSpace = .personal
         XCTAssertTrue(store.showsFolders)
         XCTAssertEqual(store.folderPath, [1])
         XCTAssertNil(store.prepareIndexEntry(.person, namespace: "second"))
         XCTAssertTrue(store.folderPath.isEmpty)
-        store.selectSpace(.shared)
+        store.selectedSpace = .shared
         XCTAssertFalse(store.showsFolders)
         XCTAssertEqual(store.prepareIndexEntry(.person, namespace: "first"), 5)
         XCTAssertEqual(store.folderPath, [2])
     }
 
     private func defaults() -> (UserDefaults, String) {
-        let suite = "NavigationRestorationTests.\(UUID().uuidString)"
+        let suite = "NavigationModelTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         return (defaults, suite)
@@ -73,15 +73,15 @@ final class NavigationRestorationTests: XCTestCase {
                                                    sectionOffsetHint: 12, localOffset: 0,
                                                    sectionFraction: 0.0)
 
-        let writer = NavigationRestorationStore(defaults: defaults, key: key)
+        let writer = NavigationModel(defaults: defaults, key: key)
         writer.setTimelineAnchor(personal, for: .library(.personal))
         writer.setTimelineAnchor(favorites, for: .favorites(.personal))
         writer.setTimelineAnchor(album, for: .album(54))
-        writer.selectSidebar(.destination(.albums))
-        writer.setOpenedAlbum(.album(54))
-        writer.selectSidebar(.album(.album(54)))
+        writer.sidebarSelection = .destination(.albums)
+        writer.openedAlbum = .album(54)
+        writer.sidebarSelection = .album(.album(54))
 
-        let reader = NavigationRestorationStore(defaults: defaults, key: key)
+        let reader = NavigationModel(defaults: defaults, key: key)
         XCTAssertEqual(reader.selectedDestination, .albums)
         XCTAssertEqual(reader.openedAlbum, .album(54))
         XCTAssertEqual(reader.sidebarSelection, .album(.album(54)))
@@ -93,13 +93,13 @@ final class NavigationRestorationTests: XCTestCase {
     func testSpaceSelectionAndIndependentAnchorsRoundTrip() {
         let (defaults, suite) = defaults()
         defer { defaults.removePersistentDomain(forName: suite) }
-        let store = NavigationRestorationStore(defaults: defaults, key: "state")
+        let store = NavigationModel(defaults: defaults, key: "state")
         let shared = PhotoTimelineRestorationAnchor(itemID: 41, dayID: "2024-10-13", sectionOffsetHint: nil, localOffset: 0, sectionFraction: 0)
-        store.selectSpace(.shared)
+        store.selectedSpace = .shared
         store.setTimelineAnchor(shared, for: .library(.shared))
-        store.selectSidebar(.album(.album(54)))
-        store.setOpenedAlbum(.album(54))
-        let restored = NavigationRestorationStore(defaults: defaults, key: "state")
+        store.sidebarSelection = .album(.album(54))
+        store.openedAlbum = .album(54)
+        let restored = NavigationModel(defaults: defaults, key: "state")
         XCTAssertEqual(restored.selectedSpace, .shared)
         XCTAssertEqual(restored.openedAlbum, .album(54))
         XCTAssertEqual(restored.timelineAnchor(for: .library(.shared)), shared)
@@ -109,9 +109,9 @@ final class NavigationRestorationTests: XCTestCase {
     func testFolderModeAndPathRoundTrip() {
         let (defaults, suite) = defaults()
         defer { defaults.removePersistentDomain(forName: suite) }
-        let store = NavigationRestorationStore(defaults: defaults, key: "state")
-        store.setFolders(shown: true, path: [2, 8])
-        let restored = NavigationRestorationStore(defaults: defaults, key: "state")
+        let store = NavigationModel(defaults: defaults, key: "state")
+        store.showsFolders = true; store.folderPath = [2, 8]
+        let restored = NavigationModel(defaults: defaults, key: "state")
         XCTAssertTrue(restored.showsFolders)
         XCTAssertEqual(restored.folderPath, [2, 8])
     }
@@ -123,7 +123,7 @@ final class NavigationRestorationTests: XCTestCase {
         let album = PhotoTimelineRestorationAnchor(itemID: 7, dayID: "2022-01-09",
                                                    sectionOffsetHint: nil, localOffset: 1,
                                                    sectionFraction: 0.5)
-        let store = NavigationRestorationStore(defaults: defaults, key: key)
+        let store = NavigationModel(defaults: defaults, key: key)
         store.setTimelineAnchor(album, for: .album(54))
         XCTAssertEqual(store.timelineAnchor(for: .album(54)), album)
         XCTAssertNil(store.timelineAnchor(for: .album(55)))
@@ -133,20 +133,20 @@ final class NavigationRestorationTests: XCTestCase {
         let (defaults, suite) = defaults()
         defer { defaults.removePersistentDomain(forName: suite) }
         let key = "state"
-        let store = NavigationRestorationStore(defaults: defaults, key: key)
-        store.setOpenedAlbum(.album(11))
-        XCTAssertEqual(NavigationRestorationStore(defaults: defaults, key: key).openedAlbum, .album(11))
-        store.setOpenedAlbum(nil)
-        XCTAssertNil(NavigationRestorationStore(defaults: defaults, key: key).openedAlbum)
+        let store = NavigationModel(defaults: defaults, key: key)
+        store.openedAlbum = .album(11)
+        XCTAssertEqual(NavigationModel(defaults: defaults, key: key).openedAlbum, .album(11))
+        store.openedAlbum = nil
+        XCTAssertNil(NavigationModel(defaults: defaults, key: key).openedAlbum)
     }
 
     func testMissingOpenedAlbumClearsOnlyAfterVerifiedList() {
         let (defaults, suite) = defaults()
         defer { defaults.removePersistentDomain(forName: suite) }
         let key = "state"
-        let store = NavigationRestorationStore(defaults: defaults, key: key)
-        store.setOpenedAlbum(.album(11))
-        store.selectSidebar(.album(.album(11)))
+        let store = NavigationModel(defaults: defaults, key: key)
+        store.openedAlbum = .album(11)
+        store.sidebarSelection = .album(.album(11))
         let other = AlbumSummary(id: 12, name: "Other", itemCount: 1)
 
         XCTAssertFalse(store.clearOpenedAlbumIfMissing(in: [other], verified: false))
@@ -154,18 +154,18 @@ final class NavigationRestorationTests: XCTestCase {
         XCTAssertTrue(store.clearOpenedAlbumIfMissing(in: [other], verified: true))
         XCTAssertNil(store.openedAlbum)
         XCTAssertEqual(store.sidebarSelection, .destination(.albums))
-        XCTAssertNil(NavigationRestorationStore(defaults: defaults, key: key).openedAlbum)
+        XCTAssertNil(NavigationModel(defaults: defaults, key: key).openedAlbum)
     }
 
     func testMapDestinationRoundTripsWithoutPersistentFilterState() {
         let (defaults, suite) = defaults()
         defer { defaults.removePersistentDomain(forName: suite) }
         let key = "state"
-        let store = NavigationRestorationStore(defaults: defaults, key: key)
+        let store = NavigationModel(defaults: defaults, key: key)
 
-        store.selectSidebar(.destination(.map))
+        store.sidebarSelection = .destination(.map)
 
-        let restored = NavigationRestorationStore(defaults: defaults, key: key)
+        let restored = NavigationModel(defaults: defaults, key: key)
         XCTAssertEqual(restored.selectedDestination, .map)
         XCTAssertNil(restored.openedAlbum)
         XCTAssertEqual(restored.state.anchors, [:])
@@ -190,7 +190,7 @@ final class NavigationRestorationTests: XCTestCase {
         let key = "state"
         defaults.set(Data(payload.utf8), forKey: key)
 
-        let store = NavigationRestorationStore(defaults: defaults, key: key)
+        let store = NavigationModel(defaults: defaults, key: key)
 
         XCTAssertEqual(store.selectedDestination, .personalLibrary, file: file, line: line)
         XCTAssertNil(store.openedAlbum, file: file, line: line)

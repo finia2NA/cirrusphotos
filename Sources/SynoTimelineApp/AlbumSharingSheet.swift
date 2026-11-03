@@ -287,7 +287,7 @@ struct AlbumSharingSheet: View {
                 }
                 self.error = warning
             } catch {
-                self.error = warning.map { "\($0)\nCould not reload: \(error.localizedDescription)" } ?? error.localizedDescription
+                self.error = warning.map { "\($0)\nCould not reload: \(reportedFailure(error, operation: "Album sharing reload"))" } ?? reportedFailure(error, operation: "Album sharing reload")
             }
             busy = false
         }
@@ -309,7 +309,7 @@ struct AlbumSharingSheet: View {
                 }
             } catch {
                 saving = false
-                load(warning: error.localizedDescription)
+                load(warning: reportedFailure(error, operation: "Album sharing"))
             }
         }
     }

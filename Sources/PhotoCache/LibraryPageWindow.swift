@@ -239,7 +239,7 @@ public actor LibraryPageWindow {
             publish(.page(page, fingerprint: identity))
         case .failure(let message):
             failedSections.insert(section)
-            publish(.failure(sectionIndex: section, message: message))
+            publish(.failure(sectionIndex: section, message: message.localizedDescription))
         }
     }
 

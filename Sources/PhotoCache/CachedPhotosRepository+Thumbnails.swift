@@ -18,7 +18,7 @@ extension CachedPhotosRepository {
         return AsyncStream(bufferingPolicy: .bufferingNewest(3)) { continuation in
             producer.task = Task {
                 guard !scope.isSessionDerived else {
-                    continuation.yield(.failure("The source collection is no longer available."))
+                    continuation.yield(.failure(.stale("The source collection is no longer available.")))
                     continuation.finish()
                     return
                 }
@@ -44,7 +44,7 @@ extension CachedPhotosRepository {
                 } catch {
                     if !Task.isCancelled && !(error is CancellationError) &&
                         !(error is NetworkGateError && priority == .prefetch) {
-                        continuation.yield(.failure(error.localizedDescription))
+                        continuation.yield(.failure(RepositoryError.record(error, operation: "Thumbnail")))
                     }
                 }
                 continuation.finish()
@@ -67,7 +67,7 @@ extension CachedPhotosRepository {
         return AsyncStream(bufferingPolicy: .bufferingNewest(4)) { continuation in
             producer.task = Task {
                 guard !scope.isSessionDerived else {
-                    continuation.yield(.failure("The source collection is no longer available."))
+                    continuation.yield(.failure(.stale("The source collection is no longer available.")))
                     continuation.finish()
                     return
                 }
@@ -141,7 +141,7 @@ extension CachedPhotosRepository {
                                           validateCached: Bool = true) async throws -> ThumbnailCacheMeasurement {
         try Task.checkCancellation()
         let source = thumbnailCollection(for: collection)
-        guard !source.isSessionDerived else { throw SynologyAPIError.unsupported("The source collection is no longer available.") }
+        guard !source.isSessionDerived else { throw RepositoryError.stale("The source collection is no longer available.") }
         let identity = CacheKey.thumbnailIdentity(scope: source.contentScope, namespace: namespace, descriptor: descriptor, size: size, collection: source)
         let key = identity.key
         if !validateCached, (try? await store.hasThumbnail(identity)) == true {
@@ -196,11 +196,11 @@ extension CachedPhotosRepository {
             let prior = try? await store.getThumbnail(identity)
             func request(etag: String?, lastModified: String?) async throws -> MediaResponse {
                 if collection.isSessionDerived {
-                    throw SynologyAPIError.unsupported("Collection access is unavailable.")
+                    throw RepositoryError.unexpected("Collection access is unavailable.")
                 }
                 if collection.incomingAlbumIdentity != nil {
                     guard let reference = incomingReference(for: collection) else {
-                        throw SynologyAPIError.unsupported("Shared album access is unavailable.")
+                        throw RepositoryError.unavailable("Shared album access is unavailable.")
                     }
                     return try await client.incomingThumbnail(descriptor, size: size, reference: reference,
                                                               etag: etag, lastModified: lastModified)
@@ -208,7 +208,7 @@ extension CachedPhotosRepository {
                 if let albumID = collection.albumID {
                     return try await client.albumThumbnail(descriptor, size: size, albumID: albumID, etag: etag, lastModified: lastModified)
                 }
-                guard let space = collection.space else { throw SynologyAPIError.unsupported("Collection space is unavailable.") }
+                guard let space = collection.space else { throw RepositoryError.unexpected("Collection space is unavailable.") }
                 return try await client.thumbnail(descriptor, size: size, space: space, etag: etag, lastModified: lastModified)
             }
             var response = try await request(etag: prior?.etag, lastModified: prior?.lastModified)

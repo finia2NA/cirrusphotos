@@ -209,7 +209,7 @@ public actor TimelineSectionCacheLoader {
                         case .value(_, let isVerified):
                             verified = verified || isVerified
                         case .failure(let message):
-                            failure = message
+                            failure = message.localizedDescription
                         }
                     }
                     return .init(index: read.index, useCachedPages: read.useCachedPages,

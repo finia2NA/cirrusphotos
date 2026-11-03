@@ -48,7 +48,7 @@ extension CachedPhotosRepository {
                 if cursor >= segment.header.totalLength { return }
                 continue
             }
-            guard allowNetwork else { throw SynologyAPIError.unsupported("This part of the video is not cached.") }
+            guard allowNetwork else { throw RepositoryError.unavailable("This part of the video is not cached.") }
             let lower = index * Self.videoSegmentSize
             let demandEnd = min(end, lower + Self.videoWindowSize)
             var windowEnd = lower + Self.videoSegmentSize

@@ -94,7 +94,7 @@ struct ViewerHistogram: View {
     @State private var bins: HistogramBins?
     @State private var corner: Alignment = .bottomTrailing
     @State private var drag: CGSize = .zero
-    @AppStorage("viewerHistogramShowsColor") private var showsColor = false
+    @AppStorage(AppPreferences.Key.viewerHistogramShowsColor) private var showsColor = false
 
     var body: some View {
         GeometryReader { geometry in

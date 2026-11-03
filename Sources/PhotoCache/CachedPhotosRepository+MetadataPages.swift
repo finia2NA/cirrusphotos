@@ -90,7 +90,7 @@ extension CachedPhotosRepository {
             do {
                 let key = CollectionKey(namespace: metadataNamespace(for: collection), collection: collection)
                 guard let catalog = try await store.metadataCatalog(key)?.catalog else { throw CollectionCatalogError.invalidCoverage }
-                guard planningEpoch == metadata.admissionEpoch, !metadata.resetInProgress else { throw MetadataAdmissionError.superseded }
+                try requireAdmission(planningEpoch)
                 rows = metadata.activePages.filter { $0.key.collection == collection && pending[$0.key]?.id == $0.value.id && $0.value.batchID == nil }
                 let batches = try MetadataReadPlanner.plan(demands: rows.values.map(\.read), catalog: catalog, profile: .fullPage)
                 for batch in batches {
@@ -111,13 +111,13 @@ extension CachedPhotosRepository {
                             let epoch = metadata.admissionEpoch
                             let result = try await metadataReadRequest(priority: effectivePriority, id: id) {
                                 if collection.incomingAlbumIdentity != nil {
-                                    guard let reference = incomingReference(for: collection) else { throw SynologyAPIError.unsupported("Shared album access is unavailable.") }
+                                    guard let reference = incomingReference(for: collection) else { throw RepositoryError.unavailable("Shared album access is unavailable.") }
                                     return try await client.readIncomingCollectionBatch(batch.request, reference: reference, fields: batch.profile)
                                 }
                                 return try await client.readCollectionBatch(batch.request, fields: batch.profile)
                             }
                             let pages = try batch.materialize(result)
-                            guard !Task.isCancelled, !metadata.resetInProgress, epoch == metadata.admissionEpoch else { throw MetadataAdmissionError.superseded }
+                            guard !Task.isCancelled, isAdmitted(epoch) else { throw MetadataAdmissionError.superseded }
                             for (read, items) in zip(batch.pages, pages) {
                                 try await store.storeMetadataPage(read, items: items, profile: result.profile,
                                                                   namespace: metadataNamespace(for: collection), currentRun: runID, admission: admission)

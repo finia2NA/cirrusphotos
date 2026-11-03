@@ -64,9 +64,9 @@ final class TimelineSectionLoadModelTests: XCTestCase {
         let filter = PhotoCollectionDescriptor.libraryFilter(UUID(), scope: .space(.personal))
         library.registerSessionCollection(map, snapshot: snapshot, source: .library(.shared))
         library.registerSessionCollection(filter, snapshot: snapshot, source: map)
-        XCTAssertTrue(library.isSharedCollection(filter))
-        XCTAssertFalse(library.allowsPersonalActions(in: filter))
-        XCTAssertTrue(library.allowsSpaceItemActions(in: filter))
+        XCTAssertTrue(library.capabilities(for: filter).isShared)
+        XCTAssertFalse(library.capabilities(for: filter).allowsPersonalActions)
+        XCTAssertTrue(library.capabilities(for: filter).allowsSpaceItemActions)
     }
 
     func testSharedInclusionWarmsBothSharedCollectionsAndPreservesPersonalAndAlbums() async throws {

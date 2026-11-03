@@ -10,21 +10,18 @@ extension CachedPhotosRepository {
     /// because a request may have reached the NAS.
     @discardableResult
     public func deleteItems(_ selection: ResolvedPhotoSelection) async throws -> Int {
-        guard !itemDeletionInProgress else {
-            throw SynologyAPIError.unsupported("Another deletion is in progress.")
-        }
-        itemDeletionInProgress = true
-        defer { itemDeletionInProgress = false }
+        try claimMutation(.deletion, busy: "Another deletion is in progress.")
+        defer { releaseMutation(.deletion) }
         let ids = selection.items.map(\.id)
         let source = mediaCollection(for: selection.authority.originatingCollection)
         guard !ids.isEmpty, Set(ids).count == ids.count, source.incomingAlbumIdentity == nil else {
-            throw SynologyAPIError.unsupported("The selected items cannot be deleted.")
+            throw RepositoryError.unavailable("The selected items cannot be deleted.")
         }
         try await initializeMetadataEngine()
         try await connect()
         let space = try await itemActionSpace(itemIDs: ids, collection: source)
         guard await verifySelectionFence(selection.authority, proofs: selection.proofs) else {
-            throw SynologyAPIError.unsupported("The selected items could not be verified. Try again.")
+            throw RepositoryError.stale("The selected items could not be verified. Try again.")
         }
         try Task.checkCancellation()
         var writeError: (any Error)?
@@ -38,10 +35,10 @@ extension CachedPhotosRepository {
         if let writeError { throw writeError }
         if let failure = outcome.failure { throw failure }
         guard let remaining = outcome.remaining else {
-            throw SynologyAPIError.unsupported("Deletion could not be confirmed. Reload before trying again.")
+            throw RepositoryError.unconfirmed("Deletion could not be confirmed. Reload before trying again.")
         }
         guard remaining.isEmpty else {
-            throw SynologyAPIError.unsupported("\(remaining.count) of \(ids.count) items were not deleted. You may not have permission to delete them.")
+            throw RepositoryError.unconfirmed("\(remaining.count) of \(ids.count) items were not deleted. You may not have permission to delete them.")
         }
         return ids.count
     }

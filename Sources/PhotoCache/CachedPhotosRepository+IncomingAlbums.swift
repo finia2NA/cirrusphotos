@@ -2,21 +2,6 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
-    /// Resolve transient filter collections to the source that owns their media.
-    public func mediaCollection(for collection: PhotoCollectionDescriptor) -> PhotoCollectionDescriptor {
-        var source = collection
-        var seen: Set<PhotoCollectionDescriptor> = []
-        while let filterID = source.libraryFilterID {
-            guard seen.insert(source).inserted, let state = metadata.libraryFilters[filterID] else { return source }
-            source = state.registration.sourceCollection
-        }
-        if let id = source.mapFilterID {
-            guard let map = metadata.mapFilters[id] else { return source }
-            return PhotoCollectionDescriptor.library(map.space)
-        }
-        return source.space.map { .library($0) } ?? source
-    }
-
     func incomingReference(for collection: PhotoCollectionDescriptor) -> String? {
         incomingAccess[mediaCollection(for: collection)]?.sharingReference
     }
@@ -37,7 +22,7 @@ extension CachedPhotosRepository {
                     try await connect()
                     let admission = try await store.metadataAdmission(listNamespace)
                     let rows = try await metadataReadRequest(priority: .visible) { try await client.incomingAlbums() }
-                    guard !Task.isCancelled, epoch == metadata.admissionEpoch, !metadata.resetInProgress else { throw MetadataAdmissionError.superseded }
+                    guard !Task.isCancelled, isAdmitted(epoch) else { throw MetadataAdmissionError.superseded }
                     var access: [PhotoCollectionDescriptor: IncomingAlbum] = [:]
                     for row in rows {
                         guard let collection = row.summary.collection, collection.incomingAlbumIdentity != nil,
@@ -49,7 +34,7 @@ extension CachedPhotosRepository {
                     try await store.storeMetadataAlbumSummaries(summaries, namespace: listNamespace, currentRun: runID, admission: admission)
                     continuation.yield(.value(summaries, verified: true))
                 } catch {
-                    if !Task.isCancelled { continuation.yield(.failure("Shared albums: \(error.localizedDescription)")) }
+                    if !Task.isCancelled { continuation.yield(.failure(RepositoryError.record(error, operation: "Shared albums"))) }
                 }
                 continuation.finish()
             }
@@ -64,20 +49,20 @@ extension CachedPhotosRepository {
         let source = mediaCollection(for: selection.authority.originatingCollection)
         let space = source.albumID != nil ? try await albumItemSpace(itemIDs: selection.items.map(\.id), collection: source) : source.contentScope.space
         guard collection.incomingAlbumIdentity != nil, space == .personal,
-              !selection.items.isEmpty, !metadata.albumMutationInProgress else {
-            throw SynologyAPIError.unsupported("This selection cannot be added to the shared album.")
+              !selection.items.isEmpty else {
+            throw RepositoryError.unavailable("This selection cannot be added to the shared album.")
         }
-        metadata.albumMutationInProgress = true
-        defer { metadata.albumMutationInProgress = false }
+        try claimMutation(.album, busy: "Another album change is in progress.")
+        defer { releaseMutation(.album) }
         try await connect()
         let rows = try await metadataReadRequest(priority: .visible) { try await client.incomingAlbums() }
         guard let row = rows.first(where: { $0.summary.collection == collection }), row.access.view, row.access.upload else {
             incomingAccess.removeValue(forKey: collection)
-            throw SynologyAPIError.unsupported("You no longer have permission to add photos to this album.")
+            throw RepositoryError.unavailable("You no longer have permission to add photos to this album.")
         }
         incomingAccess[collection] = row
         guard await verifySelectionFence(selection.authority, proofs: selection.proofs) else {
-            throw SynologyAPIError.unsupported("The selected items could not be verified. Try again.")
+            throw RepositoryError.stale("The selected items could not be verified. Try again.")
         }
         metadata.mutationEpochs[collection, default: 0] &+= 1
         metadata.timelineJobs.removeValue(forKey: collection)?.task.cancel()

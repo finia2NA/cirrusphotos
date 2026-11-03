@@ -201,7 +201,7 @@ final class PhotoViewerPresentation: ObservableObject {
             do { try await repository.rotate(action, direction: direction) }
             catch {
                 self?.image = priorImage
-                self?.rotationFailure = error.localizedDescription
+                self?.rotationFailure = reportedFailure(error, operation: "Viewer rotation")
             }
             self?.rotationPending = false
         }
@@ -433,7 +433,7 @@ final class PhotoViewerPresentation: ObservableObject {
                 SynologyDiagnostics.decoding.error(
                     "Full-size decode failed item_id=\(selection.itemID ?? -1, privacy: .public) generation=\(selection.generation, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
                 )
-                self?.decodeFailure = error.localizedDescription
+                self?.decodeFailure = reportedFailure(error, operation: "Image decoding")
                 self?.isDecodingFullImage = false
             }
         }

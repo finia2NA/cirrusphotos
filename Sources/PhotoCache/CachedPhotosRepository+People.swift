@@ -3,14 +3,14 @@ import SynologyAPI
 
 extension CachedPhotosRepository {
     public func suggestPeople(prefix: String, space: PhotoSpace) async throws -> [CollectionIndexEntry] {
-        guard !prefix.isEmpty, !metadata.peopleMutationSpaces.contains(space) else { return [] }
-        let epoch = metadata.peopleEpoch[space, default: 0]
+        guard !prefix.isEmpty, !metadata.people.mutationSpaces.contains(space) else { return [] }
+        let epoch = metadata.people.epoch[space, default: 0]
         try await connect()
         let result = try await metadataReadRequest(priority: .visible) {
             try await client.suggestPeople(prefix: prefix, space: space)
         }
         try Task.checkCancellation()
-        guard epoch == metadata.peopleEpoch[space, default: 0], !metadata.peopleMutationSpaces.contains(space) else {
+        guard epoch == metadata.people.epoch[space, default: 0], !metadata.people.mutationSpaces.contains(space) else {
             throw MetadataAdmissionError.superseded
         }
         return result
@@ -21,30 +21,29 @@ extension CachedPhotosRepository {
     }
 
     public func mergePerson(sourceID: Int64, targetID: Int64, name: String, space: PhotoSpace) async throws {
-        guard sourceID != targetID else { throw SynologyAPIError.unsupported("Choose a different person to merge.") }
+        guard sourceID != targetID else { throw RepositoryError.invalidInput("Choose a different person to merge.") }
         try await changePerson(sourceID: sourceID, targetID: targetID, name: name, space: space)
     }
 
     private func changePerson(sourceID: Int64?, targetID: Int64, name: String, space: PhotoSpace) async throws {
-        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, targetID > 0,
-              !metadata.peopleMutationsInProgress.contains(space) else {
-            throw SynologyAPIError.unsupported("Enter a name and wait for any other People change to finish.")
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, targetID > 0 else {
+            throw RepositoryError.invalidInput("Enter a name.")
         }
-        metadata.peopleMutationsInProgress.insert(space)
-        metadata.peopleMutationSpaces.insert(space)
+        try claimMutation(.people(space), busy: "Wait for the other People change to finish.")
+        metadata.people.mutationSpaces.insert(space)
         let collections = [targetID, sourceID].compactMap { $0 }.map { PhotoCollectionDescriptor.person($0, space: space) }
-        metadata.peopleMutationCollections.formUnion(collections)
+        metadata.people.mutationCollections.formUnion(collections)
         defer {
-            metadata.peopleMutationsInProgress.remove(space)
-            metadata.peopleMutationSpaces.remove(space)
-            metadata.peopleMutationCollections.subtract(collections)
+            releaseMutation(.people(space))
+            metadata.people.mutationSpaces.remove(space)
+            metadata.people.mutationCollections.subtract(collections)
         }
         try await initializeMetadataEngine()
         try await connect()
         try await reconcileMetadataSource(for: .library(space))
         let current = try await client.collectionIndex(.person, space: space)
         guard current.contains(where: { $0.id == targetID }), sourceID.map({ id in current.contains(where: { $0.id == id }) }) ?? true else {
-            throw SynologyAPIError.unsupported("The selected people have changed. Refresh People and try again.")
+            throw RepositoryError.stale("The selected people have changed. Refresh People and try again.")
         }
         try Task.checkCancellation()
         try await invalidatePeopleMutation(space: space, collections: collections)
@@ -62,22 +61,22 @@ extension CachedPhotosRepository {
             if case .success = result { result = .failure(error) }
         }
         if case .failure = result {
-            throw SynologyAPIError.unsupported("The change could not be confirmed. Refresh People before trying again.")
+            throw RepositoryError.unconfirmed("The change could not be confirmed. Refresh People before trying again.")
         }
     }
 
     private func invalidatePeopleMutation(space: PhotoSpace, collections: [PhotoCollectionDescriptor]) async throws {
-        metadata.peopleEpoch[space, default: 0] &+= 1
+        metadata.people.epoch[space, default: 0] &+= 1
         metadata.collectionIndexJobs.removeValue(forKey: CollectionIndexJobKey(kind: .person, space: space))?.task.cancel()
         for collection in collections {
             metadata.mutationEpochs[collection, default: 0] &+= 1
             metadata.timelineJobs.removeValue(forKey: collection)?.task.cancel()
             metadata.collectionRecoveries.removeValue(forKey: collection)?.task.cancel()
-            let filterIDs = metadata.libraryFilters.filter { $0.value.registration.sourceCollection == collection }.map(\.key)
+            let filterIDs = metadata.sessions.libraryFilters.filter { $0.value.registration.sourceCollection == collection }.map(\.key)
             for id in filterIDs {
-                if let state = metadata.libraryFilters.removeValue(forKey: id) {
-                    metadata.selectionRetentions.removeValue(forKey: state.registration.descriptor)
-                    metadata.deferredSelectionUnregisters.remove(state.registration.descriptor)
+                if let state = metadata.sessions.libraryFilters.removeValue(forKey: id) {
+                    metadata.sessions.selectionRetentions.removeValue(forKey: state.registration.descriptor)
+                    metadata.sessions.deferredUnregisters.remove(state.registration.descriptor)
                     metadata.latestTimelines.removeValue(forKey: state.registration.descriptor)
                 }
             }
@@ -94,15 +93,15 @@ extension CachedPhotosRepository {
 
     private func finishPeopleMutation(space: PhotoSpace, collections: [PhotoCollectionDescriptor], sourceID: Int64?, targetID: Int64, name: String) async throws {
         try await invalidatePeopleMutation(space: space, collections: collections)
-        metadata.peopleMutationSpaces.remove(space)
-        metadata.peopleMutationCollections.subtract(collections)
+        metadata.people.mutationSpaces.remove(space)
+        metadata.people.mutationCollections.subtract(collections)
         var verified: [CollectionIndexEntry]?
         for await event in collectionIndex(.person, space: space) {
             if case .value(let list, true) = event { verified = list }
         }
         guard let verified, verified.contains(where: { $0.id == targetID && $0.name == name }),
               sourceID.map({ id in !verified.contains(where: { $0.id == id }) }) ?? true else {
-            throw SynologyAPIError.unsupported("The server did not confirm the People change.")
+            throw RepositoryError.unconfirmed("The server did not confirm the People change.")
         }
         if sourceID != nil {
             let collection = PhotoCollectionDescriptor.person(targetID, space: space)

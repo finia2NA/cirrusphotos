@@ -45,7 +45,7 @@ struct AlbumRenameView: View {
                 try await model.renameAlbum(album.id, name: submittedName)
                 dismiss()
             } catch {
-                self.error = error.localizedDescription
+                self.error = reportedFailure(error, operation: "Album rename")
                 working = false
             }
         }

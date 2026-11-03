@@ -14,4 +14,9 @@ public enum SynologyDiagnostics {
     public static let decoding = Logger(subsystem: subsystem, category: "viewer.decoding")
     public static let rotations = Logger(subsystem: subsystem, category: "repository.rotations")
     public static let rotationTransport = Logger(subsystem: subsystem, category: "transport.rotations")
+    /// Failures that indicate a bug, a malformed response or an unconfirmed write.
+    /// Console: `s:local.cirrus.syno-timeline c:unexpected`.
+    public static let unexpected = Logger(subsystem: subsystem, category: "unexpected")
+    /// Expected failures such as offline reads, busy operations and stale selections.
+    public static let failures = Logger(subsystem: subsystem, category: "failures")
 }

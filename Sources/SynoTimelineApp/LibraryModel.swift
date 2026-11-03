@@ -1,3 +1,4 @@
+import Combine
 import PhotoCache
 import SwiftUI
 import SynologyAPI
@@ -15,34 +16,29 @@ struct TimelineWarmingTargetDiscovery {
     let failures: [String]
 }
 
-func permitsAlbumDownloads(source: PhotoCollectionDescriptor, incomingVerified: Bool, albums: [AlbumSummary]) -> Bool {
-    guard source.incomingAlbumIdentity != nil else { return true }
-    return incomingVerified && albums.contains { $0.collection == source && $0.recipientCanDownload }
-}
-
 @MainActor
 final class LibraryModel: ObservableObject {
-    private enum TimelineUpdateReason: Equatable {
+    enum TimelineUpdateReason: Equatable {
         case authoritativeLoad
         case favoriteMutationRefresh
     }
 
-    private var selectionAuthorities: [PhotoCollectionDescriptor: PhotoSelectionAuthority] = [:]
-    private var sessionSources: [PhotoCollectionDescriptor: PhotoCollectionDescriptor] = [:]
+    var selectionAuthorities: [PhotoCollectionDescriptor: PhotoSelectionAuthority] = [:]
+    var sessionSources: [PhotoCollectionDescriptor: PhotoCollectionDescriptor] = [:]
     @Published var albumOperation: AlbumOperation?
     @Published var albumOperationError: String?
     @Published var itemDeletion: ItemDeletion?
     @Published var itemDeletionError: String?
-    private var itemDeletionTask: Task<Void, Never>?
-    @Published private(set) var deletingAlbumID: Int64?
-    private var albumOperationTask: Task<Void, Never>?
-    private var filterAuthorities: [PhotoCollectionDescriptor: [[Bool]]] = [:]
-    private var filterMemberships: [PhotoCollectionDescriptor: [[Int64]]] = [:]
-    @Published private var snapshots: [PhotoCollectionDescriptor: TimelineSnapshot] = [:]
-    @Published private var snapshotRevisions: [PhotoCollectionDescriptor: Int] = [:]
-    @Published private var viewerSnapshotRevisions: [PhotoCollectionDescriptor: Int] = [:]
-    @Published private var timelineVerifications: [PhotoCollectionDescriptor: Bool] = [:]
-    @Published private var collectionErrors: [PhotoCollectionDescriptor: String] = [:]
+    var itemDeletionTask: Task<Void, Never>?
+    @Published var deletingAlbumID: Int64?
+    var albumOperationTask: Task<Void, Never>?
+    var filterAuthorities: [PhotoCollectionDescriptor: [[Bool]]] = [:]
+    var filterMemberships: [PhotoCollectionDescriptor: [[Int64]]] = [:]
+    @Published var snapshots: [PhotoCollectionDescriptor: TimelineSnapshot] = [:]
+    @Published var snapshotRevisions: [PhotoCollectionDescriptor: Int] = [:]
+    @Published var viewerSnapshotRevisions: [PhotoCollectionDescriptor: Int] = [:]
+    @Published var timelineVerifications: [PhotoCollectionDescriptor: Bool] = [:]
+    @Published var collectionErrors: [PhotoCollectionDescriptor: String] = [:]
     @Published private(set) var isLoading = true
     @Published private(set) var authenticationStatus: AuthenticationStatus = .notStarted
     @Published private(set) var retryRevision = 0
@@ -57,109 +53,82 @@ final class LibraryModel: ObservableObject {
     /// Whether the browser selection-favorite action may begin (selection non-empty, no active write).
     @Published private(set) var canToggleBrowserFavorite = false
     /// Pending confirmation for a large selection-favorite action; nil when no confirmation is needed.
-    @Published private(set) var pendingFavoriteConfirmation: SelectionFavoriteConfirmation?
-    @Published private(set) var browserFavoriteFailure: String?
-    @Published private(set) var rotationFailure: String?
-    @Published private(set) var rotationBusy = false
-    @Published private(set) var thumbnailRotationProgress: ThumbnailRotationProgress?
-    @Published private(set) var isFixingThumbnailRotations = false
+    @Published var pendingFavoriteConfirmation: SelectionFavoriteConfirmation?
+    @Published var browserFavoriteFailure: String?
+    @Published var rotationFailure: String?
+    @Published var rotationBusy = false
+    @Published var thumbnailRotationProgress: ThumbnailRotationProgress?
+    @Published var isFixingThumbnailRotations = false
     @Published private(set) var metadataInvalidationRevision: UInt64 = 0
     @Published private(set) var cacheResetInProgress = false
     @Published private(set) var cacheResetError: String?
-    @Published private(set) var albumMembershipRevision: UInt64 = 0
-    private(set) var changedAlbumID: Int64?
+    @Published var albumMembershipRevision: UInt64 = 0
+    var changedAlbumID: Int64?
     @Published private(set) var mapFilterInvalidationRevision: UInt64 = 0
     private(set) var invalidatedMapFilter: PhotoCollectionDescriptor?
-    private var browserSelectionStates: [PhotoCollectionDescriptor: BrowserSelectionState] = [:]
-    private var browserCommandHandler: ((BrowserSelectionCommand) -> Void)?
-    private var browserCommandOwner: UUID?
-    private var browserCommandSnapshot: BrowserCommandSnapshot = .inactive
-    private weak var activeViewer: PhotoViewerPresentation?
-    private var viewerCloseHandler: (() -> Void)?
-    private var backHandler: (() -> Void)?
-    private var thumbnailPolicyRevision: UInt64 = 0
-    private var thumbnailRotationTask: Task<Void, Never>?
+    var browserSelectionStates: [PhotoCollectionDescriptor: BrowserSelectionState] = [:]
+    var browserCommandHandler: ((BrowserSelectionCommand) -> Void)?
+    var browserCommandOwner: UUID?
+    var browserCommandSnapshot: BrowserCommandSnapshot = .inactive
+    weak var activeViewer: PhotoViewerPresentation?
+    var viewerCloseHandler: (() -> Void)?
+    var backHandler: (() -> Void)?
+    var thumbnailRotationTask: Task<Void, Never>?
     /// True while a selection-favorite write (or resolution) is in progress.
-    private(set) var browserFavoriteBusy = false
+    var browserFavoriteBusy = false
     var authenticationFailed: Bool {
         if case .failed = authenticationStatus { return true }
         return false
-    }
-    @Published var thumbnailSize: ThumbnailSize = ThumbnailSize(rawValue: UserDefaults.standard.string(forKey: "thumbnailSize") ?? "m") ?? .m {
-        didSet {
-            UserDefaults.standard.set(thumbnailSize.rawValue, forKey: "thumbnailSize")
-            if let repository {
-                thumbnailPolicyRevision &+= 1
-                let revision = thumbnailPolicyRevision
-                let size = thumbnailSize
-                Task { [weak self] in
-                    guard self?.thumbnailPolicyRevision == revision else { return }
-                    try? await repository.setConfiguredThumbnailSize(size)
-                }
-            }
-        }
-    }
-    @Published var loadsLargeViewerPreviews: Bool = UserDefaults.standard.bool(forKey: "loadsLargeViewerPreviews") {
-        didSet { UserDefaults.standard.set(loadsLargeViewerPreviews, forKey: "loadsLargeViewerPreviews") }
-    }
-    @Published var pixelInterpolation: PixelInterpolationPreference = PixelInterpolationPreference(
-        rawValue: UserDefaults.standard.string(forKey: "pixelInterpolation") ?? "off"
-    ) ?? .off {
-        didSet { UserDefaults.standard.set(pixelInterpolation.rawValue, forKey: "pixelInterpolation") }
-    }
-    @Published var videoMuted: Bool = UserDefaults.standard.bool(forKey: "videoMuted") {
-        didSet { UserDefaults.standard.set(videoMuted, forKey: "videoMuted") }
-    }
-    @Published var videoQuality: VideoQualityPreference = VideoQualityPreference(
-        rawValue: UserDefaults.standard.string(forKey: "videoQuality") ?? "automatic"
-    ) ?? .automatic {
-        didSet { UserDefaults.standard.set(videoQuality.rawValue, forKey: "videoQuality") }
-    }
-    @Published var itemsPerRow: Int = LibraryModel.persistedItemsPerRow() {
-        didSet {
-            let valid = min(10, max(3, itemsPerRow))
-            if valid != itemsPerRow { itemsPerRow = valid }
-            UserDefaults.standard.set(valid, forKey: "itemsPerRow")
-        }
-    }
-    @Published var cropsThumbnailsToSquare: Bool = UserDefaults.standard.bool(forKey: "cropsThumbnailsToSquare") {
-        didSet { UserDefaults.standard.set(cropsThumbnailsToSquare, forKey: "cropsThumbnailsToSquare") }
-    }
-    @Published var alwaysShowsTimeline: Bool = UserDefaults.standard.bool(forKey: "alwaysShowsTimeline") {
-        didSet { UserDefaults.standard.set(alwaysShowsTimeline, forKey: "alwaysShowsTimeline") }
-    }
-    @Published var budgetFraction: Double = CacheBudget.fraction(for: Int64(UserDefaults.standard.object(forKey: "cacheBudget") as? Int ?? Int(CacheBudget.bytes(at: 0.5)))) {
-        didSet {
-            let bytes = CacheBudget.bytes(at: budgetFraction)
-            UserDefaults.standard.set(Int(bytes), forKey: "cacheBudget")
-            if let repository { Task { try? await repository.setBudget(bytes) } }
-        }
     }
     @Published private(set) var cacheUsage: Int64 = 0
     @Published private(set) var albums: [AlbumSummary] = []
     @Published private(set) var albumsVerified = false
     @Published private(set) var albumListError: String?
     @Published private(set) var presentationNamespace: String?
-    private(set) var repository: CachedPhotosRepository?
-    private var started = false
-    private var authenticationTask: Task<Void, Never>?
-    private var refreshTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
-    private var albumsTask: Task<Void, Never>?
-    private var incomingAlbumsTask: Task<Void, Never>?
-    private var ownedAlbums: [AlbumSummary] = []
-    private var receivedIncomingAlbums: [AlbumSummary] = []
-    private var ownedAlbumsVerified = false
-    private var incomingAlbumsVerified = false
-    private var metadataResetTask: Task<Void, Never>?
-    private var albumSharingObservationTask: Task<Void, Never>?
-    private var mapFilterInvalidationTask: Task<Void, Never>?
-    private var albumListRequested = false
-    private var openedCollections: Set<PhotoCollectionDescriptor> = []
-    private var collectionFetchTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
+    let session: AppSession
+    var repository: CachedPhotosRepository? { session.repository }
+    var started = false
+    var authenticationTask: Task<Void, Never>?
+    var refreshTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
+    var albumsTask: Task<Void, Never>?
+    var incomingAlbumsTask: Task<Void, Never>?
+    var ownedAlbums: [AlbumSummary] = []
+    var receivedIncomingAlbums: [AlbumSummary] = []
+    var ownedAlbumsVerified = false
+    var incomingAlbumsVerified = false
+    var metadataResetTask: Task<Void, Never>?
+    var albumSharingObservationTask: Task<Void, Never>?
+    var mapFilterInvalidationTask: Task<Void, Never>?
+    var albumListRequested = false
+    var openedCollections: Set<PhotoCollectionDescriptor> = []
+    var collectionFetchTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
 
-    init(repository: CachedPhotosRepository? = nil) {
-        self.repository = repository
-        self.presentationNamespace = repository?.namespace
+    var preferences: AppPreferences { session.preferences }
+    var preferenceObservations: Set<AnyCancellable> = []
+    var thumbnailPolicyRevision: UInt64 = 0
+
+    convenience init(repository: CachedPhotosRepository? = nil, preferences: AppPreferences = AppPreferences()) {
+        self.init(session: AppSession(preferences: preferences, repository: repository))
+    }
+
+    init(session: AppSession) {
+        self.session = session
+        self.presentationNamespace = session.repository?.namespace
+        let preferences = session.preferences
+        // The repository applies the thumbnail and budget preferences; latest change wins.
+        preferences.$thumbnailSize.dropFirst().removeDuplicates().sink { [weak self] size in
+            guard let self, let repository = self.repository else { return }
+            self.thumbnailPolicyRevision &+= 1
+            let revision = self.thumbnailPolicyRevision
+            Task { [weak self] in
+                guard self?.thumbnailPolicyRevision == revision else { return }
+                try? await repository.setConfiguredThumbnailSize(size)
+            }
+        }.store(in: &preferenceObservations)
+        preferences.$budgetFraction.dropFirst().removeDuplicates().sink { [weak self] fraction in
+            guard let repository = self?.repository else { return }
+            Task { try? await repository.setBudget(CacheBudget.bytes(at: fraction)) }
+        }.store(in: &preferenceObservations)
     }
 
 
@@ -186,7 +155,7 @@ final class LibraryModel: ObservableObject {
         startAlbumListFetchIfNeeded()
     }
 
-    private func startAlbumListFetchIfNeeded() {
+    func startAlbumListFetchIfNeeded() {
         guard let repository else { return }
         if albumsTask == nil {
             albumsTask = Task { [weak self] in
@@ -275,38 +244,10 @@ final class LibraryModel: ObservableObject {
     func filterMembership(for collection: PhotoCollectionDescriptor) -> [[Int64]]? { filterMemberships[collection] }
 
     func selectionAuthority(for collection: PhotoCollectionDescriptor) -> PhotoSelectionAuthority? { selectionAuthorities[collection] }
-    func isIncomingCollection(_ collection: PhotoCollectionDescriptor) -> Bool {
-        (sessionSources[collection] ?? collection).incomingAlbumIdentity != nil
-    }
-
-    func isSharedCollection(_ collection: PhotoCollectionDescriptor) -> Bool {
-        (sessionSources[collection] ?? collection).space == .shared
-    }
-
-    func allowsSpaceItemActions(in collection: PhotoCollectionDescriptor) -> Bool {
+    func capabilities(for collection: PhotoCollectionDescriptor) -> CollectionCapabilities {
         let source = sessionSources[collection] ?? collection
-        return source.incomingAlbumIdentity == nil && !source.isLibraryFilter
-    }
-
-    func allowsPersonalActions(in collection: PhotoCollectionDescriptor) -> Bool {
-        let source = sessionSources[collection] ?? collection
-        // Owned album actions verify their members' origin at execution; album
-        // authority itself must not be interpreted as Personal Space.
-        guard !source.isSessionDerived else { return false }
-        switch source.contentScope {
-        case .space(.personal), .album: return true
-        case .space(.shared), .incomingAlbum: return false
-        }
-    }
-
-    func canDownload(in collection: PhotoCollectionDescriptor) -> Bool {
-        let source = sessionSources[collection] ?? collection
-        if source.space == .shared { return true }
-        return permitsAlbumDownloads(source: source, incomingVerified: incomingAlbumsVerified, albums: receivedIncomingAlbums)
-    }
-
-    func sourceAlbumID(for collection: PhotoCollectionDescriptor) -> Int64? {
-        (sessionSources[collection] ?? collection).albumID
+        return CollectionCapabilities(source: source, incomingAlbums: receivedIncomingAlbums,
+                                      incomingAlbumsVerified: incomingAlbumsVerified)
     }
 
     func registerSessionCollection(_ collection: PhotoCollectionDescriptor, snapshot: TimelineSnapshot,
@@ -348,7 +289,7 @@ final class LibraryModel: ObservableObject {
             registerSessionCollection(registration.descriptor, snapshot: registration.snapshot, authority: registration.authority, source: source)
             return registration.descriptor
         } catch {
-            collectionErrors[.library(.personal)] = error.localizedDescription
+            collectionErrors[.library(.personal)] = reportedFailure(error, operation: "Session collection registration")
             return nil
         }
     }
@@ -358,7 +299,7 @@ final class LibraryModel: ObservableObject {
         unregisterSessionCollection(collection)
     }
 
-    private func startCollectionFetchIfNeeded(_ collection: PhotoCollectionDescriptor,
+    func startCollectionFetchIfNeeded(_ collection: PhotoCollectionDescriptor,
                                               reason: TimelineUpdateReason = .authoritativeLoad) {
         guard let repository, collectionFetchTasks[collection] == nil else { return }
         collectionFetchTasks[collection] = Task { [weak self] in
@@ -367,15 +308,6 @@ final class LibraryModel: ObservableObject {
                 await self?.receive(event, collection: collection, reason: reason)
             }
         }
-    }
-
-    private static func persistedItemsPerRow() -> Int {
-        guard let value = (UserDefaults.standard.object(forKey: "itemsPerRow") as? NSNumber)?.intValue else { return 6 }
-        return min(10, max(3, value))
-    }
-
-    func adjustItemsPerRow(by amount: Int) {
-        itemsPerRow = min(10, max(3, itemsPerRow + amount))
     }
 
     func selectionState(for collection: PhotoCollectionDescriptor) -> BrowserSelectionState {
@@ -433,8 +365,8 @@ final class LibraryModel: ObservableObject {
         }
     }
 
-    private func updateBrowserFavoriteAvailability() {
-        let available = browserCommandsActive && allowsSpaceItemActions(in: browserCommandSnapshot.collection) &&
+    func updateBrowserFavoriteAvailability() {
+        let available = browserCommandsActive && capabilities(for: browserCommandSnapshot.collection).allowsSpaceItemActions &&
             browserCommandSnapshot.canToggleFavorite &&
             !browserCommandSnapshot.selectedOrdinals.isEmpty &&
             pendingFavoriteConfirmation == nil &&
@@ -475,7 +407,7 @@ final class LibraryModel: ObservableObject {
     }
 
     func updateViewerCommands() {
-        canToggleViewerFavorite = activeViewer.map { allowsSpaceItemActions(in: $0.collection) && $0.canToggleFavorite } ?? false
+        canToggleViewerFavorite = activeViewer.map { capabilities(for: $0.collection).allowsSpaceItemActions && $0.canToggleFavorite } ?? false
     }
 
     func toggleViewerFavorite() {
@@ -485,12 +417,12 @@ final class LibraryModel: ObservableObject {
     }
 
     func downloadSelection(_ selection: BrowserCommandSnapshot, kind: PhotoDownloadKind, choose: Bool) {
-        guard canDownload(in: selection.collection), let repository, let captured = selection.captureSelection(timeline: selection.timeline) else { return }
+        guard capabilities(for: selection.collection).allowsDownloads, let repository, let captured = selection.captureSelection(timeline: selection.timeline) else { return }
         PhotoDownloadManager.shared.start(repository: repository, source: .selection(captured), kind: kind, choose: choose)
     }
 
     func editSelection(_ selection: BrowserCommandSnapshot, application: URL) {
-        guard allowsPersonalActions(in: selection.collection), let repository, let timeline = selection.timeline else { return }
+        guard capabilities(for: selection.collection).allowsPersonalActions, let repository, let timeline = selection.timeline else { return }
         PhotoDownloadManager.shared.edit(repository: repository, snapshot: timeline, selection: selection,
                                         item: nil, collection: selection.collection, applicationURL: application)
     }
@@ -505,472 +437,6 @@ final class LibraryModel: ObservableObject {
         PhotoDownloadManager.shared.start(repository: repository, source: .item(item, collection: collection), kind: kind, choose: choose)
     }
 
-    var canRotate: Bool {
-        if let activeViewer { return allowsSpaceItemActions(in: activeViewer.collection) && activeViewer.canRotate }
-        return browserCommandsActive && allowsSpaceItemActions(in: browserCommandSnapshot.collection) && !browserCommandSnapshot.selectedOrdinals.isEmpty &&
-            timelineVerified(for: browserCommandSnapshot.collection) && !rotationBusy
-    }
-
-    func rotateSelection(_ direction: PhotoRotationDirection) {
-        if let activeViewer {
-            activeViewer.rotate(direction)
-            updateViewerCommands()
-            return
-        }
-        guard canRotate, let repository else { return }
-        rotationBusy = true
-        rotationFailure = nil
-        let snapshot = browserCommandSnapshot
-        Task { [weak self] in
-            guard let self else { return }
-            defer { rotationBusy = false }
-            guard let action = await resolveRotation(snapshot, repository: repository) else {
-                rotationFailure = "The selected photos could not be verified or do not support rotation."
-                return
-            }
-            do { try await repository.rotate(action, direction: direction) }
-            catch { rotationFailure = error.localizedDescription }
-        }
-    }
-
-    var canRotateThumbnails: Bool {
-        canRotate && allowsSpaceItemActions(in: activeViewer?.collection ?? browserCommandSnapshot.collection)
-    }
-
-    func rotateThumbnailPreviews(_ direction: PhotoRotationDirection) {
-        guard canRotateThumbnails, thumbnailRotationTask == nil, let repository else { return }
-        isFixingThumbnailRotations = false
-        let snapshot = browserCommandSnapshot
-        thumbnailRotationProgress = .init(completedItems: 0, totalItems: 0, itemID: nil, stage: .preparing)
-        thumbnailRotationTask = Task { [weak self] in
-            guard let self else { return }
-            let action: SelectionRotationAction?
-            if let viewer = activeViewer { action = viewer.rotationAction() }
-            else { action = await resolveRotation(snapshot, repository: repository) }
-            guard let action, !action.itemIDs.isEmpty else {
-                thumbnailRotationProgress = .init(completedItems: 0, totalItems: 0, itemID: nil,
-                    stage: .finished, failures: ["No selected photos support thumbnail rotation."])
-                thumbnailRotationTask = nil
-                return
-            }
-            for await progress in await repository.rotateThumbnails(action, direction: direction) {
-                thumbnailRotationProgress = progress
-            }
-            DecodedImages.shared.clear()
-            thumbnailRotationTask = nil
-        }
-    }
-
-    func fixThumbnailRotations() {
-        guard canRotateThumbnails else { return }
-        guard thumbnailRotationTask == nil, let repository else { return }
-        isFixingThumbnailRotations = true
-        let snapshot = browserCommandSnapshot
-        thumbnailRotationProgress = .init(completedItems: 0, totalItems: 0,
-                                          itemID: nil, stage: .preparing)
-        thumbnailRotationTask = Task { [weak self] in
-            guard let self else { return }
-            let action: SelectionRotationAction?
-            if let viewer = activeViewer { action = viewer.rotationAction() }
-            else { action = await resolveRotation(snapshot, repository: repository) }
-            guard let action, !action.itemIDs.isEmpty else {
-                thumbnailRotationProgress = .init(
-                    completedItems: 0, totalItems: 0, itemID: nil, stage: .finished,
-                    failures: ["No selected photos support thumbnail rotation repair."]
-                )
-                thumbnailRotationTask = nil
-                return
-            }
-            for await progress in await repository.fixThumbnailRotations(action) {
-                thumbnailRotationProgress = progress
-            }
-            DecodedImages.shared.clear()
-            thumbnailRotationTask = nil
-        }
-    }
-
-    func cancelThumbnailRotation() {
-        thumbnailRotationTask?.cancel()
-        thumbnailRotationTask = nil
-    }
-
-    func dismissThumbnailRotation() {
-        if thumbnailRotationProgress?.stage != .finished { cancelThumbnailRotation() }
-        thumbnailRotationProgress = nil
-        isFixingThumbnailRotations = false
-    }
-
-    func dismissRotationFailure() { rotationFailure = nil }
-
-    private func resolveRotation(_ snapshot: BrowserCommandSnapshot,
-                                 repository: CachedPhotosRepository) async -> SelectionRotationAction? {
-        guard snapshot.active, let selection = snapshot.captureSelection(timeline: snapshots[snapshot.collection]) else { return nil }
-        return await SelectionRotationResolver(repository: repository).resolve(selection)
-    }
-
-    // MARK: - Selection Favorites
-
-    /// Begins a selection favorite operation for the active browser. Routes through
-    /// the viewer if it is open; otherwise resolves the full browser selection.
-    func toggleSelectionFavorite() {
-        if activeViewer != nil {
-            toggleViewerFavorite()
-            return
-        }
-        guard canToggleBrowserFavorite, !browserFavoriteBusy,
-              let repository else { return }
-        browserFavoriteFailure = nil
-        let snap = browserCommandSnapshot
-        guard snap.active, !snap.selectedOrdinals.isEmpty else { return }
-        browserFavoriteBusy = true
-        updateBrowserFavoriteAvailability()
-        Task { [weak self] in
-            await self?.resolveThenMutateFavorites(snapshot: snap, repository: repository)
-        }
-    }
-
-    private func resolveThenMutateFavorites(snapshot: BrowserCommandSnapshot,
-                                             repository: CachedPhotosRepository) async {
-        defer {
-            browserFavoriteBusy = false
-            updateBrowserFavoriteAvailability()
-        }
-        guard let selection = snapshot.captureSelection(timeline: snapshots[snapshot.collection]) else { return }
-        let selectedEntireCollection = !snapshot.selectedOrdinals.isEmpty &&
-            snapshot.selectedOrdinals.count == LibraryIndex(snapshot: selection.timeline).totalCount
-        guard let action = await SelectionFavoriteResolver(repository: repository).resolve(selection) else {
-            browserFavoriteFailure = "The selected photos could not be verified. Try again."
-            return
-        }
-
-        guard !action.affectedIDs.isEmpty else { return }
-
-        if selectedEntireCollection || action.affectedIDs.count > 5 {
-            let confirmation = SelectionFavoriteConfirmation(action: action)
-            pendingFavoriteConfirmation = confirmation
-            return
-        }
-        await executeFavoriteAction(action, repository: repository)
-    }
-
-    func confirmBrowserFavorite() {
-        guard let confirmation = pendingFavoriteConfirmation,
-              let repository else {
-            pendingFavoriteConfirmation = nil
-            return
-        }
-        let action = confirmation.action
-        pendingFavoriteConfirmation = nil
-        browserFavoriteBusy = true
-        updateBrowserFavoriteAvailability()
-        Task { [weak self] in
-            defer {
-                self?.browserFavoriteBusy = false
-                self?.updateBrowserFavoriteAvailability()
-            }
-            await self?.executeFavoriteAction(action, repository: repository)
-        }
-    }
-
-    func cancelBrowserFavorite() {
-        pendingFavoriteConfirmation = nil
-        browserFavoriteBusy = false
-        updateBrowserFavoriteAvailability()
-    }
-
-    func dismissBrowserFavoriteFailure() {
-        browserFavoriteFailure = nil
-    }
-
-    private func executeFavoriteAction(_ action: SelectionFavoriteAction,
-                                       repository: CachedPhotosRepository) async {
-        do {
-            try await repository.setFavoritesBatch(action: action)
-        } catch {
-            browserFavoriteFailure = error.localizedDescription
-        }
-    }
-
-    var canManageAlbumSelection: Bool {
-        browserCommandsActive && allowsPersonalActions(in: browserCommandSnapshot.collection) && !browserCommandSnapshot.selectedOrdinals.isEmpty &&
-        browserCommandSnapshot.timeline != nil && browserCommandSnapshot.authority != nil &&
-        albumOperation == nil && !canCloseViewer
-    }
-
-    var canRemoveAlbumSelection: Bool {
-        canManageAlbumSelection && isNormalAlbum(browserCommandSnapshot.sourceAlbumID)
-    }
-
-    func beginAlbumOperation(_ kind: AlbumOperation.Kind) {
-        guard canManageAlbumSelection else { return }
-        beginAlbumOperation(kind, captured: browserCommandSnapshot)
-    }
-
-    var canDeleteSelection: Bool {
-        browserCommandsActive && allowsSpaceItemActions(in: browserCommandSnapshot.collection) &&
-        !browserCommandSnapshot.selectedOrdinals.isEmpty && browserCommandSnapshot.timeline != nil &&
-        browserCommandSnapshot.authority != nil && itemDeletion == nil && albumOperation == nil && !canCloseViewer
-    }
-
-    func beginItemDeletion() {
-        guard canDeleteSelection else { return }
-        beginItemDeletion(captured: browserCommandSnapshot)
-    }
-
-    /// Resolves the captured selection against verified metadata, then waits for
-    /// the user's confirmation. Nothing is sent to the NAS before `confirmItemDeletion`.
-    func beginItemDeletion(captured: BrowserCommandSnapshot) {
-        guard itemDeletion == nil, albumOperation == nil, allowsSpaceItemActions(in: captured.collection),
-              let repository, let selection = captured.captureSelection(timeline: captured.timeline),
-              selection.authority != nil, !selection.selectedOrdinals.isEmpty else { return }
-        let operation = ItemDeletion(count: selection.selectedOrdinals.count)
-        itemDeletion = operation
-        itemDeletionTask = Task { [weak self] in
-            let resolved = await SelectionItemResolver(repository: repository).resolveWithReceipt(selection)
-            guard !Task.isCancelled, let self, self.itemDeletion?.id == operation.id else { return }
-            guard let resolved, !resolved.items.isEmpty else {
-                self.itemDeletion = nil
-                self.itemDeletionError = "The selected items could not be verified. Try again."
-                return
-            }
-            self.itemDeletion?.selection = resolved
-            self.itemDeletion?.count = resolved.items.count
-            self.itemDeletion?.loading = false
-        }
-    }
-
-    func cancelItemDeletion() {
-        guard itemDeletion?.deleting != true else { return }
-        itemDeletionTask?.cancel()
-        itemDeletionTask = nil
-        itemDeletion = nil
-    }
-
-    func confirmItemDeletion() {
-        guard var operation = itemDeletion, !operation.loading, !operation.deleting,
-              let selection = operation.selection, let repository else { return }
-        operation.deleting = true
-        itemDeletion = operation
-        itemDeletionTask = Task { [weak self] in
-            do { try await repository.deleteItems(selection) }
-            catch {
-                if !Task.isCancelled { self?.itemDeletionError = error.localizedDescription }
-            }
-            guard let self, self.itemDeletion?.id == operation.id else { return }
-            self.itemDeletion = nil
-        }
-    }
-
-    func beginEmptyAlbumCreation() {
-        guard albumOperation == nil, repository != nil else { return }
-        var operation = AlbumOperation(kind: .create, sourceAlbumID: nil)
-        operation.createsEmptyAlbum = true
-        operation.loading = false
-        albumOperation = operation
-    }
-
-    func deleteAlbum(_ id: Int64) {
-        guard deletingAlbumID == nil, albumOperation == nil, let repository else { return }
-        deletingAlbumID = id
-        Task { [weak self] in
-            do { try await repository.deleteAlbum(id: id) }
-            catch { self?.albumOperationError = error.localizedDescription }
-            guard let self else { return }
-            self.deletingAlbumID = nil
-            self.albumsTask?.cancel()
-            self.albumsTask = nil
-            self.ensureAlbumsLoaded()
-        }
-    }
-
-    func renameAlbum(_ id: Int64, name: String) async throws {
-        guard deletingAlbumID == nil, albumOperation == nil, let repository else {
-            throw SynologyAPIError.unsupported("Another album change is in progress. Try again.")
-        }
-        deletingAlbumID = id
-        defer {
-            deletingAlbumID = nil
-            albumsTask?.cancel()
-            albumsTask = nil
-            ensureAlbumsLoaded()
-        }
-        try await repository.renameAlbum(id: id, name: name)
-    }
-
-    func isNormalAlbum(_ id: Int64?) -> Bool {
-        isKnownNormalAlbum(id, in: albums)
-    }
-
-    func beginAlbumOperation(_ kind: AlbumOperation.Kind, captured: BrowserCommandSnapshot) {
-        guard allowsPersonalActions(in: captured.collection), albumOperation == nil, let timeline = captured.timeline,
-              let fingerprint = captured.indexFingerprint, let authority = captured.authority,
-              repository != nil else { return }
-        if kind == .remove && !isNormalAlbum(captured.sourceAlbumID) { return }
-        let selection = PhotoSelectionSnapshot(collection: captured.collection, timeline: timeline,
-            timelineFingerprint: fingerprint, selectedOrdinals: captured.selectedOrdinals,
-            knownItemIDsByOrdinal: captured.knownItemIDsByOrdinal, authority: authority)
-        beginAlbumOperation(kind, selection: selection, sourceAlbumID: captured.sourceAlbumID)
-    }
-
-    func beginAlbumOperation(_ kind: AlbumOperation.Kind, selection: PhotoSelectionSnapshot, sourceAlbumID: Int64?) {
-        guard allowsPersonalActions(in: selection.collection), albumOperation == nil, let repository, selection.authority != nil,
-              !selection.selectedOrdinals.isEmpty else { return }
-        if kind == .remove && !isNormalAlbum(sourceAlbumID) { return }
-        let operation = AlbumOperation(kind: kind, sourceAlbumID: sourceAlbumID)
-        albumOperation = operation
-        albumOperationTask = Task { [weak self] in
-            let resolved = await SelectionItemResolver(repository: repository).resolveWithReceipt(selection)
-            guard !Task.isCancelled, let self, self.albumOperation?.id == operation.id else { return }
-            guard let resolved, !resolved.items.isEmpty else {
-                self.albumOperation = nil
-                self.albumOperationError = "The selected items could not be verified. Try again."
-                return
-            }
-            self.albumOperation?.selection = resolved
-            if kind == .add {
-                do {
-                    let albums = try await repository.addableAlbums()
-                    guard !Task.isCancelled, self.albumOperation?.id == operation.id else { return }
-                    self.albumOperation?.albums = albums
-                } catch {
-                    guard !Task.isCancelled else { return }
-                    self.albumOperation = nil
-                    self.albumOperationError = error.localizedDescription
-                }
-            }
-            self.albumOperation?.loading = false
-        }
-    }
-
-    /// Adds a captured selection independently of browser focus.
-    @discardableResult
-    func addCapturedSelection(_ selection: PhotoSelectionSnapshot, sourceAlbumID: Int64?, to albumID: Int64) -> Bool {
-        guard allowsPersonalActions(in: selection.collection), albumOperation == nil, let repository, selection.authority != nil,
-              (sessionSources[selection.collection] ?? selection.collection).incomingAlbumIdentity == nil,
-              !selection.selectedOrdinals.isEmpty else { return false }
-        let operation = AlbumOperation(kind: .add, sourceAlbumID: sourceAlbumID)
-        albumOperation = operation
-        albumOperationTask = Task { [weak self] in
-            do {
-                let addable = try await repository.addableAlbums()
-                guard !Task.isCancelled, addable.contains(where: { $0.id == albumID }) else {
-                    throw SynologyAPIError.unsupported("This album is no longer available for adding items.")
-                }
-                guard let resolved = await SelectionItemResolver(repository: repository).resolveWithReceipt(selection),
-                      !resolved.items.isEmpty, !Task.isCancelled else {
-                    throw SynologyAPIError.unsupported("The selected items could not be verified. Try again.")
-                }
-                guard let self, self.albumOperation?.id == operation.id else { return }
-                if sourceAlbumID == albumID {
-                    self.albumOperation = nil
-                    return
-                }
-                self.albumOperation?.writing = true
-                try await repository.addMissingItems(resolved, toAlbum: albumID)
-                guard self.albumOperation?.id == operation.id else { return }
-                self.refreshAfterAlbumOperation(operation, destinationID: albumID)
-                self.albumOperation = nil
-            } catch {
-                guard let self, self.albumOperation?.id == operation.id else { return }
-                if self.albumOperation?.writing == true { self.refreshAfterAlbumOperation(operation, destinationID: albumID) }
-                self.albumOperation = nil
-                if !Task.isCancelled { self.albumOperationError = error.localizedDescription }
-            }
-        }
-        return true
-    }
-
-    @discardableResult
-    func addCapturedSelection(_ selection: PhotoSelectionSnapshot, sourceAlbumID: Int64?, to collection: PhotoCollectionDescriptor) -> Bool {
-        if let id = collection.albumID { return addCapturedSelection(selection, sourceAlbumID: sourceAlbumID, to: id) }
-        guard collection.incomingAlbumIdentity != nil, allowsPersonalActions(in: selection.collection), albumOperation == nil, let repository,
-              (sessionSources[selection.collection] ?? selection.collection).incomingAlbumIdentity == nil,
-              selection.authority != nil, !selection.selectedOrdinals.isEmpty else { return false }
-        let operation = AlbumOperation(kind: .add, sourceAlbumID: sourceAlbumID)
-        albumOperation = operation
-        albumOperationTask = Task { [weak self] in
-            do {
-                guard let resolved = await SelectionItemResolver(repository: repository).resolveWithReceipt(selection),
-                      !resolved.items.isEmpty, !Task.isCancelled else {
-                    throw SynologyAPIError.unsupported("The selected items could not be verified. Try again.")
-                }
-                guard let self, self.albumOperation?.id == operation.id else { return }
-                self.albumOperation?.writing = true
-                try await repository.addItems(resolved, toIncomingAlbum: collection)
-                guard self.albumOperation?.id == operation.id else { return }
-                self.albumOperation = nil
-                self.incomingAlbumsTask?.cancel()
-                self.incomingAlbumsTask = nil
-                self.startAlbumListFetchIfNeeded()
-                self.collectionFetchTasks.removeValue(forKey: collection)?.cancel()
-                if self.openedCollections.contains(collection) { self.startCollectionFetchIfNeeded(collection) }
-            } catch {
-                guard let self, self.albumOperation?.id == operation.id else { return }
-                self.albumOperation = nil
-                if !Task.isCancelled { self.albumOperationError = error.localizedDescription }
-            }
-        }
-        return true
-    }
-
-    func cancelAlbumOperation() {
-        albumOperationTask?.cancel()
-        albumOperationTask = nil
-        albumOperation = nil
-    }
-
-    func submitAlbumOperation(name: String = "", albumID: Int64? = nil) {
-        guard var operation = albumOperation, !operation.loading,
-              operation.selection != nil || operation.createsEmptyAlbum,
-              let repository else { return }
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if operation.kind == .create && trimmed.isEmpty { return }
-        if operation.kind == .add && albumID == nil { return }
-        operation.loading = true
-        operation.writing = true
-        albumOperation = operation
-        albumOperationTask = Task { [weak self] in
-            do {
-                switch operation.kind {
-                case .create:
-                    if operation.createsEmptyAlbum {
-                        _ = try await repository.createEmptyAlbum(name: trimmed)
-                    } else if let selection = operation.selection {
-                        _ = try await repository.createAlbum(name: trimmed, selection: selection)
-                    }
-                case .add:
-                    guard let albumID, let selection = operation.selection else { return }
-                    try await repository.addItems(selection, toAlbum: albumID)
-                case .remove:
-                    guard let source = operation.sourceAlbumID, let selection = operation.selection else { return }
-                    try await repository.removeItems(selection, fromAlbum: source)
-                }
-                guard let self, self.albumOperation?.id == operation.id else { return }
-                self.refreshAfterAlbumOperation(operation, destinationID: albumID)
-                self.albumOperation = nil
-            } catch {
-                guard let self, self.albumOperation?.id == operation.id else { return }
-                self.refreshAfterAlbumOperation(operation, destinationID: albumID)
-                self.albumOperation = nil
-                self.albumOperationError = error.localizedDescription
-            }
-        }
-    }
-
-    private func refreshAfterAlbumOperation(_ operation: AlbumOperation, destinationID: Int64?) {
-        albumsTask?.cancel()
-        albumsTask = nil
-        if albumListRequested { startAlbumListFetchIfNeeded() }
-        let id = operation.kind == .remove ? operation.sourceAlbumID : destinationID
-        guard let id else { return }
-        let collection = PhotoCollectionDescriptor.album(id)
-        changedAlbumID = id
-        albumMembershipRevision &+= 1
-        guard openedCollections.contains(collection) else { return }
-        collectionFetchTasks.removeValue(forKey: collection)?.cancel()
-        startCollectionFetchIfNeeded(collection, reason: .favoriteMutationRefresh)
-    }
-
     // MARK: - Lifecycle
 
     func load() async {
@@ -979,14 +445,9 @@ final class LibraryModel: ObservableObject {
         isLoading = true
         collectionErrors.removeAll()
         do {
-            if repository == nil {
-                let credentials = try CredentialStore.load()
-                repository = try CachedPhotosRepository(credentials: credentials,
-                    budget: CacheBudget.bytes(at: budgetFraction))
-            }
-            guard let repository else { return }
+            let repository = try session.start()
             presentationNamespace = repository.namespace
-            try await repository.setConfiguredThumbnailSize(thumbnailSize)
+            try await repository.setConfiguredThumbnailSize(preferences.thumbnailSize)
             if albumSharingObservationTask == nil {
                 albumSharingObservationTask = Task { [weak self] in
                     for await _ in await repository.albumSharingChanges() {
@@ -1044,12 +505,12 @@ final class LibraryModel: ObservableObject {
             }
             await refreshUsage()
         } catch {
-            collectionErrors[.library(.personal)] = error.localizedDescription
+            collectionErrors[.library(.personal)] = reportedFailure(error, operation: "Startup")
         }
         isLoading = false
     }
 
-    private func receiveAlbums(_ event: ResourceEvent<[AlbumSummary]>, incoming: Bool) {
+    func receiveAlbums(_ event: ResourceEvent<[AlbumSummary]>, incoming: Bool) {
         switch event {
         case .value(let list, let verified):
             // Never expose a provisional replacement under the preceding list’s authority.
@@ -1068,11 +529,11 @@ final class LibraryModel: ObservableObject {
                 }
             }
         case .failure(let message):
-            albumListError = message
+            albumListError = message.localizedDescription
         }
     }
 
-    private func receive(_ event: ResourceEvent<TimelineSnapshot>, collection: PhotoCollectionDescriptor,
+    func receive(_ event: ResourceEvent<TimelineSnapshot>, collection: PhotoCollectionDescriptor,
                          reason: TimelineUpdateReason = .authoritativeLoad) async {
         switch event {
         case .value(let snapshot, let verified):
@@ -1090,7 +551,7 @@ final class LibraryModel: ObservableObject {
             if verified { collectionErrors.removeValue(forKey: collection) }
             updateBrowserFavoriteAvailability()
         case .failure(let message):
-            collectionErrors[collection] = message
+            collectionErrors[collection] = message.localizedDescription
             updateBrowserFavoriteAvailability()
         }
     }
@@ -1128,7 +589,7 @@ final class LibraryModel: ObservableObject {
             DecodedImages.shared.clear()
             await refreshUsage()
         } catch {
-            cacheResetError = error.localizedDescription
+            cacheResetError = reportedFailure(error, operation: "Cache clear")
         }
     }
 
@@ -1141,11 +602,11 @@ final class LibraryModel: ObservableObject {
             try await repository.clearMetadataCache()
             await refreshUsage()
         } catch {
-            cacheResetError = error.localizedDescription
+            cacheResetError = reportedFailure(error, operation: "Metadata cache clear")
         }
     }
 
-    private func handleMetadataInvalidation(_ revision: UInt64) {
+    func handleMetadataInvalidation(_ revision: UInt64) {
         guard revision > metadataInvalidationRevision else { return }
         albumsTask?.cancel()
         albumsTask = nil
@@ -1190,56 +651,11 @@ final class LibraryModel: ObservableObject {
         Task { [weak self] in await self?.refreshUsage() }
     }
 
-    private func handleMapFilterInvalidation(_ collection: PhotoCollectionDescriptor) {
+    func handleMapFilterInvalidation(_ collection: PhotoCollectionDescriptor) {
         guard collection.isMapFilter, snapshots[collection] != nil else { return }
         unregisterSessionCollection(collection)
         invalidatedMapFilter = collection
         mapFilterInvalidationRevision &+= 1
         updateBrowserFavoriteAvailability()
     }
-}
-
-/// Carries the resolved action while awaiting user confirmation.
-struct SelectionFavoriteConfirmation: Identifiable, Sendable {
-    var id: String { "\(action.targetFavorite):\(action.affectedIDs.count)" }
-    let action: SelectionFavoriteAction
-
-    var title: String {
-        let count = action.affectedIDs.count
-        let noun = count == 1 ? "Photo" : "Photos"
-        if action.targetFavorite {
-            return "Add \(count) \(noun) to Favorites?"
-        } else {
-            return "Remove \(count) \(noun) from Favorites?"
-        }
-    }
-
-    var actionButtonTitle: String {
-        if action.targetFavorite {
-            return "Add to Favorites"
-        } else {
-            return "Remove from Favorites"
-        }
-    }
-}
-
-/// A pending permanent deletion of the browser selection.
-struct ItemDeletion: Identifiable {
-    let id = UUID()
-    var count: Int
-    var selection: ResolvedPhotoSelection?
-    var loading = true
-    var deleting = false
-}
-
-struct AlbumOperation: Identifiable {
-    enum Kind { case create, add, remove }
-    let id = UUID()
-    let kind: Kind
-    let sourceAlbumID: Int64?
-    var selection: ResolvedPhotoSelection?
-    var createsEmptyAlbum = false
-    var albums: [AlbumSummary] = []
-    var loading = true
-    var writing = false
 }

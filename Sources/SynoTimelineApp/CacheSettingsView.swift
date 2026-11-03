@@ -4,8 +4,9 @@ import SynologyAPI
 
 struct CacheSettingsView: View {
     @EnvironmentObject private var library: LibraryModel
-    @AppStorage("photoDownloadDirectory") private var downloadDirectory = ""
-    @AppStorage("viewerHighlightThreshold") private var highlightThreshold = 100.0
+    @EnvironmentObject private var preferences: AppPreferences
+    @AppStorage(AppPreferences.Key.photoDownloadDirectory) private var downloadDirectory = ""
+    @AppStorage(AppPreferences.Key.viewerHighlightThreshold) private var highlightThreshold = 100.0
 
     var body: some View {
         Form {
@@ -15,19 +16,19 @@ struct CacheSettingsView: View {
                 Text(downloadDirectory.isEmpty ? PhotoDownloadManager.directory.path : downloadDirectory).lineLimit(1).truncationMode(.middle)
                 Button("Choose…") {
                     if let url = PhotoDownloadManager.shared.chooseDirectory() {
-                        UserDefaults.standard.set(url.path, forKey: "photoDownloadDirectory")
+                        UserDefaults.standard.set(url.path, forKey: AppPreferences.Key.photoDownloadDirectory)
                         downloadDirectory = url.path
                     }
                 }
             }
-            Picker("Thumbnail rendition", selection: $library.thumbnailSize) {
+            Picker("Thumbnail rendition", selection: $preferences.thumbnailSize) {
                 Text("Small").tag(ThumbnailSize.sm)
                 Text("Medium").tag(ThumbnailSize.m)
                 Text("Large").tag(ThumbnailSize.xl)
             }
-            Toggle("Load large previews in viewer", isOn: $library.loadsLargeViewerPreviews)
-                .disabled(library.thumbnailSize == .xl)
-            Picker("Pixel interpolation", selection: $library.pixelInterpolation) {
+            Toggle("Load large previews in viewer", isOn: $preferences.loadsLargeViewerPreviews)
+                .disabled(preferences.thumbnailSize == .xl)
+            Picker("Pixel interpolation", selection: $preferences.pixelInterpolation) {
                 ForEach(PixelInterpolationPreference.allCases, id: \.self) { preference in
                     Text(preference.displayName).tag(preference)
                 }
@@ -38,7 +39,7 @@ struct CacheSettingsView: View {
                 Text("\(Int(highlightThreshold))%")
                     .frame(width: 45, alignment: .trailing)
             }
-            Picker("Default video quality", selection: $library.videoQuality) {
+            Picker("Default video quality", selection: $preferences.videoQuality) {
                 ForEach(VideoQualityPreference.allCases, id: \.self) { quality in
                     Text(quality.displayName).tag(quality)
                 }
@@ -48,9 +49,9 @@ struct CacheSettingsView: View {
                 .foregroundStyle(.secondary)
             HStack {
                 Text("Maximum cache")
-                Slider(value: $library.budgetFraction, in: 0...1)
+                Slider(value: $preferences.budgetFraction, in: 0...1)
                 Text(ByteCountFormatter.string(
-                    fromByteCount: CacheBudget.bytes(at: library.budgetFraction),
+                    fromByteCount: CacheBudget.bytes(at: preferences.budgetFraction),
                     countStyle: .file
                 ))
                 .frame(width: 90, alignment: .trailing)

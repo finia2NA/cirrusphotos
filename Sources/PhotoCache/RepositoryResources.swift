@@ -3,7 +3,7 @@ import SynologyAPI
 
 public enum ResourceEvent<Value: Sendable>: Sendable {
     case value(Value, verified: Bool)
-    case failure(String)
+    case failure(RepositoryError)
 }
 
 public enum AuthenticationStatus: Sendable, Equatable {

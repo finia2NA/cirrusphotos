@@ -3,7 +3,7 @@ import SwiftUI
 struct TimelineSectionLoadView: View {
     @EnvironmentObject private var model: TimelineSectionLoadModel
     @State private var useCachedPages = false
-    @AppStorage("warmingIncludesSharedSpace") private var includesSharedSpace = true
+    @AppStorage(AppPreferences.Key.warmingIncludesSharedSpace) private var includesSharedSpace = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {

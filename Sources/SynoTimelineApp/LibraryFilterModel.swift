@@ -207,7 +207,7 @@ final class LibraryFilterModel: ObservableObject {
                                               filterAuthority: registration.referencesBySection.map { $0.map(\.sourceVerified) })
             installedRegistration = registration
         } catch {
-            validationErrors["scan"] = error.localizedDescription
+            validationErrors["scan"] = reportedFailure(error, operation: "Filter scan")
         }
     }
 

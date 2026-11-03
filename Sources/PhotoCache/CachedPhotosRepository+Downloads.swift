@@ -10,7 +10,7 @@ extension CachedPhotosRepository {
             ? try await albumItemSpace(itemIDs: [itemID], collection: source)
             : source.contentScope.space
         guard space == .personal, source.incomingAlbumIdentity == nil, !source.isSessionDerived else {
-            throw SynologyAPIError.unsupported("Editing requires a verified Personal Space photo.")
+            throw RepositoryError.unavailable("Editing requires a verified Personal Space photo.")
         }
         return source
     }
@@ -41,7 +41,7 @@ extension CachedPhotosRepository {
         let filename = URL(fileURLWithPath: name).lastPathComponent
         guard !filename.isEmpty, filename != ".", filename != ".." else { return nil }
         for await event in fullImage(resource, allowNetwork: allowNetwork, progress: progress) {
-            if case .failure(let message) = event { throw SynologyAPIError.unsupported(message) }
+            if case .failure(let error) = event { throw error }
             guard case .value(let data, _) = event, !data.isEmpty else { continue }
             try Task.checkCancellation()
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -66,7 +66,7 @@ extension CachedPhotosRepository {
                                progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
         let source = mediaCollection(for: collection)
         guard source.incomingAlbumIdentity != nil else {
-            guard !source.isSessionDerived else { throw SynologyAPIError.unsupported("The album context is unavailable.") }
+            guard !source.isSessionDerived else { throw RepositoryError.unavailable("The album context is unavailable.") }
             try await connect()
             let space = try await itemActionSpace(itemIDs: itemIDs, collection: source)
             return try await client.downloadPhotos(itemIDs: itemIDs, kind: kind, space: space, progress: progress)
@@ -75,7 +75,7 @@ extension CachedPhotosRepository {
         let rows = try await metadataReadRequest(priority: .visible) { try await client.incomingAlbums() }
         guard let row = rows.first(where: { $0.summary.collection == source }), row.access.view, row.access.download else {
             incomingAccess.removeValue(forKey: source)
-            throw SynologyAPIError.unsupported("You no longer have permission to download from this album.")
+            throw RepositoryError.unavailable("You no longer have permission to download from this album.")
         }
         incomingAccess[source] = row
         return try await client.downloadIncomingPhotos(itemIDs: itemIDs, kind: kind, reference: row.sharingReference, progress: progress)

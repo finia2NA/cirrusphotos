@@ -85,7 +85,7 @@ extension PhotoViewerSession {
                                             id: id, retryRevision: revision)
                 } catch {
                     guard !Task.isCancelled else { return }
-                    await self?.receivePage(.failure(error.localizedDescription), sectionIndex: sectionIndex,
+                    await self?.receivePage(.failure(RepositoryError.record(error, operation: "Viewer page")), sectionIndex: sectionIndex,
                                             id: id, retryRevision: revision)
                 }
                 await self?.finishPage(sectionIndex: sectionIndex, id: id)
@@ -121,8 +121,8 @@ extension PhotoViewerSession {
             scheduleThumbnailNeighbors()
         case .failure(let message):
             if sectionIndex == desired.sectionIndex {
-                if currentItem == nil { metadataStatus = .failure(message) }
-                else { metadataStatus = .ready(verified: metadataVerified, validationFailure: message) }
+                if currentItem == nil { metadataStatus = .failure(message.localizedDescription) }
+                else { metadataStatus = .ready(verified: metadataVerified, validationFailure: message.localizedDescription) }
                 publish()
             }
         }

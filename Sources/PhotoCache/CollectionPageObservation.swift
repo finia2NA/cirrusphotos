@@ -43,7 +43,7 @@ extension CachedPhotosRepository {
 
     func publishDerivedPageChanges(ids: Set<Int64>, space: PhotoSpace) {
         for observer in Array(metadata.collectionPageObservers.values) where observer.collection.isMapFilter {
-            guard let id = observer.collection.mapFilterID, let map = metadata.mapFilters[id], map.space == space else { continue }
+            guard let id = observer.collection.mapFilterID, let map = metadata.sessions.mapFilters[id], map.space == space else { continue }
             for (section, members) in map.idsBySection where members.contains(where: { ids.contains($0) }) {
                 if let key = CacheKey.page(scope: observer.collection.contentScope, namespace: namespace, section: section, collection: observer.collection) {
                     publishCollectionPage(key: key)

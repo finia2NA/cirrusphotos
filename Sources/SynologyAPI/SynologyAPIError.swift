@@ -1,6 +1,6 @@
 import Foundation
 
-public enum SynologyAPIError: LocalizedError, Sendable {
+public enum SynologyAPIError: LocalizedError, Sendable, Equatable {
     case configuration(String)
     case transport(String)
     case invalidResponse
@@ -12,9 +12,9 @@ public enum SynologyAPIError: LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .configuration(let message): message
-        case .transport(let message): "Could not reach Cirrus: \(message)"
-        case .invalidResponse: "Cirrus returned an unexpected response."
-        case .http(let status): "Cirrus returned HTTP \(status)."
+        case .transport(let message): "Could not reach the NAS: \(message)"
+        case .invalidResponse: "The NAS returned an unexpected response."
+        case .http(let status): "The NAS returned HTTP \(status)."
         case .api(let code):
             switch code {
             case 400: "The username or password was rejected."
@@ -26,7 +26,18 @@ public enum SynologyAPIError: LocalizedError, Sendable {
             default: "Synology API error \(code)."
             }
         case .unsupported(let message): message
-        case .responseTooLarge(let limit): "Cirrus returned more than the \(limit)-byte safety limit."
+        case .responseTooLarge(let limit): "The NAS returned more than the \(limit)-byte safety limit."
+        }
+    }
+
+    /// Whether this failure means the client and server disagree about the protocol,
+    /// rather than an ordinary offline, authentication or permission condition.
+    public var isUnexpected: Bool {
+        switch self {
+        case .configuration, .transport, .unsupported: false
+        case .invalidResponse, .responseTooLarge: true
+        case .http(let status): status >= 500 || status == 400
+        case .api(let code): ![105, 119, 400, 402, 403, 404, 406, 407].contains(code)
         }
     }
 }

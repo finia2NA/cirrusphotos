@@ -32,6 +32,14 @@ enum MetadataAdmissionError: LocalizedError {
 }
 
 extension CachedPhotosRepository {
+    /// Whether work admitted at `epoch` may still publish: no metadata reset has
+    /// started or finished since it was admitted.
+    func isAdmitted(_ epoch: UInt64) -> Bool { epoch == metadata.admissionEpoch && !metadata.resetInProgress }
+
+    func requireAdmission(_ epoch: UInt64) throws {
+        guard isAdmitted(epoch) else { throw MetadataAdmissionError.superseded }
+    }
+
     func captureMetadataWorkToken(
         resource: MetadataWorkResource,
         jobID: UUID,
@@ -41,7 +49,7 @@ extension CachedPhotosRepository {
         guard !metadata.resetInProgress else { throw MetadataAdmissionError.resetInProgress }
         let wholeGeneration = await store.currentGeneration()
         let metadataGeneration = await store.currentMetadataGeneration()
-        guard epoch == metadata.admissionEpoch, !metadata.resetInProgress else {
+        guard isAdmitted(epoch) else {
             throw MetadataAdmissionError.superseded
         }
         return MetadataWorkToken(
@@ -75,9 +83,9 @@ extension CachedPhotosRepository {
         case .page(let key, _):
             identityIsCurrent = metadata.pageJobs[key]?.id == token.jobID
         case .albumList:
-            identityIsCurrent = metadata.albumListJob?.id == token.jobID
+            identityIsCurrent = metadata.albums.listJob?.id == token.jobID
         case .locationIndex:
-            identityIsCurrent = metadata.locationIndexWork?.id == token.jobID
+            identityIsCurrent = metadata.locations.work?.id == token.jobID
         case .transient, .mutation:
             identityIsCurrent = true
         }

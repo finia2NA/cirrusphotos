@@ -53,12 +53,16 @@ struct RestorableAppNavigationState: Codable, Equatable {
     var anchors: [String: PhotoTimelineRestorationAnchor] = [:]
 }
 
+/// The single source of navigation state. Every change persists, so the window
+/// restores the same destination, space, album, folder and collection on launch.
 @MainActor
-final class NavigationRestorationStore: ObservableObject {
+final class NavigationModel: ObservableObject {
     static let defaultsKey = "appNavigationState"
 
     private let defaults: UserDefaults
     private let key: String
+    /// Not `@Published`: timeline anchors change while scrolling and must not
+    /// re-render observers. Navigation setters announce their own changes.
     private(set) var state: RestorableAppNavigationState
 
     init(defaults: UserDefaults = .standard, key: String = defaultsKey) {
@@ -78,10 +82,15 @@ final class NavigationRestorationStore: ObservableObject {
         state.sidebarSelection.destination
     }
 
-    var sidebarSelection: SidebarSelection { state.sidebarSelection }
+    var sidebarSelection: SidebarSelection {
+        get { state.sidebarSelection }
+        set { objectWillChange.send(); state.sidebarSelection = newValue; save() }
+    }
 
-    var selectedSpace: PhotoSpace { state.selectedSpace }
-    func selectSpace(_ space: PhotoSpace) { state.selectedSpace = space; save() }
+    var selectedSpace: PhotoSpace {
+        get { state.selectedSpace }
+        set { objectWillChange.send(); state.selectedSpace = newValue; save() }
+    }
 
     private var spaceNavigation: RestorableSpaceNavigation {
         state.spaces[state.selectedSpace] ?? RestorableSpaceNavigation()
@@ -94,40 +103,39 @@ final class NavigationRestorationStore: ObservableObject {
     }
     private func prepareSpace(namespace: String) {
         guard spaceNavigation.namespace != namespace else { return }
+        objectWillChange.send()
         updateSpaceNavigation { navigation in
             navigation = RestorableSpaceNavigation(namespace: namespace, showsFolders: navigation.showsFolders)
         }
     }
 
-    var showsFolders: Bool { spaceNavigation.showsFolders }
-    var folderPath: [Int64] { spaceNavigation.folderPath }
+    /// Folder mode and path for the selected space.
+    var showsFolders: Bool {
+        get { spaceNavigation.showsFolders }
+        set { objectWillChange.send(); updateSpaceNavigation { $0.showsFolders = newValue } }
+    }
+    var folderPath: [Int64] {
+        get { spaceNavigation.folderPath }
+        set { objectWillChange.send(); updateSpaceNavigation { $0.folderPath = newValue } }
+    }
+    /// The opened person, subject or tag of each index in the selected space.
+    var openedIndexEntries: [CollectionIndexKind: Int64] {
+        get { spaceNavigation.openedIndexEntries }
+        set { objectWillChange.send(); updateSpaceNavigation { $0.openedIndexEntries = newValue } }
+    }
     func prepareFolders(namespace: String) -> [Int64] {
         prepareSpace(namespace: namespace)
         return folderPath
-    }
-    func setFolders(shown: Bool, path: [Int64]) {
-        updateSpaceNavigation { $0.showsFolders = shown; $0.folderPath = path }
     }
     func prepareIndexEntry(_ kind: CollectionIndexKind, namespace: String) -> Int64? {
         prepareSpace(namespace: namespace)
         return spaceNavigation.openedIndexEntries[kind]
     }
-    func setOpenedIndexEntry(_ kind: CollectionIndexKind, id: Int64?) {
-        updateSpaceNavigation { $0.openedIndexEntries[kind] = id }
-    }
+
 
     var openedAlbum: PhotoCollectionDescriptor? {
-        state.openedAlbum
-    }
-
-    func selectSidebar(_ selection: SidebarSelection) {
-        state.sidebarSelection = selection
-        save()
-    }
-
-    func setOpenedAlbum(_ collection: PhotoCollectionDescriptor?) {
-        state.openedAlbum = collection
-        save()
+        get { state.openedAlbum }
+        set { objectWillChange.send(); state.openedAlbum = newValue; save() }
     }
 
     /// Clears a nested album destination only after an authoritative list proves
@@ -136,6 +144,7 @@ final class NavigationRestorationStore: ObservableObject {
     func clearOpenedAlbumIfMissing(in albums: [AlbumSummary], verified: Bool) -> Bool {
         guard verified, let collection = state.openedAlbum,
               !albums.contains(where: { $0.collection == collection }) else { return false }
+        objectWillChange.send()
         state.openedAlbum = nil
         if case .album = state.sidebarSelection { state.sidebarSelection = .destination(.albums) }
         save()

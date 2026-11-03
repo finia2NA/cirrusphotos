@@ -16,10 +16,6 @@ struct MetadataEngineState {
     var reconciliationID: UUID?
     var reconciled = false
     var inventoryCurrent = false
-    var locationProjectionLoaded = false
-    var locationPublicationID: UUID?
-    var locationPublicationTask: Task<Void, Never>?
-    var lastPublishedInventoryVerified: Bool?
     var sourceUnavailable = false
     var revision: Int64 = 0
     var directSubscribers: Set<UUID> = []
@@ -41,43 +37,25 @@ struct MetadataEngineState {
     var pageJobEpochs: [String: UInt64] = [:]
     var collectionPageObservers: [UUID: CollectionPageObserver] = [:]
     var pendingPagePromotions: [String] = []
-    var albumMutationInProgress = false
-    var albumMutationWriting = false
-    var albumMutationID: Int64?
-    var albumSharingObservers: [UUID: AsyncStream<Void>.Continuation] = [:]
-    var albumListEpoch: UInt64 = 0
-    var peopleMutationsInProgress: Set<PhotoSpace> = []
-    var peopleMutationSpaces: Set<PhotoSpace> = []
-    var peopleMutationCollections: Set<PhotoCollectionDescriptor> = []
-    var peopleEpoch: [PhotoSpace: UInt64] = [:]
     var collectionIndexJobs: [CollectionIndexJobKey: SharedJob<[CollectionIndexEntry]>] = [:]
     var folderJobs: [PhotoCollectionDescriptor: SharedJob<FolderDirectory>] = [:]
-    var albumListJob: SharedJob<[AlbumSummary]>?
-    var albumListLatest: [AlbumSummary]?
+    var albums = AlbumEngineState()
+    var people = PeopleEngineState()
+    /// Personal Space location projection. Shared Space has its own inventory scan.
+    var locations = LocationEngineState()
     var sharedLocations = SharedLocationState()
-    var locationIndexWork: SharedJob<[PhotoLocationRecord]>?
-    var locationProjectionObservers: [UUID: AsyncStream<LocationIndexEvent>.Continuation] = [:]
-    var locationIndexObservers: [UUID: AsyncStream<LocationIndexEvent>.Continuation] = [:]
-    var locationRecords: [Int64: PhotoLocationRecord] = [:]
-    var locationRevision: UInt64 = 0
-    var mapFilterInvalidationObservers: [UUID: AsyncStream<PhotoCollectionDescriptor>.Continuation] = [:]
-    var selectionRetentions: [PhotoCollectionDescriptor: SelectionRegistrationRetention] = [:]
-    var selectionLeases: [UUID: Set<PhotoCollectionDescriptor>] = [:]
-    var deferredSelectionUnregisters: Set<PhotoCollectionDescriptor> = []
-    var mapFilters: [UUID: MapFilterState] = [:]
-    var sessionFilterCatalogs: [PhotoCollectionDescriptor: LibraryFilterCatalog] = [:]
-    var libraryFilters: [UUID: LibraryFilterCollectionState] = [:]
+    var sessions = SessionCollectionState()
 
     var hasDemand: Bool {
         reconciliation != nil || !detailJobs.isEmpty || !pendingPages.isEmpty || !activePages.isEmpty ||
             !directSubscribers.isEmpty || !initialSubscribers.isEmpty || !timelineJobs.isEmpty || !pageJobs.isEmpty ||
-            albumListJob != nil || !collectionIndexJobs.isEmpty || !folderJobs.isEmpty || locationIndexWork != nil || sharedLocations.job != nil
+            albums.listJob != nil || !collectionIndexJobs.isEmpty || !folderJobs.isEmpty || locations.work != nil || sharedLocations.job != nil
     }
     mutating func clearSourceWork() {
         initialized = false; reconciled = false; sourceUnavailable = false; revision = 0
-        inventoryCurrent = false; locationProjectionLoaded = false; lastPublishedInventoryVerified = nil
+        inventoryCurrent = false; locations.projectionLoaded = false; locations.lastPublishedInventoryVerified = nil
         reconciliation = nil; reconciliationID = nil
-        locationPublicationTask = nil; locationPublicationID = nil
+        locations.publicationTask = nil; locations.publicationID = nil
         collectionRecoveries.removeAll(); directSubscribers.removeAll()
     }
 }
@@ -117,4 +95,47 @@ struct MetadataCollectionRecovery {
     let recoveryRevision: Int64
     let task: Task<TimelineSnapshot, Error>
     var active: Bool
+}
+
+/// Album-list state and the album write in progress. The `.album` mutation lane
+/// serializes writes; `mutationWriting` fences reads of the album being written.
+struct AlbumEngineState {
+    var mutationWriting = false
+    var mutationID: Int64?
+    var sharingObservers: [UUID: AsyncStream<Void>.Continuation] = [:]
+    var listEpoch: UInt64 = 0
+    var listJob: SharedJob<[AlbumSummary]>?
+    var listLatest: [AlbumSummary]?
+}
+
+/// People rename and merge fencing, per space.
+struct PeopleEngineState {
+    var mutationSpaces: Set<PhotoSpace> = []
+    var mutationCollections: Set<PhotoCollectionDescriptor> = []
+    var epoch: [PhotoSpace: UInt64] = [:]
+}
+
+/// The Personal Space location projection and its observers.
+struct LocationEngineState {
+    var work: SharedJob<[PhotoLocationRecord]>?
+    var projectionObservers: [UUID: AsyncStream<LocationIndexEvent>.Continuation] = [:]
+    var indexObservers: [UUID: AsyncStream<LocationIndexEvent>.Continuation] = [:]
+    var records: [Int64: PhotoLocationRecord] = [:]
+    var revision: UInt64 = 0
+    var projectionLoaded = false
+    var publicationID: UUID?
+    var publicationTask: Task<Void, Never>?
+    var lastPublishedInventoryVerified: Bool?
+}
+
+/// Session-only collections derived from Map pins and metadata filters, and the
+/// selection retentions and leases that keep them alive during an operation.
+struct SessionCollectionState {
+    var mapFilters: [UUID: MapFilterState] = [:]
+    var libraryFilters: [UUID: LibraryFilterCollectionState] = [:]
+    var filterCatalogs: [PhotoCollectionDescriptor: LibraryFilterCatalog] = [:]
+    var selectionRetentions: [PhotoCollectionDescriptor: SelectionRegistrationRetention] = [:]
+    var selectionLeases: [UUID: Set<PhotoCollectionDescriptor>] = [:]
+    var deferredUnregisters: Set<PhotoCollectionDescriptor> = []
+    var mapFilterInvalidationObservers: [UUID: AsyncStream<PhotoCollectionDescriptor>.Continuation] = [:]
 }

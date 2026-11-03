@@ -157,7 +157,7 @@ struct PersonEditView: View {
                 }
                 onFinish(); dismiss()
             } catch {
-                onFinish(); self.error = error.localizedDescription; working = false
+                onFinish(); self.error = reportedFailure(error, operation: "Person change"); working = false
             }
         }
     }

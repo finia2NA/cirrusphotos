@@ -6,9 +6,8 @@ extension CachedPhotosRepository {
     /// same invalidation and refresh runs for both successful and uncertain writes.
     public func uploadPhoto(at url: URL, destination: PhotoUploadDestination,
                             progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoUploadResult {
-        guard !photoUploadInProgress else { throw SynologyAPIError.unsupported("Another upload is in progress.") }
-        photoUploadInProgress = true
-        defer { photoUploadInProgress = false }
+        try claimMutation(.upload, busy: "Another upload is in progress.")
+        defer { releaseMutation(.upload) }
         try await initializeMetadataEngine()
         try await connect()
         let space: PhotoSpace
@@ -28,7 +27,7 @@ extension CachedPhotosRepository {
                     let user = try await repository.client.currentPhotosUserID()
                     let album = try await repository.client.album(id: id)
                     guard album.type == "normal", album.ownerUserID == user else {
-                        throw SynologyAPIError.unsupported("Only owned albums support file uploads.")
+                        throw RepositoryError.unavailable("Only owned albums support file uploads.")
                     }
                     return try await repository.client.uploadPhoto(at: url, destination: destination, progress: progress)
                 }
@@ -38,7 +37,7 @@ extension CachedPhotosRepository {
         let refresh = Task { try await self.refreshAfterUpload(space) }
         do { try await refresh.value }
         catch {
-            if case .success = result { throw SynologyAPIError.unsupported("The upload finished, but the library could not be refreshed. Check the library before retrying.") }
+            if case .success = result { throw RepositoryError.unconfirmed("The upload finished, but the library could not be refreshed. Check the library before retrying.") }
         }
         return try result.get()
     }

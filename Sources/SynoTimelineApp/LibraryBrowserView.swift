@@ -197,6 +197,7 @@ struct LibraryBrowserView: View {
     var onOpenPhoto: (PhotoViewerOpenRequest) -> Void = { _ in }
     var onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void = { _ in }
     @EnvironmentObject private var library: LibraryModel
+    @EnvironmentObject private var preferences: AppPreferences
     @EnvironmentObject private var infoPanel: InfoPanelModel
     @EnvironmentObject private var libraryFilter: LibraryFilterModel
     @Environment(\.colorScheme) private var colorScheme
@@ -217,7 +218,7 @@ struct LibraryBrowserView: View {
         )
     }
 
-    private var isAlbum: Bool { library.sourceAlbumID(for: collection) != nil || library.isIncomingCollection(collection) }
+    private var isAlbum: Bool { library.capabilities(for: collection).sourceAlbumID != nil || library.capabilities(for: collection).isIncoming }
     private var upload: PhotoUploadDrop? {
         let destination: PhotoUploadDestination
         switch collection {
@@ -296,10 +297,10 @@ struct LibraryBrowserView: View {
                                              header: browserHeader,
                                              emptyContent: snapshot.timeline.days.isEmpty && !shouldHideEmptyCollectionState ? AnyView(emptyState) : nil,
                                              authority: library.selectionAuthority(for: collection),
-                                             sourceAlbumID: library.sourceAlbumID(for: collection),
-                                             allowsPersonalActions: library.allowsPersonalActions(in: collection),
-                                             allowsDownloads: library.canDownload(in: collection),
-                                             allowsFileDrag: library.allowsSpaceItemActions(in: collection),
+                                             sourceAlbumID: library.capabilities(for: collection).sourceAlbumID,
+                                             allowsPersonalActions: library.capabilities(for: collection).allowsPersonalActions,
+                                             allowsDownloads: library.capabilities(for: collection).allowsDownloads,
+                                             allowsFileDrag: library.capabilities(for: collection).allowsSpaceItemActions,
                                              filterMembership: library.filterMembership(for: collection),
                                              filterAuthority: library.filterAuthority(for: collection),
                                              collection: collection,
@@ -307,9 +308,9 @@ struct LibraryBrowserView: View {
                                              revision: library.snapshotRevision(for: collection),
                                              retryRevision: library.retryRevision,
                                              repository: repository, allowNetwork: library.timelineVerified(for: collection),
-                                             thumbnailSize: library.thumbnailSize,
-                                             itemsPerRow: library.itemsPerRow,
-                                             cropsThumbnailsToSquare: library.cropsThumbnailsToSquare,
+                                             thumbnailSize: preferences.thumbnailSize,
+                                             itemsPerRow: preferences.itemsPerRow,
+                                             cropsThumbnailsToSquare: preferences.cropsThumbnailsToSquare,
                                              selectionState: library.selectionState(for: collection),
                                              restorationAnchor: restorationAnchor,
                                              bridge: bridge,
@@ -354,7 +355,7 @@ struct LibraryBrowserView: View {
                     }
                         if !snapshot.timeline.days.isEmpty {
                             TimelineNavigator(timeline: snapshot.timeline, selected: selection,
-                                              alwaysVisible: library.alwaysShowsTimeline)
+                                              alwaysVisible: preferences.alwaysShowsTimeline)
                                 .frame(width: 72)
                                 .padding(.top, contentTopInset + 16)
                                 .padding(.bottom, 16)
@@ -382,7 +383,7 @@ struct LibraryBrowserView: View {
             }
         }
         .sheet(isPresented: $showingSharing) {
-            if let albumID = library.sourceAlbumID(for: collection), let repository = library.repository {
+            if let albumID = library.capabilities(for: collection).sourceAlbumID, let repository = library.repository {
                 AlbumSharingSheet(albumID: albumID, repository: repository)
             }
         }

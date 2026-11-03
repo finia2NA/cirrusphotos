@@ -77,7 +77,7 @@ final class SharedCollectionIndexesTests: XCTestCase {
         for await event in await repository.folderDirectory(id: 0, space: .shared) {
             switch event {
             case .value(let value, true): result = value
-            case .failure(let message): XCTFail(message)
+            case .failure(let message): XCTFail(message.localizedDescription)
             default: break
             }
         }

@@ -15,11 +15,11 @@ final class LazyCollectionLoadingTests: XCTestCase {
     func testContextualAlbumActionsRemainAvailableWithoutAnInferredSpace() {
         let model = LibraryModel(repository: nil)
         XCTAssertNil(PhotoCollectionDescriptor.album(7).space)
-        XCTAssertTrue(model.allowsPersonalActions(in: .album(7)))
-        XCTAssertTrue(model.allowsPersonalActions(in: .library(.personal)))
-        XCTAssertFalse(model.allowsPersonalActions(in: .library(.shared)))
-        XCTAssertFalse(model.allowsPersonalActions(in: .incomingAlbum(ownerID: 2, albumID: 7)))
-        XCTAssertFalse(model.allowsPersonalActions(in: .libraryFilter(UUID(), scope: .space(.personal))))
+        XCTAssertTrue(model.capabilities(for: .album(7)).allowsPersonalActions)
+        XCTAssertTrue(model.capabilities(for: .library(.personal)).allowsPersonalActions)
+        XCTAssertFalse(model.capabilities(for: .library(.shared)).allowsPersonalActions)
+        XCTAssertFalse(model.capabilities(for: .incomingAlbum(ownerID: 2, albumID: 7)).allowsPersonalActions)
+        XCTAssertFalse(model.capabilities(for: .libraryFilter(UUID(), scope: .space(.personal))).allowsPersonalActions)
     }
 
     func testPersonSubjectAndTagTimelinesStartOnDemand() async throws {

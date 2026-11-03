@@ -8,9 +8,9 @@ extension CachedPhotosRepository {
         let epoch = metadata.admissionEpoch
         let admission = try await store.metadataAdmission(metadataNamespace(for: collection))
         let catalog: LibraryFilterCatalog?
-        if collection.isSessionDerived { catalog = metadata.sessionFilterCatalogs[collection] }
+        if collection.isSessionDerived { catalog = metadata.sessions.filterCatalogs[collection] }
         else { catalog = try await store.filterOptionCatalog(CollectionKey(namespace: metadataNamespace(for: collection), collection: collection)) }
-        guard !metadata.resetInProgress, !Task.isCancelled, metadata.admissionEpoch == epoch else { throw MetadataAdmissionError.superseded }
+        guard !Task.isCancelled, isAdmitted(epoch) else { throw MetadataAdmissionError.superseded }
         return (catalog, admission)
     }
 
@@ -20,13 +20,13 @@ extension CachedPhotosRepository {
         let epoch = metadata.admissionEpoch
         for _ in 0..<2 {
             let current = try await store.metadataAdmission(metadataNamespace(for: collection))
-            guard !metadata.resetInProgress, !Task.isCancelled, metadata.admissionEpoch == epoch,
+            guard !Task.isCancelled, isAdmitted(epoch),
                   current.generation == originalAdmission.generation,
                   current.metadataGeneration == originalAdmission.metadataGeneration,
                   current.resetEpoch == originalAdmission.resetEpoch else { throw MetadataAdmissionError.superseded }
             if collection.isSessionDerived {
                 guard metadata.latestTimelines[collection] != nil else { throw MetadataAdmissionError.superseded }
-                metadata.sessionFilterCatalogs[collection] = catalog
+                metadata.sessions.filterCatalogs[collection] = catalog
                 return
             }
             do {

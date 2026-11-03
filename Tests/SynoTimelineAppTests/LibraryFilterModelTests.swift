@@ -9,10 +9,10 @@ final class LibraryFilterModelTests: XCTestCase {
         let library = LibraryModel()
         let filter = PhotoCollectionDescriptor.libraryFilter(UUID(), scope: .space(.personal))
         library.registerSessionCollection(filter, snapshot: TimelineSnapshot(sections: []), source: .album(42))
-        XCTAssertEqual(library.sourceAlbumID(for: filter), 42)
-        XCTAssertNil(library.sourceAlbumID(for: .library(.personal)))
+        XCTAssertEqual(library.capabilities(for: filter).sourceAlbumID, 42)
+        XCTAssertNil(library.capabilities(for: .library(.personal)).sourceAlbumID)
         library.unregisterSessionCollection(filter)
-        XCTAssertNil(library.sourceAlbumID(for: filter))
+        XCTAssertNil(library.capabilities(for: filter).sourceAlbumID)
     }
 
     func testSelectionFollowsIDsWhenFilterMembershipChanges() {

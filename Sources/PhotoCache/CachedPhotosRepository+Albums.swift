@@ -16,29 +16,29 @@ extension CachedPhotosRepository {
         return AsyncStream(bufferingPolicy: .bufferingNewest(3)) { continuation in
             producer.task = Task {
                 do { try await initializeMetadataEngine() }
-                catch { continuation.yield(.failure(error.localizedDescription)); continuation.finish(); return }
+                catch { continuation.yield(.failure(RepositoryError.record(error, operation: "Album list"))); continuation.finish(); return }
                 let validation = albumListValidationRun()
                 let epoch = metadata.admissionEpoch
                 let cached = try? await store.metadataAlbumSummaries(personalMetadataNamespace)
-                guard !Task.isCancelled, epoch == metadata.admissionEpoch, validation == albumListValidationRun(), !metadata.resetInProgress else { continuation.finish(); return }
+                guard !Task.isCancelled, isAdmitted(epoch), validation == albumListValidationRun() else { continuation.finish(); return }
                 let list = cached?.albums
                 if let list {
-                    metadata.albumListLatest = list
-                    continuation.yield(.value(list, verified: !metadata.albumMutationWriting && cached?.validatedRun == validation))
+                    metadata.albums.listLatest = list
+                    continuation.yield(.value(list, verified: !metadata.albums.mutationWriting && cached?.validatedRun == validation))
                 }
-                if metadata.albumMutationWriting { continuation.finish(); return }
+                if metadata.albums.mutationWriting { continuation.finish(); return }
                 if cached?.validatedRun == validation, list != nil { continuation.finish(); return }
                 do {
                     let requestedValidation = albumListValidationRun()
                     let task = registerAlbumList(subscriber: subscriber)
                     let current = try await task.value
                     guard !Task.isCancelled else { continuation.finish(); return }
-                    metadata.albumListLatest = current
+                    metadata.albums.listLatest = current
                     continuation.yield(.value(current,
                                               verified: requestedValidation == albumListValidationRun()))
                 } catch {
                     if !Task.isCancelled && !(error is CancellationError) {
-                        continuation.yield(.failure("Album list: \(error.localizedDescription)"))
+                        continuation.yield(.failure(RepositoryError.record(error, operation: "Album list")))
                     }
                 }
                 continuation.finish()
@@ -51,9 +51,9 @@ extension CachedPhotosRepository {
     }
 
     private func registerAlbumList(subscriber: UUID) -> Task<[AlbumSummary], Error> {
-        if var job = metadata.albumListJob {
+        if var job = metadata.albums.listJob {
             job.subscribers.insert(subscriber)
-            metadata.albumListJob = job
+            metadata.albums.listJob = job
             return job.task
         }
         let id = UUID()
@@ -70,21 +70,21 @@ extension CachedPhotosRepository {
             guard await metadataTokenIsCurrent(token) else { throw MetadataAdmissionError.superseded }
             return list
         }
-        metadata.albumListJob = SharedJob(id: id, task: task, subscribers: [subscriber])
+        metadata.albums.listJob = SharedJob(id: id, task: task, subscribers: [subscriber])
         return task
     }
 
     private func releaseAlbumList(subscriber: UUID) {
-        guard var job = metadata.albumListJob else { cancelIdleLogin(); return }
+        guard var job = metadata.albums.listJob else { cancelIdleLogin(); return }
         job.subscribers.remove(subscriber)
         if job.subscribers.isEmpty {
             job.task.cancel()
-            metadata.albumListJob = nil
+            metadata.albums.listJob = nil
             cancelIdleLogin()
         } else {
-            metadata.albumListJob = job
+            metadata.albums.listJob = job
         }
     }
 
-    func albumListValidationRun() -> String { "\(runID):\(metadata.admissionEpoch):albums:\(metadata.albumListEpoch)" }
+    func albumListValidationRun() -> String { "\(runID):\(metadata.admissionEpoch):albums:\(metadata.albums.listEpoch)" }
 }

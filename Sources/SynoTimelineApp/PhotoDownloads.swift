@@ -68,7 +68,7 @@ final class PhotoDownloadManager: ObservableObject {
     }
 
     static var directory: URL {
-        if let path = UserDefaults.standard.string(forKey: "photoDownloadDirectory"), !path.isEmpty {
+        if let path = UserDefaults.standard.string(forKey: AppPreferences.Key.photoDownloadDirectory), !path.isEmpty {
             return URL(fileURLWithPath: path, isDirectory: true)
         }
         return FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
@@ -120,7 +120,7 @@ final class PhotoDownloadManager: ObservableObject {
                 } onCancel: { saveTask.cancel() }
                 update(id) { $0.progress = 1; $0.status = "Saved to \(final.path)"; $0.active = false }
             } catch {
-                update(id) { $0.status = error is CancellationError ? "Cancelled" : error.localizedDescription; $0.active = false }
+                update(id) { $0.status = error is CancellationError ? "Cancelled" : reportedFailure(error, operation: "Download"); $0.active = false }
             }
             tasks[id] = nil
         }
@@ -186,7 +186,7 @@ final class PhotoDownloadManager: ObservableObject {
                 try await editorOpener(file, applicationURL)
                 update(id) { $0.progress = 1; $0.status = "Saved to \(file.path)"; $0.active = false }
             } catch {
-                let description = error is CancellationError ? "Cancelled" : error.localizedDescription
+                let description = error is CancellationError ? "Cancelled" : reportedFailure(error, operation: "File promise")
                 update(id) {
                     $0.status = saved.map { "\(description) — file saved to \($0.path)" } ?? description
                     $0.active = false
@@ -243,7 +243,7 @@ final class PhotoDownloadManager: ObservableObject {
                 update(id) { $0.progress = 1; $0.status = "Saved to \(destination.path)"; $0.active = false }
                 completion(nil)
             } catch {
-                update(id) { $0.status = error is CancellationError ? "Cancelled" : error.localizedDescription; $0.active = false }
+                update(id) { $0.status = error is CancellationError ? "Cancelled" : reportedFailure(error, operation: "Editor handoff"); $0.active = false }
                 completion(error)
             }
             tasks[id] = nil

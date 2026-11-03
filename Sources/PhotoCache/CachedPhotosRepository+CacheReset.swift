@@ -106,7 +106,7 @@ extension CachedPhotosRepository {
         metadata.detailJobs.removeAll()
         metadata.detailJobByID.removeAll()
         metadata.reconciliation?.cancel()
-        metadata.locationPublicationTask?.cancel()
+        metadata.locations.publicationTask?.cancel()
         metadata.clearSourceWork()
         for observer in metadata.collectionPageObservers.values { observer.continuation.finish() }
         metadata.collectionPageObservers.removeAll()
@@ -116,38 +116,38 @@ extension CachedPhotosRepository {
         metadata.collectionIndexJobs.removeAll()
         metadata.folderJobs.values.forEach { $0.task.cancel() }
         metadata.folderJobs.removeAll()
-        metadata.albumListJob?.task.cancel()
-        metadata.locationIndexWork?.task.cancel()
+        metadata.albums.listJob?.task.cancel()
+        metadata.locations.work?.task.cancel()
         metadata.sharedLocations.job?.task.cancel()
         metadata.sharedLocations.job = nil
         metadata.sharedLocations.current = false
-        sharedFavorites.refreshTask?.cancel()
-        sharedFavorites.refreshTask = nil
-        favorites.refreshTask?.cancel()
-        favorites.refreshTask = nil
+        for favorites in favoriteStates.values {
+            favorites.refreshTask?.cancel()
+            favorites.refreshTask = nil
+        }
         metadata.timelineJobs.removeAll()
         metadata.pageJobs.removeAll()
         metadata.pageJobEpochs.removeAll()
         metadata.pageJobSourceRevisions.removeAll()
         metadata.forcedMembershipJobs.removeAll()
-        metadata.albumListJob = nil
-        metadata.locationIndexWork = nil
+        metadata.albums.listJob = nil
+        metadata.locations.work = nil
         metadata.initialSubscribers.removeAll()
     }
 
     private func clearMetadataStateAfterReset() {
         metadata.latestTimelines.removeAll()
-        metadata.albumListLatest = nil
+        metadata.albums.listLatest = nil
         metadata.pendingPagePromotions.removeAll()
-        metadata.locationRecords.removeAll()
+        metadata.locations.records.removeAll()
         metadata.sharedLocations.records.removeAll()
         metadata.sharedLocations.revision &+= 1
-        metadata.locationRevision &+= 1
-        metadata.selectionRetentions.removeAll()
-        metadata.deferredSelectionUnregisters.removeAll()
-        metadata.mapFilters.removeAll()
-        metadata.libraryFilters.removeAll()
-        metadata.sessionFilterCatalogs.removeAll()
+        metadata.locations.revision &+= 1
+        metadata.sessions.selectionRetentions.removeAll()
+        metadata.sessions.deferredUnregisters.removeAll()
+        metadata.sessions.mapFilters.removeAll()
+        metadata.sessions.libraryFilters.removeAll()
+        metadata.sessions.filterCatalogs.removeAll()
         // Mutation epochs and favorite overrides remain monotonic/live. Already
         // submitted NAS writes are not duplicated or canceled by a local reset.
     }

@@ -79,7 +79,7 @@ extension LibraryModel {
                 let failed = NSMenuItem(title: "Could Not Load Albums", action: nil, keyEquivalent: "")
                 failed.isEnabled = false
                 submenu.addItem(failed)
-                self?.albumOperationError = error.localizedDescription
+                self?.albumOperationError = reportedFailure(error, operation: "Album membership")
             }
         }
     }

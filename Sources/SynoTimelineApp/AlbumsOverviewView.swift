@@ -106,7 +106,7 @@ private struct AlbumCardView: View {
         .background(AlbumMembershipTarget(collection: collection, model: model))
         .contextMenu {
             Button("Add to Sidebar") { presentation.add(collection) }
-            if !album.isIncoming || model.canDownload(in: collection) {
+            if !album.isIncoming || model.capabilities(for: collection).allowsDownloads {
                 Divider()
                 AlbumDownloadCommands(albumID: album.id, repository: repository, incomingCollection: album.isIncoming ? collection : nil)
             }

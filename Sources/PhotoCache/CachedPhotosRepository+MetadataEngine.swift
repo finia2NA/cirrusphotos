@@ -25,7 +25,7 @@ extension CachedPhotosRepository {
         guard !metadata.initialized else { return }
         let epoch = metadata.admissionEpoch
         try await store.initializeMetadataStore()
-        guard epoch == metadata.admissionEpoch, !metadata.resetInProgress else { throw MetadataAdmissionError.superseded }
+        try requireAdmission(epoch)
         metadata.initialized = true
     }
 
@@ -151,7 +151,7 @@ extension CachedPhotosRepository {
     }
 
     private func requireMetadataEngineAdmission(epoch: UInt64, id: UUID) throws {
-        guard !metadata.resetInProgress, metadata.admissionEpoch == epoch,
+        guard isAdmitted(epoch),
               metadata.reconciliationID == id, !Task.isCancelled else { throw MetadataAdmissionError.superseded }
     }
     private func recoverMetadataSource(admission: MetadataStoreAdmission, epoch: UInt64, id: UUID) async throws {

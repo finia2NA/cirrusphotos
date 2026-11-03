@@ -15,7 +15,7 @@ struct PhotoViewerView: View {
     let cropsThumbnailsToSquare: Bool
     let showsHistogram: Bool
     let showsHighlightPeaking: Bool
-    @AppStorage("viewerHighlightThreshold") private var highlightThreshold = 100.0
+    @AppStorage(AppPreferences.Key.viewerHighlightThreshold) private var highlightThreshold = 100.0
     @State private var inspectionOverlay: CGImage?
     @State private var inspectionGeneration: UInt64?
     @State private var histogramOpacity: CGFloat = 1
@@ -83,15 +83,15 @@ struct PhotoViewerView: View {
                                 guard let state = viewer.state, state.metadataVerified, state.allowNetwork,
                                       let item = state.item else { return nil }
                                 let repository = viewer.repository
-                                let menu = item.hasDisplayableStillImage && library.canDownload(in: viewer.collection) ? photoDownloadMenu { kind, choose in
+                                let menu = item.hasDisplayableStillImage && library.capabilities(for: viewer.collection).allowsDownloads ? photoDownloadMenu { kind, choose in
                                     library.downloadViewerItem(item, repository: repository, collection: viewer.collection, kind: kind, choose: choose)
                                 } : NSMenu()
-                                if library.allowsPersonalActions(in: viewer.collection) && item.hasDisplayableStillImage {
+                                if library.capabilities(for: viewer.collection).allowsPersonalActions && item.hasDisplayableStillImage {
                                     addEditMenu(to: menu, filename: item.filename) { application in
                                         library.editViewerItem(item, repository: repository, collection: viewer.collection, application: application)
                                     }
                                 }
-                                if library.allowsPersonalActions(in: viewer.collection), let timeline = library.snapshot(for: viewer.collection),
+                                if library.capabilities(for: viewer.collection).allowsPersonalActions, let timeline = library.snapshot(for: viewer.collection),
                                    LibraryIndex(snapshot: timeline).fingerprint == viewer.index.fingerprint,
                                    let authority = library.selectionAuthority(for: viewer.collection) {
                                     let ordinal = state.desiredLocation.ordinal
@@ -100,7 +100,7 @@ struct PhotoViewerView: View {
                                         indexFingerprint: viewer.index.fingerprint, selectionGeneration: nil,
                                         selectedOrdinals: IndexSet(integer: ordinal), knownItemIDsByOrdinal: [ordinal: item.id],
                                         timeline: timeline, authority: authority,
-                                        sourceAlbumID: library.sourceAlbumID(for: viewer.collection))
+                                        sourceAlbumID: library.capabilities(for: viewer.collection).sourceAlbumID)
                                     library.addAlbumMembershipMenu(to: menu, captured: captured, pinnedIDs: pinnedAlbumIDs)
                                 }
                                 return menu.items.isEmpty ? nil : menu

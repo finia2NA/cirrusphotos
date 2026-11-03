@@ -213,7 +213,7 @@ extension PhotoViewerSession {
             job.verified = verified
             job.failure = nil
         case .failure(let message):
-            job.failure = message
+            job.failure = message.localizedDescription
         }
         images.fullJobs[key] = job
     }

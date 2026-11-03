@@ -45,7 +45,7 @@ final class PhotoUploadManager: ObservableObject {
                     }
                     completed += 1
                 } catch is CancellationError { break }
-                catch { errors.append("\(url.lastPathComponent): \(error.localizedDescription)") }
+                catch { errors.append("\(url.lastPathComponent): \(reportedFailure(error, operation: "Upload"))") }
             }
             progress = nil
             if Task.isCancelled { status = "Upload cancelled. Check the destination before retrying." }

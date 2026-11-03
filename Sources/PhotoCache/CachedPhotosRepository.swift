@@ -18,13 +18,11 @@ public actor CachedPhotosRepository {
     var authenticationState = RepositoryAuthenticationState()
     var metadata = MetadataEngineState()
     var imageWork = RepositoryImageWork()
-    let favorites = RepositoryFavoriteState()
-    let sharedFavorites = RepositoryFavoriteState()
+    let favoriteStates: [PhotoSpace: RepositoryFavoriteState] = [.personal: .init(), .shared: .init()]
     var itemMutations = RepositoryItemMutationState()
     var incomingAccess: [PhotoCollectionDescriptor: IncomingAlbum] = [:]
     var avatars: [AvatarIdentity: Data] = [:]
-    var photoUploadInProgress = false
-    var itemDeletionInProgress = false
+    var activeMutations: Set<MutationLane> = []
     var avatarTasks: [AvatarIdentity: AvatarWork] = [:]
 
     public init(credentials: SynologyCredentials, baseURL: URL = SynologyClient.defaultBaseURL,

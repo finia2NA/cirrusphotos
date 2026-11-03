@@ -4,17 +4,25 @@ import SwiftUI
 @main
 struct SynoTimelineApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
-    @StateObject private var model = LibraryModel()
+    @StateObject private var preferences: AppPreferences
+    @StateObject private var model: LibraryModel
     @StateObject private var albumPresentation = AlbumPresentationStore()
-    @StateObject private var navigationRestoration = NavigationRestorationStore()
+    @StateObject private var navigation = NavigationModel()
     @StateObject private var infoPanel = InfoPanelModel()
     @StateObject private var libraryFilter = LibraryFilterModel()
     @StateObject private var timelineSectionLoad = TimelineSectionLoadModel()
 
+    init() {
+        let preferences = AppPreferences()
+        _preferences = StateObject(wrappedValue: preferences)
+        _model = StateObject(wrappedValue: LibraryModel(session: AppSession(preferences: preferences)))
+    }
+
     var body: some Scene {
         WindowGroup("Cirrus Photos") {
-            AppShellView(navigationRestoration: navigationRestoration, albumPresentation: albumPresentation)
+            AppShellView(navigation: navigation, albumPresentation: albumPresentation)
                 .environmentObject(model)
+                .environmentObject(preferences)
                 .environmentObject(infoPanel)
                 .environmentObject(libraryFilter)
                 .environmentObject(timelineSectionLoad)
@@ -24,12 +32,12 @@ struct SynoTimelineApp: App {
         .windowToolbarStyle(.unified)
         .defaultSize(width: 860, height: 820)
         .commands {
-            LibraryCommands(model: model, infoPanel: infoPanel, filter: libraryFilter,
+            LibraryCommands(model: model, preferences: preferences, infoPanel: infoPanel, filter: libraryFilter,
                             timelineSectionLoad: timelineSectionLoad)
         }
-        Settings { CacheSettingsView().environmentObject(model) }
+        Settings { CacheSettingsView().environmentObject(model).environmentObject(preferences) }
         Window("Download Thumbnails", id: "thumbnail-download") {
-            ThumbnailRangeDownloadView().environmentObject(model)
+            ThumbnailRangeDownloadView().environmentObject(model).environmentObject(preferences)
         }
         .commandsRemoved()
         .windowResizability(.contentSize)
@@ -41,6 +49,7 @@ struct SynoTimelineApp: App {
         UtilityWindow("Info", id: InfoPanelScene.id) {
             InfoPanelView()
                 .environmentObject(model)
+                .environmentObject(preferences)
                 .environmentObject(infoPanel)
         }
         .commandsRemoved()

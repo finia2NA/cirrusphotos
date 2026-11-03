@@ -57,7 +57,7 @@ extension CachedPhotosRepository {
                         SynologyDiagnostics.originals.error(
                             "Original request failed unit_id=\(resource.unitID, privacy: .public) priority=\(String(describing: priority), privacy: .public) error=\(error.localizedDescription, privacy: .public)"
                         )
-                        continuation.yield(.failure(error.localizedDescription))
+                        continuation.yield(.failure(RepositoryError.record(error, operation: "Original image")))
                     } else if error is CancellationError || Task.isCancelled {
                         SynologyDiagnostics.originals.debug(
                             "Original request cancelled unit_id=\(resource.unitID, privacy: .public)"

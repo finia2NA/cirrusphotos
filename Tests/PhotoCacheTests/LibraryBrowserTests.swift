@@ -646,7 +646,7 @@ final class RepositoryPageAndAuthenticationTests: LibraryBrowserTestCase {
         var timeline = await repository.timeline(collection: .library(.personal)).makeAsyncIterator()
         if case .value(_, false) = await timeline.next() {} else { XCTFail("Missing cached timeline") }
         if case .failure(let message) = await timeline.next() {
-            XCTAssertTrue(message.contains("Timeline unavailable"))
+            XCTAssertTrue(message.localizedDescription.contains("Timeline unavailable"))
         } else { XCTFail("Expected metadata failure") }
         var status = await repository.authentication().makeAsyncIterator()
         let authenticated = await status.next()

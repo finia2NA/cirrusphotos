@@ -10,13 +10,13 @@ extension CachedPhotosRepository {
     /// Membership remains separate; these rows never authorize collection order.
     func resolveMetadataItems(_ ids: [Int64], priority: RequestPriority, collection: PhotoCollectionDescriptor, freshness: MetadataDetailFreshness = .currentRun) async throws -> [PhotoItem] {
         let source = mediaCollection(for: collection)
-        guard !source.isSessionDerived else { throw SynologyAPIError.unsupported("The source collection is no longer available.") }
+        guard !source.isSessionDerived else { throw RepositoryError.stale("The source collection is no longer available.") }
         let scopedNamespace = metadataNamespace(for: source)
         let scope = scopedNamespace.scope
         guard ids.count <= 2000, Set(ids).count == ids.count else { throw CollectionCatalogError.exceedsLimit }
         let admissionEpoch = metadata.admissionEpoch
         let cached = try await store.metadataDetails(scopedNamespace, ids: ids, currentRun: runID)
-        guard admissionEpoch == metadata.admissionEpoch, !metadata.resetInProgress else { throw MetadataAdmissionError.superseded }
+        try requireAdmission(admissionEpoch)
         let missing = ids.filter { freshness == .fresh || cached[$0]?.verified != true }
         let subscriber = UUID()
         var enrolled: Set<UUID> = []
@@ -36,7 +36,7 @@ extension CachedPhotosRepository {
                 let admission = try await store.metadataAdmission(scopedNamespace)
                 let items = try await metadataReadRequest(priority: priority, id: id) { try await lookupMetadataItems(chunk, source: source) }
                 try Task.checkCancellation()
-                guard !metadata.resetInProgress, epoch == metadata.admissionEpoch,
+                guard isAdmitted(epoch),
                       chunk.allSatisfy({ metadata.detailJobByID[PhotoItemIdentity(scope: scope, itemID: $0)] == id }) else {
                     throw MetadataAdmissionError.superseded
                 }
@@ -44,7 +44,7 @@ extension CachedPhotosRepository {
                     throw MetadataMembershipReadFailure(revision: admission.revision, cause: CollectionCatalogError.invalidCoverage)
                 }
                 let dirtyDays = try await store.storeMetadataDetails(items, namespace: scopedNamespace, currentRun: runID, admission: admission)
-                guard epoch == metadata.admissionEpoch, !metadata.resetInProgress, !Task.isCancelled else { throw MetadataAdmissionError.superseded }
+                guard isAdmitted(epoch), !Task.isCancelled else { throw MetadataAdmissionError.superseded }
                 if !dirtyDays.isEmpty {
                     let sources = Set(metadata.collectionObservers.values.map(\.collection))
                         .union(metadata.latestTimelines.keys)
@@ -55,7 +55,7 @@ extension CachedPhotosRepository {
                 let sources = Set(metadata.collectionPageObservers.values.map(\.collection)).filter { !$0.isSessionDerived && metadataNamespace(for: $0) == scopedNamespace }
                 for source in sources {
                     if let references = try? await store.metadataCollectionReferences(scopedNamespace, collection: source, ids: chunk) {
-                        guard epoch == metadata.admissionEpoch, !metadata.resetInProgress else { throw MetadataAdmissionError.superseded }
+                        try requireAdmission(epoch)
                         for section in references {
                             if let key = CacheKey.page(scope: scope, namespace: namespace, section: section, collection: source) { publishCollectionPage(key: key) }
                         }
@@ -96,7 +96,7 @@ extension CachedPhotosRepository {
         case .space(let space): return try await client.items(ids: ids, space: space)
         case .album(let albumID): return try await client.albumItems(ids: ids, albumID: albumID)
         case .incomingAlbum:
-            guard let reference = incomingReference(for: source) else { throw SynologyAPIError.unsupported("Shared album access is unavailable.") }
+            guard let reference = incomingReference(for: source) else { throw RepositoryError.unavailable("Shared album access is unavailable.") }
             return try await client.incomingItems(ids: ids, reference: reference)
         }
     }

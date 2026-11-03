@@ -6,7 +6,7 @@ extension CachedPhotosRepository {
         switch collection.contentScope {
         case .space(let space): return space
         case .album: return try await albumItemSpace(itemIDs: itemIDs, collection: collection)
-        case .incomingAlbum: throw SynologyAPIError.unsupported("This action is unavailable for incoming albums.")
+        case .incomingAlbum: throw RepositoryError.unavailable("This action is unavailable for incoming albums.")
         }
     }
 
@@ -17,7 +17,7 @@ extension CachedPhotosRepository {
         let source = mediaCollection(for: collection)
         guard source.albumID != nil, !itemIDs.isEmpty,
               Set(itemIDs).count == itemIDs.count else {
-            throw SynologyAPIError.unsupported("The album item origin could not be verified.")
+            throw RepositoryError.stale("The album item origin could not be verified.")
         }
         try await initializeMetadataEngine()
         try await connect()
@@ -36,7 +36,7 @@ extension CachedPhotosRepository {
             }
             let resolved = try Self.uniqueAlbumItemSpace(album, candidates: candidates)
             guard origin == nil || origin == resolved else {
-                throw SynologyAPIError.unsupported("Choose items from one space for this action.")
+                throw RepositoryError.unavailable("Choose items from one space for this action.")
             }
             origin = resolved
         }
@@ -58,12 +58,12 @@ extension CachedPhotosRepository {
                 } == true
             }
             guard matching.count == 1 else {
-                throw SynologyAPIError.unsupported("The album item origin is ambiguous or unavailable.")
+                throw RepositoryError.unavailable("The album item origin is ambiguous or unavailable.")
             }
             origins.insert(matching[0])
         }
         guard origins.count == 1, let space = origins.first else {
-            throw SynologyAPIError.unsupported("Choose items from one space for this action.")
+            throw RepositoryError.unavailable("Choose items from one space for this action.")
         }
         return space
     }

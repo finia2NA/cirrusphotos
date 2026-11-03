@@ -5,8 +5,9 @@ import TimelineCore
 
 struct ThumbnailRangeDownloadView: View {
     @EnvironmentObject private var library: LibraryModel
+    @EnvironmentObject private var preferences: AppPreferences
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("warmingIncludesSharedSpace") private var includesSharedSpace = true
+    @AppStorage(AppPreferences.Key.warmingIncludesSharedSpace) private var includesSharedSpace = true
     @State private var lower = 0.0
     @State private var upper = 0.0
     @State private var initialized = false
@@ -148,13 +149,13 @@ struct ThumbnailRangeDownloadView: View {
     }
 
     private var sizeLabel: String {
-        switch isRunning ? (batchSize ?? library.thumbnailSize) : library.thumbnailSize {
+        switch isRunning ? (batchSize ?? preferences.thumbnailSize) : preferences.thumbnailSize {
         case .sm: "Small"; case .m: "Medium"; case .xl: "Large"
         }
     }
 
     private var budgetLabel: String {
-        ByteCountFormatter.string(fromByteCount: CacheBudget.bytes(at: library.budgetFraction), countStyle: .file)
+        ByteCountFormatter.string(fromByteCount: CacheBudget.bytes(at: preferences.budgetFraction), countStyle: .file)
     }
 
     private func bytes(_ count: Int64) -> String {
@@ -222,7 +223,7 @@ struct ThumbnailRangeDownloadView: View {
             return (target.collection, target.snapshot, range)
         }
         let total = jobs.reduce(0) { $0 + $1.2.estimatedThumbnailCount(in: $1.1) }
-        let size = library.thumbnailSize
+        let size = preferences.thumbnailSize
         batchSize = size
         summary = ThumbnailBatchSummary(estimated: total)
         outcomeText = nil

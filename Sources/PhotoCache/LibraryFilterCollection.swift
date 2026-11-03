@@ -16,25 +16,25 @@ extension CachedPhotosRepository {
         guard let id = registration.descriptor.libraryFilterID,
               registration.referencesBySection.count == registration.snapshot.sections.count,
               registration.descriptor.contentScope == registration.sourceCollection.contentScope else {
-            throw SynologyAPIError.unsupported("An invalid library filter registration was supplied.")
+            throw RepositoryError.unexpected("An invalid library filter registration was supplied.")
         }
         guard !metadata.resetInProgress else { throw MetadataAdmissionError.resetInProgress }
-        if metadata.albumMutationInProgress, let id = registration.sourceCollection.albumID, id == metadata.albumMutationID {
-            throw SynologyAPIError.unsupported("The album is changing. Try the filter again after it refreshes.")
+        if isMutating(.album), let id = registration.sourceCollection.albumID, id == metadata.albums.mutationID {
+            throw RepositoryError.stale("The album is changing. Try the filter again after it refreshes.")
         }
         if registration.sourceCollection.isMapFilter && metadata.latestTimelines[registration.sourceCollection] == nil {
-            throw SynologyAPIError.unsupported("The source collection is no longer available.")
+            throw RepositoryError.stale("The source collection is no longer available.")
         }
         if let source = metadata.latestTimelines[registration.sourceCollection], LibraryIndex(snapshot: source).fingerprint != registration.sourceFingerprint {
-            throw SynologyAPIError.unsupported("The source collection changed before this filter was registered.")
+            throw RepositoryError.stale("The source collection changed before this filter was registered.")
         }
         var mapping: [TimelineSection: [LibraryFilterReference]] = [:]
         for (section, references) in zip(registration.snapshot.sections, registration.referencesBySection) {
             mapping[section] = references
         }
-        metadata.deferredSelectionUnregisters.remove(registration.descriptor)
+        metadata.sessions.deferredUnregisters.remove(registration.descriptor)
         installSelectionRetention(registration.descriptor)
-        metadata.libraryFilters[id] = .init(registrationID: UUID(), metadataEpoch: metadata.admissionEpoch,
+        metadata.sessions.libraryFilters[id] = .init(registrationID: UUID(), metadataEpoch: metadata.admissionEpoch,
                                             registration: registration, referencesBySection: mapping)
         metadata.latestTimelines[registration.descriptor] = registration.snapshot
     }
@@ -46,8 +46,8 @@ extension CachedPhotosRepository {
 
     func removeLibraryFilter(_ descriptor: PhotoCollectionDescriptor) {
         guard let id = descriptor.libraryFilterID,
-              let state = metadata.libraryFilters.removeValue(forKey: id) else { return }
-        metadata.selectionRetentions.removeValue(forKey: descriptor)
+              let state = metadata.sessions.libraryFilters.removeValue(forKey: id) else { return }
+        metadata.sessions.selectionRetentions.removeValue(forKey: descriptor)
         metadata.latestTimelines.removeValue(forKey: descriptor)
     }
 
@@ -61,15 +61,15 @@ extension CachedPhotosRepository {
                 defer { metadata.directSubscribers.remove(subscriber); cancelIdleLogin() }
                 do {
                     try await initializeMetadataEngine()
-                    guard let id = collection.libraryFilterID, let state = metadata.libraryFilters[id],
-                          let references = state.referencesBySection[section] else { throw SynologyAPIError.unsupported("This library filter is no longer available.") }
+                    guard let id = collection.libraryFilterID, let state = metadata.sessions.libraryFilters[id],
+                          let references = state.referencesBySection[section] else { throw RepositoryError.stale("This library filter is no longer available.") }
                     let sourceScope = mediaCollection(for: state.registration.sourceCollection)
-                    guard !sourceScope.isLibraryFilter else { throw SynologyAPIError.unsupported("The source collection is no longer available.") }
+                    guard !sourceScope.isLibraryFilter else { throw RepositoryError.stale("The source collection is no longer available.") }
                     let address = try DayPageAddress(section: section, collection: collection)
                     let ids = references.map(\.itemID)
                     func current() -> Bool {
                         guard !Task.isCancelled, metadata.admissionEpoch == state.metadataEpoch,
-                              metadata.libraryFilters[id]?.registrationID == state.registrationID else { return false }
+                              metadata.sessions.libraryFilters[id]?.registrationID == state.registrationID else { return false }
                         let source = metadata.latestTimelines[state.registration.sourceCollection]
                         if state.registration.sourceCollection.isMapFilter, source == nil { return false }
                         if let source, LibraryIndex(snapshot: source).fingerprint != state.registration.sourceFingerprint { return false }
@@ -101,10 +101,10 @@ extension CachedPhotosRepository {
                     guard current() else { continuation.finish(); return }
                     let result = snapshot(try await store.metadataDetails(metadataNamespace(for: state.registration.sourceCollection), ids: ids, currentRun: runID))
                     guard current() else { continuation.finish(); return }
-                    guard result.verified else { throw SynologyAPIError.unsupported("The requested photos no longer match this filter.") }
+                    guard result.verified else { throw RepositoryError.stale("The requested photos no longer match this filter.") }
                     continuation.yield(.value(applyingFavoriteOverrides(result, collection: sourceScope), verified: true))
                 } catch {
-                    if !Task.isCancelled { continuation.yield(.failure(error.localizedDescription)) }
+                    if !Task.isCancelled { continuation.yield(.failure(RepositoryError.record(error, operation: "Filter page"))) }
                 }
                 continuation.finish()
             }
@@ -113,7 +113,7 @@ extension CachedPhotosRepository {
     }
 
     func promoteLibraryFilterSources(_ section: TimelineSection, collection: PhotoCollectionDescriptor) {
-        guard let id = collection.libraryFilterID, let state = metadata.libraryFilters[id],
+        guard let id = collection.libraryFilterID, let state = metadata.sessions.libraryFilters[id],
               let references = state.referencesBySection[section] else { return }
         let scope = metadataNamespace(for: state.registration.sourceCollection).scope
         for reference in references {

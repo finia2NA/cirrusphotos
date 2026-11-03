@@ -15,7 +15,7 @@ struct MetadataCollectionObserver {
 
 extension CachedPhotosRepository {
     func metadataObservationSource(for collection: PhotoCollectionDescriptor) -> PhotoCollectionDescriptor {
-        if let id = collection.libraryFilterID, let state = metadata.libraryFilters[id] {
+        if let id = collection.libraryFilterID, let state = metadata.sessions.libraryFilters[id] {
             return state.registration.sourceCollection.isMapFilter ? mediaCollection(for: state.registration.sourceCollection) : state.registration.sourceCollection
         }
         return collection.isMapFilter ? mediaCollection(for: collection) : collection

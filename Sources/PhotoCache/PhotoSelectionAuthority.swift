@@ -75,18 +75,18 @@ extension CachedPhotosRepository {
         let fingerprint = LibraryIndex(snapshot: snapshot).fingerprint
         guard !metadata.resetInProgress, let current = metadata.latestTimelines[collection],
               LibraryIndex(snapshot: current).fingerprint == fingerprint else { return nil }
-        let filter = collection.libraryFilterID.flatMap { metadata.libraryFilters[$0] }
-        let map = collection.mapFilterID.flatMap { metadata.mapFilters[$0] }
+        let filter = collection.libraryFilterID.flatMap { metadata.sessions.libraryFilters[$0] }
+        let map = collection.mapFilterID.flatMap { metadata.sessions.mapFilters[$0] }
         if collection.isLibraryFilter && filter == nil { return nil }
         if collection.isMapFilter && map == nil { return nil }
         let source = filter?.registration.sourceCollection
-        let sourceID = source?.mapFilterID.flatMap { metadata.mapFilters[$0]?.registrationID }
+        let sourceID = source?.mapFilterID.flatMap { metadata.sessions.mapFilters[$0]?.registrationID }
         if source?.isMapFilter == true && sourceID == nil { return nil }
         return PhotoSelectionAuthority(collection: collection, fingerprint: fingerprint,
             epoch: metadata.admissionEpoch, mutationEpoch: metadata.mutationEpochs[collection, default: 0],
             registrationID: filter?.registrationID ?? map?.registrationID, source: source,
             sourceRegistrationID: sourceID, sourceMutationEpoch: source.map { metadata.mutationEpochs[$0, default: 0] } ?? 0,
-            retentions: [metadata.selectionRetentions[collection], source.flatMap { metadata.selectionRetentions[$0] }].compactMap { $0 })
+            retentions: [metadata.sessions.selectionRetentions[collection], source.flatMap { metadata.sessions.selectionRetentions[$0] }].compactMap { $0 })
     }
 
     func verifySelectionFence(_ authority: PhotoSelectionAuthority, proofs: [SelectionMembershipProof]) async -> Bool {
@@ -114,7 +114,7 @@ extension CachedPhotosRepository {
                                                 snapshot: metadata.latestTimelines[authority.collection] ?? TimelineSnapshot(sections: [])),
               current == authority else { return false }
         if let source = authority.source, let filterID = authority.collection.libraryFilterID,
-           let filter = metadata.libraryFilters[filterID] {
+           let filter = metadata.sessions.libraryFilters[filterID] {
             guard let timeline = metadata.latestTimelines[source],
                   LibraryIndex(snapshot: timeline).fingerprint == filter.registration.sourceFingerprint else { return false }
         }
@@ -130,7 +130,7 @@ extension CachedPhotosRepository {
     func selectionSourceChecks(_ authority: PhotoSelectionAuthority, locations: [LibraryIndex.Location]) -> [SelectionSourceCheck]? {
         guard selectionAuthorityIsCurrent(authority) else { return nil }
         guard let filterID = authority.collection.libraryFilterID,
-              let state = metadata.libraryFilters[filterID] else { return [] }
+              let state = metadata.sessions.libraryFilters[filterID] else { return [] }
         let source = state.registration.sourceCollection
         guard let sourceTimeline = metadata.latestTimelines[source] else { return nil }
         var grouped: [Int: [(Int, Int64)]] = [:]
@@ -149,39 +149,39 @@ extension CachedPhotosRepository {
         let id = UUID()
         var descriptors: Set<PhotoCollectionDescriptor> = [authority.collection]
         if let source = authority.source { descriptors.insert(source) }
-        metadata.selectionLeases[id] = descriptors
+        metadata.sessions.selectionLeases[id] = descriptors
         return id
     }
 
     func endSelectionLease(_ id: UUID) {
-        guard let descriptors = metadata.selectionLeases.removeValue(forKey: id) else { return }
-        for descriptor in descriptors where metadata.deferredSelectionUnregisters.contains(descriptor) {
-            guard metadata.selectionRetentions[descriptor]?.isRetained != true,
-                  !metadata.selectionLeases.values.contains(where: { $0.contains(descriptor) }) else { continue }
-            metadata.deferredSelectionUnregisters.remove(descriptor)
+        guard let descriptors = metadata.sessions.selectionLeases.removeValue(forKey: id) else { return }
+        for descriptor in descriptors where metadata.sessions.deferredUnregisters.contains(descriptor) {
+            guard metadata.sessions.selectionRetentions[descriptor]?.isRetained != true,
+                  !metadata.sessions.selectionLeases.values.contains(where: { $0.contains(descriptor) }) else { continue }
+            metadata.sessions.deferredUnregisters.remove(descriptor)
             if descriptor.isMapFilter { removeMapFilter(descriptor) }
             if descriptor.isLibraryFilter { removeLibraryFilter(descriptor) }
         }
     }
 
     func installSelectionRetention(_ descriptor: PhotoCollectionDescriptor) {
-        metadata.selectionRetentions[descriptor] = SelectionRegistrationRetention { [weak self] in
+        metadata.sessions.selectionRetentions[descriptor] = SelectionRegistrationRetention { [weak self] in
             Task { await self?.finishDeferredSelectionUnregister(descriptor) }
         }
     }
 
     func finishDeferredSelectionUnregister(_ descriptor: PhotoCollectionDescriptor) {
-        guard metadata.deferredSelectionUnregisters.contains(descriptor),
-              metadata.selectionRetentions[descriptor]?.isRetained != true,
-              !metadata.selectionLeases.values.contains(where: { $0.contains(descriptor) }) else { return }
-        metadata.deferredSelectionUnregisters.remove(descriptor)
+        guard metadata.sessions.deferredUnregisters.contains(descriptor),
+              metadata.sessions.selectionRetentions[descriptor]?.isRetained != true,
+              !metadata.sessions.selectionLeases.values.contains(where: { $0.contains(descriptor) }) else { return }
+        metadata.sessions.deferredUnregisters.remove(descriptor)
         if descriptor.isMapFilter { removeMapFilter(descriptor) }
         if descriptor.isLibraryFilter { removeLibraryFilter(descriptor) }
     }
 
     func deferSelectionUnregister(_ descriptor: PhotoCollectionDescriptor) -> Bool {
-        guard metadata.selectionRetentions[descriptor]?.isRetained == true || metadata.selectionLeases.values.contains(where: { $0.contains(descriptor) }) else { return false }
-        metadata.deferredSelectionUnregisters.insert(descriptor)
+        guard metadata.sessions.selectionRetentions[descriptor]?.isRetained == true || metadata.sessions.selectionLeases.values.contains(where: { $0.contains(descriptor) }) else { return false }
+        metadata.sessions.deferredUnregisters.insert(descriptor)
         return true
     }
 }

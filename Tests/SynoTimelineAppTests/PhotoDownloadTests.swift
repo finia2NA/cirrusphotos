@@ -11,10 +11,10 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let source = PhotoCollectionDescriptor.incomingAlbum(ownerID: 7, albumID: 42)
         let viewer = AlbumSummary(id: 42, name: "Shared", itemCount: 1, ownerUserID: 7, isIncoming: true)
         let downloader = AlbumSummary(id: 42, name: "Shared", itemCount: 1, ownerUserID: 7, isIncoming: true, recipientCanDownload: true)
-        XCTAssertFalse(permitsAlbumDownloads(source: source, incomingVerified: false, albums: [downloader]))
-        XCTAssertFalse(permitsAlbumDownloads(source: source, incomingVerified: true, albums: [viewer]))
-        XCTAssertTrue(permitsAlbumDownloads(source: source, incomingVerified: true, albums: [downloader]))
-        XCTAssertFalse(permitsAlbumDownloads(source: .incomingAlbum(ownerID: 8, albumID: 42), incomingVerified: true, albums: [downloader]))
+        XCTAssertFalse(CollectionCapabilities(source: source, incomingAlbums: [downloader], incomingAlbumsVerified: false).allowsDownloads)
+        XCTAssertFalse(CollectionCapabilities(source: source, incomingAlbums: [viewer], incomingAlbumsVerified: true).allowsDownloads)
+        XCTAssertTrue(CollectionCapabilities(source: source, incomingAlbums: [downloader], incomingAlbumsVerified: true).allowsDownloads)
+        XCTAssertFalse(CollectionCapabilities(source: .incomingAlbum(ownerID: 8, albumID: 42), incomingAlbums: [downloader], incomingAlbumsVerified: true).allowsDownloads)
     }
 
     @MainActor

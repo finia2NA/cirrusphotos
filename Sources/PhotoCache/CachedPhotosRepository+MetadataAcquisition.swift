@@ -14,7 +14,7 @@ extension CachedPhotosRepository {
             for page in 0..<2048 {
                 let batch = try await metadataReadRequest(priority: priority) {
                     if collection.incomingAlbumIdentity != nil {
-                        guard let reference = incomingReference(for: collection) else { throw SynologyAPIError.unsupported("Shared album access is unavailable.") }
+                        guard let reference = incomingReference(for: collection) else { throw RepositoryError.unavailable("Shared album access is unavailable.") }
                         return try await client.readIncomingAlbumCatalogBatch(reference: reference, offset: page * 1000, limit: 1000)
                     }
                     if let albumID = collection.albumID {
@@ -54,17 +54,17 @@ extension CachedPhotosRepository {
         let epoch = metadata.admissionEpoch
         let mutationEpoch = metadata.mutationEpochs[collection, default: 0]
         let admission = try await store.metadataAdmission(metadataNamespace(for: collection))
-        guard epoch == metadata.admissionEpoch, !metadata.resetInProgress else { throw MetadataAdmissionError.superseded }
+        try requireAdmission(epoch)
         if let recovery = metadata.collectionRecoveries[collection], recovery.active || failedReadRevision < recovery.recoveryRevision {
             return try await recovery.task.value
         }
         let id = UUID()
         let task = Task<TimelineSnapshot, Error> {
             defer { if metadata.collectionRecoveries[collection]?.id == id { metadata.collectionRecoveries[collection]?.active = false } }
-            guard epoch == metadata.admissionEpoch, !metadata.resetInProgress else { throw MetadataAdmissionError.superseded }
+            try requireAdmission(epoch)
             // This transaction adds invalidation; it cannot overwrite a newer value.
             try await store.invalidateMetadataCollection(CollectionKey(namespace: metadataNamespace(for: collection), collection: collection), admission: admission)
-            guard epoch == metadata.admissionEpoch, !metadata.resetInProgress, !Task.isCancelled,
+            guard isAdmitted(epoch), !Task.isCancelled,
                   metadata.collectionRecoveries[collection]?.id == id,
                   mutationEpoch == metadata.mutationEpochs[collection, default: 0] else { throw MetadataAdmissionError.superseded }
             let committed = try await store.metadataState(metadataNamespace(for: collection))

@@ -215,14 +215,14 @@ final class PhotoCacheTests: XCTestCase {
         var page: [PhotoItem] = []
         for await event in await first.page(timeline.sections[207], collection: .library(.personal)) {
             if case .value(let items, let verified) = event, verified { let items = items.completeItems ?? []; page = items }
-            if case .failure(let message) = event { XCTFail(message) }
+            if case .failure(let error) = event { XCTFail(error.localizedDescription) }
         }
         XCTAssertEqual(page.count, timeline.sections[207].limit)
         let imageInfo = try XCTUnwrap(page.compactMap { $0.additional?.thumbnail }.first(where: { $0.isReady(.sm) }))
         var imageBytes = 0
         for await event in await first.thumbnail(imageInfo, size: .sm, allowNetwork: true, collection: .library(.personal)) {
             if case .value(let data, let verified) = event, verified { imageBytes = data.count }
-            if case .failure(let message) = event { XCTFail(message) }
+            if case .failure(let error) = event { XCTFail(error.localizedDescription) }
         }
         XCTAssertGreaterThan(imageBytes, 0)
         let second = try CachedPhotosRepository(credentials: credentials, cacheRoot: root)
@@ -231,7 +231,7 @@ final class PhotoCacheTests: XCTestCase {
         for await event in await second.timeline(collection: .library(.personal)) {
             if case .value(_, let verified) = event, !firstWasCached { firstWasCached = !verified }
             if case .value(_, let verified) = event, verified { laterWasValidated = true }
-            if case .failure(let message) = event { XCTFail(message) }
+            if case .failure(let error) = event { XCTFail(error.localizedDescription) }
         }
         XCTAssertTrue(firstWasCached)
         XCTAssertTrue(laterWasValidated)

@@ -2,7 +2,7 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
-    func favoriteState(for space: PhotoSpace) -> RepositoryFavoriteState { space == .shared ? sharedFavorites : favorites }
+    func favoriteState(for space: PhotoSpace) -> RepositoryFavoriteState { favoriteStates[space]! }
 
     public func favoriteChanges(space: PhotoSpace) -> AsyncStream<FavoriteChange> {
         let id = UUID()
@@ -10,7 +10,7 @@ extension CachedPhotosRepository {
         return AsyncStream(bufferingPolicy: .unbounded) { continuation in
             favorites.observers[id] = continuation
             if !favorites.overrides.isEmpty {
-                continuation.yield(FavoriteChange(values: favorites.overrides, sourceCollection: space == .shared ? .library(.shared) : .library(.personal)))
+                continuation.yield(FavoriteChange(values: favorites.overrides, sourceCollection: .library(space)))
             }
             continuation.onTermination = { @Sendable _ in
                 Task { await self.removeFavoriteObserver(id, space: space) }
@@ -45,11 +45,11 @@ extension CachedPhotosRepository {
     public func setFavoritesBatch(action: SelectionFavoriteAction) async throws {
         let source = mediaCollection(for: action.collection)
         guard source.incomingAlbumIdentity == nil, !source.isSessionDerived else {
-            throw SynologyAPIError.unsupported("Favorites are unavailable for shared album photos.")
+            throw RepositoryError.unavailable("Favorites are unavailable for shared album photos.")
         }
         let space = try await itemActionSpace(itemIDs: action.affectedIDs, collection: source)
         let favorites = favoriteState(for: space)
-        let favoriteCollection: PhotoCollectionDescriptor = space == .shared ? .favorites(.shared) : .favorites(.personal)
+        let favoriteCollection = PhotoCollectionDescriptor.favorites(space)
         let scopedNamespace = MetadataNamespace(account: namespace, scope: .space(space))
         let allIDs = action.affectedIDs
         guard !allIDs.isEmpty else { return }
@@ -58,7 +58,7 @@ extension CachedPhotosRepository {
         // 1. Atomically reject or claim every affected ID against pendingIDs
         for id in allIDs {
             guard !favorites.pendingIDs.contains(id) else {
-                throw SynologyAPIError.unsupported("A favorite change is already in progress.")
+                throw RepositoryError.busy("A favorite change is already in progress.")
             }
         }
         for id in allIDs {
@@ -77,9 +77,7 @@ extension CachedPhotosRepository {
             if let expectedFingerprint = action.expectedTimelineFingerprint {
                 guard let currentSnapshot = self.metadata.latestTimelines[action.collection],
                       LibraryIndex(snapshot: currentSnapshot).fingerprint == expectedFingerprint else {
-                    throw SynologyAPIError.unsupported(
-                        "The collection changed before the favorite update. Try again."
-                    )
+                    throw RepositoryError.stale("The collection changed before the favorite update. Try again.")
                 }
             }
             // Advance the Favorites mutation epoch once before the action
@@ -181,7 +179,7 @@ extension CachedPhotosRepository {
                 )
                 throw BatchFavoriteError(
                     outcome: outcome,
-                    underlyingError: writeError ?? SynologyAPIError.unsupported("Write failed")
+                    underlyingError: writeError ?? RepositoryError.unexpected("Write failed")
                 )
             }
 
@@ -202,7 +200,7 @@ extension CachedPhotosRepository {
 
     func scheduleFavoritesRefresh(space: PhotoSpace) {
         let favorites = favoriteState(for: space)
-        let collection: PhotoCollectionDescriptor = space == .shared ? .favorites(.shared) : .favorites(.personal)
+        let collection = PhotoCollectionDescriptor.favorites(space)
         favorites.refreshTask?.cancel()
         let epoch = metadata.mutationEpochs[collection, default: 0]
         favorites.refreshTask = Task { [weak self] in
@@ -213,7 +211,7 @@ extension CachedPhotosRepository {
     }
 
     private func refreshFavoritesAfterMutation(epoch: UInt64, space: PhotoSpace) async {
-        let collection: PhotoCollectionDescriptor = space == .shared ? .favorites(.shared) : .favorites(.personal)
+        let collection = PhotoCollectionDescriptor.favorites(space)
         let favorites = favoriteState(for: space)
         let scopedNamespace = metadataNamespace(for: collection)
         metadata.timelineJobs.removeValue(forKey: collection)?.task.cancel()
@@ -241,7 +239,7 @@ extension CachedPhotosRepository {
             guard epoch == metadata.mutationEpochs[collection, default: 0],
                   !(error is CancellationError) else { return }
             for observer in metadata.refreshObservers[collection]?.values ?? [:].values {
-                observer.yield(.failure("Favorites refresh: \(error.localizedDescription)"))
+                observer.yield(.failure(RepositoryError.record(error, operation: "Favorites refresh")))
             }
             favorites.refreshTask = nil
         }

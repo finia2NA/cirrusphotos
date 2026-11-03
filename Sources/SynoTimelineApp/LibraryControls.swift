@@ -63,19 +63,19 @@ struct ViewerFavoriteControl: View {
 /// Toggles the shared browser between aspect-fitted and square-cropped thumbnails.
 /// The Library menu's "Crop Thumbnails to Square" command is the discoverable equivalent.
 struct BrowserThumbnailShapeControl: View {
-    @ObservedObject var model: LibraryModel
+    @ObservedObject var preferences: AppPreferences
 
     var body: some View {
         Button {
-            model.cropsThumbnailsToSquare.toggle()
+            preferences.cropsThumbnailsToSquare.toggle()
         } label: {
-            Label(model.cropsThumbnailsToSquare ? "Use Aspect-Fit Thumbnails" : "Crop Thumbnails to Square",
-                  systemImage: model.cropsThumbnailsToSquare
+            Label(preferences.cropsThumbnailsToSquare ? "Use Aspect-Fit Thumbnails" : "Crop Thumbnails to Square",
+                  systemImage: preferences.cropsThumbnailsToSquare
                       ? "rectangle.arrowtriangle.2.inward"
                       : "rectangle.arrowtriangle.2.outward")
         }
-        .accessibilityLabel(model.cropsThumbnailsToSquare ? "Use Aspect-Fit Thumbnails" : "Crop Thumbnails to Square")
-        .help(model.cropsThumbnailsToSquare
+        .accessibilityLabel(preferences.cropsThumbnailsToSquare ? "Use Aspect-Fit Thumbnails" : "Crop Thumbnails to Square")
+        .help(preferences.cropsThumbnailsToSquare
               ? "Crop Thumbnails to Square (on)"
               : "Crop Thumbnails to Square (off)")
     }
@@ -298,6 +298,7 @@ struct ConnectionToolbarItem: View {
 
 struct LibraryCommands: Commands {
     @ObservedObject var model: LibraryModel
+    @ObservedObject var preferences: AppPreferences
     @ObservedObject var infoPanel: InfoPanelModel
     @ObservedObject var filter: LibraryFilterModel
     @ObservedObject var timelineSectionLoad: TimelineSectionLoadModel
@@ -348,15 +349,15 @@ struct LibraryCommands: Commands {
                 .keyboardShortcut(.cancelAction)
                 .disabled(!model.canNavigateBack)
             Divider()
-            Button("Increase Thumbnail Size") { model.adjustItemsPerRow(by: -1) }
+            Button("Increase Thumbnail Size") { preferences.adjustItemsPerRow(by: -1) }
                 .keyboardShortcut("+", modifiers: .command)
-                .disabled(model.itemsPerRow <= 3)
-            Button("Decrease Thumbnail Size") { model.adjustItemsPerRow(by: 1) }
+                .disabled(preferences.itemsPerRow <= 3)
+            Button("Decrease Thumbnail Size") { preferences.adjustItemsPerRow(by: 1) }
                 .keyboardShortcut("-", modifiers: .command)
-                .disabled(model.itemsPerRow >= 10)
+                .disabled(preferences.itemsPerRow >= 10)
             Divider()
-            Toggle("Crop Thumbnails to Square", isOn: $model.cropsThumbnailsToSquare)
-            Toggle("Always Show Timeline", isOn: $model.alwaysShowsTimeline)
+            Toggle("Crop Thumbnails to Square", isOn: $preferences.cropsThumbnailsToSquare)
+            Toggle("Always Show Timeline", isOn: $preferences.alwaysShowsTimeline)
             Divider()
             Button("Select Left") { model.performBrowserCommand(.move(.left, extending: false)) }
                 .keyboardShortcut(.leftArrow, modifiers: [])

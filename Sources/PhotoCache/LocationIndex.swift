@@ -47,80 +47,80 @@ extension CachedPhotosRepository {
         if space == .shared { return sharedLocationIndexChanges() }
         let id = UUID()
         return AsyncStream(bufferingPolicy: .bufferingNewest(2)) { continuation in
-            metadata.locationProjectionObservers[id] = continuation
+            metadata.locations.projectionObservers[id] = continuation
             Task { await self.publishStoredLocationProjection() }
             continuation.onTermination = { @Sendable _ in Task { await self.removeLocationProjectionObserver(id) } }
         }
     }
-    private func removeLocationProjectionObserver(_ id: UUID) { metadata.locationProjectionObservers.removeValue(forKey: id) }
+    private func removeLocationProjectionObserver(_ id: UUID) { metadata.locations.projectionObservers.removeValue(forKey: id) }
 
     func publishStoredLocationProjection() async {
         guard metadata.initialized, !metadata.resetInProgress,
-              !metadata.mapFilters.isEmpty || !metadata.locationProjectionObservers.isEmpty else {
-            metadata.locationProjectionLoaded = false
+              !metadata.sessions.mapFilters.isEmpty || !metadata.locations.projectionObservers.isEmpty else {
+            metadata.locations.projectionLoaded = false
             return
         }
         let epoch = metadata.admissionEpoch
-        let revision = metadata.locationRevision
+        let revision = metadata.locations.revision
         guard let projection = try? await store.metadataLocationProjection(personalMetadataNamespace),
-              epoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
-        guard revision == metadata.locationRevision else {
-            metadata.locationProjectionLoaded = false
+              isAdmitted(epoch) else { return }
+        guard revision == metadata.locations.revision else {
+            metadata.locations.projectionLoaded = false
             scheduleLocationProjectionPublication()
             return
         }
         let state = projection.state, records = projection.records
         let verified = state.inventoryComplete && (metadata.inventoryCurrent || (metadata.reconciled && !metadata.sourceUnavailable))
         let byID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
-        metadata.locationProjectionLoaded = true
-        guard metadata.locationRecords != byID || metadata.lastPublishedInventoryVerified != verified else { return }
-        metadata.lastPublishedInventoryVerified = verified
+        metadata.locations.projectionLoaded = true
+        guard metadata.locations.records != byID || metadata.locations.lastPublishedInventoryVerified != verified else { return }
+        metadata.locations.lastPublishedInventoryVerified = verified
         let value = acceptLocationRecords(records, space: .personal)
-        for observer in metadata.locationProjectionObservers.values { observer.yield(.completed(value, verified: verified)) }
+        for observer in metadata.locations.projectionObservers.values { observer.yield(.completed(value, verified: verified)) }
     }
 
     /// Full rows are already available from the bounded read that changed them.
     /// Keep dependency updates O(changed IDs), and coalesce Map presentation arrays.
     func publishLocationItemChanges(_ items: [PhotoItem], deletedIDs: [Int64] = [], coverageChanged: Bool = false) {
-        guard !metadata.mapFilters.isEmpty || !metadata.locationProjectionObservers.isEmpty else {
-            metadata.locationProjectionLoaded = false
+        guard !metadata.sessions.mapFilters.isEmpty || !metadata.locations.projectionObservers.isEmpty else {
+            metadata.locations.projectionLoaded = false
             return
         }
-        guard metadata.locationProjectionLoaded else { scheduleLocationProjectionPublication(); return }
+        guard metadata.locations.projectionLoaded else { scheduleLocationProjectionPublication(); return }
         var changed = false
-        for id in deletedIDs { if metadata.locationRecords.removeValue(forKey: id) != nil { changed = true } }
+        for id in deletedIDs { if metadata.locations.records.removeValue(forKey: id) != nil { changed = true } }
         for item in items {
             let record = item.coordinate.map { PhotoLocationRecord(id: item.id, time: item.time, coordinate: $0, thumbnail: item.additional?.thumbnail) }
-            if metadata.locationRecords[item.id] != record {
-                metadata.locationRecords[item.id] = record
+            if metadata.locations.records[item.id] != record {
+                metadata.locations.records[item.id] = record
                 changed = true
             }
         }
         if changed {
-            metadata.locationRevision &+= 1
+            metadata.locations.revision &+= 1
             invalidateMapFiltersForLocationChange(space: .personal)
         }
         if changed || coverageChanged { scheduleLocationProjectionPublication() }
     }
     private func scheduleLocationProjectionPublication() {
-        guard metadata.locationPublicationTask == nil else { return }
+        guard metadata.locations.publicationTask == nil else { return }
         let id = UUID()
-        metadata.locationPublicationID = id
-        metadata.locationPublicationTask = Task {
+        metadata.locations.publicationID = id
+        metadata.locations.publicationTask = Task {
             try? await Task.sleep(for: .milliseconds(100))
-            guard !Task.isCancelled, metadata.locationPublicationID == id else { return }
-            metadata.locationPublicationTask = nil
-            metadata.locationPublicationID = nil
-            if !metadata.locationProjectionLoaded { await publishStoredLocationProjection(); return }
+            guard !Task.isCancelled, metadata.locations.publicationID == id else { return }
+            metadata.locations.publicationTask = nil
+            metadata.locations.publicationID = nil
+            if !metadata.locations.projectionLoaded { await publishStoredLocationProjection(); return }
             let epoch = metadata.admissionEpoch
-            guard !metadata.locationProjectionObservers.isEmpty,
+            guard !metadata.locations.projectionObservers.isEmpty,
                   let state = try? await store.metadataState(personalMetadataNamespace),
-                  epoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
-            let records = metadata.locationRecords.values.sorted { $0.time > $1.time || ($0.time == $1.time && $0.id < $1.id) }
+                  isAdmitted(epoch) else { return }
+            let records = metadata.locations.records.values.sorted { $0.time > $1.time || ($0.time == $1.time && $0.id < $1.id) }
             let verified = state.inventoryComplete && (metadata.inventoryCurrent || (metadata.reconciled && !metadata.sourceUnavailable))
-            metadata.lastPublishedInventoryVerified = verified
-            let value = LocationIndexValue(records: records, revision: LocationIndexRevision(metadata.locationRevision, space: .personal))
-            for observer in metadata.locationProjectionObservers.values { observer.yield(.completed(value, verified: verified)) }
+            metadata.locations.lastPublishedInventoryVerified = verified
+            let value = LocationIndexValue(records: records, revision: LocationIndexRevision(metadata.locations.revision, space: .personal))
+            for observer in metadata.locations.projectionObservers.values { observer.yield(.completed(value, verified: verified)) }
         }
     }
 
@@ -131,12 +131,12 @@ extension CachedPhotosRepository {
         let producer = StreamProducer()
         return AsyncStream(bufferingPolicy: .bufferingNewest(4)) { continuation in
             producer.task = Task {
-                metadata.locationIndexObservers[subscriber] = continuation
+                metadata.locations.indexObservers[subscriber] = continuation
                 do {
                     try await initializeMetadataEngine()
                     let epoch = metadata.admissionEpoch
                     let cached = try await store.metadataCachedLocations(personalMetadataNamespace)
-                    guard epoch == metadata.admissionEpoch, !metadata.resetInProgress, !Task.isCancelled else { throw CancellationError() }
+                    guard isAdmitted(epoch), !Task.isCancelled else { throw CancellationError() }
                     if !cached.isEmpty { continuation.yield(.cached(acceptLocationRecords(cached, space: .personal))) }
                     try await connect()
                     try await reconcileMetadataSource()
@@ -144,17 +144,17 @@ extension CachedPhotosRepository {
                     let state = projection.state
                     if (metadata.inventoryCurrent && state.inventoryComplete) || (metadata.reconciled && !metadata.sourceUnavailable && state.inventoryComplete) {
                         let records = projection.records
-                        guard epoch == metadata.admissionEpoch, !metadata.resetInProgress, !Task.isCancelled else { throw CancellationError() }
+                        guard isAdmitted(epoch), !Task.isCancelled else { throw CancellationError() }
                         continuation.yield(.completed(acceptLocationRecords(records, space: .personal), verified: true))
                     } else {
                         _ = try await verifiedTimelineSnapshot(collection: .library(.personal))
                         let task = registerLocationIndexScan(subscriber: subscriber)
                         let records = try await task.value
-                        guard epoch == metadata.admissionEpoch, !metadata.resetInProgress, !Task.isCancelled else { throw CancellationError() }
+                        guard isAdmitted(epoch), !Task.isCancelled else { throw CancellationError() }
                         continuation.yield(.completed(acceptLocationRecords(records, space: .personal), verified: true))
                     }
                 } catch {
-                    if !Task.isCancelled { continuation.yield(.failure(error.localizedDescription)) }
+                    if !Task.isCancelled { continuation.yield(.failure(RepositoryError.record(error, operation: "Location index").localizedDescription)) }
                 }
                 removeLocationIndexSubscriber(subscriber)
                 continuation.finish()
@@ -167,8 +167,8 @@ extension CachedPhotosRepository {
     }
 
     private func registerLocationIndexScan(subscriber: UUID) -> Task<[PhotoLocationRecord], Error> {
-        if var job = metadata.locationIndexWork {
-            job.subscribers.insert(subscriber); metadata.locationIndexWork = job; return job.task
+        if var job = metadata.locations.work {
+            job.subscribers.insert(subscriber); metadata.locations.work = job; return job.task
         }
         let id = UUID()
         let task = Task<[PhotoLocationRecord], Error> {
@@ -177,29 +177,29 @@ extension CachedPhotosRepository {
             return try await buildMetadataInventory(token: token, id: id)
 
         }
-        metadata.locationIndexWork = SharedJob(id: id, task: task, subscribers: [subscriber])
+        metadata.locations.work = SharedJob(id: id, task: task, subscribers: [subscriber])
         return task
     }
 
     func publishLocationIndexProgress(scanned: Int, total: Int?) {
         let event = LocationIndexEvent.progress(scanned: scanned, total: total)
-        for observer in metadata.locationIndexObservers.values { observer.yield(event) }
+        for observer in metadata.locations.indexObservers.values { observer.yield(event) }
     }
 
     private func finishLocationIndexScan(id: UUID) {
-        guard metadata.locationIndexWork?.id == id else { return }
-        metadata.locationIndexWork = nil
+        guard metadata.locations.work?.id == id else { return }
+        metadata.locations.work = nil
         cancelIdleLogin()
     }
 
     private func removeLocationIndexSubscriber(_ id: UUID) {
-        metadata.locationIndexObservers.removeValue(forKey: id)
-        metadata.locationIndexWork?.subscribers.remove(id)
+        metadata.locations.indexObservers.removeValue(forKey: id)
+        metadata.locations.work?.subscribers.remove(id)
     }
 
     func acceptLocationRecords(_ records: [PhotoLocationRecord], space: PhotoSpace) -> LocationIndexValue {
-        if space == .personal { metadata.locationProjectionLoaded = true }
-        let previous = space == .shared ? metadata.sharedLocations.records : metadata.locationRecords
+        if space == .personal { metadata.locations.projectionLoaded = true }
+        let previous = space == .shared ? metadata.sharedLocations.records : metadata.locations.records
         let next = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         let semanticChanged = previous.count != next.count || next.contains { id, record in
             guard let old = previous[id] else { return true }
@@ -209,11 +209,11 @@ extension CachedPhotosRepository {
             metadata.sharedLocations.records = next
             if semanticChanged { metadata.sharedLocations.revision &+= 1 }
         } else {
-            metadata.locationRecords = next
-            if semanticChanged { metadata.locationRevision &+= 1 }
+            metadata.locations.records = next
+            if semanticChanged { metadata.locations.revision &+= 1 }
         }
         if semanticChanged { invalidateMapFiltersForLocationChange(space: space) }
-        let revision = space == .shared ? metadata.sharedLocations.revision : metadata.locationRevision
+        let revision = space == .shared ? metadata.sharedLocations.revision : metadata.locations.revision
         return LocationIndexValue(records: records, revision: LocationIndexRevision(revision, space: space))
     }
 }

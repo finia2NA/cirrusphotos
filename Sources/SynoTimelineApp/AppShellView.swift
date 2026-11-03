@@ -4,26 +4,20 @@ import SynologyAPI
 
 struct AppShellView: View {
     @EnvironmentObject private var model: LibraryModel
+    @EnvironmentObject private var preferences: AppPreferences
     @EnvironmentObject private var infoPanel: InfoPanelModel
     @EnvironmentObject private var libraryFilter: LibraryFilterModel
     @EnvironmentObject private var timelineSectionLoad: TimelineSectionLoadModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismissWindow) private var dismissWindow
-    @ObservedObject var navigationRestoration: NavigationRestorationStore
+    @ObservedObject var navigation: NavigationModel
     @ObservedObject var albumPresentation: AlbumPresentationStore
-    @State private var sidebarSelection: SidebarSelection
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var viewer: PhotoViewerPresentation?
-    @State private var selectedDestination: LibraryDestination
-    @State private var openedIndexEntryIDs: [CollectionIndexKind: Int64] = [:]
     @State private var indexEntries: [CollectionIndexKind: [CollectionIndexEntry]] = [:]
     @State private var indexErrors: [CollectionIndexKind: String] = [:]
     @State private var personEdit: PersonEditRequest?
     @State private var peopleEditRevision: UInt64 = 0
-    @State private var openedAlbum: PhotoCollectionDescriptor?
-    @State private var selectedSpace: PhotoSpace
-    @State private var showsFolders: Bool
-    @State private var folderPath: [Int64]
     @State private var folderDirectory: FolderDirectory?
     @State private var folderDirectoryRequest: Int64?
     @State private var folderError: String?
@@ -35,15 +29,30 @@ struct AppShellView: View {
     @StateObject private var browserBridge = LibraryBrowserBridge()
     @StateObject private var mapModel = MapBrowserModel()
 
-    init(navigationRestoration: NavigationRestorationStore, albumPresentation: AlbumPresentationStore) {
-        self.navigationRestoration = navigationRestoration
+    init(navigation: NavigationModel, albumPresentation: AlbumPresentationStore) {
+        self.navigation = navigation
         self.albumPresentation = albumPresentation
-        _sidebarSelection = State(initialValue: navigationRestoration.sidebarSelection)
-        _selectedDestination = State(initialValue: navigationRestoration.selectedDestination)
-        _openedAlbum = State(initialValue: navigationRestoration.openedAlbum)
-        _selectedSpace = State(initialValue: navigationRestoration.selectedSpace)
-        _showsFolders = State(initialValue: navigationRestoration.showsFolders)
-        _folderPath = State(initialValue: navigationRestoration.folderPath)
+    }
+
+    // Navigation state lives in `NavigationModel`; these forward to it and persist on write.
+    private var sidebarSelection: SidebarSelection {
+        get { navigation.sidebarSelection } nonmutating set { navigation.sidebarSelection = newValue }
+    }
+    private var selectedDestination: LibraryDestination { navigation.selectedDestination }
+    private var openedAlbum: PhotoCollectionDescriptor? {
+        get { navigation.openedAlbum } nonmutating set { navigation.openedAlbum = newValue }
+    }
+    private var selectedSpace: PhotoSpace {
+        get { navigation.selectedSpace } nonmutating set { navigation.selectedSpace = newValue }
+    }
+    private var showsFolders: Bool {
+        get { navigation.showsFolders } nonmutating set { navigation.showsFolders = newValue }
+    }
+    private var folderPath: [Int64] {
+        get { navigation.folderPath } nonmutating set { navigation.folderPath = newValue }
+    }
+    private var openedIndexEntryIDs: [CollectionIndexKind: Int64] {
+        get { navigation.openedIndexEntries } nonmutating set { navigation.openedIndexEntries = newValue }
     }
 
     /// The collection currently browsed in the detail area, or nil for the Albums
@@ -146,7 +155,6 @@ struct AppShellView: View {
             updateBackHandler(); updateTimelineSectionLoadSource()
         }
         .onChange(of: selectedSpace) { _, space in
-            navigationRestoration.selectSpace(space)
             libraryFilter.clear()
             mapFilterOpenGeneration &+= 1
             if let previous = openedMapFilter {
@@ -155,9 +163,7 @@ struct AppShellView: View {
             }
             if selectedDestination == .map { mapModel.start(repository: model.repository, space: space) }
             else { mapModel.stopObservingProjection(); mapModel.invalidateMetadata(restart: false) }
-            openedIndexEntryIDs = [:]; indexEntries = [:]; folderDirectory = nil; folderDirectoryRequest = nil
-            showsFolders = navigationRestoration.showsFolders
-            folderPath = navigationRestoration.folderPath
+            indexEntries = [:]; folderDirectory = nil; folderDirectoryRequest = nil
             if let collection = sourceCollection { model.ensureCollectionLoaded(collection) }
             if space == .shared { model.ensureCollectionLoaded(.library(.shared)) }
             updateBackHandler(); updateTimelineSectionLoadSource(); updateInfoPanelContext()
@@ -336,14 +342,14 @@ struct AppShellView: View {
                 } else if let collection = selectedCollection {
                     LibraryBrowserView(collection: collection,
                                        restorationAnchor: collection.isSessionDerived
-                                           ? nil : navigationRestoration.timelineAnchor(for: collection),
+                                           ? nil : navigation.timelineAnchor(for: collection),
                                        bridge: browserBridge,
                                        pinnedAlbumIDs: albumPresentation.pinnedIDs,
                                        contentTopInset: topInset,
                                        onOpenPhoto: openPhoto,
                                        onRestorationAnchorChanged: { anchor in
                                            guard !collection.isSessionDerived else { return }
-                                           navigationRestoration.setTimelineAnchor(anchor, for: collection)
+                                           navigation.setTimelineAnchor(anchor, for: collection)
                                        })
                         .id(collection)
                         .allowsHitTesting(viewer == nil)
@@ -374,13 +380,13 @@ struct AppShellView: View {
                                     pinnedAlbumIDs: albumPresentation.pinnedIDs,
                                     toolbarInset: topInset,
                                     reduceMotion: reduceMotion,
-                                    pixelInterpolation: model.pixelInterpolation,
-                                    videoMuted: model.videoMuted,
+                                    pixelInterpolation: preferences.pixelInterpolation,
+                                    videoMuted: preferences.videoMuted,
                                     showsFilmstrip: model.showsFilmstrip,
-                                    cropsThumbnailsToSquare: model.cropsThumbnailsToSquare,
+                                    cropsThumbnailsToSquare: preferences.cropsThumbnailsToSquare,
                                     showsHistogram: model.showsHistogram,
                                     showsHighlightPeaking: model.showsHighlightPeaking,
-                                    onVideoMuteChanged: { model.videoMuted = $0 },
+                                    onVideoMuteChanged: { preferences.videoMuted = $0 },
                                     onSelectionChanged: followViewer,
                                     onClose: closeViewer,
                                     onInteractiveDismiss: closeViewer)
@@ -410,7 +416,7 @@ struct AppShellView: View {
 
     private func loadIndex() async {
         guard let kind = selectedDestination.indexKind, let repository = model.repository else { return }
-        let restored = navigationRestoration.prepareIndexEntry(kind, namespace: repository.namespace)
+        let restored = navigation.prepareIndexEntry(kind, namespace: repository.namespace)
         openedIndexEntryIDs[kind] = restored
         if let restored { model.ensureCollectionLoaded(kind.collection(restored, space: selectedSpace)) }
         indexErrors[kind] = nil
@@ -420,16 +426,15 @@ struct AppShellView: View {
             case .value(let list, let verified):
                 indexEntries[kind] = list
                 if verified, let id = openedIndexEntryIDs[kind], !list.contains(where: { $0.id == id }) {
-                    openedIndexEntryIDs[kind] = nil; navigationRestoration.setOpenedIndexEntry(kind, id: nil)
+                    openedIndexEntryIDs[kind] = nil
                 }
-            case .failure(let error): indexErrors[kind] = error
+            case .failure(let error): indexErrors[kind] = error.localizedDescription
             }
         }
     }
 
     private func openIndexEntry(_ entry: CollectionIndexEntry, kind: CollectionIndexKind) {
         openedIndexEntryIDs[kind] = entry.id
-        navigationRestoration.setOpenedIndexEntry(kind, id: entry.id)
         model.ensureCollectionLoaded(kind.collection(entry.id, space: selectedSpace))
         updateBackHandler(); updateInfoPanelContext()
     }
@@ -437,7 +442,6 @@ struct AppShellView: View {
     private func closeIndexEntry() {
         guard let kind = selectedDestination.indexKind else { return }
         openedIndexEntryIDs[kind] = nil
-        navigationRestoration.setOpenedIndexEntry(kind, id: nil)
         updateBackHandler(); updateInfoPanelContext()
     }
 
@@ -486,7 +490,7 @@ struct AppShellView: View {
 
     private func loadFolder() async {
         guard selectedDestination == .personalLibrary, showsFolders, let repository = model.repository else { return }
-        let restoredPath = navigationRestoration.prepareFolders(namespace: repository.namespace)
+        let restoredPath = navigation.prepareFolders(namespace: repository.namespace)
         if restoredPath != folderPath { folderPath = restoredPath; return }
         let id = folderPath.last ?? 0
         folderDirectory = nil; folderDirectoryRequest = id; folderError = nil
@@ -496,7 +500,7 @@ struct AppShellView: View {
             case .value(let directory, _):
                 folderDirectory = directory
                 model.ensureCollectionLoaded(PhotoCollectionDescriptor.folder(directory.folder.id, space: selectedSpace))
-            case .failure(let message): folderError = message
+            case .failure(let message): folderError = message.localizedDescription
             }
         }
     }
@@ -504,7 +508,6 @@ struct AppShellView: View {
     private func folderBack() {
         guard !folderPath.isEmpty else { return }
         folderPath.removeLast()
-        navigationRestoration.setFolders(shown: showsFolders, path: folderPath)
     }
 
     @ViewBuilder private func folderDetail(topInset: CGFloat) -> some View {
@@ -512,14 +515,14 @@ struct AppShellView: View {
             VStack(spacing: 0) {
                 if let folderError { Text(folderError).font(.caption).foregroundStyle(.secondary).padding(6) }
                 LibraryBrowserView(collection: collection,
-                    restorationAnchor: collection.isSessionDerived ? nil : navigationRestoration.timelineAnchor(for: collection),
+                    restorationAnchor: collection.isSessionDerived ? nil : navigation.timelineAnchor(for: collection),
                     bridge: browserBridge, pinnedAlbumIDs: albumPresentation.pinnedIDs, contentTopInset: topInset,
                     hidesEmptyCollectionState: !directory.children.isEmpty,
                     customHeader: folderHeader(directory.children),
                     onOpenPhoto: openPhoto,
                     onRestorationAnchorChanged: { anchor in
                         guard !collection.isSessionDerived else { return }
-                        navigationRestoration.setTimelineAnchor(anchor, for: collection)
+                        navigation.setTimelineAnchor(anchor, for: collection)
                     }).id(collection)
             }
         } else if let folderError {
@@ -541,7 +544,6 @@ struct AppShellView: View {
                 ForEach(children) { child in
                     Button {
                         folderPath.append(child.id)
-                        navigationRestoration.setFolders(shown: showsFolders, path: folderPath)
                     } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             AlbumCoverView(thumbnail: child.thumbnail, repository: repository, collection: PhotoCollectionDescriptor.library(selectedSpace), placeholderSymbol: "folder")
@@ -598,12 +600,9 @@ struct AppShellView: View {
         }
         let returningToAlbums = selectedDestination != .albums
         sidebarSelection = selection
-        navigationRestoration.selectSidebar(selection)
-        selectedDestination = selection.destination
         switch selection {
         case .album(let id):
             openedAlbum = id
-            navigationRestoration.setOpenedAlbum(id)
             model.ensureAlbumsLoaded()
             model.ensureCollectionLoaded(id)
         case .destination(.recentlyAdded):
@@ -613,7 +612,6 @@ struct AppShellView: View {
                 model.ensureCollectionLoaded(id)
             } else {
                 openedAlbum = nil
-                navigationRestoration.setOpenedAlbum(nil)
             }
             model.ensureAlbumsLoaded()
         case .destination:
@@ -628,12 +626,11 @@ struct AppShellView: View {
             albumPresentation.pinnedCollections.contains($0) ? .album($0) : nil
         } ?? .destination(.albums)
         sidebarSelection = selection
-        navigationRestoration.selectSidebar(selection)
     }
 
     private func validateOpenedAlbum(in albums: [AlbumSummary]) {
         albumPresentation.reconcile(albums, verified: model.albumsVerified)
-        guard navigationRestoration.clearOpenedAlbumIfMissing(
+        guard navigation.clearOpenedAlbumIfMissing(
             in: albums, verified: model.albumsVerified
         ) else { return }
         openedAlbum = nil
@@ -644,7 +641,6 @@ struct AppShellView: View {
     private func openAlbum(_ album: AlbumSummary) {
         guard let collection = album.collection else { return }
         openedAlbum = collection
-        navigationRestoration.setOpenedAlbum(collection)
         synchronizeAlbumSelection()
         model.ensureCollectionLoaded(collection)
         updateBackHandler()
@@ -653,7 +649,6 @@ struct AppShellView: View {
 
     private func closeAlbum() {
         openedAlbum = nil
-        navigationRestoration.setOpenedAlbum(nil)
         synchronizeAlbumSelection()
         updateBackHandler()
         updateInfoPanelContext()
@@ -711,10 +706,10 @@ struct AppShellView: View {
               let snapshot = model.snapshot(for: collection) else { return }
         viewer = PhotoViewerPresentation(repository: repository, collection: collection,
                                          index: LibraryIndex(snapshot: snapshot),
-                                         request: request, thumbnailSize: model.thumbnailSize,
-                                         loadsLargePreviews: model.loadsLargeViewerPreviews,
-                                         videoQuality: model.videoQuality,
-                                         isIncoming: model.isIncomingCollection(collection),
+                                         request: request, thumbnailSize: preferences.thumbnailSize,
+                                         loadsLargePreviews: preferences.loadsLargeViewerPreviews,
+                                         videoQuality: preferences.videoQuality,
+                                         isIncoming: model.capabilities(for: collection).isIncoming,
                                          allowNetwork: model.timelineVerified(for: collection),
                                          snapshotRevision: model.viewerSnapshotRevision(for: collection))
         lastViewerFollowSelection = nil
@@ -799,7 +794,7 @@ struct AppShellView: View {
             }
             spaceSelectorToolbar
             ToolbarItem(placement: .navigation) {
-                Button { showsFolders.toggle(); navigationRestoration.setFolders(shown: showsFolders, path: folderPath) } label: {
+                Button { showsFolders.toggle() } label: {
                     Image(systemName: showsFolders ? "photo.on.rectangle" : "folder")
                 }
                 .help(showsFolders ? "Show Timeline" : "Browse Folders")
@@ -850,11 +845,11 @@ struct AppShellView: View {
                 .help(model.showsHighlightPeaking ? "Hide Highlight Peaking" : "Show Highlight Peaking")
                 .accessibilityLabel(model.showsHighlightPeaking ? "Hide Highlight Peaking" : "Show Highlight Peaking")
                 if viewer.state?.item?.isVideo == true {
-                    Button { model.videoMuted.toggle() } label: {
-                        Image(systemName: model.videoMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    Button { preferences.videoMuted.toggle() } label: {
+                        Image(systemName: preferences.videoMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                     }
-                    .help(model.videoMuted ? "Unmute Video" : "Mute Video")
-                    .accessibilityLabel(model.videoMuted ? "Unmute Video" : "Mute Video")
+                    .help(preferences.videoMuted ? "Unmute Video" : "Mute Video")
+                    .accessibilityLabel(preferences.videoMuted ? "Unmute Video" : "Mute Video")
                 }
                 if viewer.state?.item?.isVideo != true {
                     ViewerRotationControls(viewer: viewer)
@@ -900,7 +895,7 @@ struct AppShellView: View {
     private var spaceSelectorToolbar: some ToolbarContent {
         if selectedDestination != .albums {
             ToolbarItem(placement: .navigation) {
-                Picker("Space", selection: $selectedSpace) {
+                Picker("Space", selection: $navigation.selectedSpace) {
                     Text("Personal Space").tag(PhotoSpace.personal)
                     Text("Shared Space").tag(PhotoSpace.shared)
                 }
@@ -915,10 +910,10 @@ struct AppShellView: View {
             collectionBackToolbar
             if selectedDestination != .personalLibrary { spaceSelectorToolbar }
             ToolbarItem(placement: .navigation) {
-                LibrarySizeControl(value: $model.itemsPerRow)
+                LibrarySizeControl(value: $preferences.itemsPerRow)
             }
             ToolbarItem(placement: .navigation) {
-                BrowserThumbnailShapeControl(model: model)
+                BrowserThumbnailShapeControl(preferences: preferences)
                     .frame(height: ToolbarMetrics.controlHeight)
             }
             collectionTitleToolbar

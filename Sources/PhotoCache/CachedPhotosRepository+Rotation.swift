@@ -35,22 +35,22 @@ extension CachedPhotosRepository {
                        direction: PhotoRotationDirection) async throws {
         let source = mediaCollection(for: action.collection)
         guard source.incomingAlbumIdentity == nil, !source.isSessionDerived else {
-            throw SynologyAPIError.unsupported("Rotation is unavailable for shared album photos.")
+            throw RepositoryError.unavailable("Rotation is unavailable for shared album photos.")
         }
         let space = try await itemActionSpace(itemIDs: action.itemIDs, collection: source)
         guard !action.itemIDs.isEmpty else { return }
         if let expected = action.expectedTimelineFingerprint {
             guard let snapshot = metadata.latestTimelines[action.collection], LibraryIndex(snapshot: snapshot).fingerprint == expected else {
-                throw SynologyAPIError.unsupported("The collection changed before the rotation. Try again.")
+                throw RepositoryError.stale("The collection changed before the rotation. Try again.")
             }
         }
         let mutationCacheEpoch = metadata.admissionEpoch
         guard action.itemIDs.allSatisfy({ action.itemsByID[$0]?.hasDisplayableStillImage == true }) else {
-            throw SynologyAPIError.unsupported("Only photos and Live Photo still images can be rotated.")
+            throw RepositoryError.unavailable("Only photos and Live Photo still images can be rotated.")
         }
         for id in action.itemIDs {
             guard !itemMutations.pendingIDs.contains(PhotoItemIdentity(scope: .space(space), itemID: id)) else {
-                throw SynologyAPIError.unsupported("A rotation is already in progress for one of these photos.")
+                throw RepositoryError.busy("A rotation is already in progress for one of these photos.")
             }
         }
         for id in action.itemIDs { itemMutations.pendingIDs.insert(PhotoItemIdentity(scope: .space(space), itemID: id)) }
@@ -134,7 +134,7 @@ extension CachedPhotosRepository {
         let operationItems: [Int64: PhotoItem]
         do {
             let source = mediaCollection(for: action.collection)
-            guard source.incomingAlbumIdentity == nil, !source.isSessionDerived else { throw SynologyAPIError.unsupported("Thumbnail rotation is unavailable for this collection.") }
+            guard source.incomingAlbumIdentity == nil, !source.isSessionDerived else { throw RepositoryError.unavailable("Thumbnail rotation is unavailable for this collection.") }
             space = try await itemActionSpace(itemIDs: action.itemIDs, collection: source)
             reporter.report(.preparing, itemID: nil)
             do { try await connect() }
@@ -249,7 +249,7 @@ extension CachedPhotosRepository {
                 "Downloading thumbnail for rotation item_id=\(id, privacy: .public) unit_id=\(descriptor.unitID, privacy: .public) size=\(size.rawValue, privacy: .public) ready=\(descriptor.isReady(size), privacy: .public)"
             )
             guard descriptor.isReady(size) else {
-                throw SynologyAPIError.unsupported("The \(size.rawValue) thumbnail is not ready.")
+                throw RepositoryError.unavailable("The \(size.rawValue) thumbnail is not ready.")
             }
             let response = try await client.thumbnail(descriptor, size: size, space: space, etag: nil, lastModified: nil)
             guard let data = response.data else { throw SynologyAPIError.invalidResponse }
@@ -268,7 +268,7 @@ extension CachedPhotosRepository {
                                            estimate: ThumbnailRotationDownloadEstimate,
                                            reporter: ThumbnailRotationReporter) async throws -> Int {
         guard let resource = item.fullImageResource(in: .space(space)) else {
-            throw SynologyAPIError.unsupported("A full-size image is unavailable.")
+            throw RepositoryError.unavailable("A full-size image is unavailable.")
         }
         reporter.report(.downloading, itemID: item.id, progress: estimate.thumbnailProgress, detail: "Downloading full photo")
         let original = try await comparisonOriginal(resource) { transfer in
@@ -357,7 +357,7 @@ extension CachedPhotosRepository {
                 if verified { return data }
                 cached = data
             case .failure(let message):
-                failure = message
+                failure = message.localizedDescription
             }
         }
         if let cached { return cached }
@@ -456,7 +456,7 @@ extension CachedPhotosRepository {
     }
 
     private func patchRotationSpace(_ items: [Int64: PhotoItem], space: PhotoSpace, epoch: UInt64) async {
-        guard epoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
+        guard isAdmitted(epoch) else { return }
         let scoped = MetadataNamespace(account: namespace, scope: .space(space))
         guard let admission = try? await store.metadataAdmission(scoped), epoch == metadata.admissionEpoch else { return }
         try? await store.applyMetadataRotationValues(items, namespace: scoped, admission: admission)
@@ -464,14 +464,14 @@ extension CachedPhotosRepository {
 
     private func patchRotationPages(action: SelectionRotationAction,
                                     replacements: [Int64: PhotoItem], metadataEpoch: UInt64) async {
-        guard metadataEpoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
+        guard isAdmitted(metadataEpoch) else { return }
         let scopedNamespace = metadataNamespace(for: action.collection)
         if metadata.initialized,
            replacements.values.allSatisfy({ $0.pendingRotationQuarterTurns == 0 }),
            let admission = try? await store.metadataAdmission(scopedNamespace) {
-            guard metadataEpoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
+            guard isAdmitted(metadataEpoch) else { return }
             try? await store.applyMetadataRotationValues(replacements, namespace: scopedNamespace, admission: admission)
-            guard metadataEpoch == metadata.admissionEpoch, !metadata.resetInProgress else { return }
+            guard isAdmitted(metadataEpoch) else { return }
             let canonical = try? await store.metadataDetails(scopedNamespace, ids: Array(replacements.keys), currentRun: runID)
             guard metadataEpoch == metadata.admissionEpoch else { return }
             if scopedNamespace.scope == .space(.personal) { publishLocationItemChanges(canonical?.values.compactMap(\.item) ?? []) }

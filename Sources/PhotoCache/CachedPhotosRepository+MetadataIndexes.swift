@@ -19,12 +19,12 @@ extension CachedPhotosRepository {
                 do {
                     try await initializeMetadataEngine()
                     let epoch = metadata.admissionEpoch
-                    let peopleEpoch = metadata.peopleEpoch[space, default: 0]
+                    let peopleEpoch = metadata.people.epoch[space, default: 0]
                     let validation = "\(runID):\(epoch):\(name)"
                     let previous = try await cached(store, namespace)
-                    guard !Task.isCancelled, epoch == metadata.admissionEpoch, !metadata.resetInProgress else { continuation.finish(); return }
-                    let writing = guardsPeopleMutations && metadata.peopleMutationSpaces.contains(space)
-                    guard !guardsPeopleMutations || peopleEpoch == metadata.peopleEpoch[space, default: 0] else { continuation.finish(); return }
+                    guard !Task.isCancelled, isAdmitted(epoch) else { continuation.finish(); return }
+                    let writing = guardsPeopleMutations && metadata.people.mutationSpaces.contains(space)
+                    guard !guardsPeopleMutations || peopleEpoch == metadata.people.epoch[space, default: 0] else { continuation.finish(); return }
                     if let previous { continuation.yield(.value(previous.0, verified: !writing && previous.1 == validation)) }
                     if writing || previous?.1 == validation { continuation.finish(); return }
                     let task: Task<Value, Error>
@@ -40,7 +40,7 @@ extension CachedPhotosRepository {
                             let admission = try await store.metadataAdmission(namespace)
                             let value = try await metadataReadRequest(priority: .visible, id: id) { try await fetch(client) }
                             try Task.checkCancellation()
-                            guard epoch == metadata.admissionEpoch, metadata[keyPath: jobs][key]?.id == id, !metadata.resetInProgress else { throw MetadataAdmissionError.superseded }
+                            guard isAdmitted(epoch), metadata[keyPath: jobs][key]?.id == id else { throw MetadataAdmissionError.superseded }
                             try await persist(store, namespace, value, validation, admission)
                             guard epoch == metadata.admissionEpoch, metadata[keyPath: jobs][key]?.id == id else { throw MetadataAdmissionError.superseded }
                             return value
@@ -48,10 +48,10 @@ extension CachedPhotosRepository {
                         metadata[keyPath: jobs][key] = SharedJob(id: id, task: task, subscribers: [subscriber])
                     }
                     let value = try await task.value
-                    guard !Task.isCancelled, epoch == metadata.admissionEpoch, (!guardsPeopleMutations || (peopleEpoch == metadata.peopleEpoch[space, default: 0] && !metadata.peopleMutationSpaces.contains(space))) else { continuation.finish(); return }
+                    guard !Task.isCancelled, epoch == metadata.admissionEpoch, (!guardsPeopleMutations || (peopleEpoch == metadata.people.epoch[space, default: 0] && !metadata.people.mutationSpaces.contains(space))) else { continuation.finish(); return }
                     continuation.yield(.value(value, verified: true))
                 } catch {
-                    if !Task.isCancelled && !(error is CancellationError) { continuation.yield(.failure("\(name): \(error.localizedDescription)")) }
+                    if !Task.isCancelled && !(error is CancellationError) { continuation.yield(.failure(RepositoryError.record(error, operation: name))) }
                 }
                 continuation.finish()
             }

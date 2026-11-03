@@ -8,19 +8,17 @@ extension CachedPhotosRepository {
     func verifiedTimelineSnapshot(
         collection: PhotoCollectionDescriptor
     ) async throws -> TimelineSnapshot {
-        var failure: String?
+        var failure: RepositoryError?
         for await event in timeline(collection: collection) {
             try Task.checkCancellation()
             switch event {
             case .value(let snapshot, let verified):
                 if verified { return snapshot }
-            case .failure(let message):
-                failure = message
+            case .failure(let error):
+                failure = error
             }
         }
-        throw SynologyAPIError.unsupported(
-            failure ?? "The requested timeline could not be validated."
-        )
+        throw failure ?? RepositoryError.stale("The requested timeline could not be validated.")
     }
 
     public func timeline(collection: PhotoCollectionDescriptor) -> AsyncStream<ResourceEvent<TimelineSnapshot>> {
@@ -29,14 +27,14 @@ extension CachedPhotosRepository {
         return AsyncStream(bufferingPolicy: .bufferingNewest(3)) { continuation in
             producer.task = Task {
                 do { try await initializeMetadataEngine() }
-                catch { continuation.yield(.failure(error.localizedDescription)); continuation.finish(); return }
+                catch { continuation.yield(.failure(RepositoryError.record(error, operation: "Timeline"))); continuation.finish(); return }
                 let validation = runID
                 let epoch = metadata.admissionEpoch
                 let mutationEpoch = metadata.mutationEpochs[collection, default: 0]
                 let cached = try? await store.metadataCatalog(CollectionKey(namespace: metadataNamespace(for: collection), collection: collection))
-                guard !Task.isCancelled, epoch == metadata.admissionEpoch, mutationEpoch == metadata.mutationEpochs[collection, default: 0], !metadata.resetInProgress else { continuation.finish(); return }
+                guard !Task.isCancelled, isAdmitted(epoch), mutationEpoch == metadata.mutationEpochs[collection, default: 0] else { continuation.finish(); return }
                 let snapshot = cached.flatMap { try? CollectionDayPager.snapshot(catalog: $0.catalog) }
-                let mutationInProgress = (metadata.albumMutationWriting && collection.albumID != nil && collection.albumID == metadata.albumMutationID) || metadata.peopleMutationCollections.contains(collection)
+                let mutationInProgress = (metadata.albums.mutationWriting && collection.albumID != nil && collection.albumID == metadata.albums.mutationID) || metadata.people.mutationCollections.contains(collection)
                 if let snapshot {
                     metadata.latestTimelines[collection] = snapshot
                     continuation.yield(.value(snapshot, verified: !mutationInProgress && cached?.validatedRun == validation))
@@ -61,7 +59,7 @@ extension CachedPhotosRepository {
                                               verified: requestedValidation == validationRun(for: collection)))
                 } catch {
                     if !Task.isCancelled && !(error is CancellationError) {
-                        continuation.yield(.failure("\(phase): \(error.localizedDescription)"))
+                        continuation.yield(.failure(RepositoryError.record(error, operation: phase)))
                     }
                 }
                 continuation.finish()
@@ -92,8 +90,8 @@ extension CachedPhotosRepository {
                     let epoch = metadata.admissionEpoch
                     let mutationEpoch = metadata.mutationEpochs[collection, default: 0]
                     let cached = useCachedPages ? try await store.metadataPage(address, namespace: metadataNamespace(for: collection), currentRun: runID) : nil
-                    guard !Task.isCancelled, epoch == metadata.admissionEpoch, mutationEpoch == metadata.mutationEpochs[collection, default: 0], !metadata.resetInProgress else { continuation.finish(); return }
-                    let mutationInProgress = (metadata.albumMutationWriting && collection.albumID != nil && collection.albumID == metadata.albumMutationID) || metadata.peopleMutationCollections.contains(collection)
+                    guard !Task.isCancelled, isAdmitted(epoch), mutationEpoch == metadata.mutationEpochs[collection, default: 0] else { continuation.finish(); return }
+                    let mutationInProgress = (metadata.albums.mutationWriting && collection.albumID != nil && collection.albumID == metadata.albums.mutationID) || metadata.people.mutationCollections.contains(collection)
                     if let cached {
                         let visible: PhotoPageSnapshot
                         if mutationInProgress {
@@ -110,7 +108,7 @@ extension CachedPhotosRepository {
                     continuation.yield(.value(applyingFavoriteOverrides(current, collection: collection), verified: current.verified))
                 } catch {
                     if !Task.isCancelled && !(error is CancellationError) && !(error is NetworkGateError && priority == .prefetch) {
-                        continuation.yield(.failure(error.localizedDescription))
+                        continuation.yield(.failure(RepositoryError.record(error, operation: "Page")))
                     }
                 }
                 continuation.finish()
@@ -175,7 +173,7 @@ extension CachedPhotosRepository {
             promoteLibraryFilterSources(section, collection: collection)
             return
         }
-        if let filterID = collection.mapFilterID, let ids = metadata.mapFilters[filterID]?.idsBySection[section] {
+        if let filterID = collection.mapFilterID, let ids = metadata.sessions.mapFilters[filterID]?.idsBySection[section] {
             for id in ids {
                 if let job = metadata.detailJobByID[PhotoItemIdentity(scope: metadataNamespace(for: collection).scope, itemID: id)] { await gate.promote(job) }
             }

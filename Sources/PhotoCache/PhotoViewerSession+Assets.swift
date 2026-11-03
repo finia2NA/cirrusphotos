@@ -192,11 +192,11 @@ extension PhotoViewerSession {
                 images.thumbnailStatus = .ready(verified: verified, validationFailure: nil)
             }
         case .failure(let message):
-            images.thumbnailFailures[tier] = message
+            images.thumbnailFailures[tier] = message.localizedDescription
             if images.thumbnailData != nil {
-                images.thumbnailStatus = .ready(verified: false, validationFailure: message)
+                images.thumbnailStatus = .ready(verified: false, validationFailure: message.localizedDescription)
             } else if images.thumbnailJobs.count == 1 {
-                images.thumbnailStatus = .failure(message)
+                images.thumbnailStatus = .failure(message.localizedDescription)
             }
         }
         publish()
@@ -284,12 +284,12 @@ extension PhotoViewerSession {
             enablePrefetchAfterCurrentSuccess()
         case .failure(let message):
             SynologyDiagnostics.viewer.error(
-                "Full-size subscription failed item_id=\(itemID ?? -1, privacy: .public) unit_id=\(resource.unitID, privacy: .public) error=\(message, privacy: .public)"
+                "Full-size subscription failed item_id=\(itemID ?? -1, privacy: .public) unit_id=\(resource.unitID, privacy: .public) error=\(message.localizedDescription, privacy: .public)"
             )
             if images.fullImageData != nil {
-                images.fullImageStatus = .ready(verified: false, validationFailure: message)
+                images.fullImageStatus = .ready(verified: false, validationFailure: message.localizedDescription)
             } else {
-                images.fullImageStatus = .failure(message)
+                images.fullImageStatus = .failure(message.localizedDescription)
             }
         }
         publish()

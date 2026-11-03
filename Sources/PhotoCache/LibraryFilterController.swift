@@ -414,7 +414,7 @@ public actor LibraryFilterController {
                             let slots = items.slots.map(\.item)
                             emissions.append((slots, verified))
                             if allowNetwork { await self.receiveScanEmission(index: index, items: slots, verified: verified) }
-                        case .failure(let message): failure = message
+                        case .failure(let message): failure = message.localizedDescription
                         }
                     }
                     return .init(index: index, useCachedPages: useCachedPages,

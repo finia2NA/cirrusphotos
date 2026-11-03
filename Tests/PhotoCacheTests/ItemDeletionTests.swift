@@ -88,7 +88,7 @@ final class ItemDeletionTests: XCTestCase {
         do {
             try await repository.deleteItems(resolved)
             XCTFail("An item that remains must not be reported as deleted")
-        } catch SynologyAPIError.unsupported(let message) {
+        } catch RepositoryError.unconfirmed(let message) {
             XCTAssertTrue(message.contains("1 of 1"))
         }
         var revisions = await repository.metadataCacheResets().makeAsyncIterator()

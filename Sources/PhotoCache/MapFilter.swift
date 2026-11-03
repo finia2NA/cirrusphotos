@@ -14,7 +14,7 @@ extension CachedPhotosRepository {
     public func mapFilterInvalidations() -> AsyncStream<PhotoCollectionDescriptor> {
         let id = UUID()
         return AsyncStream(bufferingPolicy: .bufferingNewest(8)) { continuation in
-            metadata.mapFilterInvalidationObservers[id] = continuation
+            metadata.sessions.mapFilterInvalidationObservers[id] = continuation
             continuation.onTermination = { @Sendable _ in
                 Task { await self.removeMapFilterInvalidationObserver(id) }
             }
@@ -28,17 +28,17 @@ extension CachedPhotosRepository {
     public func registerMapFilter(itemIDs: [Int64],
                                   locationRevision: LocationIndexRevision) throws -> MapFilterRegistration {
         let space = locationRevision.space
-        let revision = space == .shared ? metadata.sharedLocations.revision : metadata.locationRevision
-        let locationRecords = space == .shared ? metadata.sharedLocations.records : metadata.locationRecords
+        let revision = space == .shared ? metadata.sharedLocations.revision : metadata.locations.revision
+        let locationRecords = space == .shared ? metadata.sharedLocations.records : metadata.locations.records
         guard locationRevision.rawValue == revision else {
-            throw SynologyAPIError.unsupported("The map changed before this location opened. Try again.")
+            throw RepositoryError.stale("The map changed before this location opened. Try again.")
         }
         guard Set(itemIDs).count == itemIDs.count else {
-            throw SynologyAPIError.unsupported("The selected map photos contain duplicate IDs.")
+            throw RepositoryError.unexpected("The selected map photos contain duplicate IDs.")
         }
         let records = itemIDs.compactMap { locationRecords[$0] }
         guard records.count == itemIDs.count else {
-            throw SynologyAPIError.unsupported("Some selected map photos are no longer available.")
+            throw RepositoryError.stale("Some selected map photos are no longer available.")
         }
         let descriptor = PhotoCollectionDescriptor.mapFilter(UUID(), space: space)
         let built = DayGroupedTimelineBuilder.build(
@@ -57,10 +57,10 @@ extension CachedPhotosRepository {
                            itemIDsBySection: [[Int64]],
                            locationRevision: UInt64, space: PhotoSpace) throws {
         guard let filterID = descriptor.mapFilterID, descriptor.space == space else {
-            throw SynologyAPIError.unsupported("A map filter collection descriptor is required.")
+            throw RepositoryError.unexpected("A map filter collection descriptor is required.")
         }
         guard itemIDsBySection.count == snapshot.sections.count else {
-            throw SynologyAPIError.unsupported("A map filter snapshot does not match its item IDs.")
+            throw RepositoryError.unexpected("A map filter snapshot does not match its item IDs.")
         }
         var idsBySection: [TimelineSection: [Int64]] = [:]
         for (section, ids) in zip(snapshot.sections, itemIDsBySection) {
@@ -68,7 +68,7 @@ extension CachedPhotosRepository {
         }
         guard !metadata.resetInProgress else { throw MetadataAdmissionError.resetInProgress }
         installSelectionRetention(descriptor)
-        metadata.mapFilters[filterID] = MapFilterState(space: space, registrationID: UUID(),
+        metadata.sessions.mapFilters[filterID] = MapFilterState(space: space, registrationID: UUID(),
                                                        metadataEpoch: metadata.admissionEpoch,
                                                        locationRevision: locationRevision,
                                                        snapshot: snapshot,
@@ -84,10 +84,10 @@ extension CachedPhotosRepository {
 
     func removeMapFilter(_ descriptor: PhotoCollectionDescriptor) {
         guard let filterID = descriptor.mapFilterID,
-              metadata.mapFilters.removeValue(forKey: filterID) != nil else { return }
-        metadata.selectionRetentions.removeValue(forKey: descriptor)
+              metadata.sessions.mapFilters.removeValue(forKey: filterID) != nil else { return }
+        metadata.sessions.selectionRetentions.removeValue(forKey: descriptor)
         metadata.latestTimelines.removeValue(forKey: descriptor)
-        metadata.sessionFilterCatalogs.removeValue(forKey: descriptor)
+        metadata.sessions.filterCatalogs.removeValue(forKey: descriptor)
         metadata.mutationEpochs.removeValue(forKey: descriptor)
         cancelIdleLogin()
     }
@@ -104,14 +104,14 @@ extension CachedPhotosRepository {
                 defer { metadata.directSubscribers.remove(subscriber); cancelIdleLogin() }
                 do {
                     try await initializeMetadataEngine()
-                    guard let filterID = collection.mapFilterID, let state = metadata.mapFilters[filterID],
-                          let ids = state.idsBySection[section] else { throw SynologyAPIError.unsupported("This location filter is no longer available.") }
+                    guard let filterID = collection.mapFilterID, let state = metadata.sessions.mapFilters[filterID],
+                          let ids = state.idsBySection[section] else { throw RepositoryError.stale("This location filter is no longer available.") }
                     let source = PhotoCollectionDescriptor.library(state.space)
                     let scopedNamespace = metadataNamespace(for: source)
                     let address = try DayPageAddress(section: section, collection: collection)
                     func current() -> Bool {
                         guard !Task.isCancelled, metadata.admissionEpoch == state.metadataEpoch,
-                              metadata.mapFilters[filterID]?.registrationID == state.registrationID else { return false }
+                              metadata.sessions.mapFilters[filterID]?.registrationID == state.registrationID else { return false }
                         return true
                     }
                     func snapshot(_ details: [Int64: PhotoItemSlot]) -> PhotoPageSnapshot {
@@ -135,7 +135,7 @@ extension CachedPhotosRepository {
                     let result = snapshot(try await store.metadataDetails(scopedNamespace, ids: ids, currentRun: runID))
                     continuation.yield(.value(applyingFavoriteOverrides(result, collection: source), verified: result.verified))
                 } catch {
-                    if !Task.isCancelled { continuation.yield(.failure(error.localizedDescription)) }
+                    if !Task.isCancelled { continuation.yield(.failure(RepositoryError.record(error, operation: "Map filter page"))) }
                 }
                 continuation.finish()
             }
@@ -144,16 +144,16 @@ extension CachedPhotosRepository {
     }
 
     func invalidateMapFiltersForLocationChange(space: PhotoSpace) {
-        let descriptors = metadata.mapFilters.filter { $0.value.space == space }.map { PhotoCollectionDescriptor.mapFilter($0.key, space: $0.value.space) }
+        let descriptors = metadata.sessions.mapFilters.filter { $0.value.space == space }.map { PhotoCollectionDescriptor.mapFilter($0.key, space: $0.value.space) }
         for descriptor in descriptors {
             removeMapFilter(descriptor)
-            for observer in metadata.mapFilterInvalidationObservers.values {
+            for observer in metadata.sessions.mapFilterInvalidationObservers.values {
                 observer.yield(descriptor)
             }
         }
     }
 
     private func removeMapFilterInvalidationObserver(_ id: UUID) {
-        metadata.mapFilterInvalidationObservers.removeValue(forKey: id)
+        metadata.sessions.mapFilterInvalidationObservers.removeValue(forKey: id)
     }
 }
