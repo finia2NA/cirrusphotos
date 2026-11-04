@@ -112,6 +112,29 @@ final class FullImageRepositoryTests: XCTestCase {
         if case .failure = offlineEvents[1] {} else { XCTFail("Expected the offline validation failure") }
     }
 
+    func testCachedAPIErrorBodyIsDiscardedAndRefetched() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let image = resource(30)
+        let poison = Data(#"{"error":{"code":119},"success":false}"#.utf8)
+        let seedTransport = FullImageTransport()
+        await seedTransport.configure(data: poison)
+        _ = await consume(try repository(root: cacheRoot, transport: seedTransport), image).value
+
+        let offline = try repository(root: cacheRoot, transport: FullImageTransport())
+        var offlineEvents: [ResourceEvent<Data>] = []
+        for await event in await offline.fullImage(image, allowNetwork: false) { offlineEvents.append(event) }
+        XCTAssertTrue(offlineEvents.isEmpty, "An error body must not be served as the cached original")
+
+        let transport = FullImageTransport()
+        await transport.configure(data: Data([4, 5, 6]), etag: "fresh")
+        let events = await consume(try repository(root: cacheRoot, transport: transport), image).value
+        XCTAssertEqual(events.count, 1)
+        if case .value(let bytes, true) = events[0] { XCTAssertEqual(bytes, Data([4, 5, 6])) }
+        else { XCTFail("Expected a verified download") }
+        let validator = await transport.validators.first?.0
+        XCTAssertNil(validator, "A discarded entry's validators must not be reused")
+    }
+
     func testMetadataResetLetsAdmittedOriginalFinishAfterLastSubscriberLeaves() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let image = resource(15)

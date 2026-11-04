@@ -16,10 +16,18 @@ extension CachedPhotosRepository {
                 let schedulingDelay = ContinuousClock.now - requestedAt
                 let key = CacheKey.fullImage(namespace: namespace, resource: resource)
                 if let progress { registerFullImageProgress(progress, key: key, subscriber: subscriber) }
-                let cached: CacheEntry?
+                var cached: CacheEntry?
                 let readStart = ContinuousClock.now
                 do {
                     cached = try await store.get(key)
+                    // An API error body served with status 200 was once cached as the original.
+                    if let entry = cached, let code = PhotoDownloadValidation.apiErrorCode(in: entry.data) {
+                        SynologyDiagnostics.originals.error(
+                            "Original cache entry is an API error body, discarding unit_id=\(resource.unitID, privacy: .public) code=\(code, privacy: .public)"
+                        )
+                        try await store.remove(key)
+                        cached = nil
+                    }
                 } catch {
                     cached = nil
                     SynologyDiagnostics.originals.error(

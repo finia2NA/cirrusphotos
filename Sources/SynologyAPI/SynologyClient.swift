@@ -879,10 +879,8 @@ public actor SynologyClient: PhotosTransport {
         }
         guard http.statusCode == 200 else { throw SynologyAPIError.http(http.statusCode) }
         guard http.value(forHTTPHeaderField: "Content-Type")?.lowercased().hasPrefix("image/") == true,
-              !data.isEmpty,
-              CGImageSourceCreateWithData(data as CFData, nil) != nil else {
-            if let envelope = try? JSONDecoder().decode(APIEnvelope<EmptyData>.self, from: data),
-               let error = envelope.error { throw SynologyAPIError.api(error.code) }
+              PhotoDownloadValidation.containsImage(data) else {
+            if let code = PhotoDownloadValidation.apiErrorCode(in: data) { throw SynologyAPIError.api(code) }
             throw SynologyAPIError.invalidResponse
         }
         return MediaResponse(data: data, etag: http.value(forHTTPHeaderField: "ETag"),
@@ -968,12 +966,11 @@ public actor SynologyClient: PhotosTransport {
             )
             throw SynologyAPIError.http(http.statusCode)
         }
-        guard !data.isEmpty, CGImageSourceCreateWithData(data as CFData, nil) != nil else {
+        guard PhotoDownloadValidation.containsImage(data) else {
             SynologyDiagnostics.transport.error(
                 "Original response was not a decodable image unit_id=\(resource.unitID, privacy: .public) status=200 content_type=\(http.value(forHTTPHeaderField: "Content-Type") ?? "nil", privacy: .public) bytes=\(data.count, privacy: .public)"
             )
-            if let envelope = try? JSONDecoder().decode(APIEnvelope<EmptyData>.self, from: data),
-               let error = envelope.error { throw SynologyAPIError.api(error.code) }
+            if let code = PhotoDownloadValidation.apiErrorCode(in: data) { throw SynologyAPIError.api(code) }
             throw SynologyAPIError.invalidResponse
         }
         SynologyDiagnostics.transport.info(

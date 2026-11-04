@@ -15,6 +15,33 @@ final class PhotoDownloadTests: XCTestCase {
         XCTAssertFalse(try PhotoDownloadValidation.hasCompleteZIPTrailer(at: url))
     }
 
+    private static let pngPixel = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")!
+
+    func testErrorEnvelopeIsNotAnImage() {
+        let envelope = Data(#"{"error":{"code":119},"success":false}"#.utf8)
+        XCTAssertEqual(PhotoDownloadValidation.apiErrorCode(in: envelope), 119)
+        XCTAssertFalse(PhotoDownloadValidation.containsImage(envelope))
+        XCTAssertNil(PhotoDownloadValidation.apiErrorCode(in: Self.pngPixel))
+        XCTAssertTrue(PhotoDownloadValidation.containsImage(Self.pngPixel))
+    }
+
+    func testOriginalErrorBodyWithStatus200IsRejected() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OriginalErrorProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let client = SynologyClient(baseURL: URL(string: "https://example.test")!, session: session)
+        try await client.login(credentials: .init(username: "test", password: "unused"))
+        let resource = FullImageResource(scope: .space(.personal), unitID: 1, cacheKey: "key", filename: "a.jpg")
+        do {
+            _ = try await client.fullImage(resource, etag: nil, lastModified: nil)
+            XCTFail("An API error body must not be returned as an original")
+        } catch let error as SynologyAPIError {
+            guard case .api(119) = error else { return XCTFail("Unexpected error \(error)") }
+        }
+    }
+
     func testDownloadRequestAndOriginalFallbackFilename() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [DownloadFixtureProtocol.self]
@@ -134,6 +161,21 @@ private final class DownloadFixtureProtocol: URLProtocol, @unchecked Sendable {
         let body = login ? Data("{\"success\":true,\"data\":{\"sid\":\"test\"}}".utf8) : Data("original".utf8)
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: headers)!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+private final class OriginalErrorProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+    override func startLoading() {
+        let login = request.httpMethod == "POST"
+        let body = login ? #"{"success":true,"data":{"sid":"test"}}"# : #"{"error":{"code":119},"success":false}"#
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(
+            url: request.url!, statusCode: 200, httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
 }
