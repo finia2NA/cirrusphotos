@@ -748,6 +748,20 @@ extension DiskCache {
         }
     }
 
+    /// Withdraws only this run's validation of catalogs and summary lists, so the next read
+    /// of each fetches it again. Stored rows, page membership and Diff proof are untouched.
+    public func withdrawSummaryValidation(namespace: MetadataNamespace,
+                                          admission: MetadataStoreAdmission) throws {
+        try metadataWrite { db in
+            try admitLifetime(admission, namespace: namespace)
+            try CollectionStateRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try AlbumSummariesRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try FolderDirectoryRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try FolderCoverRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try CollectionSummaryRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+        }
+    }
+
     /// Keeps every stored row readable but withdraws all current-run validation and
     /// Diff proof. Dropping the cursor makes the next reconciliation start a new reset
     /// epoch, so every page and detail is read again before it counts as verified.

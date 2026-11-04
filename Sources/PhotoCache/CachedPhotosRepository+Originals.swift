@@ -10,11 +10,14 @@ extension CachedPhotosRepository {
         -> AsyncStream<ResourceEvent<Data>> {
         let subscriber = UUID()
         let producer = StreamProducer()
+        let requestedAt = ContinuousClock.now
         return AsyncStream(bufferingPolicy: .bufferingNewest(3)) { continuation in
             producer.task = Task {
+                let schedulingDelay = ContinuousClock.now - requestedAt
                 let key = CacheKey.fullImage(namespace: namespace, resource: resource)
                 if let progress { registerFullImageProgress(progress, key: key, subscriber: subscriber) }
                 let cached: CacheEntry?
+                let readStart = ContinuousClock.now
                 do {
                     cached = try await store.get(key)
                 } catch {
@@ -23,6 +26,9 @@ extension CachedPhotosRepository {
                         "Original cache read failed unit_id=\(resource.unitID, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
                     )
                 }
+                SynologyDiagnostics.originals.info(
+                    "Original cache read unit_id=\(resource.unitID, privacy: .public) scheduling_delay=\(String(describing: schedulingDelay), privacy: .public) read_duration=\(String(describing: ContinuousClock.now - readStart), privacy: .public) cancelled=\(Task.isCancelled, privacy: .public)"
+                )
                 guard !Task.isCancelled else { continuation.finish(); return }
                 if let cached {
                     SynologyDiagnostics.originals.info(

@@ -17,6 +17,8 @@ public struct LibraryDay: Identifiable, Sendable {
     public let count: Int
     public let section: Int
     public var id: String { String(format: "%04d-%02d-%02d", year, month, day) }
+    /// Chronological key (`yyyymmdd`) for hot paths; avoids formatting `id` strings.
+    var sortKey: Int { year * 10_000 + month * 100 + day }
     public var monthLabel: String { String(format: "%04d / %02d", year, month) }
 
     public init(year: Int, month: Int, day: Int, count: Int, section: Int) {
@@ -34,17 +36,18 @@ public struct Timeline: Sendable {
     public init(days: [LibraryDay]) {
         // A split day can appear in several API sections. Retain its first section
         // and the largest aggregate count reported by any contributing section.
-        var unique: [String: LibraryDay] = [:]
+        var unique: [Int: LibraryDay] = [:]
         for day in days {
-            guard let current = unique[day.id] else {
-                unique[day.id] = day
+            let key = day.sortKey
+            guard let current = unique[key] else {
+                unique[key] = day
                 continue
             }
-            unique[day.id] = LibraryDay(year: day.year, month: day.month, day: day.day,
-                                        count: max(current.count, day.count),
-                                        section: min(current.section, day.section))
+            unique[key] = LibraryDay(year: day.year, month: day.month, day: day.day,
+                                     count: max(current.count, day.count),
+                                     section: min(current.section, day.section))
         }
-        let sorted = unique.values.sorted { $0.id > $1.id }
+        let sorted = unique.values.sorted { $0.sortKey > $1.sortKey }
         self.days = sorted
         yearStarts = sorted.indices.filter { $0 == 0 || sorted[$0].year != sorted[$0 - 1].year }
         monthStarts = sorted.indices.filter {

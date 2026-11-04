@@ -5,6 +5,7 @@ import SynologyAPI
 /// Cancelling current work invalidates its request tokens while preserving reusable bytes.
 struct ViewerImageWork {
     static let enhancementDelay: Duration = .milliseconds(100)
+    static let fullRetryInterval: Duration = .seconds(2)
 
     struct FullJob {
         let id: UUID
@@ -51,9 +52,13 @@ struct ViewerImageWork {
     var enhancementTask: Task<Void, Never>?
     var enhancementAttempt: UUID?
     var enhancementsReleasedGeneration: UInt64?
+    /// Pending automatic retry of an uncached original whose request failed.
+    var fullRetryTask: Task<Void, Never>?
 
     mutating func cancelCurrent() {
         cancelEnhancementDelay()
+        fullRetryTask?.cancel()
+        fullRetryTask = nil
         for job in thumbnailJobs.values { job.task.cancel() }
         thumbnailJobs.removeAll()
         fullTask?.cancel()

@@ -286,10 +286,15 @@ struct ConnectionToolbarItem: View {
             .labelStyle(.titleAndIcon)
             .foregroundStyle(.secondary)
 
-            if library.authenticationStatus != .signedIn || library.error(for: .library(.personal)) != nil {
-                Button("Retry") { Task { await library.reload() } }
-                    .controlSize(.small)
-                    .disabled(library.isLoading)
+            if library.isRefreshing || library.isLoading {
+                ProgressView().controlSize(.mini)
+            } else {
+                Button { Task { await library.refresh() } } label: {
+                    Image(systemName: library.refreshFailure == nil ? "arrow.clockwise" : "exclamationmark.arrow.circlepath")
+                }
+                .buttonStyle(.borderless)
+                .help(library.refreshFailure ?? "Refresh from the NAS")
+                .accessibilityLabel("Refresh")
             }
         }
         .frame(height: ToolbarMetrics.controlHeight)
@@ -349,6 +354,10 @@ struct LibraryCommands: Commands {
                 .disabled(!model.canCloseViewer)
         }
         CommandMenu("Library") {
+            Button("Refresh from NAS") { Task { await model.refresh() } }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(model.isRefreshing || model.isLoading)
+            Divider()
             Button("Back") { model.navigateBack() }
                 .keyboardShortcut(.cancelAction)
                 .disabled(!model.canNavigateBack)

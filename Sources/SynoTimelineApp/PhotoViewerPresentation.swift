@@ -156,10 +156,7 @@ final class PhotoViewerPresentation: ObservableObject {
     }
 
     var canRetry: Bool {
-        guard invalidationMessage == nil, let state else { return false }
-        if decodeFailure != nil { return true }
-        if case .failure = state.fullImageStatus { return true }
-        return false
+        invalidationMessage == nil && state != nil && decodeFailure != nil
     }
 
     var showsUnsupportedVideo: Bool { state?.item?.isVideo == true && state?.videoResource == nil }

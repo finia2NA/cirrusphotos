@@ -93,6 +93,15 @@ public actor DiskCache {
     }
 
     public func get(_ key: String) throws -> CacheEntry? {
+        let started = ContinuousClock.now
+        defer {
+            let elapsed = ContinuousClock.now - started
+            if elapsed > .milliseconds(100) {
+                SynologyDiagnostics.originals.info(
+                    "Slow cache get duration=\(String(describing: elapsed), privacy: .public)"
+                )
+            }
+        }
         guard let record = try database.read({ try CacheEntryRecord.fetchOne($0, key: key) }) else { return nil }
         guard let filename = record.file,
               let data = try? Data(contentsOf: images.appendingPathComponent(filename)) else {

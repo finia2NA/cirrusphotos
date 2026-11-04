@@ -63,6 +63,8 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var metadataInvalidationRevision: UInt64 = 0
     @Published private(set) var cacheResetInProgress = false
     @Published private(set) var cacheResetError: String?
+    @Published private(set) var isRefreshing = false
+    @Published private(set) var refreshFailure: String?
     @Published var albumMembershipRevision: UInt64 = 0
     var changedAlbumID: Int64?
     @Published private(set) var mapFilterInvalidationRevision: UInt64 = 0
@@ -580,6 +582,41 @@ final class LibraryModel: ObservableObject {
         retryRevision += 1
         started = false
         await load()
+    }
+
+    /// Reads changes from the NAS now and reloads open views. A failed sign-in or an
+    /// unloaded library is retried from the start instead.
+    func refresh() async {
+        guard let repository, !isRefreshing, !isLoading else { return }
+        if !started || authenticationFailed || error(for: .library(.personal)) != nil {
+            refreshFailure = nil
+            await reload()
+            return
+        }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        do {
+            try await repository.refreshMetadata()
+            refreshFailure = nil
+            resubscribeAfterRefresh()
+        } catch {
+            refreshFailure = reportedFailure(error, operation: "Refresh")
+        }
+    }
+
+    /// Re-runs the album and collection streams without clearing what they show. Each starts
+    /// from its cached value, which equals the current one, and merges the re-read result.
+    private func resubscribeAfterRefresh() {
+        albumsTask?.cancel()
+        albumsTask = nil
+        incomingAlbumsTask?.cancel()
+        incomingAlbumsTask = nil
+        if albumListRequested { startAlbumListFetchIfNeeded() }
+        let collections = openedCollections.union(PhotoCollectionDescriptor.bootstrapCollections)
+        for collection in collections where !collection.isSessionDerived {
+            collectionFetchTasks.removeValue(forKey: collection)?.cancel()
+            startCollectionFetchIfNeeded(collection)
+        }
     }
 
     func refreshUsage() async {

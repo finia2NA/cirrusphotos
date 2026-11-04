@@ -9,6 +9,8 @@ struct RepositoryAuthenticationState {
     var attempt: UUID?
     var connected = false
     var status: AuthenticationStatus = .notStarted
+    /// A failure to reach the NAS is retried by the next request; a rejected sign-in is not.
+    var failureIsTransient = false
     var observers: [UUID: AsyncStream<AuthenticationStatus>.Continuation] = [:]
 
     mutating func setStatus(_ next: AuthenticationStatus) {
@@ -20,6 +22,7 @@ struct RepositoryAuthenticationState {
     mutating func resetAttempt() {
         task = nil
         attempt = nil
+        failureIsTransient = false
         setStatus(.notStarted)
     }
 

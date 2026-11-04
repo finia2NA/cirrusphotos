@@ -337,9 +337,29 @@ extension PhotoViewerSession {
                 images.fullImageStatus = .ready(verified: false, validationFailure: message.localizedDescription)
             } else {
                 images.fullImageStatus = .failure(message.localizedDescription)
+                scheduleFullImageRetry()
             }
         }
         publish()
+    }
+
+    /// An original that is not cached and could not be fetched is retried every
+    /// `fullRetryInterval` until it arrives, the selection changes or the viewer closes.
+    func scheduleFullImageRetry() {
+        guard !closed, allowNetwork, images.fullRetryTask == nil else { return }
+        let delay = ViewerImageWork.fullRetryInterval
+        let expectedGeneration = generation
+        images.fullRetryTask = Task { [weak self] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            await self?.retryFullImageAfterFailure(generation: expectedGeneration)
+        }
+    }
+
+    func retryFullImageAfterFailure(generation expectedGeneration: UInt64) {
+        images.fullRetryTask = nil
+        guard !closed, generation == expectedGeneration, images.fullImageData == nil,
+              case .failure = images.fullImageStatus else { return }
+        retry()
     }
 
     func finishCurrentFull(_ attempt: UUID) {
