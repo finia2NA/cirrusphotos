@@ -34,11 +34,17 @@ final class LibraryModel: ObservableObject {
     var albumOperationTask: Task<Void, Never>?
     var filterAuthorities: [PhotoCollectionDescriptor: [[Bool]]] = [:]
     var filterMemberships: [PhotoCollectionDescriptor: [[Int64]]] = [:]
-    @Published var snapshots: [PhotoCollectionDescriptor: TimelineSnapshot] = [:]
-    @Published var snapshotRevisions: [PhotoCollectionDescriptor: Int] = [:]
-    @Published var viewerSnapshotRevisions: [PhotoCollectionDescriptor: Int] = [:]
-    @Published var timelineVerifications: [PhotoCollectionDescriptor: Bool] = [:]
-    @Published var collectionErrors: [PhotoCollectionDescriptor: String] = [:]
+    // Per-collection timeline state. Not `@Published`: every write announces itself through
+    // `collectionStateChanged()`, immediately, or coalesced while background warming
+    // delivers timelines that no view displays yet. Each announcement re-renders the window.
+    private(set) var snapshots: [PhotoCollectionDescriptor: TimelineSnapshot] = [:] { didSet { collectionStateChanged() } }
+    private(set) var snapshotRevisions: [PhotoCollectionDescriptor: Int] = [:] { didSet { collectionStateChanged() } }
+    private(set) var viewerSnapshotRevisions: [PhotoCollectionDescriptor: Int] = [:] { didSet { collectionStateChanged() } }
+    private(set) var timelineVerifications: [PhotoCollectionDescriptor: Bool] = [:] { didSet { collectionStateChanged() } }
+    private(set) var collectionErrors: [PhotoCollectionDescriptor: String] = [:] { didSet { collectionStateChanged() } }
+    private var quietCollectionUpdates = false
+    private var pendingCollectionAnnouncement: Task<Void, Never>?
+    private static let quietAnnouncementDelay: Duration = .seconds(1)
     @Published private(set) var isLoading = true
     @Published private(set) var authenticationStatus: AuthenticationStatus = .notStarted
     @Published private(set) var retryRevision = 0
@@ -135,6 +141,22 @@ final class LibraryModel: ObservableObject {
     }
 
 
+    private func collectionStateChanged() {
+        guard quietCollectionUpdates else {
+            pendingCollectionAnnouncement?.cancel()
+            pendingCollectionAnnouncement = nil
+            objectWillChange.send()
+            return
+        }
+        guard pendingCollectionAnnouncement == nil else { return }
+        pendingCollectionAnnouncement = Task { [weak self] in
+            try? await Task.sleep(for: Self.quietAnnouncementDelay)
+            guard let self, !Task.isCancelled else { return }
+            self.pendingCollectionAnnouncement = nil
+            self.objectWillChange.send()
+        }
+    }
+
     func snapshot(for collection: PhotoCollectionDescriptor) -> TimelineSnapshot? { snapshots[collection] }
     func snapshotRevision(for collection: PhotoCollectionDescriptor) -> Int { snapshotRevisions[collection, default: 0] }
     func viewerSnapshotRevision(for collection: PhotoCollectionDescriptor) -> Int {
@@ -180,10 +202,11 @@ final class LibraryModel: ObservableObject {
 
     /// Starts loading a persistent collection lazily. Session-derived collections
     /// own their snapshots and are registered separately.
-    func ensureCollectionLoaded(_ collection: PhotoCollectionDescriptor) {
+    /// `quiet` coalesces the resulting change announcements; background warming uses it.
+    func ensureCollectionLoaded(_ collection: PhotoCollectionDescriptor, quiet: Bool = false) {
         guard !collection.isSessionDerived else { return }
         openedCollections.insert(collection)
-        startCollectionFetchIfNeeded(collection)
+        startCollectionFetchIfNeeded(collection, quiet: quiet)
     }
 
     /// Resolves every persistent collection that participates in explicit metadata
@@ -208,7 +231,7 @@ final class LibraryModel: ObservableObject {
         let albumCollections = ownedAlbums.compactMap(\.collection)
         for collection in albumCollections {
             guard !Task.isCancelled else { break }
-            ensureCollectionLoaded(collection)
+            ensureCollectionLoaded(collection, quiet: true)
             await collectionFetchTasks[collection]?.value
         }
 
@@ -303,7 +326,8 @@ final class LibraryModel: ObservableObject {
     }
 
     func startCollectionFetchIfNeeded(_ collection: PhotoCollectionDescriptor,
-                                              reason: TimelineUpdateReason = .authoritativeLoad) {
+                                              reason: TimelineUpdateReason = .authoritativeLoad,
+                                              quiet: Bool = false) {
         guard let repository, collectionFetchTasks[collection] == nil else { return }
         collectionFetchTasks[collection] = Task { [weak self] in
             let started = ContinuousClock.now
@@ -314,7 +338,7 @@ final class LibraryModel: ObservableObject {
                     events += 1
                     SynologyDiagnostics.folders.info("timeline folder=\(folder, privacy: .public) event=\(events, privacy: .public) elapsed=\(String(describing: ContinuousClock.now - started), privacy: .public)")
                 }
-                await self?.receive(event, collection: collection, reason: reason)
+                await self?.receive(event, collection: collection, reason: reason, quiet: quiet)
             }
         }
     }
@@ -549,10 +573,16 @@ final class LibraryModel: ObservableObject {
     }
 
     func receive(_ event: ResourceEvent<TimelineSnapshot>, collection: PhotoCollectionDescriptor,
-                         reason: TimelineUpdateReason = .authoritativeLoad) async {
+                         reason: TimelineUpdateReason = .authoritativeLoad, quiet: Bool = false) async {
+        var authority: PhotoSelectionAuthority?
+        if case .value(let snapshot, _) = event {
+            authority = await repository?.selectionAuthority(collection: collection, snapshot: snapshot)
+        }
+        // No suspension below: the flag covers exactly this event's writes.
+        quietCollectionUpdates = quiet
+        defer { quietCollectionUpdates = false }
         switch event {
         case .value(let snapshot, let verified):
-            let authority = await repository?.selectionAuthority(collection: collection, snapshot: snapshot)
             selectionAuthorities[collection] = authority
             let changed = snapshots[collection]?.sections != snapshot.sections
             if reason == .favoriteMutationRefresh || changed {
