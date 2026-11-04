@@ -24,6 +24,10 @@ if [[ ${free_gb:-0} -lt 25 ]]; then
     echo "Warning: only ${free_gb} GB free. Traces can be very large (Animation Hitches especially)." >&2
 fi
 
+# Instruments such as SwiftUI need a debuggable target; only the profiling bundle gets this.
+codesign --force --deep --sign - --entitlements scripts/Profiling.entitlements \
+    "$PWD/.build/Cirrus Photos.app" || exit 1
+
 echo "Template: $template (+ os_signpost), ${seconds}s. Output: $trace"
 # os_signpost records the app's performance.browser intervals alongside any template.
 xcrun xctrace record --template "$template" --instrument os_signpost --time-limit "${seconds}s" \

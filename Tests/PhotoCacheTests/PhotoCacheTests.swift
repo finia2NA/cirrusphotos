@@ -124,6 +124,23 @@ final class PhotoCacheTests: XCTestCase {
         XCTAssertEqual(CacheBudget.fraction(for: CacheBudget.bytes(at: 0.5)), 0.5, accuracy: 0.00001)
     }
 
+    /// Budgets with a reserve rely on the in-memory usage estimate between full scans;
+    /// media writes must still trigger eviction once the estimate exceeds the limit.
+    func testReserveBudgetEvictsWhenEstimatedUsageExceedsLimit() async throws {
+        let root = temporaryTestRoot("SynoEstimatedUsageTest")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = try DiskCache(root: root, budget: 200_000_000)
+        let block = 95_000_000
+        try await cache.put("first", kind: .thumbnail, data: Data(repeating: 1, count: block), validatedRun: nil)
+        try await cache.put("second", kind: .thumbnail, data: Data(repeating: 2, count: block), validatedRun: nil)
+        let first = try await cache.get("first")
+        let second = try await cache.get("second")
+        let usage = try await cache.usage()
+        XCTAssertNil(first)
+        XCTAssertNotNil(second)
+        XCTAssertEqual(usage, Int64(block))
+    }
+
     func testThumbnailEvictionUsesReadRecency() async throws {
         let root = temporaryTestRoot("ThumbnailLRU")
         defer { try? FileManager.default.removeItem(at: root) }

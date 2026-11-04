@@ -289,6 +289,7 @@ struct LibraryBrowserView: View {
     }
 
     var body: some View {
+        let _ = ModelChangeSignposts.body("Library browser body")
         Group {
             if let repository = library.repository,
                (browserHeader != nil || !(library.snapshot(for: collection)?.timeline.days.isEmpty ?? true)) {

@@ -112,6 +112,7 @@ struct AppShellView: View {
     }
 
     var body: some View {
+        let _ = ModelChangeSignposts.body("App shell body")
         NavigationSplitView(columnVisibility: $columnVisibility) {
             List(selection: Binding(get: { sidebarSelection }, set: select)) {
                 Label("Library", systemImage: "photo.on.rectangle.angled")

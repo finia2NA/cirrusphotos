@@ -148,6 +148,8 @@ Drag-out uses one `NSFilePromiseProvider` per gesture, retained by the dragging 
 
 Typed finite `AsyncStream` results emit cached values first and current values after validation, then finish. Thumbnail GETs use `If-None-Match` or `If-Modified-Since` when cached validators exist, and accept 304 only with local bytes. The NAS remains authoritative; cached metadata is provisional until validated. See [transferred cache plan](https://github.com/finia2NA/syno/issues/28#issuecomment-6478636441) for evidence, current limitations, and future work.
 
+Budget enforcement keeps an in-memory usage estimate: media writes and evictions adjust it exactly, while metadata growth is re-measured by a full usage scan at most every 15 seconds. Budgets of 200 MB or more keep a reserve below the limit that absorbs growth between scans; smaller budgets have no reserve and scan on every write. Read-recency updates are batched and flushed before eviction.
+
 The cache-location rationale and requirements for any future return to macOS's purgeable Caches directory are recorded in [decision 001](decisions/001-development-cache-location.md).
 
 ## Verification

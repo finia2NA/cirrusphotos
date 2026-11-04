@@ -29,7 +29,18 @@ struct SynoTimelineApp: App {
                 .environmentObject(timelineSectionLoad)
                 .environmentObject(metadataSync)
                 .frame(minWidth: 560, minHeight: 420)
-                .task { await model.load() }
+                .task {
+                    let signposts = ModelChangeSignposts.shared
+                    signposts.observe(model, name: "LibraryModel")
+                    signposts.observe(preferences, name: "AppPreferences")
+                    signposts.observe(albumPresentation, name: "AlbumPresentationStore")
+                    signposts.observe(navigation, name: "NavigationModel")
+                    signposts.observe(infoPanel, name: "InfoPanelModel")
+                    signposts.observe(libraryFilter, name: "LibraryFilterModel")
+                    signposts.observe(timelineSectionLoad, name: "TimelineSectionLoadModel")
+                    signposts.observe(metadataSync, name: "MetadataSyncModel")
+                    await model.load()
+                }
         }
         .windowToolbarStyle(.unified)
         .defaultSize(width: 860, height: 820)

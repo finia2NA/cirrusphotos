@@ -43,6 +43,13 @@ public actor DiskCache {
     /// Metadata rows are decoded only after `initializeMetadataStore` discarded any superseded format.
     var metadataInitialized = false
     private var configuredThumbnailSize: ThumbnailSize = .m
+    /// Usage from the last full scan, adjusted by media writes and evictions since then.
+    /// Measuring metadata cost reads every stored payload, so it is not repeated per write.
+    private var estimatedUsage: Int64?
+    private var metadataWritesSinceUsageCheck = 0
+    private var lastUsageCheck = ContinuousClock.now
+    /// Metadata growth is not tracked per write; it is re-measured at most this often.
+    private static let metadataUsageCheckInterval: Duration = .seconds(15)
     /// Read-recency updates are batched so a cache hit does not cost a write transaction.
     /// They are flushed before eviction, so eviction order still follows read recency.
     private var pendingTouches: [String: Double] = [:]
@@ -164,7 +171,7 @@ public actor DiskCache {
                     thumbnail identity: ThumbnailCacheIdentity? = nil) throws {
         if let expectedGeneration, expectedGeneration != generation { return }
         pendingTouches.removeValue(forKey: key)
-        try database.write { db in
+        let replacedCost = try database.write { db -> Int64 in
             let existing = try CacheEntryRecord.fetchOne(db, key: key)
             let storedKind: CacheKind = kind == .previewThumbnail && existing?.kind == CacheKind.thumbnail.rawValue ? .thumbnail : kind
             let filename = switch storedKind {
@@ -181,7 +188,9 @@ public actor DiskCache {
                                  thumbnailFamily: identity?.family, thumbnailSize: identity?.size.rawValue,
                                  rowRevision: (existing?.rowRevision ?? 0) + 1).upsert(db)
             if let identity { try reclassifyThumbnailFamily(identity.family, db) }
+            return existing?.cost ?? 0
         }
+        estimatedUsage? += Int64(data.count) - replacedCost
         try trim()
     }
 
@@ -216,11 +225,12 @@ public actor DiskCache {
         try database.read { try CacheEntryRecord.fetchOne($0, key: key) }?.retentionClass.flatMap(CacheRetentionClass.init(rawValue:))
     }
 
-    public func setBudget(_ value: Int64) throws { budget = value; try trim() }
+    public func setBudget(_ value: Int64) throws { budget = value; try trim(force: true) }
 
     public func clear() throws {
         generation += 1
         metadataGeneration += 1
+        estimatedUsage = nil
         try database.write { db in
             for name in try String.fetchAll(db, CacheEntryRecord.filter { $0.file != nil }.select(CacheEntryRecord.Columns.file)) {
                 try? FileManager.default.removeItem(at: images.appendingPathComponent(name))
@@ -242,6 +252,7 @@ public actor DiskCache {
     /// when the transaction fails.
     public func clearMetadata() throws -> Int {
         metadataGeneration += 1
+        estimatedUsage = nil
         let imageKinds = [CacheKind.previewThumbnail, .fullImage, .thumbnail, .videoSegment].map(\.rawValue)
         try database.inTransaction(.immediate) { db in
             try clearNormalizedMetadata(db)
@@ -251,17 +262,38 @@ public actor DiskCache {
         return metadataGeneration
     }
 
-    func trim() throws {
+    /// Keeps usage within the budget minus a reserve. Budgets with a reserve skip the full
+    /// usage scan while the estimate fits and metadata was re-measured recently; the reserve
+    /// absorbs metadata growth between scans. Budgets without a reserve always scan.
+    func trim(metadataWrite: Bool = false, force: Bool = false) throws {
         try flushTouches()
         let reserve = budget >= 200_000_000 ? min(64_000_000, budget / 10) : 0
-        while try usage() > budget - reserve {
+        let limit = budget - reserve
+        if metadataWrite { metadataWritesSinceUsageCheck += 1 }
+        if !force, reserve > 0, let estimate = estimatedUsage, estimate <= limit,
+           metadataWritesSinceUsageCheck == 0 ||
+               ContinuousClock.now - lastUsageCheck < Self.metadataUsageCheckInterval {
+            return
+        }
+        let signposter = SynologyDiagnostics.browserSignposts
+        let interval = signposter.beginInterval("Cache usage scan", id: signposter.makeSignpostID())
+        defer { signposter.endInterval("Cache usage scan", interval) }
+        var current = try usage()
+        metadataWritesSinceUsageCheck = 0
+        lastUsageCheck = .now
+        while current > limit {
             let candidate = try database.read {
                 try CacheEntryRecord.order { [$0.retentionRank, $0.accessed] }.fetchOne($0)
             }
-            if try trimNormalizedMetadata(throughRank: candidate?.retentionRank ?? Int.max) { continue }
+            if let freed = try trimNormalizedMetadata(throughRank: candidate?.retentionRank ?? Int.max) {
+                current -= freed
+                continue
+            }
             guard let candidate else { break }
             try remove(candidate.key)
+            current -= candidate.cost
         }
+        estimatedUsage = current
     }
 
     func remove(_ key: String, expectedGeneration: Int? = nil) throws {
@@ -273,6 +305,7 @@ public actor DiskCache {
             if let family = record.thumbnailFamily { try reclassifyThumbnailFamily(family, db) }
             return record
         }
+        if let removed { estimatedUsage? -= removed.cost }
         if let filename = removed?.file { try? FileManager.default.removeItem(at: images.appendingPathComponent(filename)) }
     }
 
