@@ -179,7 +179,8 @@ final class ThumbnailRangeDownloaderTests: XCTestCase {
             await downloader.download(snapshot: snapshot, range: ThumbnailDateRange(0, 0), size: .m, collection: .library(.personal)) { _ in }
         }
         for _ in 0..<200 {
-            if await transport.thumbnailCalls > 0 { break }
+            // Both bounded workers start independently; wait for the second before asserting.
+            if await transport.thumbnailCalls >= 2 { break }
             try await Task.sleep(for: .milliseconds(5))
         }
         let startedCalls = await transport.thumbnailCalls

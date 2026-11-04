@@ -1,9 +1,26 @@
 SHELL := /bin/zsh
 .DEFAULT_GOAL := start
-.PHONY: start debug clean cloc switch-user
+.PHONY: start release profile debug clean cloc switch-user
 
 start:
 	./scripts/run.sh
+
+# Optimized build; use it when judging performance.
+release:
+	./scripts/run.sh --release
+
+# Launches the optimized build under Instruments and saves the trace in .build/profiles/.
+# Example: make profile PROFILE_SECONDS=60 PROFILE_TEMPLATE="Animation Hitches"
+PROFILE_SECONDS ?= 40
+PROFILE_TEMPLATE ?= Time Profiler
+profile:
+	./scripts/run.sh --release --build-only
+	@mkdir -p .build/profiles
+	@trace=".build/profiles/$$(date +%Y%m%d-%H%M%S)-$$(echo '$(PROFILE_TEMPLATE)' | tr ' ' '-').trace"; \
+	echo "Recording $(PROFILE_SECONDS)s with '$(PROFILE_TEMPLATE)' to $$trace"; \
+	xcrun xctrace record --template '$(PROFILE_TEMPLATE)' --time-limit $(PROFILE_SECONDS)s \
+		--output "$$trace" --launch -- "$$PWD/.build/Cirrus Photos.app/Contents/MacOS/SynoTimeline" \
+		&& echo "Trace saved: $$PWD/$$trace" && open "$$trace"
 
 debug:
 	./scripts/run.sh --build-only

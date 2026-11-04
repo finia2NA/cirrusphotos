@@ -34,6 +34,9 @@ extension LibraryBrowserScrollView {
         /// Row signatures keyed by host, valid while the geometry's rows revision is unchanged.
         var rowSignatures: [String: (rows: UUID, signature: Int)] = [:]
         var selectionFramesKey: (rows: UUID, indexes: IndexSet)?
+        /// Running counts reported by the "Viewport layout" signpost.
+        var hostsCreated = 0
+        var hostsUpdated = 0
         var eventTask: Task<Void, Never>?
         var demandTask: Task<Void, Never>?
         var revision = -1
@@ -339,6 +342,10 @@ extension LibraryBrowserScrollView {
                     // Events use a bounded newest buffer, so reconcile against the authoritative window.
                     let retained = await window.retainedPages()
                     guard !Task.isCancelled, self.window === window else { break }
+                    let signposter = SynologyDiagnostics.browserSignposts
+                    let applyInterval = signposter.beginInterval("Apply pages", id: signposter.makeSignpostID(),
+                                                                 "\(retained.count) pages")
+                    defer { signposter.endInterval("Apply pages", applyInterval) }
                     let anchor = self.scroll.flatMap { scroll in
                         self.geometry?.anchor(at: self.visibleTop(in: scroll))
                     }
@@ -388,6 +395,13 @@ extension LibraryBrowserScrollView {
 
         func viewportChanged() {
             guard let scroll, let document else { return }
+            let signposter = SynologyDiagnostics.browserSignposts
+            let layoutInterval = signposter.beginInterval("Viewport layout", id: signposter.makeSignpostID())
+            let createdBefore = hostsCreated, updatedBefore = hostsUpdated
+            defer {
+                signposter.endInterval("Viewport layout", layoutInterval,
+                                       "created \(self.hostsCreated - createdBefore) updated \(self.hostsUpdated - updatedBefore)")
+            }
             if let current = geometry {
                 let width = availableWidth(in: scroll)
                 if abs(current.width - width) > 0.5 {
@@ -630,13 +644,18 @@ extension LibraryBrowserScrollView {
                              revision: (Int, Int), wanted: inout Set<String>, document: NSView,
                              passThrough: Bool = false) {
             wanted.insert(key)
+            let signposter = SynologyDiagnostics.browserSignposts
             if let host = hosts[key] {
                 if host.frame != frame { host.frame = frame }
                 if let previous = hostRevisions[key], previous != revision {
+                    let interval = signposter.beginInterval("Update host", id: signposter.makeSignpostID())
                     host.rootView = AnyView(content().environment(\.colorScheme, colorScheme))
+                    signposter.endInterval("Update host", interval)
                     hostRevisions[key] = revision
+                    hostsUpdated &+= 1
                 }
             } else {
+                let interval = signposter.beginInterval("Create host", id: signposter.makeSignpostID())
                 let root = AnyView(content().environment(\.colorScheme, colorScheme))
                 let host: NSHostingView<AnyView> = passThrough ?
                     PassThroughHostingView(rootView: root) : NSHostingView(rootView: root)
@@ -644,8 +663,10 @@ extension LibraryBrowserScrollView {
                 if let overlay = (document as? FlippedDocumentView)?.overlay {
                     document.addSubview(host, positioned: .below, relativeTo: overlay)
                 } else { document.addSubview(host) }
+                signposter.endInterval("Create host", interval)
                 hosts[key] = host
                 hostRevisions[key] = revision
+                hostsCreated &+= 1
             }
         }
 

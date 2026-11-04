@@ -5,6 +5,9 @@ import OSLog
 public enum SynologyDiagnostics {
     public static let subsystem = "local.cirrus.syno-timeline"
 
+    /// Intervals for browser scrolling and thumbnail work, shown in Instruments'
+    /// os_signpost / Points of Interest lanes (`make profile`).
+    public static let browserSignposts = OSSignposter(subsystem: subsystem, category: "performance.browser")
     public static let viewer = Logger(subsystem: subsystem, category: "viewer.assets")
     public static let originals = Logger(subsystem: subsystem, category: "repository.originals")
     public static let transport = Logger(subsystem: subsystem, category: "transport.originals")

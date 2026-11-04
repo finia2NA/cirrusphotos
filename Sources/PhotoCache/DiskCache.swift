@@ -98,7 +98,10 @@ public actor DiskCache {
 
     public func get(_ key: String) throws -> CacheEntry? {
         let started = ContinuousClock.now
+        let signposter = SynologyDiagnostics.browserSignposts
+        let interval = signposter.beginInterval("Cache read", id: signposter.makeSignpostID())
         defer {
+            signposter.endInterval("Cache read", interval)
             let elapsed = ContinuousClock.now - started
             if elapsed > .milliseconds(100) {
                 SynologyDiagnostics.originals.info(

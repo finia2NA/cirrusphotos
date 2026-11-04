@@ -1,6 +1,7 @@
 import AppKit
 import CryptoKit
 import ImageIO
+import OSLog
 import PhotoCache
 import SwiftUI
 import SynologyAPI
@@ -85,9 +86,19 @@ struct ThumbnailCell: View {
         let priorFailure = failures.contains(renditionIdentity)
         failed = priorFailure
         let network = allowNetwork && !priorFailure
+        // "Thumbnail load" spans from the cell's request to its first displayed image.
+        let signposter = SynologyDiagnostics.browserSignposts
+        var loadInterval: OSSignpostIntervalState? = signposter.beginInterval("Thumbnail load", id: signposter.makeSignpostID())
+        func endLoadInterval(_ outcome: StaticString) {
+            guard let state = loadInterval else { return }
+            loadInterval = nil
+            signposter.endInterval("Thumbnail load", state, "\(outcome)")
+        }
+        defer { endLoadInterval("ended") }
         // A decoded exact rendition already validated this run needs no disk or network work.
         if let hit = DecodedImages.shared.rendition(decodedKey(size, repository: repository)) {
             image = hit.image
+            endLoadInterval("memory")
             if hit.verified || !network { return }
         }
         for await event in await repository.thumbnailWithFallback(descriptor, size: size,
@@ -100,6 +111,7 @@ struct ThumbnailCell: View {
                     verified: verified, maxPixel: Self.maxPixel) {
                     guard !Task.isCancelled, displayedRendition == renditionIdentity else { return }
                     if image !== decoded { image = decoded }
+                    endLoadInterval("displayed")
                 } else if !Task.isCancelled { failed = true }
             case .failure:
                 failed = true
@@ -380,10 +392,20 @@ final class DecodedImages {
     }
 
     private func decode(_ data: Data, maxPixel: Int) async -> CGImageBox? {
-        do { try await gate.acquire() } catch { return nil }
+        let signposter = SynologyDiagnostics.browserSignposts
+        let wait = signposter.beginInterval("Decode wait", id: signposter.makeSignpostID())
+        do { try await gate.acquire() } catch {
+            signposter.endInterval("Decode wait", wait, "cancelled")
+            return nil
+        }
+        signposter.endInterval("Decode wait", wait)
         defer { Task { await gate.release() } }
         guard !Task.isCancelled else { return nil }
-        let box = await Task.detached(priority: .userInitiated) { Self.decodeImage(data, maxPixel: maxPixel) }.value
+        let box = await Task.detached(priority: .userInitiated) {
+            let state = signposter.beginInterval("Decode", id: signposter.makeSignpostID(), "\(data.count) bytes")
+            defer { signposter.endInterval("Decode", state) }
+            return Self.decodeImage(data, maxPixel: maxPixel)
+        }.value
         guard !Task.isCancelled else { return nil }
         return box
     }

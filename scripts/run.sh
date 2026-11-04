@@ -2,13 +2,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [[ $# -gt 1 || (${1:-} != "" && ${1:-} != "--build-only") ]]; then
-    echo "Usage: $0 [--build-only]" >&2
-    exit 2
-fi
+usage() { echo "Usage: $0 [--release] [--build-only]" >&2; exit 2; }
+build_only=false
+configuration=debug
+for argument in "$@"; do
+    case "$argument" in
+        --build-only) build_only=true ;;
+        --release) configuration=release ;;
+        *) usage ;;
+    esac
+done
 
-swift build --product SynoTimeline
-bin_dir="$(swift build --show-bin-path)"
+swift build -c "$configuration" --product SynoTimeline
+bin_dir="$(swift build -c "$configuration" --show-bin-path)"
 app_bundle="$PWD/.build/Cirrus Photos.app"
 mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Resources"
 cp "$bin_dir/SynoTimeline" "$app_bundle/Contents/MacOS/"
@@ -22,6 +28,7 @@ fi
 sed "s/__NAS_HOST__/$nas_host/" scripts/App-Info.plist > "$app_bundle/Contents/Info.plist"
 codesign --force --deep --sign - "$app_bundle"
 
-if [[ ${1:-} != "--build-only" ]]; then
+echo "Built $configuration bundle: $app_bundle"
+if [[ $build_only == false ]]; then
     open "$app_bundle"
 fi
