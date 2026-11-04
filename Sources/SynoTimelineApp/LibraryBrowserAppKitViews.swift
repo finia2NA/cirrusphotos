@@ -106,8 +106,19 @@ extension NSEvent {
 
 final class SelectionOverlayView: NSView {
     override var isFlipped: Bool { true }
-    var selectionFrames: [CGRect] = [] { didSet { needsDisplay = true } }
-    var marquee: CGRect? { didSet { needsDisplay = true } }
+    /// Only the changed frames are invalidated; the overlay spans the whole document.
+    var selectionFrames: [CGRect] = [] {
+        didSet {
+            guard oldValue != selectionFrames else { return }
+            for frame in oldValue + selectionFrames { setNeedsDisplay(frame.insetBy(dx: -4, dy: -4)) }
+        }
+    }
+    var marquee: CGRect? {
+        didSet {
+            guard oldValue != marquee else { return }
+            for rect in [oldValue, marquee].compactMap({ $0 }) { setNeedsDisplay(rect.insetBy(dx: -2, dy: -2)) }
+        }
+    }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)

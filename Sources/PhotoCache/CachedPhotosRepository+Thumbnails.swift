@@ -12,6 +12,17 @@ extension CachedPhotosRepository {
                           collection: PhotoCollectionDescriptor,
                           priority: RequestPriority = .visible,
                           cachePurpose: ThumbnailCachePurpose = .library) -> AsyncStream<ResourceEvent<Data>> {
+        thumbnail(descriptor, size: size, allowNetwork: allowNetwork, collection: collection,
+                  priority: priority, cachePurpose: cachePurpose, cachedLookup: .read)
+    }
+
+    /// `cachedLookup` lets a caller that already read the exact cache entry pass it in,
+    /// so one cache hit costs a single file read.
+    private func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, allowNetwork: Bool,
+                           collection: PhotoCollectionDescriptor,
+                           priority: RequestPriority,
+                           cachePurpose: ThumbnailCachePurpose,
+                           cachedLookup: CachedThumbnailLookup) -> AsyncStream<ResourceEvent<Data>> {
         let scope = thumbnailCollection(for: collection)
         let subscriber = UUID()
         let producer = StreamProducer()
@@ -24,9 +35,13 @@ extension CachedPhotosRepository {
                 }
                 let identity = CacheKey.thumbnailIdentity(scope: scope.contentScope, namespace: namespace, descriptor: descriptor, size: size, collection: scope)
                 let key = identity.key
-                let cached = try? await store.getThumbnail(identity)
+                let cached: CacheEntry?
+                switch cachedLookup {
+                case .read: cached = try? await store.getThumbnail(identity)
+                case .known(let entry): cached = entry
+                }
                 guard !Task.isCancelled else { continuation.finish(); return }
-                if cached != nil, cachePurpose == .library {
+                if cached?.kind == .previewThumbnail, cachePurpose == .library {
                     try? await store.promotePreviewThumbnail(key)
                 }
                 if let cached { continuation.yield(.value(cached.data, verified: cached.validatedRun == runID)) }
@@ -86,7 +101,8 @@ extension CachedPhotosRepository {
                 guard !Task.isCancelled else { continuation.finish(); return }
                 for await event in thumbnail(descriptor, size: size,
                                              allowNetwork: allowNetwork && descriptor.isReady(size),
-                                             collection: scope, priority: priority, cachePurpose: .library) {
+                                             collection: scope, priority: priority, cachePurpose: .library,
+                                             cachedLookup: .known(exactCached)) {
                     guard !Task.isCancelled else { continuation.finish(); return }
                     switch event {
                     case .value(let data, let verified):
@@ -149,7 +165,7 @@ extension CachedPhotosRepository {
             return ThumbnailCacheMeasurement(outcome: .reused, downloadedBytes: 0)
         }
         if let cached = try? await store.getThumbnail(identity), cached.validatedRun == runID {
-            try? await store.promotePreviewThumbnail(key)
+            if cached.kind == .previewThumbnail { try? await store.promotePreviewThumbnail(key) }
             return ThumbnailCacheMeasurement(outcome: .reused, downloadedBytes: 0)
         }
         try Task.checkCancellation()
@@ -254,4 +270,9 @@ extension CachedPhotosRepository {
         imageWork.thumbnailJobs.removeValue(forKey: key)
         cancelIdleLogin()
     }
+}
+
+private enum CachedThumbnailLookup {
+    case read
+    case known(CacheEntry?)
 }

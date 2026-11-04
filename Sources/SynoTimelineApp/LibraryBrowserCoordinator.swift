@@ -31,6 +31,9 @@ extension LibraryBrowserScrollView {
         var viewRevision = 0
         var hosts: [String: NSHostingView<AnyView>] = [:]
         var hostRevisions: [String: (Int, Int)] = [:]
+        /// Row signatures keyed by host, valid while the geometry's rows revision is unchanged.
+        var rowSignatures: [String: (rows: UUID, signature: Int)] = [:]
+        var selectionFramesKey: (rows: UUID, indexes: IndexSet)?
         var eventTask: Task<Void, Never>?
         var demandTask: Task<Void, Never>?
         var revision = -1
@@ -288,6 +291,7 @@ extension LibraryBrowserScrollView {
             hosts.values.forEach { $0.removeFromSuperview() }
             hosts.removeAll()
             hostRevisions.removeAll()
+            rowSignatures.removeAll()
         }
 
         func stopWindow() {
@@ -311,6 +315,7 @@ extension LibraryBrowserScrollView {
             hosts.values.forEach { $0.removeFromSuperview() }
             hosts.removeAll()
             hostRevisions.removeAll()
+            rowSignatures.removeAll()
         }
 
         func startEvents(rebasingTo index: LibraryIndex? = nil, filterMembership: [[Int64]]? = nil, filterAuthority: [[Bool]]? = nil) {
@@ -454,7 +459,8 @@ extension LibraryBrowserScrollView {
                     let rowY = slice.y + row.y
                     guard rowY + row.layout.height >= y - overscan,
                           rowY <= y + height + overscan else { continue }
-                    addHost("r:\(slice.source.dayID):\(slice.source.dayRange.lowerBound):\(rowIndex)",
+                    let rowKey = "r:\(slice.source.dayID):\(slice.source.dayRange.lowerBound):\(rowIndex)"
+                    addHost(rowKey,
                             frame: CGRect(x: 0, y: rowY, width: geometry.width, height: row.layout.height),
                             content: AnyView(HostedRow(collection: collection, row: row, repository: repository,
                                                        size: thumbnailSize, failures: thumbnailFailures,
@@ -466,13 +472,14 @@ extension LibraryBrowserScrollView {
                                                        },
                                                        selection: selectionObservation,
                                                        presentation: presentation)),
-                            revision: (viewRevision, Self.rowSignature(row, pages: pages)),
+                            revision: (viewRevision, cachedRowSignature(rowKey, row: row, rows: geometry.rowsRevision)),
                             wanted: &wanted, document: document, passThrough: true)
                 }
             }
             for key in hosts.keys where !wanted.contains(key) {
                 hosts.removeValue(forKey: key)?.removeFromSuperview()
                 hostRevisions.removeValue(forKey: key)
+                rowSignatures.removeValue(forKey: key)
             }
             if !suppressFeedback, !geometry.slices.isEmpty {
                 let day = geometry.slices[geometry.slice(at: y)].source.dayID
@@ -609,18 +616,28 @@ extension LibraryBrowserScrollView {
             ))
         }
 
-        func addHost(_ key: String, frame: CGRect, content: AnyView,
+        /// Row content only changes when the geometry rematerializes rows, so the
+        /// (comparatively expensive) signature is not recomputed for every scroll frame.
+        func cachedRowSignature(_ key: String, row: LibraryViewportGeometry.Row, rows: UUID) -> Int {
+            if let cached = rowSignatures[key], cached.rows == rows { return cached.signature }
+            let signature = Self.rowSignature(row, pages: pages)
+            rowSignatures[key] = (rows, signature)
+            return signature
+        }
+
+        /// Content is built only when a host is created or its revision changed.
+        func addHost(_ key: String, frame: CGRect, content: @autoclosure () -> AnyView,
                              revision: (Int, Int), wanted: inout Set<String>, document: NSView,
                              passThrough: Bool = false) {
             wanted.insert(key)
             if let host = hosts[key] {
-                host.frame = frame
+                if host.frame != frame { host.frame = frame }
                 if let previous = hostRevisions[key], previous != revision {
-                    host.rootView = AnyView(content.environment(\.colorScheme, colorScheme))
+                    host.rootView = AnyView(content().environment(\.colorScheme, colorScheme))
                     hostRevisions[key] = revision
                 }
             } else {
-                let root = AnyView(content.environment(\.colorScheme, colorScheme))
+                let root = AnyView(content().environment(\.colorScheme, colorScheme))
                 let host: NSHostingView<AnyView> = passThrough ?
                     PassThroughHostingView(rootView: root) : NSHostingView(rootView: root)
                 host.frame = frame
