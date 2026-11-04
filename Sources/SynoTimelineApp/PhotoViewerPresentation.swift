@@ -178,6 +178,18 @@ final class PhotoViewerPresentation: ObservableObject {
             state?.item?.hasDisplayableStillImage == true
     }
 
+    var canAnnotate: Bool {
+        !isIncoming && invalidationMessage == nil && !isClosing && state?.item != nil &&
+            state?.metadataVerified == true && state?.allowNetwork == true
+    }
+
+    /// The displayed item as a rating or tag target.
+    func annotationAction() -> SelectionAnnotationAction? {
+        guard canAnnotate, let item = state?.item else { return nil }
+        return SelectionAnnotationAction(itemIDs: [item.id], collection: collection, itemsByID: [item.id: item],
+                                         expectedTimelineFingerprint: index.fingerprint)
+    }
+
     func rotationAction() -> SelectionRotationAction? {
         guard canRotate, let state, let item = state.item,
               index.sections.indices.contains(state.desiredLocation.sectionIndex) else { return nil }

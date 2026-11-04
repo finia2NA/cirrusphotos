@@ -109,6 +109,9 @@ struct PhotoViewerView: View {
                                         sourceAlbumID: library.capabilities(for: viewer.collection).sourceAlbumID)
                                     library.addAlbumMembershipMenu(to: menu, captured: captured, pinnedIDs: pinnedAlbumIDs)
                                 }
+                                if library.capabilities(for: viewer.collection).allowsSpaceItemActions, viewer.canAnnotate {
+                                    library.addAnnotationMenus(to: menu, target: library.viewerAnnotationTarget(viewer))
+                                }
                                 return menu.items.isEmpty ? nil : menu
                               }, startFileDrag: { view, event in
                                 guard !viewer.isIncoming, let state = viewer.state, state.metadataVerified, state.allowNetwork,

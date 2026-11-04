@@ -364,7 +364,7 @@ extension CachedPhotosRepository {
         throw SynologyAPIError.transport(failure ?? "The full-size image is unavailable.")
     }
 
-    private func lookupAllRotationItems(_ ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] {
+    func lookupAllRotationItems(_ ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] {
         var result: [PhotoItem] = []
         for start in stride(from: 0, to: ids.count, by: 1_000) {
             let requested = Array(ids[start..<min(start + 1_000, ids.count)])

@@ -65,6 +65,7 @@ extension LibraryBrowserScrollView {
         var onRetry: (() -> Void)?
         var onOpenPhoto: ((PhotoViewerOpenRequest) -> Void)?
         var onAlbumMenu: ((NSMenu, BrowserCommandSnapshot) -> Void)?
+        var onAnnotationMenu: ((NSMenu, BrowserCommandSnapshot) -> Void)?
         var onDownload: ((BrowserCommandSnapshot, PhotoDownloadKind, Bool) -> Void)?
         var onDelete: ((BrowserCommandSnapshot) -> Void)?
         var onEdit: ((BrowserCommandSnapshot, URL) -> Void)?
@@ -114,6 +115,7 @@ extension LibraryBrowserScrollView {
             onRetry = input.onRetry
             onOpenPhoto = input.onOpenPhoto
             onAlbumMenu = input.onAlbumMenu
+            onAnnotationMenu = input.onAnnotationMenu
             onDownload = input.onDownload
             onDelete = input.onDelete
             onEdit = input.onEdit

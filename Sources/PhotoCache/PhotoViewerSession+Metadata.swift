@@ -26,6 +26,19 @@ extension PhotoViewerSession {
     func applyItemChanges(_ change: PhotoItemChange) {
         guard supportsItemActions, change.scope == mediaContentScope else { return }
         if !change.favoriteValues.isEmpty { applyFavorites(change.favoriteValues) }
+        if !change.annotations.isEmpty {
+            for (section, page) in metadata.pages {
+                let updated = page.slots.map { slot in
+                    PhotoItemSlot(itemID: slot.itemID, item: change.annotations[slot.itemID].map { slot.item?.withAnnotations($0) } ?? slot.item,
+                                  verified: slot.verified)
+                }
+                metadata.pages[section] = ViewerMetadataWindow.PageEntry(slots: updated, verified: page.verified, membershipVerified: page.membershipVerified)
+            }
+            if let id = currentItem?.id, let annotations = change.annotations[id], let item = currentItem {
+                currentItem = item.withAnnotations(annotations)
+                publish()
+            }
+        }
         for (section, page) in metadata.pages {
             let updated = page.slots.map { slot in
                 PhotoItemSlot(itemID: slot.itemID, item: change.items[slot.itemID].map { replacement in

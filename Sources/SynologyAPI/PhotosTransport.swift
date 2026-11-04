@@ -195,6 +195,10 @@ public protocol PhotosTransport: Sendable {
                           receive: @escaping @Sendable (VideoRangeEvent) async throws -> Void) async throws
     func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws
     func rotate(itemIDs: [Int64], direction: PhotoRotationDirection, space: PhotoSpace) async throws
+    func setRating(itemIDs: [Int64], rating: Int, space: PhotoSpace) async throws
+    func createTag(name: String, space: PhotoSpace) async throws -> PhotoTag
+    func addTags(_ tagIDs: [Int64], toItems itemIDs: [Int64], space: PhotoSpace) async throws
+    func removeTags(_ tagIDs: [Int64], fromItems itemIDs: [Int64], space: PhotoSpace) async throws
     func deleteItems(_ itemIDs: [Int64], space: PhotoSpace) async throws
     func livePhotoMotion(itemID: Int64, space: PhotoSpace) async throws -> VideoPlaybackResource?
     func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, space: PhotoSpace,

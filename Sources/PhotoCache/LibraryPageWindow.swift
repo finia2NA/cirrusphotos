@@ -309,6 +309,10 @@ public actor LibraryPageWindow {
         for (section, page) in pages {
             var modified = false
             let slots = page.slots.map { slot -> PhotoItemSlot in
+                if let annotations = change.annotations[slot.itemID], let item = slot.item {
+                    modified = true
+                    return PhotoItemSlot(itemID: slot.itemID, item: item.withAnnotations(annotations), verified: slot.verified)
+                }
                 guard let replacement = change.items[slot.itemID] else { return slot }
                 modified = true
                 let updated = slot.item?.withRotationMetadata(from: replacement) ?? replacement

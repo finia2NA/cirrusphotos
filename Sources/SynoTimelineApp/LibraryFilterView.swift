@@ -42,6 +42,14 @@ struct LibraryFilterView: View {
                 FilterFacetView(title: "Camera", values: filter.catalog.cameras, selection: $filter.draft.cameras)
                 FilterFacetView(title: "Lens", values: filter.catalog.lenses, selection: $filter.draft.lenses)
                 FilterFacetView(title: "File Extension", values: filter.catalog.extensions, selection: $filter.draft.extensions)
+                FilterFacetView(title: "Tags", values: filter.catalog.tags, selection: $filter.draft.tags)
+                HStack {
+                    Text("Rating").frame(width: 100, alignment: .leading)
+                    Picker("", selection: $filter.ratingChoice) {
+                        ForEach(LibraryFilterModel.RatingChoice.allCases) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden()
+                }
                 rangeRow("Megapixels", min: $filter.megapixelsMin, max: $filter.megapixelsMax)
                 sizeRow
                 rangeRow("ISO", min: $filter.isoMin, max: $filter.isoMax)

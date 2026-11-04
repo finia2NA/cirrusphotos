@@ -5,6 +5,7 @@ public struct LibraryFilterCatalog: Codable, Equatable, Sendable {
     public var cameras: [String] = []
     public var lenses: [String] = []
     public var extensions: [String] = []
+    public var tags: [String] = []
     public init() {}
 }
 
@@ -534,7 +535,9 @@ public actor LibraryFilterController {
         }
         var cameraByKey: [String: String] = [:], lensByKey: [String: String] = [:]
         var extensions = Set<String>()
+        var tagByKey: [String: String] = [:]
         if !complete {
+            for value in persistedCatalog.tags { tagByKey[LibraryFilterParsing.lookupKey(value)] = value }
             for value in persistedCatalog.cameras { cameraByKey[LibraryFilterParsing.lookupKey(value)] = value }
             for value in persistedCatalog.lenses { lensByKey[LibraryFilterParsing.lookupKey(value)] = value }
             extensions.formUnion(persistedCatalog.extensions)
@@ -548,11 +551,13 @@ public actor LibraryFilterController {
                 lensByKey[LibraryFilterParsing.lookupKey(lens), default: lens] = lens
             }
             if let ext = values.fileExtension { extensions.insert(ext) }
+            for tag in values.tags { tagByKey[LibraryFilterParsing.lookupKey(tag), default: tag] = tag }
         }
         var result = LibraryFilterCatalog()
         result.cameras = cameraByKey.values.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         result.lenses = lensByKey.values.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         result.extensions = extensions.sorted()
+        result.tags = tagByKey.values.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         cachedCatalog = result
         return result
     }

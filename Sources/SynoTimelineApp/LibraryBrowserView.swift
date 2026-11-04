@@ -316,6 +316,11 @@ struct LibraryBrowserView: View {
                                              onAlbumMenu: { menu, selection in
                                                  library.addAlbumMembershipMenu(to: menu, captured: selection, pinnedIDs: pinnedAlbumIDs)
                                              },
+                                             onAnnotationMenu: { menu, selection in
+                                                 if let target = library.browserAnnotationTarget(selection) {
+                                                     library.addAnnotationMenus(to: menu, target: target)
+                                                 }
+                                             },
                                              onDownload: { selection, kind, choose in
                                                  library.downloadSelection(selection, kind: kind, choose: choose)
                                              },
@@ -433,6 +438,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let contentTopInset: CGFloat
     let onOpenPhoto: (PhotoViewerOpenRequest) -> Void
     let onAlbumMenu: (NSMenu, BrowserCommandSnapshot) -> Void
+    let onAnnotationMenu: (NSMenu, BrowserCommandSnapshot) -> Void
     let onDownload: (BrowserCommandSnapshot, PhotoDownloadKind, Bool) -> Void
     let onDelete: (BrowserCommandSnapshot) -> Void
     let onEdit: (BrowserCommandSnapshot, URL) -> Void

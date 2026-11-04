@@ -295,6 +295,14 @@ struct AppShellView: View {
         } message: {
             Text(model.rotationFailure ?? viewer?.rotationFailure ?? "The photo could not be rotated.")
         }
+        .alert("Rating or Tag Failed", isPresented: Binding(
+            get: { model.annotationFailure != nil },
+            set: { if !$0 { model.dismissAnnotationFailure() } }
+        )) {
+            Button("OK") { model.dismissAnnotationFailure() }
+        } message: {
+            Text(model.annotationFailure ?? "The change could not be saved.")
+        }
         .sheet(item: $personEdit) { request in
             PersonEditView(request: request, people: indexEntries[.person] ?? [], repository: model.repository) {
                 peopleEditRevision &+= 1
@@ -942,7 +950,7 @@ struct AppShellView: View {
         if selectedDestination == .personalLibrary && showsFolders && !folderPath.isEmpty {
             return ("Back to Parent Folder", folderBack)
         }
-        return selectedDestination == .albums ? nil : collectionBackAction
+        return collectionBackAction
     }
 
     @ViewBuilder

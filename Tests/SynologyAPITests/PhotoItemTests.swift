@@ -20,6 +20,45 @@ final class PhotoItemTests: XCTestCase {
         XCTAssertEqual(motion.variant, .converted(.high))
     }
 
+    func testRatingAndTagsDecodeFromObservedItemShape() throws {
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data(
+            """
+            {"id":284533,"filename":"IMG_4645.JPG","time":1,"type":"photo","additional":{"description":"","tag":[{"id":41,"name":"testtag"}],"rating":5,"favorite":true}}
+            """.utf8))
+        XCTAssertEqual(item.rating, 5)
+        XCTAssertEqual(item.tags, [PhotoTag(id: 41, name: "testtag")])
+        let bare = try JSONDecoder().decode(PhotoItem.self, from: Data(#"{"id":1,"time":1,"type":"photo"}"#.utf8))
+        XCTAssertEqual(bare.rating, 0)
+        XCTAssertEqual(bare.tags, [])
+    }
+
+    func testAnnotationEditsKeepOtherFieldsAndSurviveRotationAndFavoriteProjection() throws {
+        let item = try JSONDecoder().decode(PhotoItem.self, from: Data(
+            """
+            {"id":1,"time":1,"type":"photo","additional":{"orientation":1,"orientation_original":1,"favorite":true,"rating":2,"tag":[{"id":1,"name":"a"}]}}
+            """.utf8))
+        let edited = item.withAnnotations(PhotoAnnotations(rating: 4, tags: [PhotoTag(id: 2, name: "b")]))
+        XCTAssertEqual(edited.rating, 4)
+        XCTAssertEqual(edited.tags.map(\.name), ["b"])
+        XCTAssertTrue(edited.isFavorite)
+        XCTAssertEqual(edited.additional?.orientation, 1)
+        XCTAssertEqual(item.rotated(.clockwise).rating, 2)
+        XCTAssertEqual(item.rotated(.clockwise).tags.map(\.name), ["a"])
+        XCTAssertEqual(item.withFavorite(false).tags.map(\.name), ["a"])
+        // A rotation replacement carries rotation fields only, so it must not reset annotations.
+        let replacement = try JSONDecoder().decode(PhotoItem.self, from: Data(
+            #"{"id":1,"time":1,"type":"photo","additional":{"orientation":6,"orientation_original":1}}"#.utf8))
+        XCTAssertEqual(item.withRotationMetadata(from: replacement).rating, 2)
+        XCTAssertEqual(item.withRotationMetadata(from: replacement).additional?.orientation, 6)
+        let bare = try JSONDecoder().decode(PhotoItem.self, from: Data(#"{"id":2,"time":1,"type":"photo"}"#.utf8))
+        XCTAssertEqual(bare.withAnnotations(.init(rating: 3, tags: [])).rating, 3)
+    }
+
+    func testPageRequestsAskForTagAndRating() {
+        XCTAssertTrue(PhotosRequestFields.pageAdditional.contains("tag"))
+        XCTAssertTrue(PhotosRequestFields.pageAdditional.contains("rating"))
+    }
+
     func testLivePhotoWithoutAdvertisedRenditionDoesNotInventVideoResource() throws {
         let member = try JSONDecoder().decode(LivePhotoUnitMember.self, from: Data(
             """

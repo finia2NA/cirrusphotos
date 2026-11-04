@@ -61,6 +61,7 @@ enum CacheSchema {
             facets.column(.megapixels, .double, nullable: true); facets.column(.bytes, .integer, nullable: true)
             facets.column(.iso, .double, nullable: true); facets.column(.focalLength, .double, nullable: true)
             facets.column(.aperture, .double, nullable: true); facets.column(.exposure, .double, nullable: true)
+            facets.column(.rating, .integer); facets.column(.tags, .text, nullable: true)
         }
         try table(CollectionStateRecord.self, db, key: [.namespace, .collection]) { t in
             t.column(.namespace, .text); t.column(.collection, .text); t.column(.catalog, .text)
@@ -210,14 +211,20 @@ struct ItemFacets: Codable, Equatable, Sendable {
     var focalLength: Double?
     var aperture: Double?
     var exposure: Double?
+    var rating: Int
+    /// Tag names joined by `tagSeparator`; nil without tags.
+    var tags: String?
+    static let tagSeparator = "\u{1F}"
     enum CodingKeys: String, CodingKey, ColumnExpression, CaseIterable {
-        case filename, camera, lens, megapixels, bytes, iso, aperture, exposure
+        case filename, camera, lens, megapixels, bytes, iso, aperture, exposure, rating, tags
         case filenameKey = "filename_key", captureTime = "capture_time", indexedTime = "indexed_time", mediaKind = "media_kind"
         case fileExtension = "file_extension", focalLength = "focal_length"
     }
 
     init(captureTime: Int64, indexedTime: Int64?, filename: String?, filenameKey: String?, mediaKind: String, camera: String?, lens: String?, fileExtension: String?,
-         megapixels: Double?, bytes: Int64?, iso: Double?, focalLength: Double?, aperture: Double?, exposure: Double?) {
+         megapixels: Double?, bytes: Int64?, iso: Double?, focalLength: Double?, aperture: Double?, exposure: Double?,
+         rating: Int, tags: String?) {
+        self.rating = rating; self.tags = tags
         self.captureTime = captureTime; self.indexedTime = indexedTime; self.mediaKind = mediaKind
         self.filename = filename; self.filenameKey = filenameKey
         self.camera = camera; self.lens = lens; self.fileExtension = fileExtension; self.megapixels = megapixels
@@ -231,6 +238,8 @@ struct ItemFacets: Codable, Equatable, Sendable {
         camera = values.camera; lens = values.lens; fileExtension = values.fileExtension
         megapixels = values.megapixels; bytes = values.bytes; iso = values.iso
         focalLength = values.focalLengthMM; aperture = values.aperture; exposure = values.exposureSeconds
+        rating = values.rating
+        tags = values.tags.isEmpty ? nil : values.tags.joined(separator: Self.tagSeparator)
     }
 
     static func mediaKindKey(_ kind: PhotoMediaKind) -> String {
@@ -253,7 +262,8 @@ struct ItemFacets: Codable, Equatable, Sendable {
         case let key: kind = .unknown(key)
         }
         return LibraryFilterValues(filename: filename, filenameKey: filenameKey, mediaKind: kind, camera: camera, lens: lens, fileExtension: fileExtension, megapixels: megapixels,
-                                   bytes: bytes, iso: iso, focalLengthMM: focalLength, aperture: aperture, exposureSeconds: exposure)
+                                   bytes: bytes, iso: iso, focalLengthMM: focalLength, aperture: aperture, exposureSeconds: exposure,
+                                   rating: rating, tags: tags?.components(separatedBy: Self.tagSeparator) ?? [])
     }
 
     // Mirrors `PhotoCollectionDescriptor.membershipTime(for:)`.
@@ -329,7 +339,8 @@ struct ItemFacetRecord: Decodable, FetchableRecord, TableRecord {
                             filename: row[F.filename], filenameKey: row[F.filenameKey], mediaKind: row[F.mediaKind],
                             camera: row[F.camera], lens: row[F.lens], fileExtension: row[F.fileExtension],
                             megapixels: row[F.megapixels], bytes: row[F.bytes], iso: row[F.iso],
-                            focalLength: row[F.focalLength], aperture: row[F.aperture], exposure: row[F.exposure])
+                            focalLength: row[F.focalLength], aperture: row[F.aperture], exposure: row[F.exposure],
+                            rating: row[F.rating], tags: row[F.tags])
     }
 }
 

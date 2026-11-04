@@ -17,6 +17,27 @@ The viewer and Favorites album captures in `docs/captures/favorites.har` and `fa
 
 The web client changes favorite status with a form-encoded `POST /webapi/entry.cgi/SYNO.Foto.Browse.Item`: `api=SYNO.Foto.Browse.Item`, `version=7`, `method=set_favorite`, `id=[<item IDs>]`, and `favorite=true` or `false`. `favorites.har` captured the one-item form. `favoriteunfavorite2photos.har` confirmed that the endpoint accepts several IDs in one request: the web client sent the same two-item array once with `favorite=true` and once with `favorite=false`, and both returned `{"success":true}`. This endpoint is implemented for Personal Space favorites; the accompanying `SYNO.Foto.Udc.send_event` request is telemetry.
 
+## Tags and ratings
+
+Captured in `docs/captures/tagsandratings.har` (web client, Personal and Shared Space) and verified with writes on `phototest`; see [capturefindings/tags-and-ratings.md](capturefindings/tags-and-ratings.md). Every call exists as `SYNO.Foto.…` and `SYNO.FotoTeam.…`; tags and their IDs belong to one space.
+
+| Operation | Request | Success response |
+| --- | --- | --- |
+| Create or fetch a tag | `Browse.GeneralTag create` v2, `name` (JSON string, e.g. `"testtag"`) | `{"tag":{"id":41,"name":"testtag"}}` |
+| Add tags | `Browse.Item add_tag` v7, `id=[…]`, `tag=[…]` | `{"error_list":[]}` |
+| Remove tags | `Browse.Item remove_tag` v7, same parameters | `{"error_list":[]}` |
+| Set rating | `Browse.Item set` v7, `id=[…]`, `rating=0…5` | `{"error_list":[]}` |
+| Item tags | `Browse.Item get_tag` v7, `id=[…]` | `{"intersection":[{id,name}],"union":[{id,name}]}` |
+| Tag list, count, one tag | `Browse.GeneralTag list` / `count` / `get` v2 | rows `{id,name,item_count}` |
+| Typing suggestions | `Browse.GeneralTag suggest` v2, `keyword`, `limit` | `{"list":[{id,name}]}` |
+
+- `additional` accepts `tag` (`[{id,name}]`, empty for none) and `rating` (integer, 0 for unrated) on `Browse.Item list` and `get` in both spaces, and the Diff v7 `list` feed returns them (web client `get` requests ask for `description`, `tag`, … `rating`, … `person`). The web client's list requests omit both fields, so the app asks for them in every page request.
+- Duplicate `create` names return the existing tag with success; an empty name is error 120. A tag with no items disappears from `list` and `get`; there is no delete method (`delete` is error 103).
+- `rating` outside 0–5 is error 120. Rating several items is one request.
+- `add_tag` with an unknown tag ID succeeds with every item ID in `error_list` (bare integers). Unknown item IDs are ignored silently. Repeated adds and removes succeed.
+- `Browse.Item list` accepts `general_tag_id` to list one tag's items; the app filters the cached metadata instead.
+- Not observed: renaming a tag, per-item tag limits, and rating or tags on the other space's items (rejected or ignored was not tested).
+
 ## Thumbnail replacement
 
 Authorized write probes against `cirrus` on 2026-10-09 established that
@@ -837,7 +858,7 @@ A probe on the disposable `phototest` account took a fresh `get_version` v7 curs
   | JPEG added to a folder | `list` modification with its `folder_id` |
   | File moved to another folder | same ID, `list` modification with the new `folder_id`; `item.move` stays empty |
   | `Browse.Item set rating` (v7, `{id: [...], rating: n}`) | `list` modification with the new `additional.rating` |
-  | `GeneralTag create` (v1, `name`) then `Browse.Item add_tag` / `remove_tag` (v7, `{id: [...], tag: [tag_id]}`) | `list` modification with the new `additional.tag` |
+  | `GeneralTag create` (v2, `name`) then `Browse.Item add_tag` / `remove_tag` (v7, `{id: [...], tag: [tag_id]}`) | `list` modification with the new `additional.tag` |
   | Parent folder renamed on the filesystem | no item change and no cursor advance within 2 minutes |
   | Folder removed | `list` tombstone and a `get` `item.delete` |
 

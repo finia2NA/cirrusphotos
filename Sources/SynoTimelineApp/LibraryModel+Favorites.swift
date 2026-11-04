@@ -24,6 +24,85 @@ extension LibraryModel {
         }
     }
 
+    // MARK: - Selection favorite state
+
+    private static let favoriteStateSelectionLimit = 50
+
+    /// Resolves whether the whole browser selection is favorited. Larger selections are not
+    /// resolved, since the heart then only toggles. Keeps the last value while the browser
+    /// is not the key responder (for example while the Info panel is key).
+    func refreshBrowserSelectionFavorite(force: Bool = false) {
+        guard browserCommandSnapshot.active else { return }
+        let snapshot = browserCommandSnapshot
+        guard let repository, capabilities(for: snapshot.collection).allowsSpaceItemActions,
+              (1...Self.favoriteStateSelectionLimit).contains(snapshot.selectedOrdinals.count) else {
+            favoriteStateKey = nil
+            favoriteStateTask?.cancel()
+            if browserSelectionFavorited { browserSelectionFavorited = false }
+            return
+        }
+        observeFavoriteChanges(of: repository)
+        let key = "\(snapshot.collection.rawValue)|\(snapshot.indexFingerprint ?? "")|" +
+            snapshot.selectedOrdinals.map(String.init).joined(separator: ",")
+        guard force || key != favoriteStateKey else { return }
+        favoriteStateKey = key
+        favoriteStateTask?.cancel()
+        favoriteStateTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(100))
+            guard !Task.isCancelled, let self,
+                  let selection = snapshot.captureSelection(timeline: snapshots[snapshot.collection]) else { return }
+            let action = await SelectionFavoriteResolver(repository: repository).resolve(selection)
+            guard !Task.isCancelled else { return }
+            let value = action.map { !$0.targetFavorite } ?? false
+            if browserSelectionFavorited != value { browserSelectionFavorited = value }
+        }
+    }
+
+    /// Favorite writes from any surface (viewer, browser, Info panel) refresh the state.
+    private func observeFavoriteChanges(of repository: CachedPhotosRepository) {
+        let identifier = ObjectIdentifier(repository)
+        guard identifier != favoriteObserverRepository else { return }
+        favoriteObserverRepository = identifier
+        favoriteObserverTasks.forEach { $0.cancel() }
+        favoriteObserverTasks = [PhotoSpace.personal, .shared].map { space in
+            Task { [weak self] in
+                for await _ in await repository.favoriteChanges(space: space) {
+                    guard !Task.isCancelled else { return }
+                    self?.refreshBrowserSelectionFavorite(force: true)
+                }
+            }
+        } + [Task { [weak self] in
+            for await change in await repository.photoItemChanges() where !change.favoriteValues.isEmpty {
+                guard !Task.isCancelled else { return }
+                self?.refreshBrowserSelectionFavorite(force: true)
+            }
+        }]
+    }
+
+    func canFavoriteFromInfoPanel(viewerActive: Bool, collection: PhotoCollectionDescriptor, selection: IndexSet) -> Bool {
+        if viewerActive { return canToggleViewerFavorite }
+        return capabilities(for: collection).allowsSpaceItemActions && timelineVerified(for: collection) &&
+            !browserFavoriteBusy && pendingFavoriteConfirmation == nil &&
+            infoPanelSnapshot(collection: collection, selection: selection)?.canToggleFavorite == true
+    }
+
+    /// Toggles the Info panel's single item. The panel is its own key window, so the
+    /// browser's menu-bar command state is not used.
+    func toggleInfoPanelFavorite(viewerActive: Bool, collection: PhotoCollectionDescriptor, selection: IndexSet) {
+        guard canFavoriteFromInfoPanel(viewerActive: viewerActive, collection: collection, selection: selection) else { return }
+        if viewerActive {
+            toggleViewerFavorite()
+            return
+        }
+        guard let repository, let snapshot = infoPanelSnapshot(collection: collection, selection: selection) else { return }
+        browserFavoriteFailure = nil
+        browserFavoriteBusy = true
+        updateBrowserFavoriteAvailability()
+        Task { [weak self] in
+            await self?.resolveThenMutateFavorites(snapshot: snapshot, repository: repository)
+        }
+    }
+
     func resolveThenMutateFavorites(snapshot: BrowserCommandSnapshot,
                                              repository: CachedPhotosRepository) async {
         defer {

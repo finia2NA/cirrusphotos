@@ -7,6 +7,7 @@ enum InfoPanelScene {
 
 struct InfoPanelView: View {
     @EnvironmentObject private var infoPanel: InfoPanelModel
+    @Environment(LibraryModel.self) private var model
 
     var body: some View {
         content
@@ -74,13 +75,17 @@ struct InfoPanelView: View {
         return VStack(alignment: .leading, spacing: 8) {
             if let filename = content.filename {
                 HStack(spacing: 6) {
-                    Image(systemName: content.mediaKind?.systemImage ?? "doc")
-                        .accessibilityHidden(true)
-                    copyButton(label: filename, value: filename, help: "Copy filename")
+                    HStack(spacing: 6) {
+                        Image(systemName: content.mediaKind?.systemImage ?? "doc")
+                            .accessibilityHidden(true)
+                        copyButton(label: filename, value: filename, help: "Copy filename")
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(content.mediaKind?.accessibilityLabel ?? "File"), \(filename)")
+                    Spacer(minLength: 6)
+                    if !content.isLoading { favoriteButton(content) }
                 }
                 .font(.headline)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(content.mediaKind?.accessibilityLabel ?? "File"), \(filename)")
             }
             if content.itemIDText != nil || content.folderPath != nil {
                 HStack(spacing: 4) {
@@ -111,6 +116,22 @@ struct InfoPanelView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                ratingRow(content)
+                if !content.tags.isEmpty {
+                    TagFlowLayout(spacing: 4) {
+                        ForEach(content.tags, id: \.self) { tag in
+                            Text(tag)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(RoundedRectangle(cornerRadius: 5).fill(.quaternary))
+                        }
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Tags, \(content.tags.joined(separator: ", "))")
+                }
                 Divider()
                 if let camera = content.camera {
                     Text(camera)
@@ -134,6 +155,49 @@ struct InfoPanelView: View {
                 }
             }
         }
+    }
+
+    private func favoriteButton(_ content: InfoPanelContent) -> some View {
+        let canFavorite = model.canFavoriteFromInfoPanel(viewerActive: infoPanel.isViewerActive,
+                                                         collection: infoPanel.currentBrowserCollection,
+                                                         selection: infoPanel.currentBrowserSelection)
+        return Button {
+            model.toggleInfoPanelFavorite(viewerActive: infoPanel.isViewerActive,
+                                          collection: infoPanel.currentBrowserCollection,
+                                          selection: infoPanel.currentBrowserSelection)
+        } label: {
+            Image(systemName: content.isFavorite ? "heart.fill" : "heart")
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .disabled(!canFavorite)
+        .help(content.isFavorite ? "Remove from Favorites" : "Add to Favorites")
+        .accessibilityLabel(content.isFavorite ? "Remove from Favorites" : "Add to Favorites")
+    }
+
+    private func ratingRow(_ content: InfoPanelContent) -> some View {
+        let canRate = model.canRateFromInfoPanel(viewerActive: infoPanel.isViewerActive,
+                                                 collection: infoPanel.currentBrowserCollection,
+                                                 selection: infoPanel.currentBrowserSelection)
+        return HStack(spacing: 2) {
+            ForEach(1...5, id: \.self) { star in
+                Button {
+                    // Clicking the current rating's star clears it.
+                    model.setInfoPanelRating(star == content.rating ? 0 : star,
+                                             viewerActive: infoPanel.isViewerActive,
+                                             collection: infoPanel.currentBrowserCollection,
+                                             selection: infoPanel.currentBrowserSelection)
+                } label: {
+                    Image(systemName: "star.fill")
+                        .foregroundStyle(star <= content.rating ? AnyShapeStyle(.orange) : AnyShapeStyle(.quaternary))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canRate)
+                .accessibilityLabel("\(star) \(star == 1 ? "star" : "stars")")
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Rating, \(content.rating) of 5 stars")
     }
 
     private func copyButton(label: String, value: String, help: String) -> some View {
@@ -178,6 +242,40 @@ struct InfoPanelView: View {
         return parts.joined(separator: ", ")
     }
 
+}
+
+/// Wraps tag chips onto as many lines as the width needs.
+private struct TagFlowLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(width: proposal.width ?? .infinity, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = arrange(width: bounds.width, subviews: subviews)
+        for (subview, origin) in zip(subviews, result.origins) {
+            subview.place(at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y), proposal: .unspecified)
+        }
+    }
+
+    private func arrange(width: CGFloat, subviews: Subviews) -> (origins: [CGPoint], size: CGSize) {
+        var origins: [CGPoint] = []
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, maxX: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+            if x > 0, x + size.width > width {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            origins.append(CGPoint(x: x, y: y))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            maxX = max(maxX, x - spacing)
+        }
+        return (origins, CGSize(width: maxX, height: y + rowHeight))
+    }
 }
 
 struct InfoPanelWindowConfigurator: NSViewRepresentable {

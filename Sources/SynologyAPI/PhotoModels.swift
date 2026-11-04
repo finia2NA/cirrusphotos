@@ -26,6 +26,31 @@ public enum PhotoMediaKind: Hashable, Sendable {
     }
 }
 
+/// A Synology general tag. Tags belong to one space; the same name in Personal and
+/// Shared Space is two tags with unrelated IDs.
+public struct PhotoTag: Codable, Hashable, Sendable, Identifiable {
+    public let id: Int64
+    public let name: String
+
+    public init(id: Int64, name: String) {
+        self.id = id
+        self.name = name
+    }
+}
+
+/// The user-editable annotations of an item.
+public struct PhotoAnnotations: Sendable, Equatable {
+    public let rating: Int
+    public let tags: [PhotoTag]
+
+    public init(rating: Int, tags: [PhotoTag]) {
+        self.rating = rating
+        self.tags = tags
+    }
+
+    public static let maximumRating = 5
+}
+
 public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
     public let id: Int64
     /// Retained as evidence, not treated as a universal space discriminator.
@@ -64,9 +89,13 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
         public let gps: PhotoCoordinate?
         public let folderPath: String?
         public var favorite: Bool?
+        /// Star rating from 0 (unrated) to 5. Absent when the page was not requested with `rating`.
+        public var rating: Int?
+        public var tags: [PhotoTag]?
 
         enum CodingKeys: String, CodingKey {
-            case thumbnail, resolution, orientation, exif, gps, favorite
+            case thumbnail, resolution, orientation, exif, gps, favorite, rating
+            case tags = "tag"
             case orientationOriginal = "orientation_original"
             case videoConvert = "video_convert"
             case videoMeta = "video_meta"
@@ -75,6 +104,9 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
     }
 
     public var isFavorite: Bool { additional?.favorite == true }
+    /// The star rating, 0 when unrated or not loaded.
+    public var rating: Int { additional?.rating ?? 0 }
+    public var tags: [PhotoTag] { additional?.tags ?? [] }
 
     public var mediaKind: PhotoMediaKind {
         let normalizedType = type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -100,7 +132,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
                                      orientation: value.orientation, orientationOriginal: value.orientationOriginal,
                                      videoConvert: current?.videoConvert, videoMeta: current?.videoMeta,
                                      exif: current?.exif, gps: current?.gps, folderPath: current?.folderPath,
-                                     favorite: current?.favorite)
+                                     favorite: current?.favorite, rating: current?.rating, tags: current?.tags)
         item.pendingRotationQuarterTurns = replacement.pendingRotationQuarterTurns
         return item
     }
@@ -126,6 +158,22 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
         return copy
     }
 
+    /// Replaces only the rating and tags, preserving every other field.
+    public func withAnnotations(_ annotations: PhotoAnnotations) -> PhotoItem {
+        var copy = self
+        if copy.additional == nil {
+            copy.additional = Additional(thumbnail: nil, resolution: nil, orientation: nil, orientationOriginal: nil,
+                                         videoConvert: nil, videoMeta: nil, exif: nil, gps: nil, folderPath: nil,
+                                         favorite: nil, rating: annotations.rating, tags: annotations.tags)
+        } else {
+            copy.additional?.rating = annotations.rating
+            copy.additional?.tags = annotations.tags
+        }
+        return copy
+    }
+
+    public var annotations: PhotoAnnotations { PhotoAnnotations(rating: rating, tags: tags) }
+
     /// Optimistic metadata projection used while Synology regenerates the normal
     /// display orientation. The authoritative item replaces this value after the write.
     public func rotated(_ direction: PhotoRotationDirection) -> PhotoItem {
@@ -143,7 +191,9 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
                 exif: additional.exif,
                 gps: additional.gps,
                 folderPath: additional.folderPath,
-                favorite: additional.favorite
+                favorite: additional.favorite,
+                rating: additional.rating,
+                tags: additional.tags
             )
         } else {
             additional = Additional(
@@ -152,7 +202,8 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
                 orientationOriginal: additional.orientationOriginal,
                 videoConvert: additional.videoConvert, videoMeta: additional.videoMeta,
                 exif: additional.exif, gps: additional.gps,
-                folderPath: additional.folderPath, favorite: additional.favorite
+                folderPath: additional.folderPath, favorite: additional.favorite,
+                rating: additional.rating, tags: additional.tags
             )
         }
         copy.additional = additional

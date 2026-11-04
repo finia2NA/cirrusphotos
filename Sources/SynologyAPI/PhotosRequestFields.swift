@@ -5,7 +5,7 @@
 public enum PhotosRequestFields {
     public static let pageAdditional = [
         "thumbnail", "resolution", "orientation", "video_convert",
-        "video_meta", "address", "favorite", "exif", "gps", "folder",
+        "video_meta", "address", "favorite", "exif", "gps", "folder", "tag", "rating",
     ]
 
     /// The `additional` fields for the whole-library location scan. Kept minimal:

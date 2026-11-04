@@ -11,6 +11,7 @@ Current API behavior lives in [`../SYNOLOGY_PHOTOS_API.md`](../SYNOLOGY_PHOTOS_A
 | [timeline-paging.md](timeline-paging.md) | Wire topology of timeline sections and the stable day-slot model |
 | [video-streaming.md](video-streaming.md) | `Streaming` and `Download` range behavior, plus the Android client's playback requests |
 | [album-sharing.md](album-sharing.md) | Album membership, sharing, public links, recipients and Provider access |
+| [tags-and-ratings.md](tags-and-ratings.md) | Tag creation and assignment, ratings, and how both reach the cache |
 
 ## Runners
 

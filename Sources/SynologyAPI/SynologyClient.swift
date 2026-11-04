@@ -609,6 +609,44 @@ public actor SynologyClient: PhotosTransport {
             "id": Self.idArray(itemIDs), "favorite": favorite ? "true" : "false"])
     }
 
+    /// Sets the star rating (0 clears it) of items in one space.
+    public func setRating(itemIDs: [Int64], rating: Int, space: PhotoSpace) async throws {
+        guard !itemIDs.isEmpty else { return }
+        guard (0...PhotoAnnotations.maximumRating).contains(rating) else { throw SynologyAPIError.invalidResponse }
+        let response: APIEnvelope<ItemWriteResult> = try await request(Self.api("Browse.Item", space), version: 7, method: "set", [
+            "id": Self.idArray(itemIDs), "rating": String(rating)])
+        guard response.success else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+        guard response.data?.errorList.isEmpty == true else { throw SynologyAPIError.invalidResponse }
+    }
+
+    /// Creates a tag, or returns the existing tag of that name: the server treats a
+    /// duplicate name as idempotent and rejects an empty name.
+    public func createTag(name: String, space: PhotoSpace) async throws -> PhotoTag {
+        struct Created: Decodable { let tag: PhotoTag }
+        let created: Created = try await call(Self.api("Browse.GeneralTag", space), version: 2, method: "create", [
+            "name": try Self.jsonString(name)])
+        guard created.tag.id > 0, !created.tag.name.isEmpty else { throw SynologyAPIError.invalidResponse }
+        return created.tag
+    }
+
+    public func addTags(_ tagIDs: [Int64], toItems itemIDs: [Int64], space: PhotoSpace) async throws {
+        try await writeTags("add_tag", tagIDs, itemIDs, space)
+    }
+
+    public func removeTags(_ tagIDs: [Int64], fromItems itemIDs: [Int64], space: PhotoSpace) async throws {
+        try await writeTags("remove_tag", tagIDs, itemIDs, space)
+    }
+
+    /// `error_list` names the items that were not changed (it also names every item for
+    /// an unknown tag). An unknown item ID is silently ignored by the server.
+    private func writeTags(_ method: String, _ tagIDs: [Int64], _ itemIDs: [Int64], _ space: PhotoSpace) async throws {
+        guard !itemIDs.isEmpty, !tagIDs.isEmpty else { return }
+        let response: APIEnvelope<ItemWriteResult> = try await request(Self.api("Browse.Item", space), version: 7, method: method, [
+            "id": Self.idArray(itemIDs), "tag": Self.idArray(tagIDs)])
+        guard response.success else { throw SynologyAPIError.api(response.error?.code ?? -1) }
+        guard response.data?.errorList.isEmpty == true else { throw SynologyAPIError.invalidResponse }
+    }
+
     /// Submits a library deletion and waits for the background task to finish.
     /// Task `done` only means the NAS processed the request: unknown IDs and IDs
     /// from the other space also finish with `error` 0, so callers must verify

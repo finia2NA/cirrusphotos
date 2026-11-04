@@ -83,6 +83,7 @@ extension LibraryBrowserScrollView.Coordinator {
             }
         }
         if allowsAlbumMembership { onAlbumMenu?(menu, snapshot) }
+        if allowsFileDrag, allowNetwork { onAnnotationMenu?(menu, snapshot) }
         if allowsFileDrag, let onDelete {
             if !menu.items.isEmpty { menu.addItem(.separator()) }
             menu.addItem(PhotoDownloadMenuItem(title: "Delete…") { onDelete(snapshot) })

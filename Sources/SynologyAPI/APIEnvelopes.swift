@@ -54,6 +54,14 @@ struct ItemSetData: Decodable {
 
 struct ItemSetError: Decodable { let id: Int64?; let code: Int? }
 
+/// A write result whose `error_list` is empty on success. Failed entries are bare item IDs
+/// for tags and objects for other fields, so only their number is read.
+struct ItemWriteResult: Decodable {
+    let errorList: [Entry]
+    enum CodingKeys: String, CodingKey { case errorList = "error_list" }
+    struct Entry: Decodable { init(from decoder: Decoder) throws {} }
+}
+
 struct RegeneratingData: Decodable { let list: [RegeneratingEntry] }
 struct RegeneratingEntry: Decodable {
     let itemID: Int64?

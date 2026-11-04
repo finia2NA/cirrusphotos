@@ -69,6 +69,10 @@ public struct LibraryFilter: Equatable, Sendable {
     public var focalLengthMM: OptionalNumericRange<Double>
     public var aperture: OptionalNumericRange<Double>
     public var exposureSeconds: OptionalNumericRange<Double>
+    /// Matches an item that has at least one of these tags, compared by name.
+    public var tags: Set<String>
+    /// Star rating bounds; 0 is unrated.
+    public var rating: OptionalNumericRange<Int>
 
     public init(filename: FilenameSearch = .init(), mediaKinds: Set<PhotoMediaKind> = [], cameras: Set<String> = [],
                 lenses: Set<String> = [], extensions: Set<String> = [],
@@ -77,7 +81,8 @@ public struct LibraryFilter: Equatable, Sendable {
                 iso: OptionalNumericRange<Double> = .init(),
                 focalLengthMM: OptionalNumericRange<Double> = .init(),
                 aperture: OptionalNumericRange<Double> = .init(),
-                exposureSeconds: OptionalNumericRange<Double> = .init()) {
+                exposureSeconds: OptionalNumericRange<Double> = .init(),
+                tags: Set<String> = [], rating: OptionalNumericRange<Int> = .init()) {
         self.filename = filename
         self.mediaKinds = mediaKinds
         self.cameras = cameras
@@ -89,18 +94,20 @@ public struct LibraryFilter: Equatable, Sendable {
         self.focalLengthMM = focalLengthMM
         self.aperture = aperture
         self.exposureSeconds = exposureSeconds
+        self.tags = tags
+        self.rating = rating
     }
 
     public var isEmpty: Bool {
         filename.isEmpty && mediaKinds.isEmpty && cameras.isEmpty && lenses.isEmpty && extensions.isEmpty &&
             megapixels.isEmpty && bytes.isEmpty && iso.isEmpty && focalLengthMM.isEmpty &&
-            aperture.isEmpty && exposureSeconds.isEmpty
+            aperture.isEmpty && exposureSeconds.isEmpty && tags.isEmpty && rating.isEmpty
     }
 
     public var activeCriterionCount: Int {
         [!filename.isEmpty, !mediaKinds.isEmpty, !cameras.isEmpty, !lenses.isEmpty, !extensions.isEmpty,
          !megapixels.isEmpty, !bytes.isEmpty, !iso.isEmpty, !focalLengthMM.isEmpty,
-         !aperture.isEmpty, !exposureSeconds.isEmpty].filter { $0 }.count
+         !aperture.isEmpty, !exposureSeconds.isEmpty, !tags.isEmpty, !rating.isEmpty].filter { $0 }.count
     }
 
     public func matches(_ item: PhotoItem) -> Bool {
@@ -113,7 +120,11 @@ public struct LibraryFilter: Equatable, Sendable {
         if !matches(cameras, value: values.camera, normalizer: LibraryFilterParsing.lookupKey) { return false }
         if !matches(lenses, value: values.lens, normalizer: LibraryFilterParsing.lookupKey) { return false }
         if !matches(extensions, value: values.fileExtension, normalizer: LibraryFilterParsing.extensionKey) { return false }
-        return megapixels.contains(values.megapixels) && bytes.contains(values.bytes) &&
+        if !tags.isEmpty {
+            let wanted = Set(tags.map(LibraryFilterParsing.lookupKey))
+            guard values.tags.contains(where: { wanted.contains(LibraryFilterParsing.lookupKey($0)) }) else { return false }
+        }
+        return rating.contains(values.rating) && megapixels.contains(values.megapixels) && bytes.contains(values.bytes) &&
             iso.contains(values.iso) && focalLengthMM.contains(values.focalLengthMM) &&
             aperture.contains(values.aperture) && exposureSeconds.contains(values.exposureSeconds)
     }
@@ -141,9 +152,13 @@ struct LibraryFilterValues: Equatable, Sendable {
     let focalLengthMM: Double?
     let aperture: Double?
     let exposureSeconds: Double?
+    let rating: Int
+    let tags: [String]
 
     init(filename: String?, filenameKey: String?, mediaKind: PhotoMediaKind, camera: String?, lens: String?, fileExtension: String?, megapixels: Double?,
-         bytes: Int64?, iso: Double?, focalLengthMM: Double?, aperture: Double?, exposureSeconds: Double?) {
+         bytes: Int64?, iso: Double?, focalLengthMM: Double?, aperture: Double?, exposureSeconds: Double?,
+         rating: Int = 0, tags: [String] = []) {
+        self.rating = rating; self.tags = tags
         self.filename = filename; self.filenameKey = filenameKey
         self.mediaKind = mediaKind; self.camera = camera; self.lens = lens; self.fileExtension = fileExtension
         self.megapixels = megapixels; self.bytes = bytes; self.iso = iso; self.focalLengthMM = focalLengthMM
@@ -165,6 +180,8 @@ struct LibraryFilterValues: Equatable, Sendable {
         focalLengthMM = LibraryFilterParsing.firstPositiveNumber(item.additional?.exif?.focalLength)
         aperture = LibraryFilterParsing.aperture(item.additional?.exif?.aperture)
         exposureSeconds = LibraryFilterParsing.exposureSeconds(item.additional?.exif?.exposureTime)
+        rating = item.rating
+        tags = item.tags.map(\.name)
     }
 }
 

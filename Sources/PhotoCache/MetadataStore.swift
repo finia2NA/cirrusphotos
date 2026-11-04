@@ -50,7 +50,7 @@ public struct MetadataStoreAdmission: Sendable {
 /// Typed record access on the existing cache actor. No transaction suspends.
 /// The normalized format is initialized explicitly when the engine enrolls it.
 extension DiskCache {
-    static let metadataFormatVersion = 8
+    static let metadataFormatVersion = 9
 
     public func initializeMetadataStore() throws {
         try database.inTransaction(.immediate) { db in
@@ -791,6 +791,26 @@ extension DiskCache {
                 let favorites = CollectionKey(namespace: namespace, collection: .favorites(space))
                 try CollectionStateRecord.row(favorites).updateAll(db) { $0.validatedRun.set(to: nil) }
                 try CollectionDayRecord.all(favorites).updateAll(db) { $0.membershipGeneration += 1 }
+            }
+            try advanceMetadataLocalRevision(db, namespace)
+        }
+    }
+    /// Replaces the rating and tags of cached details and withdraws the validation of the tag
+    /// index and of the collections of every tag whose membership changed.
+    public func applyMetadataAnnotations(_ values: [Int64: PhotoAnnotations], changedTagIDs: Set<Int64>,
+                                         namespace: MetadataNamespace, admission: MetadataStoreAdmission) throws {
+        try metadataWrite { db in
+            try admitLifetime(admission, namespace: namespace)
+            for (id, annotations) in values {
+                try patchMetadataDetail(db, namespace: namespace, itemID: id) { $0.withAnnotations(annotations) }
+            }
+            if let space = namespace.scope.space {
+                for tagID in changedTagIDs {
+                    let key = CollectionKey(namespace: namespace, collection: .tag(tagID, space: space))
+                    try CollectionStateRecord.row(key).updateAll(db) { $0.validatedRun.set(to: nil) }
+                    try CollectionDayRecord.all(key).updateAll(db) { $0.membershipGeneration += 1 }
+                }
+                try CollectionSummaryRecord.row(namespace, .tag).updateAll(db) { $0.validatedRun.set(to: nil) }
             }
             try advanceMetadataLocalRevision(db, namespace)
         }

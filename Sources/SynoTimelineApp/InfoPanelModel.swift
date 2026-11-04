@@ -34,6 +34,10 @@ struct InfoPanelContent: Equatable {
     var formatBadge: String?
     var exposure: [String] = []
     var durationText: String?
+    /// Star rating, 0 when unrated.
+    var rating = 0
+    var isFavorite = false
+    var tags: [String] = []
     var pins: [InfoPanelPin] = []
 }
 
@@ -61,6 +65,14 @@ final class InfoPanelModel: ObservableObject {
     private var generation: UInt64 = 0
     private var debounceTask: Task<Void, Never>?
     private var resolveTask: Task<Void, Never>?
+    private var changesRepositoryID: ObjectIdentifier?
+    private var changesTasks: [Task<Void, Never>] = []
+
+    deinit { changesTasks.forEach { $0.cancel() } }
+
+    var isViewerActive: Bool { viewerActive }
+    var currentBrowserCollection: PhotoCollectionDescriptor { browserCollection }
+    var currentBrowserSelection: IndexSet { browserSelection }
 
     func setVisible(_ value: Bool) {
         guard visible != value else { return }
@@ -80,6 +92,7 @@ final class InfoPanelModel: ObservableObject {
     func updateBrowserContext(repository: CachedPhotosRepository?, snapshot: TimelineSnapshot?,
                               collection: PhotoCollectionDescriptor, selection: IndexSet) {
         browserRepository = repository
+        observeItemChanges(of: repository)
         browserCollection = collection
         browserSelection = selection
         if browserSnapshot?.sections != snapshot?.sections {
@@ -188,6 +201,51 @@ final class InfoPanelModel: ObservableObject {
         }
     }
 
+    /// Re-resolves the selection when a rating or tag edit lands, since the resolution key
+    /// (collection, selection, index fingerprint) does not change for metadata edits.
+    private func observeItemChanges(of repository: CachedPhotosRepository?) {
+        let identifier = repository.map(ObjectIdentifier.init)
+        guard identifier != changesRepositoryID else { return }
+        changesRepositoryID = identifier
+        changesTasks.forEach { $0.cancel() }
+        changesTasks = []
+        guard let repository else { return }
+        // Album favorites arrive as item changes; space favorites on their own stream.
+        var tasks = [Task { [weak self] in
+            for await change in await repository.photoItemChanges() {
+                guard !Task.isCancelled else { return }
+                if !change.annotations.isEmpty || !change.favoriteValues.isEmpty {
+                    self?.applyFavoriteValues(change.favoriteValues)
+                    self?.refreshAfterAnnotationChange()
+                }
+            }
+        }]
+        for space in [PhotoSpace.personal, .shared] {
+            tasks.append(Task { [weak self] in
+                for await change in await repository.favoriteChanges(space: space) {
+                    guard !Task.isCancelled else { return }
+                    self?.applyFavoriteValues(change.values)
+                    self?.refreshAfterAnnotationChange()
+                }
+            })
+        }
+        changesTasks = tasks
+    }
+
+    private func applyFavoriteValues(_ values: [Int64: Bool]) {
+        guard visible, !viewerActive, content.kind == .single,
+              let id = content.itemIDText.flatMap({ Int64($0) }), let value = values[id],
+              content.isFavorite != value else { return }
+        content.isFavorite = value
+    }
+
+    private func refreshAfterAnnotationChange() {
+        guard visible, !viewerActive, browserSelection.count == 1 else { return }
+        generation &+= 1
+        cancelBrowserWork()
+        startResolution(generation: generation)
+    }
+
     private func cancelBrowserWork() {
         debounceTask?.cancel()
         debounceTask = nil
@@ -258,6 +316,9 @@ final class InfoPanelModel: ObservableObject {
         content.dateTimeText = InfoPanelFormatting.singleDateTime(item.time)
         content.formatBadge = item.filename.flatMap(InfoPanelFormatting.formatBadge(filename:))
         content.metrics = metrics(for: item)
+        content.rating = item.rating
+        content.isFavorite = item.isFavorite
+        content.tags = item.tags.map(\.name)
         content.pins = item.coordinate.map { [InfoPanelPin(id: item.id, coordinate: $0)] } ?? []
         if item.isVideo {
             content.durationText = item.additional?.videoMeta?.duration.map(InfoPanelFormatting.duration)

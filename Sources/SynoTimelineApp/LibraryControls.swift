@@ -87,7 +87,7 @@ struct BrowserFavoriteControl: View {
 
     var body: some View {
         Button(action: model.toggleSelectionFavorite) {
-            Label("Toggle Favorite", systemImage: "heart")
+            Label("Toggle Favorite", systemImage: model.browserSelectionFavorited && canToggle ? "heart.fill" : "heart")
         }
         .disabled(!canToggle)
         .accessibilityLabel(accessibilityLabel)
@@ -421,6 +421,17 @@ struct LibraryCommands: Commands {
             Button("Toggle Favorite") { model.toggleSelectionFavorite() }
                 .keyboardShortcut(".", modifiers: [])
                 .disabled(!model.canToggleFavorite)
+            Menu("Rating") {
+                ForEach(0...PhotoAnnotations.maximumRating, id: \.self) { rating in
+                    Button(LibraryModel.ratingTitle(rating)) { model.setSelectionRating(rating) }
+                        .keyboardShortcut(KeyEquivalent(Character(String(rating))), modifiers: [])
+                }
+            }
+            .disabled(!model.canAnnotate)
+            Button("Add Tag…") { model.promptAddTag() }
+                .disabled(!model.canAnnotate)
+            Button("Remove Tag…") { model.promptRemoveTag() }
+                .disabled(!model.canRemoveTag)
             Divider()
             Button(infoPanel.isVisible ? "Hide Info" : "Show Info") {
                 if infoPanel.isVisible {

@@ -6,6 +6,29 @@ import SynologyAPI
 final class LibraryFilterModel: ObservableObject {
     enum SizeUnit: String, CaseIterable, Identifiable { case KB, MB, GB; var id: String { rawValue } }
 
+    /// The rating criterion offered in the filter: any, unrated, or at least N stars.
+    enum RatingChoice: Int, CaseIterable, Identifiable {
+        case any = -1, unrated = 0, one, two, three, four, five
+        var id: Int { rawValue }
+
+        var title: String {
+            switch self {
+            case .any: "Any"
+            case .unrated: "Unrated"
+            case .one, .two, .three, .four, .five:
+                String(repeating: "★", count: rawValue) + (self == .five ? "" : " or more")
+            }
+        }
+
+        var range: OptionalNumericRange<Int> {
+            switch self {
+            case .any: .init()
+            case .unrated: .init(minimum: 0, maximum: 0)
+            default: .init(minimum: rawValue, maximum: nil)
+            }
+        }
+    }
+
     @Published var isPresented = false
     @Published var draft = LibraryFilter()
     @Published private(set) var committed = LibraryFilter()
@@ -23,6 +46,7 @@ final class LibraryFilterModel: ObservableObject {
     @Published var focalMin = ""; @Published var focalMax = ""
     @Published var apertureMin = ""; @Published var apertureMax = ""
     @Published var shutterMin = ""; @Published var shutterMax = ""
+    @Published var ratingChoice: RatingChoice = .any
 
     private weak var library: LibraryModel?
     private var controller: LibraryFilterController?
@@ -116,6 +140,7 @@ final class LibraryFilterModel: ObservableObject {
         filter.focalLengthMM = range(focalMin, focalMax, parser: parsePositive)
         filter.aperture = range(apertureMin, apertureMax, parser: parseAperture)
         filter.exposureSeconds = range(shutterMin, shutterMax, parser: parseShutter)
+        filter.rating = ratingChoice.range
         if filter.isEmpty { clear(); isPresented = false; return }
         committed = filter
         isPresented = false
@@ -143,6 +168,7 @@ final class LibraryFilterModel: ObservableObject {
         isoMin = ""; isoMax = ""; focalMin = ""; focalMax = ""
         apertureMin = ""; apertureMax = ""; shutterMin = ""; shutterMax = ""
         sizeMinUnit = .MB; sizeMaxUnit = .MB
+        ratingChoice = .any
         validationErrors = [:]
     }
 

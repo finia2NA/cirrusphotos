@@ -62,11 +62,19 @@ final class LibraryModel {
     private(set) var browserCommandsActive = false
     /// Whether the browser selection-favorite action may begin (selection non-empty, no active write).
     private(set) var canToggleBrowserFavorite = false
+    /// True when every item of a small browser selection is a favorite; fills the toolbar heart.
+    var browserSelectionFavorited = false
+    @ObservationIgnored var favoriteStateKey: String?
+    @ObservationIgnored var favoriteStateTask: Task<Void, Never>?
+    @ObservationIgnored var favoriteObserverTasks: [Task<Void, Never>] = []
+    @ObservationIgnored var favoriteObserverRepository: ObjectIdentifier?
     /// Pending confirmation for a large selection-favorite action; nil when no confirmation is needed.
     var pendingFavoriteConfirmation: SelectionFavoriteConfirmation?
     var browserFavoriteFailure: String?
     var rotationFailure: String?
     var rotationBusy = false
+    var annotationFailure: String?
+    var annotationBusy = false
     var thumbnailRotationProgress: ThumbnailRotationProgress?
     var isFixingThumbnailRotations = false
     private(set) var metadataInvalidationRevision: UInt64 = 0
@@ -82,6 +90,9 @@ final class LibraryModel {
     @ObservationIgnored var browserCommandHandler: ((BrowserSelectionCommand) -> Void)?
     @ObservationIgnored var browserCommandOwner: UUID?
     @ObservationIgnored var browserCommandSnapshot: BrowserCommandSnapshot = .inactive
+    /// The last snapshot published while the browser was the key responder. Kept after the
+    /// Info panel takes key so its rating control can still act on the selection.
+    @ObservationIgnored var lastActiveBrowserSnapshot: BrowserCommandSnapshot?
     @ObservationIgnored weak var activeViewer: PhotoViewerPresentation?
     @ObservationIgnored var viewerCloseHandler: (() -> Void)?
     @ObservationIgnored var backHandler: (() -> Void)?
@@ -377,7 +388,9 @@ final class LibraryModel {
         if canOpenSelectedPhoto != canOpen { canOpenSelectedPhoto = canOpen }
         browserCommandHandler = active ? handler : nil
         browserCommandSnapshot = active ? snapshot : .inactive
+        if active { lastActiveBrowserSnapshot = snapshot }
         updateBrowserFavoriteAvailability()
+        refreshBrowserSelectionFavorite()
         if !active { browserCommandOwner = nil }
     }
 

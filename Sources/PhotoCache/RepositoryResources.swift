@@ -30,12 +30,53 @@ public struct PhotoItemChange: Sendable {
     public let items: [Int64: PhotoItem]
     public let quarterTurns: [Int64: Int]
     public let favoriteValues: [Int64: Bool]
+    /// Authoritative ratings and tags, applied to displayed items without touching other fields.
+    public let annotations: [Int64: PhotoAnnotations]
 
-    public init(items: [Int64: PhotoItem], quarterTurns: [Int64: Int] = [:], favoriteValues: [Int64: Bool] = [:], scope: PhotoContentScope = .space(.personal)) {
+    public init(items: [Int64: PhotoItem], quarterTurns: [Int64: Int] = [:], favoriteValues: [Int64: Bool] = [:],
+                annotations: [Int64: PhotoAnnotations] = [:], scope: PhotoContentScope = .space(.personal)) {
         self.scope = scope
         self.items = items
         self.quarterTurns = quarterTurns
         self.favoriteValues = favoriteValues
+        self.annotations = annotations
+    }
+}
+
+/// A rating or tag edit applied to a verified selection.
+public enum PhotoAnnotationEdit: Sendable, Equatable {
+    case rating(Int)
+    case addTags([PhotoTag])
+    case removeTags([PhotoTag])
+}
+
+/// A verified selection for a rating or tag edit.
+public struct SelectionAnnotationAction: Sendable {
+    public let itemIDs: [Int64]
+    public let collection: PhotoCollectionDescriptor
+    public let itemsByID: [Int64: PhotoItem]
+    public let expectedTimelineFingerprint: String?
+
+    public init(itemIDs: [Int64], collection: PhotoCollectionDescriptor, itemsByID: [Int64: PhotoItem],
+                expectedTimelineFingerprint: String? = nil) {
+        self.itemIDs = itemIDs
+        self.collection = collection
+        self.itemsByID = itemsByID
+        self.expectedTimelineFingerprint = expectedTimelineFingerprint
+    }
+
+    public var items: [PhotoItem] { itemIDs.compactMap { itemsByID[$0] } }
+
+    /// The rating shared by every item, or nil when they differ.
+    public var commonRating: Int? {
+        let ratings = Set(items.map(\.rating))
+        return ratings.count == 1 ? ratings.first : nil
+    }
+
+    /// Tags carried by at least one item, ordered by name.
+    public var presentTags: [PhotoTag] {
+        Dictionary(items.flatMap(\.tags).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            .values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 }
 

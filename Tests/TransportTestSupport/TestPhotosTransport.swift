@@ -158,6 +158,18 @@ public extension TestPhotosTransport {
     func rotate(itemIDs: [Int64], direction: PhotoRotationDirection, space: PhotoSpace) async throws {
         throw UnexpectedTransportCall("rotate")
     }
+    func setRating(itemIDs: [Int64], rating: Int, space: PhotoSpace) async throws {
+        throw UnexpectedTransportCall("setRating")
+    }
+    func createTag(name: String, space: PhotoSpace) async throws -> PhotoTag {
+        throw UnexpectedTransportCall("createTag")
+    }
+    func addTags(_ tagIDs: [Int64], toItems itemIDs: [Int64], space: PhotoSpace) async throws {
+        throw UnexpectedTransportCall("addTags")
+    }
+    func removeTags(_ tagIDs: [Int64], fromItems itemIDs: [Int64], space: PhotoSpace) async throws {
+        throw UnexpectedTransportCall("removeTags")
+    }
     func deleteItems(_ itemIDs: [Int64], space: PhotoSpace) async throws {
         throw UnexpectedTransportCall("deleteItems")
     }
