@@ -11,7 +11,9 @@ struct SynoTimelineApp: App {
     @StateObject private var infoPanel = InfoPanelModel()
     @StateObject private var libraryFilter = LibraryFilterModel()
     @StateObject private var timelineSectionLoad = TimelineSectionLoadModel()
-    @StateObject private var metadataSync = MetadataSyncModel()
+    /// Held without observing: the scene never reads sync progress, and observing it here
+    /// re-evaluated the whole scene (window and menu bar) for every synced section.
+    @State private var metadataSync = MetadataSyncModel()
 
     init() {
         let preferences = AppPreferences()
