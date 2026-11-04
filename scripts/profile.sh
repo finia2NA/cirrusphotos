@@ -24,8 +24,9 @@ if [[ ${free_gb:-0} -lt 25 ]]; then
     echo "Warning: only ${free_gb} GB free. Traces can be very large (Animation Hitches especially)." >&2
 fi
 
-echo "Template: $template, ${seconds}s. Output: $trace"
-xcrun xctrace record --template "$template" --time-limit "${seconds}s" \
+echo "Template: $template (+ os_signpost), ${seconds}s. Output: $trace"
+# os_signpost records the app's performance.browser intervals alongside any template.
+xcrun xctrace record --template "$template" --instrument os_signpost --time-limit "${seconds}s" \
     --output "$trace" --launch -- "$app" >"$log" 2>&1 &
 recorder=$!
 
@@ -52,7 +53,7 @@ while kill -0 "$recorder" 2>/dev/null; do
         phase=recording
         started=$now
     fi
-    if [[ $phase != processing ]] && grep -q 'ending recording\|Stopping recording' "$log"; then
+    if [[ $phase != processing ]] && grep -q 'ending recording\|Stopping recording\|Recording completed' "$log"; then
         phase=processing
         processing_started=$now
     fi
