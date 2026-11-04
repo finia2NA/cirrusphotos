@@ -289,3 +289,42 @@ struct HostedPlaceholder: View {
             .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 10)
     }
 }
+
+/// A pooled one-line label for day headings and section status in the browser document.
+/// Plain AppKit text is far cheaper to place than a SwiftUI hosting view per line, and
+/// pointer input passes through to the document like the photo cells.
+final class BrowserLabelView: NSTextField {
+    enum Style { case heading, status }
+
+    private(set) var style: Style = .heading
+
+    convenience init(style: Style) {
+        self.init(labelWithString: "")
+        lineBreakMode = .byTruncatingTail
+        maximumNumberOfLines = 1
+        apply(style)
+    }
+
+    func apply(_ style: Style) {
+        self.style = style
+        switch style {
+        case .heading:
+            font = .preferredFont(forTextStyle: .headline)
+            textColor = .labelColor
+        case .status:
+            font = .preferredFont(forTextStyle: .callout)
+            textColor = .secondaryLabelColor
+        }
+    }
+
+    /// Places the text 10 points from the leading edge, vertically centered in `slot`,
+    /// matching the former SwiftUI layout.
+    func place(in slot: CGRect) {
+        let height = ceil(cell?.cellSize.height ?? 17)
+        let target = CGRect(x: slot.minX + 10, y: slot.minY + (slot.height - height) / 2,
+                            width: max(0, slot.width - 10), height: height)
+        if frame != target { frame = target }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}

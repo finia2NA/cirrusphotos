@@ -204,20 +204,9 @@ struct LibraryBrowserView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showingSharing = false
-    @State private var selectedDay: String?
+    /// Held, not observed: scrolling past days re-renders only the scrubber.
+    @State private var daySelection = BrowserDaySelection()
     @State private var jumpRequest: DayJumpRequest?
-
-    private var selection: Binding<Int> {
-        Binding(
-            get: { library.snapshot(for: collection)?.timeline.index(keeping: selectedDay) ?? 0 },
-            set: { index in
-                guard let days = library.snapshot(for: collection)?.timeline.days, days.indices.contains(index) else { return }
-                let day = days[index].id
-                selectedDay = day
-                jumpRequest = DayJumpRequest(dayID: day)
-            }
-        )
-    }
 
     private var isAlbum: Bool { library.capabilities(for: collection).sourceAlbumID != nil || library.capabilities(for: collection).isIncoming }
     private var upload: PhotoUploadDrop? {
@@ -354,11 +343,15 @@ struct LibraryBrowserView: View {
                                                                           userScrollGeneration: generation)
                                              },
                                              onRetry: { Task { await library.reload() } }) { day in
-                        if snapshot.timeline.days.contains(where: { $0.id == day }) { selectedDay = day }
+                        if daySelection.day != day, snapshot.timeline.days.contains(where: { $0.id == day }) {
+                            daySelection.day = day
+                        }
                     }
                         if !snapshot.timeline.days.isEmpty {
-                            TimelineNavigator(timeline: snapshot.timeline, selected: selection,
-                                              alwaysVisible: preferences.alwaysShowsTimeline)
+                            BrowserTimelineNavigator(daySelection: daySelection, timeline: snapshot.timeline,
+                                                     alwaysVisible: preferences.alwaysShowsTimeline) { day in
+                                jumpRequest = DayJumpRequest(dayID: day)
+                            }
                                 .frame(width: 72)
                                 .padding(.top, contentTopInset + 16)
                                 .padding(.bottom, 16)
@@ -395,8 +388,9 @@ struct LibraryBrowserView: View {
         .background(Color(nsColor: .textBackgroundColor))
         .onChange(of: library.snapshotRevision(for: collection)) { _, _ in
             guard let timeline = library.snapshot(for: collection)?.timeline,
-                  let index = timeline.index(keeping: selectedDay) else { selectedDay = nil; return }
-            selectedDay = timeline.days[index].id
+                  let index = timeline.index(keeping: daySelection.day) else { daySelection.day = nil; return }
+            let day = timeline.days[index].id
+            if daySelection.day != day { daySelection.day = day }
         }
     }
 }
@@ -505,4 +499,30 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         coordinator.stop()
     }
 
+}
+
+/// The scrubber's selected day, shared by reference between the browser and its scrubber.
+@MainActor
+final class BrowserDaySelection: ObservableObject {
+    @Published var day: String?
+}
+
+/// Observes the selected day so only the scrubber re-renders as the visible day changes.
+private struct BrowserTimelineNavigator: View {
+    @ObservedObject var daySelection: BrowserDaySelection
+    let timeline: Timeline
+    let alwaysVisible: Bool
+    let onJump: (String) -> Void
+
+    var body: some View {
+        TimelineNavigator(timeline: timeline, selected: Binding(
+            get: { timeline.index(keeping: daySelection.day) ?? 0 },
+            set: { index in
+                guard timeline.days.indices.contains(index) else { return }
+                let day = timeline.days[index].id
+                daySelection.day = day
+                onJump(day)
+            }
+        ), alwaysVisible: alwaysVisible)
+    }
 }

@@ -40,6 +40,9 @@ extension LibraryBrowserScrollView {
         var animateCellFrames = false
         var presentationObserver: AnyCancellable?
         static let cellPoolLimit = 160
+        /// Visible heading and status labels by key, and hidden labels ready for reuse.
+        var labels: [String: BrowserLabelView] = [:]
+        var labelPool: [BrowserLabelView] = []
         var selectionFramesKey: (rows: UUID, indexes: IndexSet)?
         /// Running counts reported by the "Viewport layout" signpost.
         var hostsCreated = 0
@@ -306,15 +309,48 @@ extension LibraryBrowserScrollView {
             if cellPool.count < Self.cellPoolLimit { cellPool.append(cell) } else { cell.removeFromSuperview() }
         }
 
-        /// Recycles every visible cell; `detach` also removes pooled cells from the document.
+        /// Recycles every visible cell and label; `detach` also removes pooled ones from the document.
         func removeAllCells(detach: Bool) {
             for cell in cells.values { recycle(cell) }
             cells.removeAll()
             cellRevisions.removeAll()
+            for label in labels.values { recycle(label) }
+            labels.removeAll()
             if detach {
                 cellPool.forEach { $0.removeFromSuperview() }
                 cellPool.removeAll()
+                labelPool.forEach { $0.removeFromSuperview() }
+                labelPool.removeAll()
             }
+        }
+
+        func recycle(_ label: BrowserLabelView) {
+            label.isHidden = true
+            if labelPool.count < 60 { labelPool.append(label) } else { label.removeFromSuperview() }
+        }
+
+        /// Shows a heading or status line, reusing the label already shown for `key` or a pooled one.
+        func placeLabel(_ key: String, text: String, style: BrowserLabelView.Style, slot: CGRect,
+                        wanted: inout Set<String>, document: NSView) {
+            wanted.insert(key)
+            let label: BrowserLabelView
+            if let existing = labels[key] {
+                label = existing
+            } else if let pooled = labelPool.popLast() {
+                label = pooled
+                label.isHidden = false
+                labels[key] = label
+            } else {
+                label = BrowserLabelView(style: style)
+                if let overlay = (document as? FlippedDocumentView)?.overlay {
+                    document.addSubview(label, positioned: .below, relativeTo: overlay)
+                } else { document.addSubview(label) }
+                labels[key] = label
+                hostsCreated &+= 1
+            }
+            if label.style != style { label.apply(style) }
+            if label.stringValue != text { label.stringValue = text }
+            label.place(in: slot)
         }
 
         func openFromCell(_ ordinal: Int, anchor: PhotoViewerSourceAnchor) {
@@ -347,8 +383,13 @@ extension LibraryBrowserScrollView {
                 cells[item.ordinal] = cell
                 cellRevisions[item.ordinal] = nil
             }
-            let revision = CellRevision(rows: geometry.rowsRevision, view: viewRevision, itemID: item.photo.id)
-            if cellRevisions[item.ordinal] != revision {
+            let revision = CellRevision(rows: geometry.rowsRevision, view: viewRevision,
+                                        item: item.photo, verified: item.verified)
+            // Rows rematerialize on every page arrival; only a changed item or view state reconfigures.
+            if let previous = cellRevisions[item.ordinal],
+               (previous.rows == revision.rows && previous.view == revision.view) || previous.sameContent(as: revision) {
+                if previous.rows != revision.rows { cellRevisions[item.ordinal] = revision }
+            } else {
                 cellRevisions[item.ordinal] = revision
                 hostsUpdated &+= 1
                 let ordinal = item.ordinal
@@ -516,6 +557,7 @@ extension LibraryBrowserScrollView {
             let range = geometry.sliceRange(y: max(0, y - overscan), height: height + 2 * overscan)
             var wanted: Set<String> = []
             var wantedCells: Set<Int> = []
+            var wantedLabels: Set<String> = []
             if animateCellFrames {
                 NSAnimationContext.beginGrouping()
                 NSAnimationContext.current.duration = BrowserThumbnailPresentation.transitionDuration
@@ -538,22 +580,23 @@ extension LibraryBrowserScrollView {
                 let slice = geometry.slices[position]
                 let section = slice.source.sectionIndex
                 if slice.heading {
-                    addHost("h:\(slice.source.dayID)", frame: CGRect(x: 0, y: slice.y, width: geometry.width, height: 32),
-                            content: AnyView(Text(slice.source.dayID).font(.headline)
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 10)),
-                            revision: (viewRevision, 0), wanted: &wanted, document: document)
+                    placeLabel("h:\(slice.source.dayID)", text: slice.source.dayID, style: .heading,
+                               slot: CGRect(x: 0, y: slice.y, width: geometry.width, height: 32),
+                               wanted: &wantedLabels, document: document)
                 }
+                let statusSlot = CGRect(x: 0, y: slice.y + (slice.heading ? 38 : 0), width: geometry.width, height: 28)
+                let statusKey = "\(slice.source.dayID):\(slice.source.dayRange.lowerBound)"
                 if let page = pages[section] {
                     if page.slots.count <= slice.source.pageRange.lowerBound {
-                        addHost("e:\(slice.source.dayID):\(slice.source.dayRange.lowerBound)",
-                                frame: CGRect(x: 0, y: slice.y + (slice.heading ? 38 : 0),
-                                              width: geometry.width, height: 28),
-                                content: AnyView(HostedPlaceholder(message: "No photos in this section")),
-                                revision: (viewRevision, rowRevisions[section] ?? 0),
-                                wanted: &wanted, document: document)
+                        placeLabel("e:" + statusKey, text: "No photos in this section", style: .status,
+                                   slot: statusSlot, wanted: &wantedLabels, document: document)
                     }
+                } else if errors[section] == nil {
+                    placeLabel("p:" + statusKey, text: unavailableOffline ? "Unavailable offline" : "Loading photos…",
+                               style: .status, slot: statusSlot, wanted: &wantedLabels, document: document)
                 } else {
-                    let message = errors[section] ?? (unavailableOffline ? "Unavailable offline" : "Loading photos…")
+                    // Rare: a failed section keeps its SwiftUI message and Retry button.
+                    let message = errors[section] ?? ""
                     addHost("p:\(slice.source.dayID):\(slice.source.dayRange.lowerBound)",
                             frame: CGRect(x: 0, y: slice.y + (slice.heading ? 38 : 0),
                                           width: geometry.width, height: 28),
@@ -586,6 +629,9 @@ extension LibraryBrowserScrollView {
             for key in hosts.keys where !wanted.contains(key) {
                 hosts.removeValue(forKey: key)?.removeFromSuperview()
                 hostRevisions.removeValue(forKey: key)
+            }
+            for key in labels.keys where !wantedLabels.contains(key) {
+                if let label = labels.removeValue(forKey: key) { recycle(label) }
             }
             if !suppressFeedback, !geometry.slices.isEmpty {
                 let day = geometry.slices[geometry.slice(at: y)].source.dayID
@@ -820,9 +866,15 @@ extension LibraryBrowserScrollView {
     }
 }
 
-/// What a visible cell was last configured from; equal revisions skip reconfiguration.
-struct CellRevision: Equatable {
+/// What a visible cell was last configured from. The rows token short-circuits the
+/// common case; after a page arrival the item itself decides whether anything changed.
+struct CellRevision {
     let rows: UUID
     let view: Int
-    let itemID: Int64
+    let item: PhotoItem
+    let verified: Bool
+
+    func sameContent(as other: CellRevision) -> Bool {
+        view == other.view && verified == other.verified && item == other.item
+    }
 }
