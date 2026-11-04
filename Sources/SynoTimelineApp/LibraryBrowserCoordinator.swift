@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import PhotoCache
 import SwiftUI
 import SynologyAPI
@@ -31,8 +32,14 @@ extension LibraryBrowserScrollView {
         var viewRevision = 0
         var hosts: [String: NSHostingView<AnyView>] = [:]
         var hostRevisions: [String: (Int, Int)] = [:]
-        /// Row signatures keyed by host, valid while the geometry's rows revision is unchanged.
-        var rowSignatures: [String: (rows: UUID, signature: Int)] = [:]
+        /// Visible photo cells by ordinal, and hidden cells ready for reuse.
+        var cells: [Int: BrowserPhotoCellView] = [:]
+        var cellPool: [BrowserPhotoCellView] = []
+        var cellRevisions: [Int: CellRevision] = [:]
+        /// Set by an animated square toggle: the next cell layout animates frames.
+        var animateCellFrames = false
+        var presentationObserver: AnyCancellable?
+        static let cellPoolLimit = 160
         var selectionFramesKey: (rows: UUID, indexes: IndexSet)?
         /// Running counts reported by the "Viewport layout" signpost.
         var hostsCreated = 0
@@ -73,7 +80,6 @@ extension LibraryBrowserScrollView {
             get { selectionState.selection }
             set { selectionState.selection = newValue }
         }
-        let selectionObservation = BrowserSelectionObservation()
         let presentation = BrowserThumbnailPresentation(cropsToSquare: false)
         let thumbnailFailures = ThumbnailFailureRegistry()
         var presentationRequest = 0
@@ -254,29 +260,110 @@ extension LibraryBrowserScrollView {
         }
 
         /// Applies the square preference with a short ease-in-out morph. Geometry is
-        /// already final, so only the visible thumbnail frame animates. The mutation is
-        /// deferred out of the SwiftUI update cycle, and a deferred request is ignored if
-        /// a newer snap or toggle supersedes it.
+        /// already final; the next cell layout animates each visible frame while images
+        /// aspect-fill, and the presentation settles on its rest gravity afterwards.
         func applySquarePresentation(_ cropsToSquare: Bool) {
             presentationRequest &+= 1
-            let request = presentationRequest
+            observePresentation()
             let animated = !reduceMotion
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.presentationRequest == request else { return }
-                let animation: Animation? = animated
-                    ? .easeInOut(duration: BrowserThumbnailPresentation.transitionDuration)
-                    : nil
-                withAnimation(animation) {
-                    self.presentation.setCropsToSquare(cropsToSquare, animated: animated)
-                }
-            }
+            presentation.setCropsToSquare(cropsToSquare, animated: animated)
+            animateCellFrames = animated
+            updateCellPresentation()
         }
 
         /// Applies the square preference immediately, invalidating any pending animated
         /// request. Used for initial construction, relayout, and Reduce Motion.
         func snapPresentation(_ cropsToSquare: Bool) {
             presentationRequest &+= 1
+            observePresentation()
             presentation.setCropsToSquare(cropsToSquare, animated: false)
+            animateCellFrames = false
+            updateCellPresentation()
+        }
+
+        /// The transition end changes `fillsFrame`; cells pick it up after the change.
+        func observePresentation() {
+            guard presentationObserver == nil else { return }
+            presentationObserver = presentation.objectWillChange.sink { [weak self] _ in
+                DispatchQueue.main.async { self?.updateCellPresentation() }
+            }
+        }
+
+        func updateCellPresentation() {
+            let fills = presentation.fillsFrame
+            for cell in cells.values { cell.fillsFrame = fills }
+        }
+
+        func updateCellSelection() {
+            for (ordinal, cell) in cells { cell.selected = selection.contains(ordinal) }
+        }
+
+        /// Hides a cell and returns it to the pool, keeping keyboard focus in the browser.
+        func recycle(_ cell: BrowserPhotoCellView) {
+            if cell.window?.firstResponder === cell { (scroll as? TimelineScrollView)?.focusTimeline() }
+            cell.resetForReuse()
+            cell.isHidden = true
+            if cellPool.count < Self.cellPoolLimit { cellPool.append(cell) } else { cell.removeFromSuperview() }
+        }
+
+        /// Recycles every visible cell; `detach` also removes pooled cells from the document.
+        func removeAllCells(detach: Bool) {
+            for cell in cells.values { recycle(cell) }
+            cells.removeAll()
+            cellRevisions.removeAll()
+            if detach {
+                cellPool.forEach { $0.removeFromSuperview() }
+                cellPool.removeAll()
+            }
+        }
+
+        func openFromCell(_ ordinal: Int, anchor: PhotoViewerSourceAnchor) {
+            guard let item = loadedItem(ordinal) else { return }
+            let page = pages[item.sectionIndex]
+            let seed = PhotoViewerSeed(sectionIndex: item.sectionIndex, pageOffset: item.pageOffset,
+                item: item.photo, page: page?.completeItems, pageVerified: page?.verified ?? item.verified)
+            openFromAccessibility(ordinal, request: PhotoViewerOpenRequest(seed: seed, source: anchor))
+        }
+
+        /// Shows `item` in a visible cell at `frame`, reusing the cell already showing that
+        /// ordinal or a pooled one. Content is re-applied only when rows or view state changed.
+        func placeCell(_ item: LibraryViewportGeometry.RowItem, frame: CGRect, geometry: LibraryViewportGeometry,
+                       document: NSView, repository: CachedPhotosRepository) {
+            let cell: BrowserPhotoCellView
+            if let existing = cells[item.ordinal] {
+                cell = existing
+            } else {
+                if let pooled = cellPool.popLast() {
+                    cell = pooled
+                    cell.frame = frame
+                } else {
+                    cell = BrowserPhotoCellView(frame: frame)
+                    if let overlay = (document as? FlippedDocumentView)?.overlay {
+                        document.addSubview(cell, positioned: .below, relativeTo: overlay)
+                    } else { document.addSubview(cell) }
+                    hostsCreated &+= 1
+                }
+                cell.isHidden = false
+                cells[item.ordinal] = cell
+                cellRevisions[item.ordinal] = nil
+            }
+            let revision = CellRevision(rows: geometry.rowsRevision, view: viewRevision, itemID: item.photo.id)
+            if cellRevisions[item.ordinal] != revision {
+                cellRevisions[item.ordinal] = revision
+                hostsUpdated &+= 1
+                let ordinal = item.ordinal
+                cell.onSelect = { [weak self] in self?.selectFromAccessibility(ordinal) }
+                cell.onCommand = { [weak self] in self?.perform($0) }
+                cell.onActivate = { [weak self] anchor in self?.openFromCell(ordinal, anchor: anchor) }
+                cell.fillsFrame = presentation.fillsFrame
+                cell.configure(BrowserPhotoCellContent(item: item.photo, ordinal: ordinal, repository: repository,
+                                                       size: thumbnailSize, allowNetwork: item.verified,
+                                                       collection: collection, failures: thumbnailFailures),
+                               selected: selection.contains(ordinal))
+            }
+            if cell.frame != frame {
+                if animateCellFrames { cell.animator().frame = frame } else { cell.frame = frame }
+            }
         }
 
         func stop() {
@@ -294,7 +381,8 @@ extension LibraryBrowserScrollView {
             hosts.values.forEach { $0.removeFromSuperview() }
             hosts.removeAll()
             hostRevisions.removeAll()
-            rowSignatures.removeAll()
+            removeAllCells(detach: true)
+            presentationObserver = nil
         }
 
         func stopWindow() {
@@ -318,7 +406,7 @@ extension LibraryBrowserScrollView {
             hosts.values.forEach { $0.removeFromSuperview() }
             hosts.removeAll()
             hostRevisions.removeAll()
-            rowSignatures.removeAll()
+            removeAllCells(detach: false)
         }
 
         func startEvents(rebasingTo index: LibraryIndex? = nil, filterMembership: [[Int64]]? = nil, filterAuthority: [[Bool]]? = nil) {
@@ -427,6 +515,13 @@ extension LibraryBrowserScrollView {
             let overscan = min(240, height * 0.35)
             let range = geometry.sliceRange(y: max(0, y - overscan), height: height + 2 * overscan)
             var wanted: Set<String> = []
+            var wantedCells: Set<Int> = []
+            if animateCellFrames {
+                NSAnimationContext.beginGrouping()
+                NSAnimationContext.current.duration = BrowserThumbnailPresentation.transitionDuration
+                NSAnimationContext.current.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                NSAnimationContext.current.allowsImplicitAnimation = true
+            }
             if let header {
                 addHost("album-header", frame: CGRect(x: 0, y: 0, width: geometry.width, height: geometry.contentOrigin),
                         content: header.content(repository, geometry.width),
@@ -469,31 +564,28 @@ extension LibraryBrowserScrollView {
                             revision: (viewRevision, rowRevisions[section] ?? 0),
                             wanted: &wanted, document: document)
                 }
-                for (rowIndex, row) in geometry.rows(in: position).enumerated() {
+                for row in geometry.rows(in: position) {
                     let rowY = slice.y + row.y
                     guard rowY + row.layout.height >= y - overscan,
                           rowY <= y + height + overscan else { continue }
-                    let rowKey = "r:\(slice.source.dayID):\(slice.source.dayRange.lowerBound):\(rowIndex)"
-                    addHost(rowKey,
-                            frame: CGRect(x: 0, y: rowY, width: geometry.width, height: row.layout.height),
-                            content: AnyView(HostedRow(collection: collection, row: row, repository: repository,
-                                                       size: thumbnailSize, failures: thumbnailFailures,
-                                                       pageForSection: { [weak self] in self?.pages[$0] },
-                                                       onSelect: { [weak self] in self?.selectFromAccessibility($0) },
-                                                       onCommand: { [weak self] in self?.perform($0) },
-                                                       onOpenPhoto: { [weak self] ordinal, request in
-                                                           self?.openFromAccessibility(ordinal, request: request)
-                                                       },
-                                                       selection: selectionObservation,
-                                                       presentation: presentation)),
-                            revision: (viewRevision, cachedRowSignature(rowKey, row: row, rows: geometry.rowsRevision)),
-                            wanted: &wanted, document: document, passThrough: true)
+                    for item in row.items {
+                        guard let frame = geometry.frame(forItem: item.photo.id) else { continue }
+                        wantedCells.insert(item.ordinal)
+                        placeCell(item, frame: frame, geometry: geometry, document: document, repository: repository)
+                    }
                 }
+            }
+            if animateCellFrames {
+                NSAnimationContext.endGrouping()
+                animateCellFrames = false
+            }
+            for ordinal in cells.keys where !wantedCells.contains(ordinal) {
+                if let cell = cells.removeValue(forKey: ordinal) { recycle(cell) }
+                cellRevisions.removeValue(forKey: ordinal)
             }
             for key in hosts.keys where !wanted.contains(key) {
                 hosts.removeValue(forKey: key)?.removeFromSuperview()
                 hostRevisions.removeValue(forKey: key)
-                rowSignatures.removeValue(forKey: key)
             }
             if !suppressFeedback, !geometry.slices.isEmpty {
                 let day = geometry.slices[geometry.slice(at: y)].source.dayID
@@ -630,19 +722,9 @@ extension LibraryBrowserScrollView {
             ))
         }
 
-        /// Row content only changes when the geometry rematerializes rows, so the
-        /// (comparatively expensive) signature is not recomputed for every scroll frame.
-        func cachedRowSignature(_ key: String, row: LibraryViewportGeometry.Row, rows: UUID) -> Int {
-            if let cached = rowSignatures[key], cached.rows == rows { return cached.signature }
-            let signature = Self.rowSignature(row, pages: pages)
-            rowSignatures[key] = (rows, signature)
-            return signature
-        }
-
         /// Content is built only when a host is created or its revision changed.
         func addHost(_ key: String, frame: CGRect, content: @autoclosure () -> AnyView,
-                             revision: (Int, Int), wanted: inout Set<String>, document: NSView,
-                             passThrough: Bool = false) {
+                             revision: (Int, Int), wanted: inout Set<String>, document: NSView) {
             wanted.insert(key)
             let signposter = SynologyDiagnostics.browserSignposts
             if let host = hosts[key] {
@@ -657,8 +739,7 @@ extension LibraryBrowserScrollView {
             } else {
                 let interval = signposter.beginInterval("Create host", id: signposter.makeSignpostID())
                 let root = AnyView(content().environment(\.colorScheme, colorScheme))
-                let host: NSHostingView<AnyView> = passThrough ?
-                    PassThroughHostingView(rootView: root) : NSHostingView(rootView: root)
+                let host = NSHostingView(rootView: root)
                 host.frame = frame
                 if let overlay = (document as? FlippedDocumentView)?.overlay {
                     document.addSubview(host, positioned: .below, relativeTo: overlay)
@@ -718,32 +799,6 @@ extension LibraryBrowserScrollView {
             return hash.finalize()
         }
 
-        static func rowSignature(_ row: LibraryViewportGeometry.Row, pages: [Int: LibraryPage]) -> Int {
-            var hash = Hasher()
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = .sortedKeys
-            hash.combine(row.firstOrdinal)
-            hash.combine(row.slots.count)
-            for slot in row.slots {
-                guard let slot else { hash.combine(false); continue }
-                hash.combine(true)
-                hash.combine(slot.photo.id)
-                hash.combine(slot.ordinal)
-                hash.combine(slot.sectionIndex)
-                hash.combine(slot.pageOffset)
-                hash.combine(slot.verified)
-                hash.combine(try? encoder.encode(slot.photo))
-                hash.combine(slot.photo.pendingRotationQuarterTurns)
-                hash.combine(slot.photo.isFavorite)
-                hash.combine(slot.photo.displayAspectRatio)
-                let thumbnail = slot.photo.additional?.thumbnail
-                hash.combine(thumbnail?.unitID); hash.combine(thumbnail?.cacheKey)
-                hash.combine(thumbnail?.sm); hash.combine(thumbnail?.m); hash.combine(thumbnail?.xl)
-                hash.combine(pages[slot.sectionIndex]?.verified)
-            }
-            return hash.finalize()
-        }
-
         static func membershipSignature(_ page: LibraryPage) -> Int {
             var hash = Hasher()
             hash.combine(page.slots.count)
@@ -763,4 +818,11 @@ extension LibraryBrowserScrollView {
             max(1, Double(scroll.contentView.bounds.height - scroll.contentInsets.top - scroll.contentInsets.bottom))
         }
     }
+}
+
+/// What a visible cell was last configured from; equal revisions skip reconfiguration.
+struct CellRevision: Equatable {
+    let rows: UUID
+    let view: Int
+    let itemID: Int64
 }

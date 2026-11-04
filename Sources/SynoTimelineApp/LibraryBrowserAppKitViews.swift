@@ -137,30 +137,13 @@ final class SelectionOverlayView: NSView {
     }
 }
 
-final class PassThroughHostingView<Content: View>: NSHostingView<Content> {
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        guard let hit = super.hitTest(point) else { return nil }
-        var candidate: NSView? = hit
-        while let view = candidate, view !== self {
-            if view is ThumbnailRetryControl { return hit }
-            candidate = view.superview
-        }
-        return nil
-    }
-}
-
 final class PassThroughSourceView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-@MainActor
-final class BrowserSelectionObservation: ObservableObject {
-    @Published var indexes = IndexSet()
-}
-
-/// Shared, retained presentation state for the square/aspect-fit thumbnail morph. Every
-/// hosted row observes the same instance, so a mode change animates the visible frame of
-/// already-attached rows without replacing their `AnyView` roots or reissuing media work.
+/// Shared presentation state for the square/aspect-fit thumbnail morph. Cells read
+/// `fillsFrame` from it, so a mode change animates the visible frames of attached cells
+/// without reconfiguring them or reissuing media work.
 @MainActor
 final class BrowserThumbnailPresentation: ObservableObject {
     static let transitionDuration: TimeInterval = 0.22
@@ -236,7 +219,7 @@ final class TimelineScrollView: NSScrollView {
     var browserCommandContextActive: Bool {
         guard let window, window.isKeyWindow else { return false }
         if window.firstResponder === keyboardResponder { return true }
-        return (window.firstResponder as? ThumbnailActivationSurface.ActivationView)?.enclosingScrollView === self
+        return (window.firstResponder as? BrowserPhotoCellView)?.enclosingScrollView === self
     }
 
     @discardableResult
@@ -297,54 +280,6 @@ final class TimelineScrollView: NSScrollView {
         userScroll?(direction, scrollGeneration)
     }
 
-}
-
-struct HostedRow: View {
-    let collection: PhotoCollectionDescriptor
-    let row: LibraryViewportGeometry.Row
-    let repository: CachedPhotosRepository
-    let size: ThumbnailSize
-    let failures: ThumbnailFailureRegistry
-    let pageForSection: (Int) -> LibraryPage?
-    let onSelect: (Int) -> Void
-    let onCommand: (BrowserSelectionCommand) -> Void
-    let onOpenPhoto: (Int, PhotoViewerOpenRequest) -> Void
-    @ObservedObject var selection: BrowserSelectionObservation
-    @ObservedObject var presentation: BrowserThumbnailPresentation
-
-    var body: some View {
-        HStack(alignment: .top, spacing: row.layout.gap) {
-            ForEach(row.layout.cells.indices, id: \.self) { position in
-                let cell = row.layout.cells[position]
-                if let item = row.slots[position] {
-                    let slot = CGRect(x: cell.x, y: 0, width: cell.width, height: row.layout.height)
-                    let visible = FixedPhotoGrid.visibleFrame(in: slot,
-                        aspectRatio: item.photo.displayAspectRatio,
-                        cropsToSquare: presentation.cropsToSquare)
-                    ThumbnailCell(item: item.photo, repository: repository,
-                                  size: size, allowNetwork: item.verified, collection: collection, failures: failures,
-                                  fillsFrame: presentation.fillsFrame,
-                                  isSelected: selection.indexes.contains(item.ordinal),
-                                  onSelect: { onSelect(item.ordinal) },
-                                  onCommand: onCommand) { source in
-                        let page = pageForSection(item.sectionIndex)
-                        let seed = PhotoViewerSeed(sectionIndex: item.sectionIndex,
-                            pageOffset: item.pageOffset, item: item.photo, page: page?.completeItems,
-                            pageVerified: page?.verified ?? item.verified)
-                        onOpenPhoto(item.ordinal, PhotoViewerOpenRequest(seed: seed, source: source))
-                    }
-                        .frame(width: visible.width, height: visible.height)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                        .overlay { ThumbnailBadgeOverlay(item: item.photo) }
-                        .frame(width: cell.width, height: row.layout.height)
-                } else {
-                    Color.clear.frame(width: cell.width, height: row.layout.height)
-                }
-            }
-        }
-        .frame(width: row.layout.width, height: row.layout.height, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
 }
 
 struct HostedPlaceholder: View {

@@ -34,6 +34,12 @@ final class PhotoViewerSourceAnchor {
         self.image = image
     }
 
+    /// Detaches the anchor from any item, for a recycled cell.
+    func clear() {
+        itemID = nil
+        image = nil
+    }
+
     func activate() {
         (view as? PhotoViewerSourceActivating)?.activateViewerSource(self)
     }

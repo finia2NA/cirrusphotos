@@ -132,8 +132,7 @@ final class LibraryInputRoutingTests: XCTestCase {
         let overlay = SelectionOverlayView(frame: document.bounds)
         document.overlay = overlay
         document.addSubview(overlay)
-        let row = PassThroughHostingView(rootView: AnyView(Text("Photo row")))
-        row.frame = CGRect(x: 0, y: 40, width: 320, height: 180)
+        let row = BrowserPhotoCellView(frame: CGRect(x: 0, y: 40, width: 320, height: 180))
         document.addSubview(row, positioned: .below, relativeTo: overlay)
         scroll.documentView = document
         scroll.keyboardResponder = document
@@ -293,37 +292,34 @@ final class LibraryInputRoutingTests: XCTestCase {
     }
 
     @MainActor
-    func testPhotoRowsPassThroughWhileOrdinaryControlsRemainInteractive() {
+    func testPhotoCellsPassThroughWhileOrdinaryControlsRemainInteractive() {
         let ordinaryHost = NSView(frame: CGRect(x: 0, y: 0, width: 120, height: 40))
         let retry = NSButton(title: "Retry", target: nil, action: nil)
         retry.frame = ordinaryHost.bounds
         ordinaryHost.addSubview(retry)
         XCTAssertTrue(ordinaryHost.hitTest(CGPoint(x: 60, y: 20)) === retry)
 
-        let rowHost = PassThroughHostingView(rootView: AnyView(Text("Photo")))
-        rowHost.frame = ordinaryHost.frame
-        XCTAssertNil(rowHost.hitTest(CGPoint(x: 60, y: 20)))
+        let cell = BrowserPhotoCellView(frame: ordinaryHost.frame)
+        XCTAssertNil(cell.hitTest(CGPoint(x: 60, y: 20)))
     }
 
     @MainActor
-    func testThumbnailRetryControlReceivesClicksInsidePassThroughRow() throws {
+    func testThumbnailRetryControlReceivesClicksInsidePassThroughCell() throws {
         var retries = 0
-        let row = PassThroughHostingView(rootView: AnyView(
-            ThumbnailRetryButton { retries += 1 }.frame(width: 28, height: 28)
-        ))
-        row.frame = CGRect(x: 0, y: 0, width: 80, height: 80)
-        let window = NSWindow(contentRect: row.frame, styleMask: [.titled],
+        let cell = BrowserPhotoCellView(frame: CGRect(x: 0, y: 0, width: 80, height: 80))
+        cell.setRetry { retries += 1 }
+        let window = NSWindow(contentRect: cell.frame, styleMask: [.titled],
                               backing: .buffered, defer: false)
-        window.contentView = row
+        window.contentView = cell
         defer { window.orderOut(nil) }
-        row.layoutSubtreeIfNeeded()
-        let hit = try XCTUnwrap(row.hitTest(CGPoint(x: 40, y: 40)))
+        cell.layoutSubtreeIfNeeded()
+        let hit = try XCTUnwrap(cell.hitTest(CGPoint(x: 62, y: 62)))
         var view: NSView? = hit
         while view != nil, !(view is ThumbnailRetryControl) { view = view?.superview }
         let retry = try XCTUnwrap(view as? ThumbnailRetryControl)
         retry.performClick(nil)
         XCTAssertEqual(retries, 1)
-        XCTAssertNil(row.hitTest(CGPoint(x: 2, y: 2)))
+        XCTAssertNil(cell.hitTest(CGPoint(x: 2, y: 2)))
     }
 
     @MainActor
@@ -340,10 +336,9 @@ final class LibraryInputRoutingTests: XCTestCase {
 
     @MainActor
     func testThumbnailAccessibilityPressSelectsAndOpenIsSeparateAction() {
-        let view = ThumbnailActivationSurface.ActivationView()
-        let anchor = PhotoViewerSourceAnchor()
-        anchor.attach(view); anchor.update(itemID: 7, image: nil)
-        view.anchor = anchor
+        let view = BrowserPhotoCellView()
+        let anchor = view.anchor
+        anchor.update(itemID: 7, image: nil)
         var selections = 0, opens = 0
         view.onSelect = { selections += 1 }
         view.onActivate = { _ in opens += 1 }
@@ -361,7 +356,7 @@ final class LibraryInputRoutingTests: XCTestCase {
                               styleMask: [.borderless], backing: .buffered, defer: false)
         let scroll = TimelineScrollView(frame: window.contentView?.bounds ?? .zero)
         let document = FlippedDocumentView(frame: CGRect(x: 0, y: 0, width: 300, height: 400))
-        let thumbnail = ThumbnailActivationSurface.ActivationView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let thumbnail = BrowserPhotoCellView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
         document.addSubview(thumbnail)
         scroll.documentView = document
         window.contentView = scroll

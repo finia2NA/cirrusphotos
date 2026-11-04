@@ -75,7 +75,7 @@ extension LibraryBrowserScrollView.Coordinator {
     func publishSelection() {
         selectionEpoch &+= 1
         pendingOpen = nil
-        selectionObservation.indexes = selection.indexes
+        updateCellSelection()
         persistSelectionState()
         updateSelectionDrawing()
         if let scroll = scroll as? TimelineScrollView {
