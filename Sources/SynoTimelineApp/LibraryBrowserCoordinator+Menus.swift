@@ -55,7 +55,30 @@ extension LibraryBrowserScrollView.Coordinator {
                                          cropsToSquare: geometry?.cropsThumbnailsToSquare ?? false,
                                          from: document, event: event,
                                          localSelection: allowsAlbumMembership ? .init(selection: captured, sourceAlbumID: sourceAlbumID, namespace: repository.namespace) : nil,
-                                         promisesFile: clicked.photo.hasDisplayableStillImage || count > 1)
+                                         promisesFile: clicked.photo.hasDisplayableStillImage || count > 1,
+                                         text: dragText(for: selected))
+    }
+
+    /// Text for the drag pasteboard, available only when every selected photo is already loaded;
+    /// a file promise provider cannot serve it later, and resolving would delay the drag.
+    func dragText(for selected: IndexSet) -> String? {
+        let items = selected.compactMap { loadedItem($0)?.photo }
+        return items.count == selected.count ? SelectionText.csv(for: items) : nil
+    }
+
+    var canCopySelection: Bool { !selection.indexes.isEmpty && timelineSnapshot != nil && index != nil }
+
+    /// Edit > Copy: the selection's filenames and IDs as text, resolved by the model.
+    func copySelection() {
+        guard canCopySelection else { return }
+        var known: [Int: Int64] = [:]
+        for ordinal in selection.indexes {
+            if let item = loadedItem(ordinal) { known[ordinal] = item.photo.id }
+        }
+        onCopy?(BrowserCommandSnapshot(owner: commandOwner, active: true, canOpen: false,
+            canToggleFavorite: false, collection: collection, indexFingerprint: index?.fingerprint,
+            selectionGeneration: selectionState.generation, selectedOrdinals: selection.indexes,
+            knownItemIDsByOrdinal: known, timeline: timelineSnapshot, authority: selectionAuthority, sourceAlbumID: sourceAlbumID))
     }
 
     func contextMenu(at point: CGPoint) -> NSMenu? {

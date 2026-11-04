@@ -123,7 +123,8 @@ struct PhotoViewerView: View {
                                 let preview = state.thumbnailData.flatMap { NSImage(data: $0) } ?? viewer.source.image ?? viewer.image
                                 return PhotoFileDragSource.begin(payload: payload, previews: [preview].compactMap { $0 },
                                                                  cropsToSquare: cropsThumbnailsToSquare,
-                                                                 from: view, event: event)
+                                                                 from: view, event: event,
+                                                                 text: SelectionText.csv(for: [item]))
                               }) { viewer.zoom = Double($0) }
                 .accessibilityLabel(viewer.filename)
 

@@ -324,6 +324,9 @@ struct LibraryBrowserView: View {
                                              onDownload: { selection, kind, choose in
                                                  library.downloadSelection(selection, kind: kind, choose: choose)
                                              },
+                                             onCopy: { selection in
+                                                 library.copySelectionText(selection)
+                                             },
                                              onDelete: { selection in
                                                  library.beginItemDeletion(captured: selection)
                                              },
@@ -440,6 +443,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let onAlbumMenu: (NSMenu, BrowserCommandSnapshot) -> Void
     let onAnnotationMenu: (NSMenu, BrowserCommandSnapshot) -> Void
     let onDownload: (BrowserCommandSnapshot, PhotoDownloadKind, Bool) -> Void
+    let onCopy: (BrowserCommandSnapshot) -> Void
     let onDelete: (BrowserCommandSnapshot) -> Void
     let onEdit: (BrowserCommandSnapshot, URL) -> Void
     let onSelectionStateChanged: (BrowserSelectionState) -> Void
@@ -483,6 +487,8 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
         document.commandHandler = { [weak coordinator = context.coordinator] command in
             coordinator?.perform(command)
         }
+        document.copyHandler = { [weak coordinator = context.coordinator] in coordinator?.copySelection() }
+        document.canCopyHandler = { [weak coordinator = context.coordinator] in coordinator?.canCopySelection ?? false }
         scroll.focusChanged = { [weak coordinator = context.coordinator] active in
             coordinator?.publishCommandState(active: active)
         }

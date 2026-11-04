@@ -55,24 +55,25 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
     static func begin(payload: PhotoDragPayload, previews: [NSImage], cropsToSquare: Bool,
                       from view: NSView, event: NSEvent, albumCollection: PhotoCollectionDescriptor? = nil,
                       localSelection: SelectionDragRegistry.Entry? = nil, promisesFile: Bool = true,
-                      onEnd: (() -> Void)? = nil) -> Bool {
+                      text: String? = nil, onEnd: (() -> Void)? = nil) -> Bool {
         guard payload.count > 0, !payload.filename.isEmpty else { return false }
         let source = PhotoFileDragSource()
         source.onEnd = onEnd
         let delegate = PhotoPromiseDelegate(payload: payload)
         let provider = LocalHandlePromiseProvider(fileType: payload.fileType.identifier, delegate: delegate)
         provider.userInfo = delegate
+        provider.text = text
         let writer: NSPasteboardWriting
         if let albumCollection {
             let nonce = AlbumDragRegistry.register(collection: albumCollection, namespace: payload.repository.namespace)
             source.localNonce = nonce
             provider.localType = AlbumDragRegistry.type; provider.nonce = nonce
-            writer = promisesFile ? provider : LocalHandleWriter(type: AlbumDragRegistry.type, nonce: nonce)
+            writer = promisesFile ? provider : LocalHandleWriter(type: AlbumDragRegistry.type, nonce: nonce, text: text)
         } else if let localSelection {
             let nonce = SelectionDragRegistry.register(localSelection)
             source.selectionNonce = nonce
             provider.localType = SelectionDragRegistry.type; provider.nonce = nonce
-            writer = promisesFile ? provider : LocalHandleWriter(type: SelectionDragRegistry.type, nonce: nonce)
+            writer = promisesFile ? provider : LocalHandleWriter(type: SelectionDragRegistry.type, nonce: nonce, text: text)
         } else { writer = provider }
         let item = NSDraggingItem(pasteboardWriter: writer)
         let image = dragPreview(images: Array(previews.prefix(20)), count: payload.count,

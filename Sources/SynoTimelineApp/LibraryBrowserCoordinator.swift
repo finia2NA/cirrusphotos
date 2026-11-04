@@ -67,6 +67,7 @@ extension LibraryBrowserScrollView {
         var onAlbumMenu: ((NSMenu, BrowserCommandSnapshot) -> Void)?
         var onAnnotationMenu: ((NSMenu, BrowserCommandSnapshot) -> Void)?
         var onDownload: ((BrowserCommandSnapshot, PhotoDownloadKind, Bool) -> Void)?
+        var onCopy: ((BrowserCommandSnapshot) -> Void)?
         var onDelete: ((BrowserCommandSnapshot) -> Void)?
         var onEdit: ((BrowserCommandSnapshot, URL) -> Void)?
         var onSelectionStateChanged: ((BrowserSelectionState) -> Void)?
@@ -117,6 +118,7 @@ extension LibraryBrowserScrollView {
             onAlbumMenu = input.onAlbumMenu
             onAnnotationMenu = input.onAnnotationMenu
             onDownload = input.onDownload
+            onCopy = input.onCopy
             onDelete = input.onDelete
             onEdit = input.onEdit
             onSelectionStateChanged = input.onSelectionStateChanged

@@ -67,14 +67,18 @@ enum SelectionDragRegistry {
 final class LocalHandlePromiseProvider: NSFilePromiseProvider {
     var localType: NSPasteboard.PasteboardType?
     var nonce: UUID?
+    /// Offered as plain text beside the file promise; text fields take it and Finder takes the file.
+    /// It is written when the drag starts: a file promise provider never serves other types lazily.
+    var text: String?
     override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
-        super.writableTypes(for: pasteboard) + (localType.map { [$0] } ?? [])
+        super.writableTypes(for: pasteboard) + (localType.map { [$0] } ?? []) + (text == nil ? [] : [.string])
     }
     override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
-        type == localType ? nonce?.uuidString : super.pasteboardPropertyList(forType: type)
+        if type == .string, let text { return text }
+        return type == localType ? nonce?.uuidString : super.pasteboardPropertyList(forType: type)
     }
     override func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
-        type == localType ? [] : super.writingOptions(forType: type, pasteboard: pasteboard)
+        return type == localType ? [] : super.writingOptions(forType: type, pasteboard: pasteboard)
     }
 }
 
@@ -82,9 +86,14 @@ final class LocalHandlePromiseProvider: NSFilePromiseProvider {
 final class LocalHandleWriter: NSObject, NSPasteboardWriting {
     private let type: NSPasteboard.PasteboardType
     private let nonce: UUID
-    init(type: NSPasteboard.PasteboardType, nonce: UUID) { self.type = type; self.nonce = nonce }
-    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] { [type] }
-    func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? { nonce.uuidString }
+    private let text: String?
+    init(type: NSPasteboard.PasteboardType, nonce: UUID, text: String? = nil) {
+        self.type = type; self.nonce = nonce; self.text = text
+    }
+    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] { text == nil ? [type] : [type, .string] }
+    func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        type == .string ? text : nonce.uuidString
+    }
 }
 
 /// Accepts only in-process selection handles; never requests a promised file.

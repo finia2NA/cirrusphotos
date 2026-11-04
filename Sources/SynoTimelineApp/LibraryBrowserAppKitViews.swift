@@ -9,6 +9,8 @@ final class FlippedDocumentView: NSView {
     override var acceptsFirstResponder: Bool { true }
     var interaction: ((InteractionPhase) -> Void)?
     var commandHandler: ((BrowserSelectionCommand) -> Void)?
+    var copyHandler: (() -> Void)?
+    var canCopyHandler: (() -> Bool)?
     var contextMenuHandler: ((CGPoint) -> NSMenu?)?
     var fileDragHandler: ((CGPoint, NSEvent) -> Bool)?
     var fileDragHitTest: ((CGPoint) -> Bool)?
@@ -81,9 +83,19 @@ final class FlippedDocumentView: NSView {
         commandHandler?(command)
     }
 
+    /// The standard Edit > Copy item reaches this through the responder chain.
+    @objc func copy(_ sender: Any?) { copyHandler?() }
+
     override func flagsChanged(with event: NSEvent) {
         if !event.modifierFlags.contains(.shift) { commandHandler?(.endExtension) }
         super.flagsChanged(with: event)
+    }
+}
+
+extension FlippedDocumentView: NSUserInterfaceValidations {
+    func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(copy(_:)) { return canCopyHandler?() ?? false }
+        return responds(to: item.action)
     }
 }
 
