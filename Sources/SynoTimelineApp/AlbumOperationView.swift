@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct AlbumOperationView: View {
-    @ObservedObject var model: LibraryModel
+    var model: LibraryModel
     let operation: AlbumOperation
     @State private var name = ""
     @State private var albumID: Int64?

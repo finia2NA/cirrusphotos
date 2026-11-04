@@ -90,7 +90,7 @@ final class LocalHandleWriter: NSObject, NSPasteboardWriting {
 /// Accepts only in-process selection handles; never requests a promised file.
 struct AlbumMembershipTarget: NSViewRepresentable {
     let collection: PhotoCollectionDescriptor
-    @ObservedObject var model: LibraryModel
+    var model: LibraryModel
     func makeNSView(context: Context) -> TargetView { TargetView() }
     func updateNSView(_ view: TargetView, context: Context) { view.collection = collection; view.model = model }
     @MainActor final class TargetView: NSView {

@@ -319,8 +319,16 @@ final class BrowserPhotoCellView: NSView, PhotoViewerSourceActivating, PhotoView
         let size = content.size, collection = content.collection
         let keyPrefix = "\(ObjectIdentifier(repository).hashValue):\(family)"
         loadTask = Task.detached(priority: .userInitiated) { [weak self] in
+            // Start to first repository result: repository actor wait plus "Cache lookup".
+            var firstResult: OSSignpostIntervalState? = signposter.beginInterval("Thumbnail first result",
+                                                                                 id: signposter.makeSignpostID())
+            defer { if let firstResult { signposter.endInterval("Thumbnail first result", firstResult, "none") } }
             for await event in await repository.thumbnailWithFallback(descriptor, size: size,
                                                                       allowNetwork: network, collection: collection) {
+                if let state = firstResult {
+                    signposter.endInterval("Thumbnail first result", state)
+                    firstResult = nil
+                }
                 guard !Task.isCancelled else { return }
                 switch event {
                 case .value(let value, let verified):

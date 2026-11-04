@@ -38,25 +38,36 @@ final class TimelineSectionLoadModel: ObservableObject {
     private var targetRuns: [TargetRun] = []
     private var discoveryFailures: [String] = []
     private var operationTask: Task<Void, Never>?
-    private var libraryObserver: AnyCancellable?
+    /// Identifies the current library observation; a new library supersedes the old loop.
+    private var libraryObservation: UInt64 = 0
     private var runActive = false
     private var lastUseCachedPages = false
     private var includeSharedSpace = false
 
     func configure(library: LibraryModel, filter: LibraryFilterModel) {
-        if self.library !== library {
-            self.library = library
-            libraryObserver = library.objectWillChange.sink { [weak self] _ in
-                Task { @MainActor in
-                    await Task.yield()
-                    self?.refreshAvailabilityAndCheckRevisions()
-                }
-            }
-        }
         if self.filter !== filter {
             self.filter = filter
         }
-        refreshAvailabilityAndCheckRevisions()
+        if self.library !== library {
+            self.library = library
+            libraryObservation &+= 1
+            observeLibrary(libraryObservation)
+        } else {
+            refreshAvailabilityAndCheckRevisions()
+        }
+    }
+
+    /// Re-checks whenever library state read by the check changes.
+    private func observeLibrary(_ observation: UInt64) {
+        guard observation == libraryObservation else { return }
+        withObservationTracking {
+            refreshAvailabilityAndCheckRevisions()
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                await Task.yield()
+                self?.observeLibrary(observation)
+            }
+        }
     }
 
     /// Refreshes app-wide command eligibility. Map remains excluded from target

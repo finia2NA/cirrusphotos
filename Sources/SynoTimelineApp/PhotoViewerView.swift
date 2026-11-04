@@ -4,7 +4,7 @@ import SwiftUI
 import TimelineCore
 
 struct PhotoViewerView: View {
-    @EnvironmentObject private var library: LibraryModel
+    @Environment(LibraryModel.self) private var library
     @ObservedObject var viewer: PhotoViewerPresentation
     var pinnedAlbumIDs: [Int64] = []
     let toolbarInset: CGFloat

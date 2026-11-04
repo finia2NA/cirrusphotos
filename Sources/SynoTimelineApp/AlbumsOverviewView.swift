@@ -8,7 +8,7 @@ struct AlbumsOverviewView: View {
     let onOpenAlbum: (AlbumSummary) -> Void
     @ObservedObject var presentation: AlbumPresentationStore
     var contentTopInset: CGFloat = 0
-    @EnvironmentObject private var model: LibraryModel
+    @Environment(LibraryModel.self) private var model
     @EnvironmentObject private var preferences: AppPreferences
 
     var body: some View {
@@ -76,7 +76,7 @@ struct AlbumsOverviewView: View {
 }
 
 private struct AlbumCardView: View {
-    @EnvironmentObject private var model: LibraryModel
+    @Environment(LibraryModel.self) private var model
     let album: AlbumSummary
     let collection: PhotoCollectionDescriptor
     let repository: CachedPhotosRepository?

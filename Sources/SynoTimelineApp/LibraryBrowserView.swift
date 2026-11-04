@@ -197,7 +197,7 @@ struct LibraryBrowserView: View {
     var uploadFolderName: String?
     var onOpenPhoto: (PhotoViewerOpenRequest) -> Void = { _ in }
     var onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void = { _ in }
-    @EnvironmentObject private var library: LibraryModel
+    @Environment(LibraryModel.self) private var library
     @EnvironmentObject private var preferences: AppPreferences
     @EnvironmentObject private var infoPanel: InfoPanelModel
     @EnvironmentObject private var libraryFilter: LibraryFilterModel

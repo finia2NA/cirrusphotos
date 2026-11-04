@@ -4,7 +4,7 @@ import SynologyAPI
 import TimelineCore
 
 struct ThumbnailRangeDownloadView: View {
-    @EnvironmentObject private var library: LibraryModel
+    @Environment(LibraryModel.self) private var library
     @EnvironmentObject private var preferences: AppPreferences
     @Environment(\.dismiss) private var dismiss
     @AppStorage(AppPreferences.Key.warmingIncludesSharedSpace) private var includesSharedSpace = true

@@ -47,7 +47,8 @@ final class MetadataSyncModel: ObservableObject {
     private enum Outcome { case verified, incomplete, preempted, cancelled }
 
     private weak var library: LibraryModel?
-    private var libraryObserver: AnyCancellable?
+    /// Identifies the current library observation; a new library supersedes the old loop.
+    private var libraryObservation: UInt64 = 0
     private var task: Task<Void, Never>?
     private var taskID: UUID?
     private var loaders: [TimelineSectionCacheLoader] = []
@@ -85,13 +86,21 @@ final class MetadataSyncModel: ObservableObject {
     func configure(library: LibraryModel) {
         guard self.library !== library else { return }
         self.library = library
-        libraryObserver = library.objectWillChange.sink { [weak self] _ in
+        libraryObservation &+= 1
+        observeLibrary(libraryObservation)
+    }
+
+    /// Re-checks whenever library state read by the check changes.
+    private func observeLibrary(_ observation: UInt64) {
+        guard observation == libraryObservation else { return }
+        withObservationTracking {
+            startOrRestartIfNeeded()
+        } onChange: { [weak self] in
             Task { @MainActor in
                 await Task.yield()
-                self?.startOrRestartIfNeeded()
+                self?.observeLibrary(observation)
             }
         }
-        startOrRestartIfNeeded()
     }
 
     /// The collection on screen. Session-derived collections are ignored.

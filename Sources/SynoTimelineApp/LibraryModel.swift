@@ -17,104 +17,107 @@ struct TimelineWarmingTargetDiscovery {
 }
 
 @MainActor
-final class LibraryModel: ObservableObject {
+@Observable
+final class LibraryModel {
     enum TimelineUpdateReason: Equatable {
         case authoritativeLoad
         case favoriteMutationRefresh
     }
 
-    var selectionAuthorities: [PhotoCollectionDescriptor: PhotoSelectionAuthority] = [:]
-    var sessionSources: [PhotoCollectionDescriptor: PhotoCollectionDescriptor] = [:]
-    @Published var albumOperation: AlbumOperation?
-    @Published var albumOperationError: String?
-    @Published var itemDeletion: ItemDeletion?
-    @Published var itemDeletionError: String?
-    var itemDeletionTask: Task<Void, Never>?
-    @Published var deletingAlbumID: Int64?
-    var albumOperationTask: Task<Void, Never>?
-    var filterAuthorities: [PhotoCollectionDescriptor: [[Bool]]] = [:]
-    var filterMemberships: [PhotoCollectionDescriptor: [[Int64]]] = [:]
-    // Per-collection timeline state. Not `@Published`: every write announces itself through
-    // `collectionStateChanged()`, immediately, or coalesced while background warming
-    // delivers timelines that no view displays yet. Each announcement re-renders the window.
-    private(set) var snapshots: [PhotoCollectionDescriptor: TimelineSnapshot] = [:] { didSet { collectionStateChanged() } }
-    private(set) var snapshotRevisions: [PhotoCollectionDescriptor: Int] = [:] { didSet { collectionStateChanged() } }
-    private(set) var viewerSnapshotRevisions: [PhotoCollectionDescriptor: Int] = [:] { didSet { collectionStateChanged() } }
-    private(set) var timelineVerifications: [PhotoCollectionDescriptor: Bool] = [:] { didSet { collectionStateChanged() } }
-    private(set) var collectionErrors: [PhotoCollectionDescriptor: String] = [:] { didSet { collectionStateChanged() } }
-    private var quietCollectionUpdates = false
-    private var pendingCollectionAnnouncement: Task<Void, Never>?
+    @ObservationIgnored var selectionAuthorities: [PhotoCollectionDescriptor: PhotoSelectionAuthority] = [:]
+    @ObservationIgnored var sessionSources: [PhotoCollectionDescriptor: PhotoCollectionDescriptor] = [:]
+    var albumOperation: AlbumOperation?
+    var albumOperationError: String?
+    var itemDeletion: ItemDeletion?
+    var itemDeletionError: String?
+    @ObservationIgnored var itemDeletionTask: Task<Void, Never>?
+    var deletingAlbumID: Int64?
+    @ObservationIgnored var albumOperationTask: Task<Void, Never>?
+    @ObservationIgnored var filterAuthorities: [PhotoCollectionDescriptor: [[Bool]]] = [:]
+    @ObservationIgnored var filterMemberships: [PhotoCollectionDescriptor: [[Int64]]] = [:]
+    // Per-collection timeline state. Untracked storage: every write bumps the tracked
+    // `collectionStateRevision` through `collectionStateChanged()`, immediately, or coalesced
+    // while background warming delivers timelines that no view displays yet. Readers go
+    // through the accessors below, which register the revision as their dependency.
+    @ObservationIgnored private(set) var snapshots: [PhotoCollectionDescriptor: TimelineSnapshot] = [:] { didSet { collectionStateChanged() } }
+    @ObservationIgnored private(set) var snapshotRevisions: [PhotoCollectionDescriptor: Int] = [:] { didSet { collectionStateChanged() } }
+    @ObservationIgnored private(set) var viewerSnapshotRevisions: [PhotoCollectionDescriptor: Int] = [:] { didSet { collectionStateChanged() } }
+    @ObservationIgnored private(set) var timelineVerifications: [PhotoCollectionDescriptor: Bool] = [:] { didSet { collectionStateChanged() } }
+    @ObservationIgnored private(set) var collectionErrors: [PhotoCollectionDescriptor: String] = [:] { didSet { collectionStateChanged() } }
+    private(set) var collectionStateRevision: UInt64 = 0
+    @ObservationIgnored private var quietCollectionUpdates = false
+    @ObservationIgnored private var pendingCollectionAnnouncement: Task<Void, Never>?
     private static let quietAnnouncementDelay: Duration = .seconds(1)
-    @Published private(set) var isLoading = true
-    @Published private(set) var authenticationStatus: AuthenticationStatus = .notStarted
-    @Published private(set) var retryRevision = 0
-    @Published private(set) var canToggleViewerFavorite = false
-    @Published var showsFilmstrip = false
-    @Published var showsHistogram = false
-    @Published var showsHighlightPeaking = false
-    @Published var showsFocusEdges = false
-    @Published private(set) var canCloseViewer = false
-    @Published private(set) var canNavigateBack = false
-    @Published private(set) var canOpenSelectedPhoto = false
-    @Published private(set) var browserCommandsActive = false
+    private(set) var isLoading = true
+    private(set) var authenticationStatus: AuthenticationStatus = .notStarted
+    private(set) var retryRevision = 0
+    private(set) var canToggleViewerFavorite = false
+    var showsFilmstrip = false
+    var showsHistogram = false
+    var showsHighlightPeaking = false
+    var showsFocusEdges = false
+    private(set) var canCloseViewer = false
+    private(set) var canNavigateBack = false
+    private(set) var canOpenSelectedPhoto = false
+    private(set) var browserCommandsActive = false
     /// Whether the browser selection-favorite action may begin (selection non-empty, no active write).
-    @Published private(set) var canToggleBrowserFavorite = false
+    private(set) var canToggleBrowserFavorite = false
     /// Pending confirmation for a large selection-favorite action; nil when no confirmation is needed.
-    @Published var pendingFavoriteConfirmation: SelectionFavoriteConfirmation?
-    @Published var browserFavoriteFailure: String?
-    @Published var rotationFailure: String?
-    @Published var rotationBusy = false
-    @Published var thumbnailRotationProgress: ThumbnailRotationProgress?
-    @Published var isFixingThumbnailRotations = false
-    @Published private(set) var metadataInvalidationRevision: UInt64 = 0
-    @Published private(set) var cacheResetInProgress = false
-    @Published private(set) var cacheResetError: String?
-    @Published private(set) var isRefreshing = false
-    @Published private(set) var refreshFailure: String?
-    @Published var albumMembershipRevision: UInt64 = 0
-    var changedAlbumID: Int64?
-    @Published private(set) var mapFilterInvalidationRevision: UInt64 = 0
-    private(set) var invalidatedMapFilter: PhotoCollectionDescriptor?
-    var browserSelectionStates: [PhotoCollectionDescriptor: BrowserSelectionState] = [:]
-    var browserCommandHandler: ((BrowserSelectionCommand) -> Void)?
-    var browserCommandOwner: UUID?
-    var browserCommandSnapshot: BrowserCommandSnapshot = .inactive
-    weak var activeViewer: PhotoViewerPresentation?
-    var viewerCloseHandler: (() -> Void)?
-    var backHandler: (() -> Void)?
-    var thumbnailRotationTask: Task<Void, Never>?
+    var pendingFavoriteConfirmation: SelectionFavoriteConfirmation?
+    var browserFavoriteFailure: String?
+    var rotationFailure: String?
+    var rotationBusy = false
+    var thumbnailRotationProgress: ThumbnailRotationProgress?
+    var isFixingThumbnailRotations = false
+    private(set) var metadataInvalidationRevision: UInt64 = 0
+    private(set) var cacheResetInProgress = false
+    private(set) var cacheResetError: String?
+    private(set) var isRefreshing = false
+    private(set) var refreshFailure: String?
+    var albumMembershipRevision: UInt64 = 0
+    @ObservationIgnored var changedAlbumID: Int64?
+    private(set) var mapFilterInvalidationRevision: UInt64 = 0
+    @ObservationIgnored private(set) var invalidatedMapFilter: PhotoCollectionDescriptor?
+    @ObservationIgnored var browserSelectionStates: [PhotoCollectionDescriptor: BrowserSelectionState] = [:]
+    @ObservationIgnored var browserCommandHandler: ((BrowserSelectionCommand) -> Void)?
+    @ObservationIgnored var browserCommandOwner: UUID?
+    @ObservationIgnored var browserCommandSnapshot: BrowserCommandSnapshot = .inactive
+    @ObservationIgnored weak var activeViewer: PhotoViewerPresentation?
+    @ObservationIgnored var viewerCloseHandler: (() -> Void)?
+    @ObservationIgnored var backHandler: (() -> Void)?
+    @ObservationIgnored var thumbnailRotationTask: Task<Void, Never>?
     /// True while a selection-favorite write (or resolution) is in progress.
-    var browserFavoriteBusy = false
+    @ObservationIgnored var browserFavoriteBusy = false
     var authenticationFailed: Bool {
         if case .failed = authenticationStatus { return true }
         return false
     }
-    @Published private(set) var cacheUsage: Int64 = 0
-    @Published private(set) var albums: [AlbumSummary] = []
-    @Published private(set) var albumsVerified = false
-    @Published private(set) var albumListError: String?
-    @Published private(set) var presentationNamespace: String?
+    private(set) var cacheUsage: Int64 = 0
+    private(set) var albums: [AlbumSummary] = []
+    private(set) var albumsVerified = false
+    private(set) var albumListError: String?
+    private(set) var presentationNamespace: String?
     let session: AppSession
     var repository: CachedPhotosRepository? { session.repository }
-    var started = false
-    var authenticationTask: Task<Void, Never>?
-    var refreshTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
-    var albumsTask: Task<Void, Never>?
-    var incomingAlbumsTask: Task<Void, Never>?
-    var ownedAlbums: [AlbumSummary] = []
-    var receivedIncomingAlbums: [AlbumSummary] = []
-    var ownedAlbumsVerified = false
-    var incomingAlbumsVerified = false
-    var metadataResetTask: Task<Void, Never>?
-    var albumSharingObservationTask: Task<Void, Never>?
-    var mapFilterInvalidationTask: Task<Void, Never>?
-    var albumListRequested = false
-    var openedCollections: Set<PhotoCollectionDescriptor> = []
-    var collectionFetchTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
+    @ObservationIgnored var started = false
+    @ObservationIgnored var authenticationTask: Task<Void, Never>?
+    @ObservationIgnored var refreshTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
+    @ObservationIgnored var albumsTask: Task<Void, Never>?
+    @ObservationIgnored var incomingAlbumsTask: Task<Void, Never>?
+    @ObservationIgnored var ownedAlbums: [AlbumSummary] = []
+    @ObservationIgnored var receivedIncomingAlbums: [AlbumSummary] = []
+    @ObservationIgnored var ownedAlbumsVerified = false
+    @ObservationIgnored var incomingAlbumsVerified = false
+    @ObservationIgnored var metadataResetTask: Task<Void, Never>?
+    @ObservationIgnored var albumSharingObservationTask: Task<Void, Never>?
+    @ObservationIgnored var mapFilterInvalidationTask: Task<Void, Never>?
+    @ObservationIgnored var albumListRequested = false
+    @ObservationIgnored var openedCollections: Set<PhotoCollectionDescriptor> = []
+    @ObservationIgnored var collectionFetchTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
 
     var preferences: AppPreferences { session.preferences }
-    var preferenceObservations: Set<AnyCancellable> = []
-    var thumbnailPolicyRevision: UInt64 = 0
+    @ObservationIgnored var preferenceObservations: Set<AnyCancellable> = []
+    @ObservationIgnored var thumbnailPolicyRevision: UInt64 = 0
 
     convenience init(repository: CachedPhotosRepository? = nil, preferences: AppPreferences = AppPreferences()) {
         self.init(session: AppSession(preferences: preferences, repository: repository))
@@ -145,7 +148,7 @@ final class LibraryModel: ObservableObject {
         guard quietCollectionUpdates else {
             pendingCollectionAnnouncement?.cancel()
             pendingCollectionAnnouncement = nil
-            objectWillChange.send()
+            collectionStateRevision &+= 1
             return
         }
         guard pendingCollectionAnnouncement == nil else { return }
@@ -153,17 +156,30 @@ final class LibraryModel: ObservableObject {
             try? await Task.sleep(for: Self.quietAnnouncementDelay)
             guard let self, !Task.isCancelled else { return }
             self.pendingCollectionAnnouncement = nil
-            self.objectWillChange.send()
+            self.collectionStateRevision &+= 1
         }
     }
 
-    func snapshot(for collection: PhotoCollectionDescriptor) -> TimelineSnapshot? { snapshots[collection] }
-    func snapshotRevision(for collection: PhotoCollectionDescriptor) -> Int { snapshotRevisions[collection, default: 0] }
-    func viewerSnapshotRevision(for collection: PhotoCollectionDescriptor) -> Int {
-        viewerSnapshotRevisions[collection, default: 0]
+    func snapshot(for collection: PhotoCollectionDescriptor) -> TimelineSnapshot? {
+        _ = collectionStateRevision
+        return snapshots[collection]
     }
-    func timelineVerified(for collection: PhotoCollectionDescriptor) -> Bool { timelineVerifications[collection] == true }
-    func error(for collection: PhotoCollectionDescriptor) -> String? { collectionErrors[collection] }
+    func snapshotRevision(for collection: PhotoCollectionDescriptor) -> Int {
+        _ = collectionStateRevision
+        return snapshotRevisions[collection, default: 0]
+    }
+    func viewerSnapshotRevision(for collection: PhotoCollectionDescriptor) -> Int {
+        _ = collectionStateRevision
+        return viewerSnapshotRevisions[collection, default: 0]
+    }
+    func timelineVerified(for collection: PhotoCollectionDescriptor) -> Bool {
+        _ = collectionStateRevision
+        return timelineVerifications[collection] == true
+    }
+    func error(for collection: PhotoCollectionDescriptor) -> String? {
+        _ = collectionStateRevision
+        return collectionErrors[collection]
+    }
 
     func albumName(for collection: PhotoCollectionDescriptor) -> String? {
         album(for: collection)?.name

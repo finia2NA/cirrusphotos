@@ -7,7 +7,7 @@ import TimelineCore
 /// Full-screen Apple Map of geotagged photos in the selected space.
 struct MapBrowserView: View {
     @ObservedObject var model: MapBrowserModel
-    @EnvironmentObject private var library: LibraryModel
+    @Environment(LibraryModel.self) private var library
     var contentTopInset: CGFloat = 0
     var space: PhotoSpace
     let onOpenPhoto: (Int64) -> Void

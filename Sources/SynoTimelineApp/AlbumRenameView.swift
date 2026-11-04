@@ -2,7 +2,7 @@ import SwiftUI
 import SynologyAPI
 
 struct AlbumRenameView: View {
-    @EnvironmentObject private var model: LibraryModel
+    @Environment(LibraryModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let album: AlbumSummary
     @State private var name: String

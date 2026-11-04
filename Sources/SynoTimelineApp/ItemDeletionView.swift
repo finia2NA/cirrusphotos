@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ItemDeletionView: View {
-    @ObservedObject var model: LibraryModel
+    var model: LibraryModel
     let deletion: ItemDeletion
 
     var body: some View {

@@ -235,19 +235,24 @@ final class LibraryInputRoutingTests: XCTestCase {
     @MainActor
     func testRepeatedCommandRegistrationDoesNotPublishAndStaleOwnerCannotDeactivate() {
         let model = LibraryModel()
-        var publications = 0, calls = 0
-        let observation = model.objectWillChange.sink { publications += 1 }
+        var calls = 0
         let first = UUID(), second = UUID()
         model.installBrowserCommands(owner: first, active: true, canOpen: true, collection: .library(.personal)) { _ in calls += 10 }
-        let afterInitial = publications
+        // Identical re-registration must not change any observed command state.
+        final class Changes: @unchecked Sendable { var count = 0 }
+        let changes = Changes()
+        withObservationTracking {
+            _ = model.browserCommandsActive
+            _ = model.canOpenSelectedPhoto
+            _ = model.canToggleBrowserFavorite
+        } onChange: { changes.count += 1 }
         model.installBrowserCommands(owner: first, active: true, canOpen: true, collection: .library(.personal)) { _ in calls += 10 }
-        XCTAssertEqual(publications, afterInitial)
+        XCTAssertEqual(changes.count, 0)
         model.installBrowserCommands(owner: second, active: true, canOpen: true, collection: .library(.personal)) { _ in calls += 1 }
         model.installBrowserCommands(owner: first, active: false, canOpen: false, collection: .library(.personal), handler: nil)
         XCTAssertTrue(model.browserCommandsActive)
         model.performBrowserCommand(.openSelected)
         XCTAssertEqual(calls, 1)
-        withExtendedLifetime(observation) {}
     }
 
     @MainActor

@@ -3,7 +3,7 @@ import SwiftUI
 import SynologyAPI
 
 struct CacheSettingsView: View {
-    @EnvironmentObject private var library: LibraryModel
+    @Environment(LibraryModel.self) private var library
     @EnvironmentObject private var preferences: AppPreferences
     @AppStorage(AppPreferences.Key.photoDownloadDirectory) private var downloadDirectory = ""
     @AppStorage(AppPreferences.Key.viewerHighlightThreshold) private var highlightThreshold = 100.0

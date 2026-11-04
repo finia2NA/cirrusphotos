@@ -82,7 +82,7 @@ struct BrowserThumbnailShapeControl: View {
 }
 
 struct BrowserFavoriteControl: View {
-    @ObservedObject var model: LibraryModel
+    var model: LibraryModel
     let collection: PhotoCollectionDescriptor
 
     var body: some View {
@@ -127,7 +127,7 @@ struct ViewerRotationControls: View {
 }
 
 struct BrowserRotationControls: View {
-    @ObservedObject var model: LibraryModel
+    var model: LibraryModel
     var body: some View {
         HStack(spacing: 2) {
             Button { model.rotateSelection(.counterClockwise) } label: {
@@ -143,7 +143,7 @@ struct BrowserRotationControls: View {
 }
 
 struct ThumbnailRotationProgressView: View {
-    @ObservedObject var model: LibraryModel
+    var model: LibraryModel
     private var progress: ThumbnailRotationProgress? { model.thumbnailRotationProgress }
 
     var body: some View {
@@ -261,7 +261,7 @@ struct ViewerToolbarTitle: View {
 }
 
 struct ConnectionToolbarItem: View {
-    @EnvironmentObject private var library: LibraryModel
+    @Environment(LibraryModel.self) private var library
 
     var body: some View {
         HStack(spacing: 7) {
@@ -304,7 +304,7 @@ struct ConnectionToolbarItem: View {
 }
 
 struct LibraryCommands: Commands {
-    @ObservedObject var model: LibraryModel
+    @Bindable var model: LibraryModel
     @ObservedObject var preferences: AppPreferences
     @ObservedObject var infoPanel: InfoPanelModel
     @ObservedObject var filter: LibraryFilterModel
@@ -448,7 +448,7 @@ struct LibraryCommands: Commands {
 /// Filmstrip, histogram, highlight peaking and focus-edge overlays in their own glass pill,
 /// separate from the viewer's action buttons.
 struct ViewerOverlayControls: View {
-    @ObservedObject var model: LibraryModel
+    var model: LibraryModel
 
     var body: some View {
         HStack(spacing: 0) {

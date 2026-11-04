@@ -40,7 +40,7 @@ struct AlbumSidebarSection: View {
 
 
 private struct AlbumSidebarRow: View {
-    @EnvironmentObject private var model: LibraryModel
+    @Environment(LibraryModel.self) private var model
     let id: PhotoCollectionDescriptor
     let album: AlbumSummary?
     let repository: CachedPhotosRepository?

@@ -3,7 +3,7 @@ import SwiftUI
 import SynologyAPI
 
 struct AppShellView: View {
-    @EnvironmentObject private var model: LibraryModel
+    @Environment(LibraryModel.self) private var model
     @EnvironmentObject private var preferences: AppPreferences
     @EnvironmentObject private var infoPanel: InfoPanelModel
     @EnvironmentObject private var libraryFilter: LibraryFilterModel
@@ -300,10 +300,10 @@ struct AppShellView: View {
                 peopleEditRevision &+= 1
             }
         }
-        .sheet(item: $model.albumOperation) { operation in
+        .sheet(item: Bindable(model).albumOperation) { operation in
             AlbumOperationView(model: model, operation: operation)
         }
-        .sheet(item: $model.itemDeletion) { deletion in
+        .sheet(item: Bindable(model).itemDeletion) { deletion in
             ItemDeletionView(model: model, deletion: deletion)
         }
         .alert("Delete Failed", isPresented: Binding(

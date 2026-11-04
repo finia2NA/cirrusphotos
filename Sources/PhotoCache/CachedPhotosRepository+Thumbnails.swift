@@ -88,7 +88,11 @@ extension CachedPhotosRepository {
                 }
                 let exact = CacheKey.thumbnailIdentity(scope: scope.contentScope, namespace: namespace,
                                                        descriptor: descriptor, size: size, collection: scope)
+                // Includes waiting for the shared DiskCache actor, unlike "Cache read" inside it.
+                let signposter = SynologyDiagnostics.browserSignposts
+                let lookup = signposter.beginInterval("Cache lookup", id: signposter.makeSignpostID())
                 let exactCached = try? await store.getThumbnail(exact)
+                signposter.endInterval("Cache lookup", lookup)
                 guard !Task.isCancelled else { continuation.finish(); return }
                 if exactCached == nil,
                    let fallback = await bestCachedFallback(descriptor, target: size, collection: scope) {
