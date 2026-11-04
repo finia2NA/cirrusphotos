@@ -25,12 +25,12 @@ extension CachedPhotosRepository {
                 }
                 guard !Task.isCancelled else { continuation.finish(); return }
                 if let cached {
-                    SynologyDiagnostics.originals.debug(
+                    SynologyDiagnostics.originals.info(
                         "Original cache hit unit_id=\(resource.unitID, privacy: .public) bytes=\(cached.data.count, privacy: .public) validated_this_run=\(cached.validatedRun == self.runID, privacy: .public)"
                     )
                     continuation.yield(.value(cached.data, verified: cached.validatedRun == runID))
                 } else {
-                    SynologyDiagnostics.originals.debug(
+                    SynologyDiagnostics.originals.info(
                         "Original cache miss unit_id=\(resource.unitID, privacy: .public)"
                     )
                 }
@@ -39,7 +39,7 @@ extension CachedPhotosRepository {
                         progress?(TransferProgress(completedBytes: Int64(cached.data.count),
                                                    totalBytes: Int64(cached.data.count)))
                     }
-                    SynologyDiagnostics.originals.debug(
+                    SynologyDiagnostics.originals.info(
                         "Original network request skipped unit_id=\(resource.unitID, privacy: .public) network_allowed=\(allowNetwork, privacy: .public) already_validated=\(cached?.validatedRun == self.runID, privacy: .public)"
                     )
                     continuation.finish()
@@ -86,6 +86,9 @@ extension CachedPhotosRepository {
     private func registerFullImage(_ resource: FullImageResource, key: String, subscriber: UUID,
                                    priority: RequestPriority) -> Task<FullImageResolution, Error> {
         if var job = imageWork.fullImageJobs[key] {
+            SynologyDiagnostics.originals.info(
+                "Original job joined unit_id=\(resource.unitID, privacy: .public) subscribers=\(job.subscribers.count + 1, privacy: .public) priority=\(String(describing: priority), privacy: .public)"
+            )
             job.subscribers.insert(subscriber)
             imageWork.fullImageJobs[key] = job
             if priority == .visible { Task { await fullImageGate.promote(job.id) } }
@@ -95,10 +98,18 @@ extension CachedPhotosRepository {
         let task = Task<FullImageResolution, Error> {
             defer { finishFullImageJob(key: key, id: id) }
             let generation = await store.currentGeneration()
+            let gateStart = ContinuousClock.now
             try await fullImageGate.acquire(priority: priority, id: id)
+            SynologyDiagnostics.originals.info(
+                "Original gate acquired unit_id=\(resource.unitID, privacy: .public) priority=\(String(describing: priority), privacy: .public) waited=\(String(describing: ContinuousClock.now - gateStart), privacy: .public)"
+            )
             do {
                 try Task.checkCancellation()
+                let connectStart = ContinuousClock.now
                 try await connect()
+                SynologyDiagnostics.originals.info(
+                    "Original connection ready unit_id=\(resource.unitID, privacy: .public) took=\(String(describing: ContinuousClock.now - connectStart), privacy: .public)"
+                )
                 let prior = try? await store.get(key)
                 SynologyDiagnostics.originals.info(
                     "Downloading or validating original unit_id=\(resource.unitID, privacy: .public) priority=\(String(describing: priority), privacy: .public) has_etag=\(prior?.etag != nil, privacy: .public) has_last_modified=\(prior?.lastModified != nil, privacy: .public)"
@@ -150,6 +161,9 @@ extension CachedPhotosRepository {
                 await fullImageGate.release(id)
                 return result
             } catch {
+                SynologyDiagnostics.originals.info(
+                    "Original job ended with error unit_id=\(resource.unitID, privacy: .public) cancelled=\(Task.isCancelled, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                )
                 await fullImageGate.release(id)
                 throw error
             }
@@ -166,6 +180,7 @@ extension CachedPhotosRepository {
         guard var job = imageWork.fullImageJobs[key] else { return }
         job.subscribers.remove(subscriber)
         if job.subscribers.isEmpty && !imageWork.fullImageFinishWithoutSubscribers.contains(key) {
+            SynologyDiagnostics.originals.info("Original job cancelled, last subscriber left")
             job.task.cancel()
             imageWork.fullImageJobs.removeValue(forKey: key)
             Task { await fullImageGate.release(job.id) }

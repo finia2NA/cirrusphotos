@@ -12,6 +12,9 @@ extension PhotoViewerSession {
         guard !closed, let item = currentItem else { return }
         let network = allowNetwork && metadataVerified
         let descriptor = item.additional?.thumbnail
+        SynologyDiagnostics.viewer.info(
+            "Starting assets item_id=\(item.id, privacy: .public) allow_network=\(self.allowNetwork, privacy: .public) metadata_verified=\(self.metadataVerified, privacy: .public) network=\(network, privacy: .public) generation=\(self.generation, privacy: .public) has_full_data=\(self.images.fullImageData != nil, privacy: .public) has_thumbnail_data=\(self.images.thumbnailData != nil, privacy: .public)"
+        )
         if let descriptor {
             if thumbnailSize != .xl {
                 startThumbnail(descriptor: descriptor, itemID: item.id,
@@ -98,6 +101,9 @@ extension PhotoViewerSession {
               descriptor.flatMap(expensiveThumbnailRequest) != nil || resource != nil else { return }
         let attempt = UUID()
         let expectedGeneration = generation
+        SynologyDiagnostics.viewer.info(
+            "Scheduling enhancements item_id=\(itemID, privacy: .public) has_expensive_thumbnail=\(descriptor.flatMap(self.expensiveThumbnailRequest) != nil, privacy: .public) has_full_resource=\(resource != nil, privacy: .public)"
+        )
         images.enhancementAttempt = attempt
         images.enhancementTask = Task { [weak self] in
             do { try await Task.sleep(for: ViewerImageWork.enhancementDelay) }
@@ -112,7 +118,15 @@ extension PhotoViewerSession {
                                      itemID: Int64, descriptor: ThumbnailInfo?,
                                      resource: FullImageResource?) {
         guard !closed, images.enhancementAttempt == attempt, generation == expectedGeneration,
-              currentItem?.id == itemID else { return }
+              currentItem?.id == itemID else {
+            SynologyDiagnostics.viewer.info(
+                "Enhancements dropped as stale item_id=\(itemID, privacy: .public) closed=\(self.closed, privacy: .public)"
+            )
+            return
+        }
+        SynologyDiagnostics.viewer.info(
+            "Releasing enhancements item_id=\(itemID, privacy: .public) has_full_data=\(self.images.fullImageData != nil, privacy: .public) full_task_active=\(self.images.fullTask != nil, privacy: .public)"
+        )
         images.enhancementTask = nil
         images.enhancementAttempt = nil
         images.enhancementsReleasedGeneration = generation
@@ -140,6 +154,9 @@ extension PhotoViewerSession {
         let key = Self.thumbnailKey(descriptor, size: request.size)
         let identity = Self.viewerThumbnailIdentity(descriptor)
         if images.thumbnailData == nil { images.thumbnailStatus = .loading }
+        SynologyDiagnostics.viewer.info(
+            "Starting thumbnail item_id=\(itemID, privacy: .public) tier=\(String(describing: request.tier), privacy: .public) size=\(String(describing: request.size), privacy: .public) purpose=\(String(describing: request.purpose), privacy: .public) allow_network=\(allowNetwork, privacy: .public)"
+        )
         let task = Task { [weak self] in
             if request.purpose == .library {
                 for await event in await repository.thumbnailWithFallback(
@@ -177,9 +194,17 @@ extension PhotoViewerSession {
                                   tier: ViewerImageWork.ThumbnailTier,
                                   generation expectedGeneration: UInt64, itemID: Int64) {
         guard !closed, let job = images.thumbnailJobs[tier], job.id == attempt,
-              generation == expectedGeneration, currentItem?.id == itemID else { return }
+              generation == expectedGeneration, currentItem?.id == itemID else {
+            SynologyDiagnostics.viewer.info(
+                "Thumbnail event dropped as stale item_id=\(itemID, privacy: .public) tier=\(String(describing: tier), privacy: .public)"
+            )
+            return
+        }
         switch event {
         case .value(let data, let verified):
+            SynologyDiagnostics.viewer.info(
+                "Thumbnail bytes received item_id=\(itemID, privacy: .public) tier=\(String(describing: tier), privacy: .public) bytes=\(data.count, privacy: .public) verified=\(verified, privacy: .public)"
+            )
             images.thumbnailFailures.removeValue(forKey: tier)
             if tier == .configured {
                 images.thumbnailDataByIdentity[job.identity] = data
@@ -192,6 +217,9 @@ extension PhotoViewerSession {
                 images.thumbnailStatus = .ready(verified: verified, validationFailure: nil)
             }
         case .failure(let message):
+            SynologyDiagnostics.viewer.error(
+                "Thumbnail failed item_id=\(itemID, privacy: .public) tier=\(String(describing: tier), privacy: .public) error=\(message.localizedDescription, privacy: .public)"
+            )
             images.thumbnailFailures[tier] = message.localizedDescription
             if images.thumbnailData != nil {
                 images.thumbnailStatus = .ready(verified: false, validationFailure: message.localizedDescription)
@@ -204,6 +232,9 @@ extension PhotoViewerSession {
 
     func finishThumbnail(_ attempt: UUID, tier: ViewerImageWork.ThumbnailTier, key: String) {
         guard images.thumbnailJobs[tier]?.id == attempt else { return }
+        SynologyDiagnostics.viewer.info(
+            "Thumbnail stream finished tier=\(String(describing: tier), privacy: .public) has_thumbnail_data=\(self.images.thumbnailData != nil, privacy: .public)"
+        )
         images.thumbnailJobs.removeValue(forKey: tier)
         images.thumbnailPrefetchJobs.removeValue(forKey: key)?.task.cancel()
         if images.thumbnailData == nil, images.thumbnailJobs.isEmpty {
@@ -213,11 +244,14 @@ extension PhotoViewerSession {
     }
 
     func startFullImage(resource: FullImageResource, allowNetwork: Bool) {
-        SynologyDiagnostics.viewer.debug(
+        SynologyDiagnostics.viewer.info(
             "Starting full-size subscription item_id=\(self.currentItem?.id ?? -1, privacy: .public) unit_id=\(resource.unitID, privacy: .public) network_allowed=\(allowNetwork, privacy: .public)"
         )
         let key = Self.resourceKey(resource)
         if let prefetched = images.fullJobs.removeValue(forKey: key) {
+            SynologyDiagnostics.viewer.info(
+                "Adopting prefetched full-size job unit_id=\(resource.unitID, privacy: .public) has_data=\(prefetched.data != nil, privacy: .public) completed=\(prefetched.completed, privacy: .public) prefetch_allowed_network=\(prefetched.allowNetwork, privacy: .public)"
+            )
             images.fullTask?.cancel()
             if let data = prefetched.data {
                 images.fullImageData = data
@@ -244,11 +278,19 @@ extension PhotoViewerSession {
             return
         }
         if let task = images.fullTask, allowNetwork && !images.fullTaskAllowsNetwork {
+            SynologyDiagnostics.viewer.info(
+                "Replacing cache-only full-size task with network task unit_id=\(resource.unitID, privacy: .public)"
+            )
             task.cancel()
             images.fullTask = nil
             images.fullAttempt = nil
         }
-        guard images.fullTask == nil else { return }
+        guard images.fullTask == nil else {
+            SynologyDiagnostics.viewer.info(
+                "Full-size start skipped, task already active unit_id=\(resource.unitID, privacy: .public) requested_network=\(allowNetwork, privacy: .public) active_network=\(self.images.fullTaskAllowsNetwork, privacy: .public)"
+            )
+            return
+        }
         let attempt = UUID()
         let expectedGeneration = generation
         let expectedID = currentItem?.id
@@ -273,7 +315,12 @@ extension PhotoViewerSession {
                                     resource: FullImageResource) {
         guard !closed, images.fullAttempt == attempt, generation == expectedGeneration,
               currentItem?.id == itemID,
-              currentItem?.fullImageResource(in: mediaContentScope).map(Self.resourceKey) == Self.resourceKey(resource) else { return }
+              currentItem?.fullImageResource(in: mediaContentScope).map(Self.resourceKey) == Self.resourceKey(resource) else {
+            SynologyDiagnostics.viewer.info(
+                "Full-size event dropped as stale unit_id=\(resource.unitID, privacy: .public) item_id=\(itemID ?? -1, privacy: .public) closed=\(self.closed, privacy: .public) attempt_matches=\(self.images.fullAttempt == attempt, privacy: .public) generation_matches=\(self.generation == expectedGeneration, privacy: .public) item_matches=\(self.currentItem?.id == itemID, privacy: .public)"
+            )
+            return
+        }
         switch event {
         case .value(let data, let verified):
             SynologyDiagnostics.viewer.info(
@@ -299,6 +346,9 @@ extension PhotoViewerSession {
         if images.fullAttempt == attempt {
             let waitingForEnhancements = allowNetwork && metadataVerified &&
                 images.enhancementsReleasedGeneration != generation
+            SynologyDiagnostics.viewer.info(
+                "Full-size stream finished item_id=\(self.currentItem?.id ?? -1, privacy: .public) has_data=\(self.images.fullImageData != nil, privacy: .public) status=\(String(describing: self.images.fullImageStatus), privacy: .public) task_allowed_network=\(self.images.fullTaskAllowsNetwork, privacy: .public) waiting_for_enhancements=\(waitingForEnhancements, privacy: .public) allow_network=\(self.allowNetwork, privacy: .public) metadata_verified=\(self.metadataVerified, privacy: .public)"
+            )
             if images.fullImageData == nil, images.fullImageStatus == .loading, !waitingForEnhancements {
                 images.fullImageStatus = .failure("The full-size image is not cached.")
                 publish()
