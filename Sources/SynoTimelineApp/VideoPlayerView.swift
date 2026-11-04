@@ -14,6 +14,8 @@ struct VideoConfiguration {
     let poster: NSImage?
     var isMuted: Bool = false
     var onMuteChanged: (Bool) -> Void = { _ in }
+    /// Loading, buffering, stall and failure states of the player, for the viewer status.
+    var onPlaybackStatus: (VideoPlaybackStatus) -> Void = { _ in }
 }
 
 struct LivePhotoConfiguration {
@@ -30,6 +32,7 @@ final class VideoPlayerContainerView: NSView {
     var onClose: (() -> Void)?
     var onFirstFrame: (() -> Void)?
     var onPlaybackFinished: (() -> Void)?
+    var onPlaybackStatus: ((VideoPlaybackStatus) -> Void)?
     var toolbarInset: CGFloat = 0 { didSet { needsLayout = true } }
 
     var isMotionPlayback = false {
@@ -52,6 +55,10 @@ final class VideoPlayerContainerView: NSView {
     private var identity: String?
     private var fallbackRequestIdentity: String?
     private var onMuteChanged: (Bool) -> Void = { _ in }
+    private var isShowingFirstFrame = false
+    private var reportedStatus: VideoPlaybackStatus?
+    private var waitingSince: ContinuousClock.Instant?
+    private var stallTask: Task<Void, Never>?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -157,7 +164,12 @@ final class VideoPlayerContainerView: NSView {
                                        allowNetwork: allowNetwork, poster: poster, isMuted: player.isMuted,
                                        onMuteChanged: self.onMuteChanged)
                         self.fallbackRequestIdentity = nextIdentity
-                    } else { self.onPlaybackFinished?() }
+                    } else {
+                        if !self.isMotionPlayback {
+                            self.report(.failed(item.error?.localizedDescription ?? "The video couldn't be played."))
+                        }
+                        self.onPlaybackFinished?()
+                    }
                 }
             @unknown default:
                 SynologyDiagnostics.videoPlayer.error(
@@ -170,6 +182,8 @@ final class VideoPlayerContainerView: NSView {
             DispatchQueue.main.async { [weak self, weak player] in
                 guard let self, let player, self.player === player else { return }
                 self.posterView.isHidden = ready
+                self.isShowingFirstFrame = ready
+                self.refreshPlaybackStatus()
                 if ready {
                     let elapsed = playerStarted.duration(to: .now).components
                     let ms = elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000
@@ -178,16 +192,75 @@ final class VideoPlayerContainerView: NSView {
                 }
             }
         }
-        timeObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { player, _ in
+        timeObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] player, _ in
             let reason = player.reasonForWaitingToPlay?.rawValue ?? "none"
             SynologyDiagnostics.videoPlayer.info(
                 "Video player time control changed unit_id=\(resource.unitID, privacy: .public) quality=\(resource.variant.cacheComponent, privacy: .public) status=\(player.timeControlStatus.rawValue, privacy: .public) waiting_reason=\(reason, privacy: .public)"
             )
+            DispatchQueue.main.async { [weak self, weak player] in
+                guard let self, let player, self.player === player else { return }
+                self.refreshPlaybackStatus()
+            }
         }
         player.play()
     }
 
+    /// Reports loading before the first frame, buffering while playback waits for data, and a
+    /// stall when neither has received data for `ViewerStatus.stallInterval`.
+    private func refreshPlaybackStatus() {
+        guard let player, !isMotionPlayback else { return }
+        if case .failed = reportedStatus { return }
+        let status: VideoPlaybackStatus
+        if !isShowingFirstFrame { status = .loading }
+        else {
+            switch player.timeControlStatus {
+            case .playing: status = .playing
+            case .paused: status = .paused
+            case .waitingToPlayAtSpecifiedRate: status = .buffering
+            @unknown default: status = .playing
+            }
+        }
+        let waiting = status == .loading || status == .buffering
+        if waiting {
+            if waitingSince == nil { waitingSince = .now }
+            if stallTask == nil { startStallCheck() }
+            if reportedStatus == .stalled { return }
+        } else {
+            waitingSince = nil
+            stallTask?.cancel()
+            stallTask = nil
+        }
+        report(status)
+    }
+
+    private func startStallCheck() {
+        stallTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self, let since = self.waitingSince else { return }
+                let lastData = self.loader?.lastDelivery ?? since
+                let quiet = max(since, lastData).duration(to: .now)
+                if quiet >= ViewerStatus.stallInterval {
+                    self.report(.stalled)
+                } else if self.reportedStatus == .stalled {
+                    self.report(self.isShowingFirstFrame ? .buffering : .loading)
+                }
+            }
+        }
+    }
+
+    private func report(_ status: VideoPlaybackStatus) {
+        guard reportedStatus != status else { return }
+        reportedStatus = status
+        onPlaybackStatus?(status)
+    }
+
     func stop() {
+        stallTask?.cancel()
+        stallTask = nil
+        waitingSince = nil
+        reportedStatus = nil
+        isShowingFirstFrame = false
         timeObservation = nil
         muteObservation = nil
         displayObservation = nil
@@ -229,6 +302,10 @@ final class VideoAssetLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecke
     private let allowNetwork: Bool
     private let lock = NSLock()
     private var tasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    private var lastDeliveryTime: ContinuousClock.Instant?
+
+    /// When the loader last handed data to the player, from the cache or the NAS.
+    var lastDelivery: ContinuousClock.Instant? { lock.withLock { lastDeliveryTime } }
 
     init(repository: CachedPhotosRepository, resource: VideoPlaybackResource, allowNetwork: Bool) {
         self.repository = repository
@@ -344,6 +421,7 @@ final class VideoAssetLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecke
                         SynologyDiagnostics.videoPlayer.info("Video first loader response unit_id=\(self.resource.unitID, privacy: .public) elapsed_ms=\(ms, privacy: .public)")
                     }
                     if !state.demand.informationOnly { request.dataRequest?.respond(with: value.data) }
+                    lock.withLock { lastDeliveryTime = .now }
                     try state.demand.advance(value.data.count)
                 }
             }

@@ -56,8 +56,6 @@ final class RotationTests: XCTestCase {
         let action = SelectionRotationAction(itemIDs: [1], sectionsByID: [1: section],
                                              collection: .library(.personal), itemsByID: [1: original])
         let store = await repository.store
-        let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
-            server: URL(string: "https://nas.invalid")!, account: "rotation"), section: section, collection: .library(.personal)))
         try await seedMetadataPage([original], section: section, repository: repository)
         try await repository.rotate(action, direction: .clockwise)
         let calls = await transport.rotateCalls
@@ -79,8 +77,6 @@ final class RotationTests: XCTestCase {
         let action = SelectionRotationAction(itemIDs: [2], sectionsByID: [2: section],
                                              collection: .library(.personal), itemsByID: [2: original])
         let store = await repository.store
-        let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
-            server: URL(string: "https://nas.invalid")!, account: "rotation"), section: section, collection: .library(.personal)))
         try await seedMetadataPage([original], section: section, repository: repository)
         do {
             try await repository.rotate(action, direction: .clockwise)
@@ -106,9 +102,6 @@ final class RotationTests: XCTestCase {
         let repository = try repository(transport, root: root)
         for await _ in await repository.timeline(collection: .library(.personal)) {}
 
-        let store = await repository.store
-        let sourceKey = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
-            server: URL(string: "https://nas.invalid")!, account: "rotation"), section: sourceSection, collection: .library(.personal)))
         try await seedMetadataPage([original], section: sourceSection, repository: repository)
 
         let built = DayGroupedTimelineBuilder.build(entries: [.init(id: original.id, time: original.time)])
@@ -198,8 +191,6 @@ final class RotationTests: XCTestCase {
         let action = SelectionRotationAction(itemIDs: [11], sectionsByID: [11: section],
                                              collection: .library(.personal), itemsByID: [11: original])
         let store = await repository.store
-        let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
-            server: URL(string: "https://nas.invalid")!, account: "rotation"), section: section, collection: .library(.personal)))
         try await seedMetadataPage([original], section: section, repository: repository)
         var final: ThumbnailRotationProgress?
         for await progress in await repository.rotateThumbnails(action, direction: .clockwise) { final = progress }
@@ -225,8 +216,6 @@ final class RotationTests: XCTestCase {
         let action = SelectionRotationAction(itemIDs: [12], sectionsByID: [12: section],
                                              collection: .library(.personal), itemsByID: [12: original])
         let store = await repository.store
-        let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(
-            server: URL(string: "https://nas.invalid")!, account: "rotation"), section: section, collection: .library(.personal)))
         try await seedMetadataPage([original], section: section, repository: repository)
         for await _ in await repository.rotateThumbnails(action, direction: .clockwise) {}
         let restored = await transport.restoredUnits
@@ -609,8 +598,6 @@ private actor RotationTransport: TestPhotosTransport {
         return try fixtureDayCatalog(timelineSnapshot, initial: initial)
     }
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
-        let section = fixtureSection(request)
-        let collection = request.collection
 
         return try fixtureBatch(pageItems, request: request, fields: fields)
     }

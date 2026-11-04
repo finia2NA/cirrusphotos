@@ -34,8 +34,6 @@ private actor RangeTransport: TestPhotosTransport {
         }, completeness: initial ? .partial : .complete)
     }
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
-        let section = fixtureSection(request)
-        let collection = request.collection
 
         pageCalls += 1
         for waiter in pageStartWaiters { waiter.resume() }

@@ -460,4 +460,4 @@ Status: implemented. Notices are entries of `ActivityKind.notice(title:)` with a
 - Reveal across collections (navigate, then reveal).
 - Thumbnail-only rotation as a tracked transfer instead of a modal sheet.
 - A reachability signal for connection notices.
-- #11: viewer progress line, "Medium · Loading" status format, and video buffering/stall states.
+- #11: viewer progress line, "Medium · Loading" status format, and video buffering/stall states. Implemented outside this plan; see the Viewer status and progress section of `docs/ARCHITECTURE.md`.

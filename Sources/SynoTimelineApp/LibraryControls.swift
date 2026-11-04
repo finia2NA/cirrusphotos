@@ -236,27 +236,34 @@ struct InfoPanelToolbarControl: View {
 
 struct ViewerToolbarTitle: View {
     @ObservedObject var viewer: PhotoViewerPresentation
+    @ObservedObject private var status: ViewerStatusModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(viewer: PhotoViewerPresentation) {
+        self.viewer = viewer
+        status = viewer.statusModel
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Text(viewer.filename)
                 .font(.headline)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            HStack(spacing: 5) {
-                if viewer.showsLoadingIndicator {
-                    ProgressView().controlSize(.mini)
-                        .accessibilityHidden(true)
-                }
-                Text(viewer.detailLine)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            Text([viewer.dateText, status.status.short].filter { !$0.isEmpty }.joined(separator: " · "))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .monospacedDigit()
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ViewerProgressBar(model: status, reduceMotion: reduceMotion)
+                .padding(.top, 2)
+                .padding(.horizontal, 12)
         }
         .frame(minWidth: 100, idealWidth: 270, maxWidth: 360)
-        .help(viewer.detailLine)
+        .help(status.status.help)
         .accessibilityElement(children: .combine)
+        .accessibilityHint(status.status.help)
     }
 }
 

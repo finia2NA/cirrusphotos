@@ -51,6 +51,8 @@ extension LibraryModel {
             return .connected
         case .failed(let message):
             return .failed(label: "Login failed", detail: message)
+        case .unreachable(let message):
+            return .failed(label: "NAS unreachable", detail: message)
         }
     }
 }

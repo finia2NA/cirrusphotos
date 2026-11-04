@@ -170,8 +170,6 @@ private actor FilterModelTransport: TestPhotosTransport {
     }
 
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
-        let section = fixtureSection(request)
-        let collection = request.collection
 
         try await Task.sleep(for: delay)
         var rows: [PhotoItem] = []

@@ -79,6 +79,9 @@ final class LibraryModel {
     /// The last state `noteConnectionState` saw, and whether a lost-connection notice is showing.
     @ObservationIgnored var lastConnectionState: ConnectionState?
     @ObservationIgnored var connectionLossNoticed = false
+    /// Whether the NAS has been reached this session. Until then, failing to reach it is
+    /// expected (offline launch) and posts no notice.
+    @ObservationIgnored var hasConnected = false
     var albumMembershipRevision: UInt64 = 0
     @ObservationIgnored var changedAlbumID: Int64?
     private(set) var mapFilterInvalidationRevision: UInt64 = 0
@@ -99,8 +102,10 @@ final class LibraryModel {
     /// Resumes the queued favorite change waiting for the confirmation alert.
     @ObservationIgnored var favoriteConfirmationReply: CheckedContinuation<Bool, Never>?
     var authenticationFailed: Bool {
-        if case .failed = authenticationStatus { return true }
-        return false
+        switch authenticationStatus {
+        case .failed, .unreachable: true
+        case .notStarted, .loggingIn, .signedIn: false
+        }
     }
     private(set) var cacheUsage: Int64 = 0
     private(set) var albums: [AlbumSummary] = []
@@ -692,6 +697,7 @@ final class LibraryModel {
         switch state {
         case .connected:
             activity.connectionIsHealthy = true
+            hasConnected = true
             if connectionLossNoticed {
                 connectionLossNoticed = false
                 activity.notice("Connected to the NAS again", key: "connection")
@@ -700,6 +706,7 @@ final class LibraryModel {
             activity.connectionIsHealthy = false
             let onlyRefreshFailed = refreshFailure != nil && error(for: .library(.personal)) == nil
             if case .degraded = state, onlyRefreshFailed { return }
+            if case .unreachable = authenticationStatus, !hasConnected { return }
             guard !connectionLossNoticed else { return }
             connectionLossNoticed = true
             activity.notice(label, detail: "\(detail) Showing cached content.", key: "connection")

@@ -799,8 +799,6 @@ final class PhotoViewerMetadataValidationTests: PhotoViewerSessionTestCase {
         await transport.configure(pages: [0: [current]], blockedPages: [0])
         let repository = try repository(root: cacheRoot, transport: transport)
         for await _ in await repository.timeline(collection: .library(.personal)) {}
-        let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let pageKey = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: namespace, section: descriptor, collection: .library(.personal)))
         try await seedMetadataPage([stale], section: descriptor, repository: repository)
 
         let session = PhotoViewerSession(repository: repository, collection: .library(.personal),
@@ -838,8 +836,6 @@ final class PhotoViewerMetadataValidationTests: PhotoViewerSessionTestCase {
                                   blockedPages: [2])
         let repository = try repository(root: cacheRoot, transport: transport)
         let namespace = CacheKey.namespace(server: server, account: credentials.username)
-        let neighborPageKey = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: namespace,
-                                                          section: snapshot.sections[1], collection: .library(.personal)))
         try await seedMetadataPage(Array(items[2...3]), section: snapshot.sections[1], repository: repository)
         let neighborResource = try XCTUnwrap(items[2].fullImageResource(in: .space(.personal)))
         try await repository.store.put(CacheKey.fullImage(namespace: namespace, resource: neighborResource),
@@ -1042,8 +1038,6 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         XCTAssertEqual(writes.count, 1)
         let badgeUpdated = await waitUntil { await window.retainedPages().first?.items.first?.isFavorite == true }
         XCTAssertTrue(badgeUpdated)
-        let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(server: server, account: credentials.username),
-                                              section: section, collection: .library(.personal)))
         let stored = try await repo.store.metadataPage(try DayPageAddress(section: section, collection: .library(.personal)), namespace: repo.personalMetadataNamespace, currentRun: repo.runID)?.completeItems ?? []
         XCTAssertTrue(stored[0].isFavorite)
         await session.toggleFavorite()
@@ -1128,7 +1122,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         XCTAssertTrue(timelineUpdatedBeforeResponse)
         await session.close()
         await transport.releaseFavoriteWrite()
-        await toggle.value
+        _ = await toggle.value
 
         let completedWrites = await transport.favoriteWrites.count
         XCTAssertEqual(completedWrites, 1)
@@ -1136,9 +1130,6 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
             await window.retainedPages().first?.items.first?.isFavorite == true
         }
         XCTAssertTrue(timelineUpdated)
-        let key = try XCTUnwrap(CacheKey.page(scope: .space(.personal), namespace: CacheKey.namespace(server: server,
-                                                                           account: credentials.username),
-                                              section: section, collection: .library(.personal)))
         let store = await repo.store
         let cached = try await store.metadataPage(try DayPageAddress(section: section, collection: .library(.personal)), namespace: repo.personalMetadataNamespace, currentRun: repo.runID)
         XCTAssertEqual(cached?.slots.first?.item?.isFavorite, true)
@@ -1189,8 +1180,8 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
                       "Returning to the photo whose write is pending should disable only that photo")
 
         await transport.releaseFavoriteWrite()
-        await firstToggle.value
-        await secondToggle.value
+        _ = await firstToggle.value
+        _ = await secondToggle.value
         let writes = await transport.favoriteWrites.count
         XCTAssertEqual(writes, 2)
         await session.close()
@@ -1255,7 +1246,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         XCTAssertFalse(calls.contains(249), "Optimistic status must not be mistaken for committed membership")
 
         await transport.releaseFavoriteWrite()
-        await toggle.value
+        _ = await toggle.value
         await session.close()
     }
 
@@ -1287,7 +1278,7 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
         XCTAssertTrue(pendingPageStarted)
 
         await transport.releaseFavoriteWrite()
-        await toggle.value
+        _ = await toggle.value
 
         let reachedReplannedPage = await waitUntil { await session.state().item?.id == items[250].id }
         XCTAssertTrue(reachedReplannedPage,

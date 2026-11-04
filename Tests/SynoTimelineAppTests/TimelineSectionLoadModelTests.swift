@@ -180,7 +180,6 @@ private actor LoadModelTransport: TestPhotosTransport {
     }
 
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
-        let section = fixtureSection(request)
         let collection = request.collection
 
         requestedCollections.append(collection)

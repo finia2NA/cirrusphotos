@@ -24,7 +24,15 @@ private actor FullImageTransport: TestPhotosTransport {
         returnNotModified = notModified
     }
 
+    var progressSteps: [TransferProgress] = []
+
+    func setProgressSteps(_ steps: [TransferProgress]) { progressSteps = steps }
     func release(_ unitID: Int64) { released.insert(unitID) }
+    func fullImage(_ resource: FullImageResource, etag: String?, lastModified: String?,
+                   progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> MediaResponse {
+        for step in progressSteps { progress(step) }
+        return try await fullImage(resource, etag: etag, lastModified: lastModified)
+    }
     func waitUntilCalled(_ unitID: Int64) async {
         if calls.contains(unitID) { return }
         await withCheckedContinuation { callWaiters[unitID, default: []].append($0) }
@@ -72,6 +80,30 @@ final class FullImageRepositoryTests: XCTestCase {
             for await event in await repository.fullImage(resource, priority: priority) { events.append(event) }
             return events
         }
+    }
+
+    func testProgressStreamFollowsTransferStartedByAnotherSubscriber() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let transport = FullImageTransport()
+        await transport.configure(block: true)
+        await transport.setProgressSteps([TransferProgress(completedBytes: 40, totalBytes: 100),
+                                          TransferProgress(completedBytes: 60, totalBytes: 100)])
+        let repository = try repository(root: cacheRoot, transport: transport)
+        let image = resource(30)
+        let loading = consume(repository, image)
+        await transport.waitUntilCalled(30)
+
+        // A subscriber that arrives mid-transfer receives its progress, replayed or live.
+        var iterator = await repository.fullImageProgress(image).makeAsyncIterator()
+        var latest = await iterator.next()
+        for _ in 0..<100 where latest?.completedBytes != 60 {
+            latest = await iterator.next()
+        }
+        XCTAssertEqual(latest, TransferProgress(completedBytes: 60, totalBytes: 100))
+
+        await transport.release(30)
+        let events = await loading.value
+        XCTAssertEqual(events.count, 1)
     }
 
     func testCachedFirstValidationOncePerRunAndOfflineFallback() async throws {

@@ -288,8 +288,6 @@ private actor AuditBlockedTransport: TestPhotosTransport {
         return try fixtureDayCatalog(snapshot, initial: initial)
     }
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
-        let section = fixtureSection(request)
-        let collection = request.collection
 
         started = true
         if !released { await withCheckedContinuation { blocked = $0 } }

@@ -10,7 +10,10 @@ public enum AuthenticationStatus: Sendable, Equatable {
     case notStarted
     case loggingIn
     case signedIn
+    /// The NAS rejected the sign-in. It is not retried until the user asks.
     case failed(String)
+    /// The NAS could not be reached. The next request tries again.
+    case unreachable(String)
 }
 
 public struct FavoriteChange: Sendable {

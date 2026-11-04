@@ -17,8 +17,10 @@ extension CachedPhotosRepository {
     /// A rejected sign-in is sticky until the user explicitly retries it. Failing to reach
     /// the NAS is not: the next request starts a new attempt.
     public func retryAuthentication() {
-        guard case .failed = authenticationState.status else { return }
-        authenticationState.resetAttempt()
+        switch authenticationState.status {
+        case .failed, .unreachable: authenticationState.resetAttempt()
+        case .notStarted, .loggingIn, .signedIn: break
+        }
     }
 
     private func removeAuthenticationObserver(_ id: UUID) {
@@ -28,11 +30,10 @@ extension CachedPhotosRepository {
     func connect() async throws {
         try Task.checkCancellation()
         if authenticationState.connected { return }
-        if case .failed(let message) = authenticationState.status, !authenticationState.failureIsTransient {
+        if case .failed(let message) = authenticationState.status {
             throw AuthenticationAttemptError.previousFailure(message)
         }
         if authenticationState.task == nil {
-            authenticationState.failureIsTransient = false
             authenticationState.setStatus(.loggingIn)
             authenticationState.attempt = UUID()
             authenticationState.task = Task { try await client.login(credentials: credentials) }
@@ -50,8 +51,11 @@ extension CachedPhotosRepository {
                 authenticationState.attempt == attempt && !authenticationState.connected {
                 authenticationState.task = nil
                 authenticationState.attempt = nil
-                if case SynologyAPIError.transport = error { authenticationState.failureIsTransient = true }
-                authenticationState.setStatus(.failed(error.localizedDescription))
+                if case SynologyAPIError.transport = error {
+                    authenticationState.setStatus(.unreachable(error.localizedDescription))
+                } else {
+                    authenticationState.setStatus(.failed(error.localizedDescription))
+                }
             }
             throw error
         }

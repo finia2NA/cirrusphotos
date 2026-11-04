@@ -92,6 +92,27 @@ extension CachedPhotosRepository {
         }
     }
 
+    /// Byte progress of the shared full-image transfer for `resource`, whoever started it. The
+    /// latest known value is delivered first. The stream never finishes on its own.
+    public func fullImageProgress(_ resource: FullImageResource) -> AsyncStream<TransferProgress> {
+        let key = CacheKey.fullImage(namespace: namespace, resource: resource)
+        let subscriber = UUID()
+        let (stream, continuation) = AsyncStream.makeStream(of: TransferProgress.self,
+                                                            bufferingPolicy: .bufferingNewest(1))
+        registerFullImageProgress({ continuation.yield($0) }, key: key, subscriber: subscriber)
+        continuation.onTermination = { @Sendable _ in
+            Task { await self.unregisterFullImageProgress(key: key, subscriber: subscriber) }
+        }
+        return stream
+    }
+
+    private func unregisterFullImageProgress(key: String, subscriber: UUID) {
+        imageWork.fullImageProgressObservers[key]?[subscriber] = nil
+        if imageWork.fullImageProgressObservers[key]?.isEmpty == true {
+            imageWork.fullImageProgressObservers[key] = nil
+        }
+    }
+
     public func promoteFullImage(_ resource: FullImageResource) async {
         let key = CacheKey.fullImage(namespace: namespace, resource: resource)
         if let job = imageWork.fullImageJobs[key] { await fullImageGate.promote(job.id) }
@@ -187,10 +208,7 @@ extension CachedPhotosRepository {
     }
 
     private func releaseFullImage(key: String, subscriber: UUID) {
-        imageWork.fullImageProgressObservers[key]?[subscriber] = nil
-        if imageWork.fullImageProgressObservers[key]?.isEmpty == true {
-            imageWork.fullImageProgressObservers[key] = nil
-        }
+        unregisterFullImageProgress(key: key, subscriber: subscriber)
         guard var job = imageWork.fullImageJobs[key] else { return }
         job.subscribers.remove(subscriber)
         if job.subscribers.isEmpty && !imageWork.fullImageFinishWithoutSubscribers.contains(key) {

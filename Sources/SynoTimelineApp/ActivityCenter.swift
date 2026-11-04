@@ -278,8 +278,9 @@ final class ActivityCenter {
     var transfers: [ActivityEntry] { entries.filter { $0.kind.isTransfer && !$0.phase.needsAttention } }
     var inProgress: [ActivityEntry] { entries.filter { !$0.kind.isTransfer && !$0.phase.isSettled } }
     var runningCount: Int { entries.count { !$0.phase.isSettled } }
-    /// Set by `LibraryModel`: false after a lost connection, when load failures are expected.
-    var connectionIsHealthy = true
+    /// Set by `LibraryModel`: true only while the NAS is connected. Before the first sign-in
+    /// completes and after a lost connection, load failures are expected and not noted.
+    var connectionIsHealthy = false
     /// The collection the main browser shows, when a photo of it can be revealed there.
     var revealableCollection: PhotoCollectionDescriptor?
     @ObservationIgnored var revealHandler: (@MainActor (PhotoItem, PhotoCollectionDescriptor) -> Void)?

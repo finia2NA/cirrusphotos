@@ -63,7 +63,10 @@ struct PhotoViewerView: View {
                                                        generation: state.selection.generation,
                                                        allowNetwork: state.allowNetwork && state.metadataVerified,
                                                        poster: viewer.image, isMuted: videoMuted,
-                                                       onMuteChanged: onVideoMuteChanged)
+                                                       onMuteChanged: onVideoMuteChanged,
+                                                       onPlaybackStatus: { [generation = state.selection.generation] status in
+                                                           viewer.noteVideoPlayback(status, generation: generation)
+                                                       })
                                 }
                               },
                               livePhotoConfiguration: viewer.state.flatMap { state in

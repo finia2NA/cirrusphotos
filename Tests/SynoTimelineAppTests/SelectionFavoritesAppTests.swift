@@ -387,8 +387,6 @@ actor AppMockTransport: TestPhotosTransport {
     }
 
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
-        let section = fixtureSection(request)
-        let collection = request.collection
 
         return try fixtureBatch(Array((pages[0] ?? []).dropFirst(request.offset).prefix(request.limit)), request: request, fields: fields)
     }

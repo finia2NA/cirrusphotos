@@ -700,7 +700,6 @@ actor SelectionFavoritesMockTransport: TestPhotosTransport {
 
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
         let section = fixtureSection(request)
-        let collection = request.collection
 
         itemCallCount += 1
         for waiter in itemStartWaiters { waiter.resume() }

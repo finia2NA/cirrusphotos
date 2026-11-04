@@ -6,11 +6,11 @@ import TimelineCore
 
 @MainActor
 final class PhotoViewerPresentation: ObservableObject {
-    @Published private(set) var state: PhotoViewerState?
+    @Published private(set) var state: PhotoViewerState? { didSet { updateStatus() } }
     @Published private(set) var image: NSImage?
-    @Published private(set) var decodeFailure: String?
-    @Published private(set) var isDecodingFullImage = false
-    @Published private(set) var invalidationMessage: String?
+    @Published private(set) var decodeFailure: String? { didSet { updateStatus() } }
+    @Published private(set) var isDecodingFullImage = false { didSet { updateStatus() } }
+    @Published private(set) var invalidationMessage: String? { didSet { updateStatus() } }
     @Published private(set) var isClosing = false
     @Published private(set) var rotationPending = false
     @Published private(set) var isDisplayingFullResolution = false
@@ -21,6 +21,9 @@ final class PhotoViewerPresentation: ObservableObject {
     let originalItemID: Int64
     let snapshotRevision: Int
     let canvasController = PhotoViewerCanvasController()
+    /// The short status, hover text and progress line state, kept apart so progress updates
+    /// don't redraw the whole viewer.
+    let statusModel = ViewerStatusModel()
     var onInfoItemChanged: ((PhotoItem?) -> Void)?
     private let initialItem: PhotoItem
     let index: LibraryIndex
@@ -30,6 +33,19 @@ final class PhotoViewerPresentation: ObservableObject {
     /// Where favorite and rotation changes report progress and failures.
     var activity: ActivityCenter = .shared
     private let videoQuality: VideoQualityPreference
+    private let thumbnailSize: ThumbnailSize
+    private let loadsLargePreviews: Bool
+    /// The size of the image on screen.
+    private(set) var displayedTier: ViewerImageTier? { didSet { updateStatus() } }
+    private var transfer: TransferProgress? { didSet { updateStatus() } }
+    private var transferStalled = false { didSet { updateStatus() } }
+    /// Full-resolution bytes arrived from the NAS for the current item.
+    private var networkLoaded = false { didSet { updateStatus() } }
+    private var videoPlayback: VideoPlaybackStatus? { didSet { updateStatus() } }
+    private var transferResource: FullImageResource?
+    private var transferTask: Task<Void, Never>?
+    private var stallTask: Task<Void, Never>?
+    private var lastTransferActivity = ContinuousClock.now
 
     private var stateTask: Task<Void, Never>?
     private var decodeTask: Task<Void, Never>?
@@ -59,9 +75,12 @@ final class PhotoViewerPresentation: ObservableObject {
         self.repository = repository
         self.collection = collection
         self.videoQuality = videoQuality
+        self.thumbnailSize = thumbnailSize
+        self.loadsLargePreviews = loadsLargePreviews && thumbnailSize != .xl
         self.isIncoming = isIncoming
         self.snapshotRevision = snapshotRevision
         image = request.source.image
+        displayedTier = request.source.image == nil ? nil : .thumbnail(thumbnailSize)
         session = PhotoViewerSession(repository: repository, collection: collection,
                                      index: index, seed: request.seed,
                                      thumbnailSize: thumbnailSize,
@@ -84,6 +103,8 @@ final class PhotoViewerPresentation: ObservableObject {
         thumbnailDecodeTask?.cancel()
         for task in neighborDecodeTasks.values { task.cancel() }
         for task in neighborPreviewTasks.values { task.cancel() }
+        transferTask?.cancel()
+        stallTask?.cancel()
         let session = session
         Task { await session.close() }
     }
@@ -93,54 +114,37 @@ final class PhotoViewerPresentation: ObservableObject {
         return initialItem.filename ?? "Untitled"
     }
 
-    var detailLine: String {
-        guard let state else {
-            let date = Self.dateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(initialItem.time)))
-            return "\(date) · Opening…"
-        }
-        let date = state.item.map { Self.dateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval($0.time))) }
-        let status: String
-        if let invalidationMessage { status = invalidationMessage }
-        else if let failure = state.favoriteFailure { status = "Favorite change failed: \(failure)" }
-        else if state.favoriteUpdating { status = "Updating favorite…" }
-        else if let decodeFailure { status = decodeFailure }
-        else if state.item == nil, case .failure(let message) = state.metadataStatus { status = message }
-        else if let video = state.videoResource {
-            switch video.variant {
-            case .converted(let chosen):
-                if let target = videoQuality.targetQuality, chosen != target {
-                    status = "\(chosen.displayName) · \(target.displayName) unavailable"
-                } else {
-                    status = chosen.displayName
-                }
-            case .original:
-                status = videoQuality == .original
-                    ? video.variant.displayName
-                    : "Original · No converted quality available"
-            }
-        } else {
-            switch state.fullImageStatus {
-            case .idle: status = "Waiting for full resolution"
-            case .loading:
-                status = state.isLoadingLargePreview
-                    ? "Loading large preview and full resolution"
-                    : "Loading full resolution"
-            case .ready(let verified, let validationFailure):
-                if isDecodingFullImage { status = "Decoding full resolution…" }
-                else if let validationFailure { status = "Full resolution cached · \(validationFailure)" }
-                else { status = verified ? "Full resolution" : "Full resolution cached" }
-            case .failure(let message): status = message
-            case .unsupported(let message): status = message
-            }
-        }
-        return [date, status].compactMap { $0 }.joined(separator: " · ")
+    /// The capture date shown before the status in the toolbar title.
+    var dateText: String {
+        let time: Int64? = state == nil ? initialItem.time : state?.item?.time
+        return time.map { Self.dateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval($0))) } ?? ""
     }
 
-    var showsLoadingIndicator: Bool {
-        guard let state else { return true }
-        if isDecodingFullImage { return true }
-        if case .loading = state.fullImageStatus { return true }
-        return false
+    /// The date followed by the short status, e.g. "12 Mar 2024 · Medium · Loading".
+    var detailLine: String {
+        [dateText, statusModel.status.short].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    private func updateStatus() {
+        statusModel.update(currentStatus(), generation: state?.selection.generation)
+    }
+
+    private func currentStatus() -> ViewerStatus {
+        if let invalidationMessage { return .message(invalidationMessage) }
+        guard let state else { return .opening }
+        if state.item == nil {
+            if case .failure(let message) = state.metadataStatus { return .message(message) }
+            return .opening
+        }
+        return ViewerStatus.make(ViewerStatus.Inputs(
+            displayed: displayedTier, fullStatus: state.fullImageStatus,
+            isLoadingLargePreview: state.isLoadingLargePreview, largePreviews: loadsLargePreviews,
+            isDecoding: isDecodingFullImage, decodeFailure: decodeFailure,
+            transfer: transfer, networkLoaded: networkLoaded, stalled: transferStalled,
+            allowNetwork: state.allowNetwork,
+            video: state.videoResource.map {
+                ViewerStatus.Video(variant: $0.variant, preference: videoQuality, playback: videoPlayback)
+            }))
     }
 
     var decodedThumbnailIdentities: Set<String> { Set(decodedThumbnails.keys) }
@@ -290,6 +294,7 @@ final class PhotoViewerPresentation: ObservableObject {
         decodeTask?.cancel()
         thumbnailDecodeTask?.cancel()
         cancelNeighborDecodes()
+        stopTransferTracking()
         Task { await session.close() }
     }
 
@@ -301,6 +306,7 @@ final class PhotoViewerPresentation: ObservableObject {
         decodeTask?.cancel()
         thumbnailDecodeTask?.cancel()
         cancelNeighborDecodes()
+        stopTransferTracking()
         Task { await session.close() }
         return true
     }
@@ -312,10 +318,75 @@ final class PhotoViewerPresentation: ObservableObject {
         neighborPreviewTasks.removeAll()
     }
 
+    /// Follows byte progress of the displayed photo's full-resolution transfer while it loads,
+    /// and marks the load stalled when no data arrives for `ViewerStatus.stallInterval`.
+    private func trackTransfer(_ next: PhotoViewerState) {
+        let resource: FullImageResource? = if next.videoResource == nil, next.fullImageStatus == .loading {
+            next.item?.fullImageResource(in: next.contentScope)
+        } else { nil }
+        guard resource != transferResource else { return }
+        stopTransferTracking()
+        guard let resource else { return }
+        transferResource = resource
+        lastTransferActivity = .now
+        let repository = repository
+        transferTask = Task { [weak self] in
+            for await progress in await repository.fullImageProgress(resource) {
+                guard !Task.isCancelled, let self, self.transferResource == resource else { return }
+                self.receiveTransfer(progress)
+            }
+        }
+        stallTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self, self.transferResource == resource else { return }
+                let stalled = self.lastTransferActivity.duration(to: .now) >= ViewerStatus.stallInterval
+                if self.transferStalled != stalled { self.transferStalled = stalled }
+            }
+        }
+    }
+
+    /// Progress callbacks can arrive out of order; only forward movement counts.
+    private func receiveTransfer(_ progress: TransferProgress) {
+        guard progress.completedBytes > (transfer?.completedBytes ?? -1) else { return }
+        lastTransferActivity = .now
+        if transferStalled { transferStalled = false }
+        if progress.completedBytes > 0, !networkLoaded { networkLoaded = true }
+        let percent = { (value: TransferProgress?) in value?.fractionCompleted.map { Int($0 * 100) } }
+        // Without a known size the status shows received bytes; limit updates to about 100 kB steps.
+        if let current = transfer, progress.totalBytes != nil, percent(current) == percent(progress) { return }
+        if let current = transfer, progress.totalBytes == nil,
+           progress.completedBytes - current.completedBytes < 100_000 { return }
+        transfer = progress
+    }
+
+    private func stopTransferTracking() {
+        transferTask?.cancel()
+        stallTask?.cancel()
+        transferTask = nil
+        stallTask = nil
+        transferResource = nil
+        if transfer != nil { transfer = nil }
+        if transferStalled { transferStalled = false }
+    }
+
+    /// Video player state for the displayed item. A final playback failure is noted once per item.
+    func noteVideoPlayback(_ status: VideoPlaybackStatus, generation: UInt64) {
+        guard let state, state.selection.generation == generation, !isClosing else { return }
+        videoPlayback = status
+        guard case .failed(let message) = status, let item = state.item,
+              item.id != lastFullImageFailureItemID else { return }
+        lastFullImageFailureItemID = item.id
+        guard activity.connectionIsHealthy else { return }
+        activity.notice("Couldn't play \(item.filename ?? "video")", detail: message, key: "viewer:\(item.id)")
+    }
+
     /// Notes, once per photo, that the opened photo's full resolution failed to load. Skipped
-    /// while the NAS is known to be unreachable, which the connection notice already covers.
+    /// unless the NAS is connected, and for cache-only attempts (signing in, metadata not yet
+    /// verified, or offline), where a missing original is expected and a network attempt follows.
     private func noteFullImageFailure(_ next: PhotoViewerState) {
         guard case .failure(let message) = next.fullImageStatus, let item = next.item,
+              next.allowNetwork, next.metadataVerified,
               item.id != lastFullImageFailureItemID else { return }
         lastFullImageFailureItemID = item.id
         guard activity.connectionIsHealthy else { return }
@@ -340,20 +411,26 @@ final class PhotoViewerPresentation: ObservableObject {
                 isDisplayingFullResolution = false
                 if next.selection.itemID == originalItemID {
                     image = source.image
+                    displayedTier = image == nil ? nil : .thumbnail(thumbnailSize)
                 } else if let identity = next.thumbnailIdentity {
                     image = decodedNeighborPreviews[identity] ?? decodedThumbnails[identity]
                     adoptedNeighborPreview = decodedNeighborPreviews[identity] != nil
+                    displayedTier = image == nil ? nil : .thumbnail(adoptedNeighborPreview ? .xl : thumbnailSize)
                 } else {
                     image = nil
+                    displayedTier = nil
                 }
                 zoom = 1
             }
             canvasController.resetForSelection(next.selection.generation, image: image,
                                                itemID: next.selection.itemID)
+            videoPlayback = nil
+            networkLoaded = false
         }
         state = next
         onInfoItemChanged?(next.item)
         noteFullImageFailure(next)
+        trackTransfer(next)
         if let data = next.fullImageData, lastFullData != data {
             lastFullData = data
             decodeFull(data, selection: next.selection)
@@ -419,16 +496,19 @@ final class PhotoViewerPresentation: ObservableObject {
               image == nil else { return }
         isDisplayingFullResolution = false
         image = decoded
+        displayedTier = .thumbnail(thumbnailSize)
     }
 
     private func decodeThumbnail(_ data: Data, selection: PhotoViewerSelection) {
         thumbnailDecodeTask?.cancel()
+        let tier = ViewerImageTier.thumbnail(state?.thumbnailIsLargePreview == true ? .xl : thumbnailSize)
         thumbnailDecodeTask = Task { [weak self] in
             guard let decoded = await DecodedImages.shared.image(from: data, maxPixel: 1600),
                   !Task.isCancelled, self?.state?.selection == selection,
                   self?.hasDisplayedFullImage == false else { return }
             self?.isDisplayingFullResolution = false
             self?.image = decoded
+            self?.displayedTier = tier
             if let identity = self?.state?.thumbnailIdentity {
                 self?.decodedThumbnails[identity] = decoded
             }
@@ -452,6 +532,7 @@ final class PhotoViewerPresentation: ObservableObject {
                     "Full-size decode succeeded item_id=\(selection.itemID ?? -1, privacy: .public) width=\(bitmap.image.width, privacy: .public) height=\(bitmap.image.height, privacy: .public) generation=\(selection.generation, privacy: .public)"
                 )
                 self?.isDisplayingFullResolution = true
+                self?.displayedTier = .full
                 self?.image = NSImage(cgImage: displayBitmap.image,
                                       size: NSSize(width: displayBitmap.image.width,
                                                    height: displayBitmap.image.height))

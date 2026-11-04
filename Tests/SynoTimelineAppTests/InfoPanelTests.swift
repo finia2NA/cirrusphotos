@@ -424,8 +424,6 @@ actor InfoPanelMockTransport: TestPhotosTransport {
         try CollectionDayCatalog(days: pages.map { try CollectionDayCount(day: CaptureDay(time: $0.key), count: $0.value.count) }, completeness: initial ? .partial : .complete)
     }
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
-        let section = fixtureSection(request)
-        let collection = request.collection
 
         itemCalls += 1
         do {

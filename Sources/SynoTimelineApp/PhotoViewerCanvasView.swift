@@ -280,6 +280,7 @@ final class PhotoViewerCanvasView: NSView {
         view.onPrevious = onPrevious
         view.onNext = onNext
         view.onClose = onClose
+        view.onPlaybackStatus = configuration.onPlaybackStatus
         view.toolbarInset = 0
         view.configure(repository: configuration.repository, resource: configuration.resource,
                        generation: configuration.generation, allowNetwork: configuration.allowNetwork,
