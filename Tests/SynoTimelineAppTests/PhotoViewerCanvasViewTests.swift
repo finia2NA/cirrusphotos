@@ -42,6 +42,29 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         return image
     }
 
+    func testImageArrivingDuringOpeningWaitsForTransitionToFinish() async throws {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        defer { window.orderOut(nil) }
+        let canvas = PhotoViewerCanvasView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        window.contentView = canvas
+        canvas.layoutSubtreeIfNeeded()
+        let thumbnail = try bitmapImage(width: 400, height: 300)
+        canvas.setImage(thumbnail, selectionGeneration: 1,
+                        openingSourceRectInWindow: CGRect(x: 20, y: 20, width: 100, height: 75))
+        let openingFrame = canvas.presentedImageFrame
+
+        let full = try bitmapImage(width: 600, height: 400)
+        canvas.setImage(full, selectionGeneration: 1, openingSourceRectInWindow: nil)
+        XCTAssertTrue(canvas.presentedImage === thumbnail,
+                      "The upgrade must not retarget the opening transition")
+        XCTAssertEqual(canvas.presentedImageFrame, openingFrame)
+
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertTrue(canvas.presentedImage === full)
+        XCTAssertNotEqual(canvas.presentedImageFrame, openingFrame)
+    }
+
     func testFilmstripDividerTracksDragAndClampsHeight() throws {
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 800, height: 600),
                               styleMask: [.borderless], backing: .buffered, defer: false)
