@@ -66,11 +66,12 @@ extension CachedPhotosRepository {
     }
 
     /// Compare against a verified destination before adding, including videos.
+    /// Items of either space are accepted; the NAS resolves them by ID alone.
     public func addMissingItems(_ selection: ResolvedPhotoSelection, toAlbum id: Int64) async throws {
         let source = mediaCollection(for: selection.authority.originatingCollection)
         let sourceSpace = source.albumID != nil ? try await albumItemSpace(itemIDs: selection.items.map(\.id), collection: source) : source.contentScope.space
-        guard sourceSpace == .personal, source.incomingAlbumIdentity == nil else {
-            throw RepositoryError.unavailable("Only verified Personal Space items can be added to albums.")
+        guard source.incomingAlbumIdentity == nil else {
+            throw RepositoryError.unavailable("Items of incoming albums cannot be added to albums.")
         }
         let collection = PhotoCollectionDescriptor.album(id)
         let timeline = try await verifiedTimelineSnapshot(collection: collection)
@@ -94,7 +95,7 @@ extension CachedPhotosRepository {
             // A numeric member ID in a mixed album cannot skip an add from a
             // different space. Resolve the overlapping destination identities.
             let destinationSpace = try await albumItemSpace(itemIDs: Array(overlapping).sorted(), collection: collection)
-            if destinationSpace != .personal { existing.subtract(overlapping) }
+            if destinationSpace != sourceSpace { existing.subtract(overlapping) }
         }
         let missing = selection.items.map(\.id).filter { !existing.contains($0) }
         guard !missing.isEmpty else {
@@ -133,8 +134,10 @@ extension CachedPhotosRepository {
         try await store.invalidateMetadataAlbumSummaries(personalMetadataNamespace, admission: admission)
         if let selection {
             let source = mediaCollection(for: selection.authority.originatingCollection)
-            let space = source.albumID != nil ? try await albumItemSpace(itemIDs: selection.items.map(\.id), collection: source) : source.contentScope.space
-            guard space == .personal, source.incomingAlbumIdentity == nil,
+            // A selection from either space may join an owned album. An album source
+            // can mix spaces, so its members must resolve to exactly one.
+            if source.albumID != nil { _ = try await albumItemSpace(itemIDs: selection.items.map(\.id), collection: source) }
+            guard source.incomingAlbumIdentity == nil,
                   !selection.items.isEmpty,
                   await verifySelectionFence(selection.authority, proofs: selection.proofs) else {
                 throw RepositoryError.stale("The selected items could not be verified. Try again.")

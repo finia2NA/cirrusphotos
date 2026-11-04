@@ -608,6 +608,30 @@ final class AlbumBrowserTests: XCTestCase {
         }
     }
 
+    func testSharedSpaceSelectionCanBeAddedToAnOwnedAlbum() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let day = Int64(1711929600)
+        let photos = try (1...2).map { try item($0) }
+        let target = AlbumSummary(id: 55, name: "Target", itemCount: 0)
+        let original = TimelineSnapshot(sections: [section(1, limit: 2, count: 2)])
+        await transport.configure(albumList: [target], albumEntriesByID: [55: []],
+            timelineSnapshot: original, pageItems: photos)
+        await transport.configureMutation(entries: [.init(id: 2, time: day)], list: [target])
+        let repository = try makeRepository(root: root, transport: transport)
+        let collection = PhotoCollectionDescriptor.library(.shared)
+        let timeline = try await repository.verifiedTimelineSnapshot(collection: collection)
+        for await _ in await repository.page(timeline.sections[0], collection: collection) { }
+        let authority = await repository.selectionAuthority(collection: collection, snapshot: timeline)
+        let snapshot = PhotoSelectionSnapshot(collection: collection, timeline: timeline,
+            timelineFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
+            selectedOrdinals: IndexSet(integer: 1), knownItemIDsByOrdinal: [1: 2], authority: authority)
+        let receipt = await SelectionItemResolver(repository: repository).resolveWithReceipt(snapshot)
+        try await repository.addMissingItems(try XCTUnwrap(receipt), toAlbum: 55)
+        let written = await transport.writtenIDs
+        XCTAssertEqual(written, [2])
+    }
+
     func testUnloadedSelectedAlbumPageReachesMutation() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
         let transport = AlbumFakeTransport()

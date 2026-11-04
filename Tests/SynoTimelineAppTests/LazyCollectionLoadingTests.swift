@@ -20,6 +20,11 @@ final class LazyCollectionLoadingTests: XCTestCase {
         XCTAssertFalse(model.capabilities(for: .library(.shared)).allowsPersonalActions)
         XCTAssertFalse(model.capabilities(for: .incomingAlbum(ownerID: 2, albumID: 7)).allowsPersonalActions)
         XCTAssertFalse(model.capabilities(for: .libraryFilter(UUID(), scope: .space(.personal))).allowsPersonalActions)
+        XCTAssertTrue(model.capabilities(for: .library(.shared)).allowsAlbumMembership)
+        XCTAssertTrue(model.capabilities(for: .favorites(.shared)).allowsAlbumMembership)
+        XCTAssertTrue(model.capabilities(for: .album(7)).allowsAlbumMembership)
+        XCTAssertFalse(model.capabilities(for: .incomingAlbum(ownerID: 2, albumID: 7)).allowsAlbumMembership)
+        XCTAssertFalse(model.capabilities(for: .libraryFilter(UUID(), scope: .space(.shared))).allowsAlbumMembership)
     }
 
     func testPersonSubjectAndTagTimelinesStartOnDemand() async throws {

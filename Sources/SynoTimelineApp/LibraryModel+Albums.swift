@@ -5,7 +5,7 @@ import SynologyAPI
 /// Album creation, membership, rename and deletion started from the browser, menus and drags.
 extension LibraryModel {
     var canManageAlbumSelection: Bool {
-        browserCommandsActive && capabilities(for: browserCommandSnapshot.collection).allowsPersonalActions && !browserCommandSnapshot.selectedOrdinals.isEmpty &&
+        browserCommandsActive && capabilities(for: browserCommandSnapshot.collection).allowsAlbumMembership && !browserCommandSnapshot.selectedOrdinals.isEmpty &&
         browserCommandSnapshot.timeline != nil && browserCommandSnapshot.authority != nil &&
         albumOperation == nil && !canCloseViewer
     }
@@ -60,7 +60,7 @@ extension LibraryModel {
     }
 
     func beginAlbumOperation(_ kind: AlbumOperation.Kind, captured: BrowserCommandSnapshot) {
-        guard capabilities(for: captured.collection).allowsPersonalActions, albumOperation == nil, let timeline = captured.timeline,
+        guard capabilities(for: captured.collection).allowsAlbumMembership, albumOperation == nil, let timeline = captured.timeline,
               let fingerprint = captured.indexFingerprint, let authority = captured.authority,
               repository != nil else { return }
         if kind == .remove && !isNormalAlbum(captured.sourceAlbumID) { return }
@@ -71,7 +71,7 @@ extension LibraryModel {
     }
 
     func beginAlbumOperation(_ kind: AlbumOperation.Kind, selection: PhotoSelectionSnapshot, sourceAlbumID: Int64?) {
-        guard capabilities(for: selection.collection).allowsPersonalActions, albumOperation == nil, let repository, selection.authority != nil,
+        guard capabilities(for: selection.collection).allowsAlbumMembership, albumOperation == nil, let repository, selection.authority != nil,
               !selection.selectedOrdinals.isEmpty else { return }
         if kind == .remove && !isNormalAlbum(sourceAlbumID) { return }
         let operation = AlbumOperation(kind: kind, sourceAlbumID: sourceAlbumID)
@@ -103,7 +103,7 @@ extension LibraryModel {
     /// Adds a captured selection independently of browser focus.
     @discardableResult
     func addCapturedSelection(_ selection: PhotoSelectionSnapshot, sourceAlbumID: Int64?, to albumID: Int64) -> Bool {
-        guard capabilities(for: selection.collection).allowsPersonalActions, albumOperation == nil, let repository, selection.authority != nil,
+        guard capabilities(for: selection.collection).allowsAlbumMembership, albumOperation == nil, let repository, selection.authority != nil,
               (sessionSources[selection.collection] ?? selection.collection).incomingAlbumIdentity == nil,
               !selection.selectedOrdinals.isEmpty else { return false }
         let operation = AlbumOperation(kind: .add, sourceAlbumID: sourceAlbumID)

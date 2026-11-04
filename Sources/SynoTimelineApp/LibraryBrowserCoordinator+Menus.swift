@@ -21,7 +21,7 @@ extension LibraryBrowserScrollView.Coordinator {
         if !selection.contains(ordinal) { selection.replace(with: ordinal); publishSelection() }
         let selected = selection.indexes
         let count = selected.count
-        guard count > 0, allowsPersonalActions || clicked.photo.hasDisplayableStillImage || count > 1 else { return false }
+        guard count > 0, allowsAlbumMembership || clicked.photo.hasDisplayableStillImage || count > 1 else { return false }
         var known: [Int: Int64] = [:]
         var previews: [NSImage] = []
         if let image = findViewerSourceAnchor(for: clicked.photo.id, in: document)?.image { previews.append(image) }
@@ -51,7 +51,7 @@ extension LibraryBrowserScrollView.Coordinator {
         return PhotoFileDragSource.begin(payload: payload, previews: previews,
                                          cropsToSquare: geometry?.cropsThumbnailsToSquare ?? false,
                                          from: document, event: event,
-                                         localSelection: allowsPersonalActions ? .init(selection: captured, sourceAlbumID: sourceAlbumID, namespace: repository.namespace) : nil,
+                                         localSelection: allowsAlbumMembership ? .init(selection: captured, sourceAlbumID: sourceAlbumID, namespace: repository.namespace) : nil,
                                          promisesFile: clicked.photo.hasDisplayableStillImage || count > 1)
     }
 
@@ -79,7 +79,7 @@ extension LibraryBrowserScrollView.Coordinator {
                 self?.onEdit?(editSnapshot, application)
             }
         }
-        if allowsPersonalActions { onAlbumMenu?(menu, snapshot) }
+        if allowsAlbumMembership { onAlbumMenu?(menu, snapshot) }
         if allowsFileDrag, let onDelete {
             if !menu.items.isEmpty { menu.addItem(.separator()) }
             menu.addItem(PhotoDownloadMenuItem(title: "Delete…") { onDelete(snapshot) })

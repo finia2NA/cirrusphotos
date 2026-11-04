@@ -97,7 +97,7 @@ struct PhotoViewerView: View {
                                         library.editViewerItem(item, repository: repository, collection: viewer.collection, application: application)
                                     }
                                 }
-                                if library.capabilities(for: viewer.collection).allowsPersonalActions, let timeline = library.snapshot(for: viewer.collection),
+                                if library.capabilities(for: viewer.collection).allowsAlbumMembership, let timeline = library.snapshot(for: viewer.collection),
                                    LibraryIndex(snapshot: timeline).fingerprint == viewer.index.fingerprint,
                                    let authority = library.selectionAuthority(for: viewer.collection) {
                                     let ordinal = state.desiredLocation.ordinal

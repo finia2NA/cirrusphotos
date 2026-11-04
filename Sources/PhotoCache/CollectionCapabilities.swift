@@ -27,8 +27,19 @@ public struct CollectionCapabilities: Equatable, Sendable {
     /// Favorites, rotation, deletion and file drags, which act in the item's own space.
     public var allowsSpaceItemActions: Bool { !isIncoming && !source.isLibraryFilter }
 
-    /// Album membership and editor handoff. Owned albums qualify because their
-    /// members' origin is verified when the action runs.
+    /// Adding to and creating owned albums from the collection's items, in either
+    /// space. Owned albums qualify because their members' origin is verified when
+    /// the action runs. Contributing to incoming albums stays Personal-only.
+    public var allowsAlbumMembership: Bool {
+        guard !source.isSessionDerived else { return false }
+        switch source.contentScope {
+        case .space, .album: return true
+        case .incomingAlbum: return false
+        }
+    }
+
+    /// Editor handoff and contribution to incoming albums. Owned albums qualify
+    /// because their members' origin is verified when the action runs.
     public var allowsPersonalActions: Bool {
         guard !source.isSessionDerived else { return false }
         switch source.contentScope {

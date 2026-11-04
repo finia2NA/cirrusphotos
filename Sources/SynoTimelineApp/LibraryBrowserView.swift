@@ -291,6 +291,7 @@ struct LibraryBrowserView: View {
                                              authority: library.selectionAuthority(for: collection),
                                              sourceAlbumID: library.capabilities(for: collection).sourceAlbumID,
                                              allowsPersonalActions: library.capabilities(for: collection).allowsPersonalActions,
+                                             allowsAlbumMembership: library.capabilities(for: collection).allowsAlbumMembership,
                                              allowsDownloads: library.capabilities(for: collection).allowsDownloads,
                                              allowsFileDrag: library.capabilities(for: collection).allowsSpaceItemActions,
                                              filterMembership: library.filterMembership(for: collection),
@@ -408,6 +409,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let authority: PhotoSelectionAuthority?
     let sourceAlbumID: Int64?
     let allowsPersonalActions: Bool
+    let allowsAlbumMembership: Bool
     let allowsDownloads: Bool
     let allowsFileDrag: Bool
     let filterMembership: [[Int64]]?

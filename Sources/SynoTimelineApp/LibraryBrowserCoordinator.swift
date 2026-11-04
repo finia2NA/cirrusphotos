@@ -18,6 +18,7 @@ extension LibraryBrowserScrollView {
         var selectionAuthority: PhotoSelectionAuthority?
         var sourceAlbumID: Int64?
         var allowsPersonalActions = true
+        var allowsAlbumMembership = true
         var allowsDownloads = true
         var allowsFileDrag = true
         var geometry: LibraryViewportGeometry?
@@ -106,6 +107,7 @@ extension LibraryBrowserScrollView {
             selectionAuthority = input.authority
             sourceAlbumID = input.sourceAlbumID
             allowsPersonalActions = input.allowsPersonalActions
+            allowsAlbumMembership = input.allowsAlbumMembership
             allowsDownloads = input.allowsDownloads
             allowsFileDrag = input.allowsFileDrag
             onVisibleDay = input.onVisibleDay
