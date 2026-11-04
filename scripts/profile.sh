@@ -81,7 +81,9 @@ status=$?
 trap - INT
 printf '\r\033[K'
 
-if [[ $status -eq 0 && -d $trace ]]; then
+# xctrace exits non-zero (for example 54) when it kills the launched app at the time
+# limit, even though the trace is complete; a saved trace is the success criterion.
+if [[ -d $trace ]] && grep -q 'Output file saved as' "$log"; then
     echo "Trace saved: $PWD/$trace ($(du -sh "$trace" | awk '{ print $1 }'))"
     rm -f "$log"
     open "$trace"
