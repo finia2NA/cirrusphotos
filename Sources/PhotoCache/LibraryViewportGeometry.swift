@@ -53,6 +53,9 @@ public struct LibraryViewportGeometry {
     /// When true, each loaded item's materialized interaction/image frame is the full
     /// square slot rather than an aspect-fitted rectangle inside it.
     public private(set) var cropsThumbnailsToSquare: Bool
+    /// Changes whenever materialized rows or item frames are rebuilt, so callers can
+    /// cache values derived from rows without comparing their contents.
+    public private(set) var rowsRevision = UUID()
 
     private let index: LibraryIndex
     private var pages: [Int: LibraryPage] = [:]
@@ -308,6 +311,7 @@ public struct LibraryViewportGeometry {
     }
 
     private mutating func materializeRows() {
+        rowsRevision = UUID()
         materializedRows.removeAll(keepingCapacity: true)
         itemFrames.removeAll(keepingCapacity: true); itemSlotFrames.removeAll(keepingCapacity: true)
         var loaded: [Int: RowItem] = [:], starts = Set<Int>()

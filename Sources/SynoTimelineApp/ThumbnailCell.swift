@@ -66,6 +66,14 @@ struct ThumbnailCell: View {
         .task(id: taskIdentity) { await load() }
     }
 
+    private static let maxPixel = 520
+
+    /// Memory key for one decoded rendition. The repository identity keeps a later
+    /// account's run from inheriting an earlier run's validation state.
+    private func decodedKey(_ rendition: ThumbnailSize, repository: CachedPhotosRepository) -> String {
+        "\(ObjectIdentifier(repository).hashValue):\(familyIdentity):\(rendition.rawValue):\(Self.maxPixel)"
+    }
+
     private func load() async {
         if displayedRendition?.hasPrefix(familyIdentity) != true {
             image = nil
@@ -76,14 +84,22 @@ struct ThumbnailCell: View {
         }
         let priorFailure = failures.contains(renditionIdentity)
         failed = priorFailure
+        let network = allowNetwork && !priorFailure
+        // A decoded exact rendition already validated this run needs no disk or network work.
+        if let hit = DecodedImages.shared.rendition(decodedKey(size, repository: repository)) {
+            image = hit.image
+            if hit.verified || !network { return }
+        }
         for await event in await repository.thumbnailWithFallback(descriptor, size: size,
-                                                                  allowNetwork: allowNetwork && !priorFailure, collection: collection) {
+                                                                  allowNetwork: network, collection: collection) {
             guard !Task.isCancelled else { return }
             switch event {
-            case .value(let value, _):
-                if let decoded = await DecodedImages.shared.image(from: value.data, maxPixel: 520) {
+            case .value(let value, let verified):
+                if let decoded = await DecodedImages.shared.renditionImage(
+                    key: decodedKey(value.size, repository: repository), data: value.data,
+                    verified: verified, maxPixel: Self.maxPixel) {
                     guard !Task.isCancelled, displayedRendition == renditionIdentity else { return }
-                    image = decoded
+                    if image !== decoded { image = decoded }
                 } else if !Task.isCancelled { failed = true }
             case .failure:
                 failed = true
@@ -296,45 +312,116 @@ private final class CGImageBox: @unchecked Sendable {
     init(_ image: CGImage) { self.image = image }
 }
 
+/// Decoded images shared by browser cells, the viewer, Map and album cards.
 @MainActor
 final class DecodedImages {
     static let shared = DecodedImages()
-    private let cache = NSCache<NSString, NSImage>()
-    private let gate = DecodeGate()
-    private init() { cache.totalCostLimit = 100 * 1_000_000 }
 
-    func clear() { cache.removeAllObjects() }
+    final class Rendition {
+        let image: NSImage
+        let digest: String
+        var verified: Bool
+        init(image: NSImage, digest: String, verified: Bool) {
+            self.image = image; self.digest = digest; self.verified = verified
+        }
+    }
+
+    private let cache = NSCache<NSString, NSImage>()
+    private let renditions = NSCache<NSString, Rendition>()
+    private let gate = DecodeGate()
+    private init() {
+        cache.totalCostLimit = 128 * 1_000_000
+        renditions.totalCostLimit = 384 * 1_000_000
+    }
+
+    func clear() {
+        cache.removeAllObjects()
+        renditions.removeAllObjects()
+    }
+
+    /// A decoded rendition by its caller-defined identity, without touching its bytes.
+    func rendition(_ key: String) -> Rendition? { renditions.object(forKey: key as NSString) }
+
+    /// Decodes bytes for an identified rendition. Identical bytes reuse the existing
+    /// decoded image and only update its validation state.
+    func renditionImage(key: String, data: Data, verified: Bool, maxPixel: Int) async -> NSImage? {
+        let digest = await Self.digest(data)
+        let cacheKey = key as NSString
+        if let existing = renditions.object(forKey: cacheKey), existing.digest == digest {
+            existing.verified = existing.verified || verified
+            return existing.image
+        }
+        guard let box = await decode(data, maxPixel: maxPixel) else { return nil }
+        let image = NSImage(cgImage: box.image, size: NSSize(width: box.image.width, height: box.image.height))
+        renditions.setObject(Rendition(image: image, digest: digest, verified: verified), forKey: cacheKey,
+                             cost: box.image.bytesPerRow * box.image.height)
+        return image
+    }
 
     func image(from data: Data, maxPixel: Int) async -> NSImage? {
-        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let key = "\(digest):\(maxPixel)" as NSString
+        let key = "\(await Self.digest(data)):\(maxPixel)" as NSString
         if let image = cache.object(forKey: key) { return image }
-        do { try await gate.acquire() } catch { return nil }
-        defer { Task { await gate.release() } }
-        guard !Task.isCancelled else { return nil }
-        let box = await Task.detached(priority: .utility) { () -> CGImageBox? in
-            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                  let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceThumbnailMaxPixelSize: maxPixel
-                  ] as CFDictionary) else { return nil }
-            return CGImageBox(cg)
-        }.value
-        guard let box, !Task.isCancelled else { return nil }
+        guard let box = await decode(data, maxPixel: maxPixel) else { return nil }
         let image = NSImage(cgImage: box.image, size: NSSize(width: box.image.width, height: box.image.height))
         cache.setObject(image, forKey: key, cost: box.image.bytesPerRow * box.image.height)
         return image
     }
+
+    private static func digest(_ data: Data) async -> String {
+        await Task.detached(priority: .userInitiated) {
+            let hex = Array("0123456789abcdef".utf8)
+            var bytes: [UInt8] = []
+            bytes.reserveCapacity(64)
+            for byte in SHA256.hash(data: data) {
+                bytes.append(hex[Int(byte >> 4)]); bytes.append(hex[Int(byte & 0x0f)])
+            }
+            return String(decoding: bytes, as: UTF8.self)
+        }.value
+    }
+
+    private func decode(_ data: Data, maxPixel: Int) async -> CGImageBox? {
+        do { try await gate.acquire() } catch { return nil }
+        defer { Task { await gate.release() } }
+        guard !Task.isCancelled else { return nil }
+        let box = await Task.detached(priority: .userInitiated) { Self.decodeImage(data, maxPixel: maxPixel) }.value
+        guard !Task.isCancelled else { return nil }
+        return box
+    }
+
+    /// Images that already fit and need no orientation transform are decoded directly,
+    /// which is about twice as fast as ImageIO's thumbnail path for cached thumbnails.
+    nonisolated private static func decodeImage(_ data: Data, maxPixel: Int) -> CGImageBox? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        if let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+           let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+           let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+           max(width, height) <= maxPixel,
+           ((properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1) == 1,
+           let image = CGImageSourceCreateImageAtIndex(source, 0, [
+               kCGImageSourceShouldCacheImmediately: true
+           ] as CFDictionary) {
+            return CGImageBox(image)
+        }
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel
+        ] as CFDictionary) else { return nil }
+        return CGImageBox(image)
+    }
 }
 
+/// Bounds concurrent decodes. The newest request runs first, so cells that just
+/// scrolled into view are not stuck behind work for cells that already left it.
 private actor DecodeGate {
+    private let limit = 4
     private var active = 0
     private var waiting: [(UUID, CheckedContinuation<Void, Error>)] = []
 
     func acquire() async throws {
         try Task.checkCancellation()
-        if active < 2 { active += 1; return }
+        if active < limit { active += 1; return }
         let id = UUID()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -348,7 +435,7 @@ private actor DecodeGate {
 
     func release() {
         if !waiting.isEmpty {
-            let (_, continuation) = waiting.removeFirst()
+            let (_, continuation) = waiting.removeLast()
             continuation.resume()
         } else { active = max(0, active - 1) }
     }

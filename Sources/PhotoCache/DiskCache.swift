@@ -43,6 +43,10 @@ public actor DiskCache {
     /// Metadata rows are decoded only after `initializeMetadataStore` discarded any superseded format.
     var metadataInitialized = false
     private var configuredThumbnailSize: ThumbnailSize = .m
+    /// Read-recency updates are batched so a cache hit does not cost a write transaction.
+    /// They are flushed before eviction, so eviction order still follows read recency.
+    private var pendingTouches: [String: Double] = [:]
+    private var touchFlushScheduled = false
 
     public init(root: URL, budget: Int64) throws {
         self.root = root
@@ -156,6 +160,7 @@ public actor DiskCache {
                     etag: String? = nil, lastModified: String? = nil, expectedGeneration: Int? = nil,
                     thumbnail identity: ThumbnailCacheIdentity? = nil) throws {
         if let expectedGeneration, expectedGeneration != generation { return }
+        pendingTouches.removeValue(forKey: key)
         try database.write { db in
             let existing = try CacheEntryRecord.fetchOne(db, key: key)
             let storedKind: CacheKind = kind == .previewThumbnail && existing?.kind == CacheKind.thumbnail.rawValue ? .thumbnail : kind
@@ -179,6 +184,7 @@ public actor DiskCache {
 
     public func markValidated(_ key: String, run: String, expectedGeneration: Int? = nil) throws {
         if let expectedGeneration, expectedGeneration != generation { return }
+        pendingTouches.removeValue(forKey: key)
         try database.write { db in
             try CacheEntryRecord.filter(key: key).updateAll(db) { [
                 $0.validatedRun.set(to: run), $0.accessed.set(to: Date().timeIntervalSince1970)
@@ -189,6 +195,7 @@ public actor DiskCache {
     /// Promotes a viewer preview to an ordinary thumbnail without touching its image file.
     public func promotePreviewThumbnail(_ key: String, expectedGeneration: Int? = nil) throws {
         if let expectedGeneration, expectedGeneration != generation { return }
+        pendingTouches.removeValue(forKey: key)
         try database.write { db in
             try CacheEntryRecord.filter { $0.key == key && $0.kind == CacheKind.previewThumbnail.rawValue }.updateAll(db) { [
                 $0.kind.set(to: CacheKind.thumbnail.rawValue), $0.accessed.set(to: Date().timeIntervalSince1970)
@@ -242,6 +249,7 @@ public actor DiskCache {
     }
 
     func trim() throws {
+        try flushTouches()
         let reserve = budget >= 200_000_000 ? min(64_000_000, budget / 10) : 0
         while try usage() > budget - reserve {
             let candidate = try database.read {
@@ -255,6 +263,7 @@ public actor DiskCache {
 
     func remove(_ key: String, expectedGeneration: Int? = nil) throws {
         if let expectedGeneration, expectedGeneration != generation { return }
+        pendingTouches.removeValue(forKey: key)
         let removed = try database.write { db -> CacheEntryRecord? in
             guard let record = try CacheEntryRecord.fetchOne(db, key: key) else { return nil }
             try record.delete(db)
@@ -265,8 +274,31 @@ public actor DiskCache {
     }
 
     private func touch(_ key: String) throws {
+        pendingTouches[key] = Date().timeIntervalSince1970
+        if pendingTouches.count >= 256 {
+            try flushTouches()
+        } else if !touchFlushScheduled {
+            touchFlushScheduled = true
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                await self?.scheduledTouchFlush()
+            }
+        }
+    }
+
+    private func scheduledTouchFlush() {
+        touchFlushScheduled = false
+        try? flushTouches()
+    }
+
+    func flushTouches() throws {
+        guard !pendingTouches.isEmpty else { return }
+        let touches = pendingTouches
+        pendingTouches.removeAll(keepingCapacity: true)
         try database.write { db in
-            try CacheEntryRecord.filter(key: key).updateAll(db) { $0.accessed.set(to: Date().timeIntervalSince1970) }
+            for (key, accessed) in touches {
+                try CacheEntryRecord.filter(key: key).updateAll(db) { $0.accessed.set(to: accessed) }
+            }
         }
     }
 
@@ -328,6 +360,13 @@ private extension ThumbnailSize {
 public enum CacheError: LocalizedError { case storage
     public var errorDescription: String? { "The local photo cache could not be used." }
 }
+private let hexDigits = Array("0123456789abcdef".utf8)
 private func digest(_ data: Data) -> String {
-    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    var bytes: [UInt8] = []
+    bytes.reserveCapacity(64)
+    for byte in SHA256.hash(data: data) {
+        bytes.append(hexDigits[Int(byte >> 4)])
+        bytes.append(hexDigits[Int(byte & 0x0f)])
+    }
+    return String(decoding: bytes, as: UTF8.self)
 }

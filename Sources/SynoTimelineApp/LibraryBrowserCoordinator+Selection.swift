@@ -88,9 +88,18 @@ extension LibraryBrowserScrollView.Coordinator {
         DispatchQueue.main.async { callback?(value) }
     }
 
+    /// Selection frames are document coordinates, so scrolling alone never changes them.
     func updateSelectionDrawing() {
-        guard let geometry else { document?.selectionFrames = []; return }
-        document?.selectionFrames = geometry.frames(for: selection.indexes)
+        guard let geometry else {
+            selectionFramesKey = nil
+            if document?.selectionFrames.isEmpty == false { document?.selectionFrames = [] }
+            return
+        }
+        let indexes = selection.indexes
+        if let key = selectionFramesKey, key.rows == geometry.rowsRevision, key.indexes == indexes { return }
+        selectionFramesKey = (geometry.rowsRevision, indexes)
+        let frames = indexes.isEmpty ? [] : geometry.frames(for: indexes)
+        if document?.selectionFrames != frames { document?.selectionFrames = frames }
     }
 
     func loadedItem(_ ordinal: Int) -> LibraryViewportGeometry.RowItem? {
