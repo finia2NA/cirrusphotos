@@ -337,8 +337,8 @@ final class PhotoDownloadDestinationTests: XCTestCase {
     }
 
     @MainActor
-    func testForcedArchivePromiseWrapsSingletonOriginal() async throws {
-        let root = temporaryTestRoot("ArchivePromise")
+    func testFolderPromiseHoldsSingletonOriginal() async throws {
+        let root = temporaryTestRoot("FolderPromise")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = EditingMockTransport()
@@ -346,16 +346,19 @@ final class PhotoDownloadDestinationTests: XCTestCase {
                                                      budget: 100_000_000, cacheRoot: root.appendingPathComponent("cache"), transport: transport)
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.dng\",\"time\":1,\"type\":\"photo\"}".utf8))
         let payload = PhotoDragPayload(repository: repository, source: .item(photo, collection: .library(.personal)), count: 1,
-                                       filename: "Album.zip", forcesArchive: true)
+                                       filename: "Album", delivery: .folder)
+        XCTAssertEqual(payload.fileType, .folder)
         let manager = PhotoDownloadManager()
-        let destination = root.appendingPathComponent("Album.zip")
-        let finished = expectation(description: "album archive")
+        let destination = root.appendingPathComponent("Album")
+        let finished = expectation(description: "album folder")
         manager.fulfillPromise(payload, destination: destination) { error in
             XCTAssertNil(error)
             finished.fulfill()
         }
         await fulfillment(of: [finished], timeout: 10)
-        XCTAssertTrue(try Data(contentsOf: destination).starts(with: [0x50, 0x4b]))
+        let contents = try FileManager.default.contentsOfDirectory(atPath: destination.path)
+        XCTAssertEqual(contents.count, 1)
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent(contents[0])), Data("raw-image".utf8))
         let ids = await transport.downloadedIDs
         XCTAssertEqual(ids, [1])
     }
@@ -375,7 +378,7 @@ final class PhotoDownloadDestinationTests: XCTestCase {
                 let signal = DispatchSemaphore(value: 0)
                 DispatchQueue.global().async {
                     defer { signal.signal() }
-                    do { try PhotoDownloadManager.writePromise(source, destination: url, makeArchive: false) }
+                    do { try PhotoDownloadManager.writePromise(source, destination: url) }
                     catch { XCTFail("Promised write failed: \(error)") }
                 }
                 XCTAssertEqual(signal.wait(timeout: .now() + 3), .success, "Nested coordination blocked the promised write")
@@ -387,20 +390,90 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: destination), Data("image".utf8))
     }
 
-    func testPromisedWriteDoesNotOverwriteAndCanCreateZIP() throws {
+    func testPromisedWriteDoesNotOverwrite() throws {
         let root = temporaryTestRoot("PromiseDestination")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let source = root.appendingPathComponent("photo.jpg")
-        let destination = root.appendingPathComponent("Photos.zip")
+        let destination = root.appendingPathComponent("photo copy.jpg")
         try Data("image".utf8).write(to: source)
         try Data("existing".utf8).write(to: destination)
-        XCTAssertThrowsError(try PhotoDownloadManager.writePromise(source, destination: destination, makeArchive: true))
+        XCTAssertThrowsError(try PhotoDownloadManager.writePromise(source, destination: destination))
         XCTAssertEqual(try Data(contentsOf: destination), Data("existing".utf8))
-        try FileManager.default.removeItem(at: destination)
-        try PhotoDownloadManager.writePromise(source, destination: destination, makeArchive: true)
-        let bytes = try Data(contentsOf: destination)
-        XCTAssertTrue(bytes.starts(with: [0x50, 0x4b]))
+    }
+
+    func testFolderPromiseUnzipsFilesAtomicallyAndDropsArchiveMetadata() throws {
+        let root = temporaryTestRoot("FolderUnzip")
+        let content = root.appendingPathComponent("content", isDirectory: true)
+        try FileManager.default.createDirectory(at: content, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("one".utf8).write(to: content.appendingPathComponent("one.jpg"))
+        try Data("two".utf8).write(to: content.appendingPathComponent("two.heic"))
+        let archive = root.appendingPathComponent("download.zip")
+        try Self.zip(content, to: archive, keepParent: false)
+        XCTAssertTrue(try PhotoDownloadManager.isZIPArchive(archive))
+        XCTAssertFalse(try PhotoDownloadManager.isZIPArchive(content.appendingPathComponent("one.jpg")))
+
+        let destination = root.appendingPathComponent("Photos")
+        try PhotoDownloadManager.writeFolderPromise(archive, filename: "download.zip", destination: destination)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path).sorted(), ["one.jpg", "two.heic"])
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("two.heic")), Data("two".utf8))
+        XCTAssertThrowsError(try PhotoDownloadManager.writeFolderPromise(archive, filename: "download.zip", destination: destination))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path).filter { $0.hasPrefix("Photos") }, ["Photos"])
+
+        // A lone wrapper directory is lifted so the promised folder is the container.
+        let wrapped = root.appendingPathComponent("wrapped.zip")
+        try Self.zip(content, to: wrapped, keepParent: true)
+        let lifted = root.appendingPathComponent("Lifted")
+        try PhotoDownloadManager.writeFolderPromise(wrapped, filename: "wrapped.zip", destination: lifted)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: lifted.path).sorted(), ["one.jpg", "two.heic"])
+    }
+
+    func testFolderPromiseRejectsSymbolicLinksAndEmptyArchives() throws {
+        let root = temporaryTestRoot("FolderUnsafe")
+        let content = root.appendingPathComponent("content", isDirectory: true)
+        try FileManager.default.createDirectory(at: content, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createSymbolicLink(at: content.appendingPathComponent("link"),
+                                                   withDestinationURL: URL(fileURLWithPath: "/etc/hosts"))
+        let archive = root.appendingPathComponent("link.zip")
+        try Self.zip(content, to: archive, keepParent: false)
+        let destination = root.appendingPathComponent("Photos")
+        XCTAssertThrowsError(try PhotoDownloadManager.writeFolderPromise(archive, filename: "link.zip", destination: destination))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+
+        let emptyArchive = root.appendingPathComponent("empty.zip")
+        try Data([0x50, 0x4b, 0x05, 0x06] + [UInt8](repeating: 0, count: 18)).write(to: emptyArchive)
+        XCTAssertThrowsError(try PhotoDownloadManager.writeFolderPromise(emptyArchive, filename: "empty.zip", destination: destination))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+    }
+
+    func testDownloadSavesZIPResponseAsUnzippedFolderWithoutOverwriting() throws {
+        let root = temporaryTestRoot("DownloadUnzip")
+        let content = root.appendingPathComponent("content", isDirectory: true)
+        let directory = root.appendingPathComponent("Downloads", isDirectory: true)
+        try FileManager.default.createDirectory(at: content, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("one".utf8).write(to: content.appendingPathComponent("one.jpg"))
+        try Data("two".utf8).write(to: content.appendingPathComponent("two.jpg"))
+        let archive = root.appendingPathComponent("download.zip")
+        try Self.zip(content, to: archive, keepParent: false)
+        let first = try PhotoDownloadManager.save(archive, filename: "download.zip", directory: directory)
+        let second = try PhotoDownloadManager.save(archive, filename: "download.zip", directory: directory)
+        XCTAssertEqual(first.lastPathComponent, "download")
+        XCTAssertEqual(second.lastPathComponent, "download 1")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: second.path).sorted(), ["one.jpg", "two.jpg"])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted(), ["download", "download 1"])
+    }
+
+    private static func zip(_ directory: URL, to archive: URL, keepParent: Bool) throws {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        task.arguments = ["-c", "-k"] + (keepParent ? ["--keepParent"] : []) + [directory.path, archive.path]
+        try task.run()
+        task.waitUntilExit()
+        XCTAssertEqual(task.terminationStatus, 0)
     }
 
     @MainActor

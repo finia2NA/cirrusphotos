@@ -5,12 +5,18 @@ import SynologyAPI
 import UniformTypeIdentifiers
 
 struct PhotoDragPayload: Sendable {
+    /// A file promise delivers exactly one item: a single original, or a folder of unzipped originals.
+    enum Delivery: Sendable { case file, folder }
+
     let repository: CachedPhotosRepository
     let source: PhotoDownloadSource
     let count: Int
     let filename: String
-    var forcesArchive: Bool = false
+    var delivery: Delivery = .file
 
+    var fileType: UTType {
+        delivery == .folder ? .folder : (UTType(filenameExtension: URL(fileURLWithPath: filename).pathExtension) ?? .data)
+    }
 }
 
 private final class PromiseCompletion: @unchecked Sendable {
@@ -53,10 +59,8 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
         guard payload.count > 0, !payload.filename.isEmpty else { return false }
         let source = PhotoFileDragSource()
         source.onEnd = onEnd
-        let fileType: UTType = payload.forcesArchive || payload.count > 1 ? .zip :
-            (UTType(filenameExtension: URL(fileURLWithPath: payload.filename).pathExtension) ?? .data)
         let delegate = PhotoPromiseDelegate(payload: payload)
-        let provider = LocalHandlePromiseProvider(fileType: fileType.identifier, delegate: delegate)
+        let provider = LocalHandlePromiseProvider(fileType: payload.fileType.identifier, delegate: delegate)
         provider.userInfo = delegate
         let writer: NSPasteboardWriting
         if let albumCollection {

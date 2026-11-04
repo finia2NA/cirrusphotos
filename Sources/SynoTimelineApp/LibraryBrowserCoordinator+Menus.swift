@@ -39,14 +39,17 @@ extension LibraryBrowserScrollView.Coordinator {
             canToggleFavorite: false, collection: collection, indexFingerprint: index.fingerprint,
             selectionGeneration: selectionState.generation, selectedOrdinals: selected,
             knownItemIDsByOrdinal: known, timeline: timelineSnapshot, authority: selectionAuthority, sourceAlbumID: sourceAlbumID)
-        let filename: String
+        guard let captured = command.captureSelection(timeline: timelineSnapshot) else { return false }
+        // Several photos use the server's ZIP download and are promised as one folder of unzipped originals.
+        let payload: PhotoDragPayload
         if count == 1 {
             let name = clicked.photo.filename.flatMap { $0.isEmpty ? nil : $0 } ?? "Photo-\(clicked.photo.id)"
-            filename = URL(fileURLWithPath: name).lastPathComponent
-        } else { filename = "Photos.zip" }
-        guard let captured = command.captureSelection(timeline: timelineSnapshot) else { return false }
-        let payload = PhotoDragPayload(repository: repository, source: .selection(captured),
-                                       count: count, filename: filename)
+            payload = PhotoDragPayload(repository: repository, source: .selection(captured), count: 1,
+                                       filename: URL(fileURLWithPath: name).lastPathComponent)
+        } else {
+            payload = PhotoDragPayload(repository: repository, source: .selection(captured), count: count,
+                                       filename: "Photos", delivery: .folder)
+        }
         cancelPointerInteraction()
         return PhotoFileDragSource.begin(payload: payload, previews: previews,
                                          cropsToSquare: geometry?.cropsThumbnailsToSquare ?? false,

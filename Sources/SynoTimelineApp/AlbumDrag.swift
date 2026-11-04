@@ -143,9 +143,9 @@ struct AlbumDragGesture: ViewModifier {
                 guard let repository else { return false }
                 let safe = name.components(separatedBy: CharacterSet(charactersIn: "/:\\").union(.controlCharacters))
                     .joined(separator: "-").trimmingCharacters(in: .whitespacesAndNewlines)
-                let filename = (safe.isEmpty || safe == "." || safe == ".." ? "Album" : safe) + ".zip"
+                let filename = safe.isEmpty || safe == "." || safe == ".." ? "Album" : safe
                 let payload = PhotoDragPayload(repository: repository, source: .album(collection.albumID ?? 0), count: 1,
-                                               filename: filename, forcesArchive: true)
+                                               filename: filename, delivery: .folder)
                 return PhotoFileDragSource.begin(payload: payload, previews: [preview].compactMap { $0 },
                                                  cropsToSquare: true, from: view, event: event, albumCollection: collection, promisesFile: collection.albumID != nil)
             })

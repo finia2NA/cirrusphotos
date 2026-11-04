@@ -219,9 +219,10 @@ final class PhotoDownloadManager: ObservableObject {
                     }
                 }
                 let response: PhotoDownloadResponse
-                if payload.count == 1 && !payload.forcesArchive, let cached = try await payload.repository.cachedOriginalForDownload(items[0], includeLivePhoto: true, collection: mediaCollection) {
+                if payload.delivery == .file, items.count == 1,
+                   let cached = try await payload.repository.cachedOriginalForDownload(items[0], includeLivePhoto: true, collection: mediaCollection) {
                     response = cached
-                } else if payload.count == 1 && !payload.forcesArchive, items[0].mediaKind == .livePhoto {
+                } else if payload.delivery == .file, items.count == 1, items[0].mediaKind == .livePhoto {
                     guard let still = try await payload.repository.livePhotoStillForEditing(items[0], collection: mediaCollection, progress: progress) else {
                         throw DownloadFailure.message("The Live Photo still is unavailable.")
                     }
@@ -231,11 +232,13 @@ final class PhotoDownloadManager: ObservableObject {
                 }
                 defer { try? FileManager.default.removeItem(at: response.temporaryURL.deletingLastPathComponent()) }
                 try Task.checkCancellation()
-                update(id) { $0.status = "Saving…" }
+                update(id) { $0.status = payload.delivery == .folder ? "Unzipping…" : "Saving…" }
+                let delivery = payload.delivery
                 let writeTask = Task.detached(priority: .utility) {
-                    try Self.writePromise(response.temporaryURL, destination: destination,
-                                          makeArchive: (payload.forcesArchive || payload.count > 1) && items.count == 1 &&
-                                            response.temporaryURL.pathExtension.lowercased() != "zip")
+                    switch delivery {
+                    case .file: try Self.writePromise(response.temporaryURL, destination: destination)
+                    case .folder: try Self.writeFolderPromise(response.temporaryURL, filename: response.filename, destination: destination)
+                    }
                 }
                 try await withTaskCancellationHandler {
                     try await writeTask.value
@@ -243,36 +246,105 @@ final class PhotoDownloadManager: ObservableObject {
                 update(id) { $0.progress = 1; $0.status = "Saved to \(destination.path)"; $0.active = false }
                 completion(nil)
             } catch {
-                update(id) { $0.status = error is CancellationError ? "Cancelled" : reportedFailure(error, operation: "Editor handoff"); $0.active = false }
+                update(id) { $0.status = error is CancellationError ? "Cancelled" : reportedFailure(error, operation: "File promise"); $0.active = false }
                 completion(error)
             }
             tasks[id] = nil
         }
     }
 
-    nonisolated static func writePromise(_ source: URL, destination: URL, makeArchive: Bool) throws {
+    nonisolated static func writePromise(_ source: URL, destination: URL) throws {
         let fm = FileManager.default
         let directory = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask,
                                    appropriateFor: destination, create: true)
         defer { try? fm.removeItem(at: directory) }
         let staged = directory.appendingPathComponent("payload")
         try Task.checkCancellation()
-        if makeArchive {
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-            task.arguments = ["-c", "-k", "--keepParent", source.path, staged.path]
-            task.standardOutput = FileHandle.nullDevice
-            task.standardError = FileHandle.nullDevice
-            try task.run()
-            task.waitUntilExit()
-            guard task.terminationStatus == 0 else { throw DownloadFailure.message("Could not create the ZIP archive.") }
-        } else { try fm.copyItem(at: source, to: staged) }
+        try fm.copyItem(at: source, to: staged)
         try Task.checkCancellation()
-        // The file-promise receiver coordinates this write while waiting for our
-        // completion. Coordinating again here would wait on the receiver itself.
+        try publish(staged, at: destination)
+    }
+
+    /// Delivers a download as a folder of files. A ZIP response is unzipped and a single-file
+    /// response is copied in. The finished folder appears at `destination` in one rename, so the
+    /// receiver never sees it half-populated.
+    nonisolated static func writeFolderPromise(_ source: URL, filename: String, destination: URL) throws {
+        let fm = FileManager.default
+        let directory = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask,
+                                   appropriateFor: destination, create: true)
+        defer { try? fm.removeItem(at: directory) }
+        let folder = directory.appendingPathComponent("payload", isDirectory: true)
+        try populateFolder(folder, from: source, filename: filename)
+        try publish(folder, at: destination)
+    }
+
+    /// Fills a new folder with the contents of a ZIP download, or with a single-file response.
+    nonisolated static func populateFolder(_ folder: URL, from source: URL, filename: String) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: folder, withIntermediateDirectories: false)
+        try Task.checkCancellation()
+        if try isZIPArchive(source) {
+            try unzip(source, into: folder)
+            try tidyExtractedFolder(folder)
+        } else {
+            let name = URL(fileURLWithPath: filename).lastPathComponent
+            try fm.copyItem(at: source, to: folder.appendingPathComponent(name.isEmpty ? "Photo" : name))
+        }
+        try Task.checkCancellation()
+        guard !(try fm.contentsOfDirectory(atPath: folder.path)).isEmpty else {
+            throw DownloadFailure.message("The download contained no files.")
+        }
+    }
+
+    /// The file-promise receiver coordinates this write while waiting for our completion.
+    /// Coordinating again here would wait on the receiver itself.
+    private nonisolated static func publish(_ staged: URL, at destination: URL) throws {
         if renamex_np(staged.path, destination.path, UInt32(RENAME_EXCL)) != 0 {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
+    }
+
+    nonisolated static func isZIPArchive(_ url: URL) throws -> Bool {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        // Local file header, or the end record of an empty archive.
+        let signature = [UInt8](try handle.read(upToCount: 4) ?? Data())
+        return signature == [0x50, 0x4b, 0x03, 0x04] || signature == [0x50, 0x4b, 0x05, 0x06]
+    }
+
+    private nonisolated static func unzip(_ archive: URL, into folder: URL) throws {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        task.arguments = ["-x", "-k", archive.path, folder.path]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        try task.run()
+        while task.isRunning {
+            if Task.isCancelled { task.terminate(); task.waitUntilExit(); throw CancellationError() }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        guard task.terminationStatus == 0 else { throw DownloadFailure.message("Could not unzip the download.") }
+    }
+
+    /// Drops archive metadata, rejects links that could point outside the folder, and lifts the
+    /// contents out of a lone wrapper directory so the promised folder is the container.
+    private nonisolated static func tidyExtractedFolder(_ folder: URL) throws {
+        let fm = FileManager.default
+        for entry in ["__MACOSX", ".DS_Store"] { try? fm.removeItem(at: folder.appendingPathComponent(entry)) }
+        if let walker = fm.enumerator(at: folder, includingPropertiesForKeys: [.isSymbolicLinkKey]) {
+            for case let url as URL in walker {
+                if try url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
+                    throw DownloadFailure.message("The download contained an unsafe link.")
+                }
+            }
+        }
+        let entries = try fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey])
+        guard entries.count == 1, let wrapper = entries.first,
+              try wrapper.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else { return }
+        for child in try fm.contentsOfDirectory(at: wrapper, includingPropertiesForKeys: nil) {
+            try fm.moveItem(at: child, to: folder.appendingPathComponent(child.lastPathComponent))
+        }
+        try fm.removeItem(at: wrapper)
     }
 
     func cancel(_ id: UUID) { tasks[id]?.cancel() }
@@ -305,10 +377,14 @@ final class PhotoDownloadManager: ObservableObject {
         defer { try? fm.removeItem(at: replacementDirectory) }
         let staging = replacementDirectory.appendingPathComponent(UUID().uuidString)
         try Task.checkCancellation()
-        try fm.copyItem(at: source, to: staging)
+        // A ZIP response is a multi-item download; save its files as a folder rather than the archive.
+        var unzips = URL(fileURLWithPath: filename).pathExtension.lowercased() == "zip"
+        if unzips { unzips = try isZIPArchive(source) }
+        if unzips { try populateFolder(staging, from: source, filename: filename) }
+        else { try fm.copyItem(at: source, to: staging) }
         try Task.checkCancellation()
         let name = URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent
-        let ext = URL(fileURLWithPath: filename).pathExtension
+        let ext = unzips ? "" : URL(fileURLWithPath: filename).pathExtension
         for number in 0..<10000 {
             let suffix = number == 0 ? "" : " \(number)"
             let final = directory.appendingPathComponent(name + suffix + (ext.isEmpty ? "" : "." + ext))
