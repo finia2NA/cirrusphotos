@@ -191,7 +191,6 @@ final class SelectionFavoritesAppTests: XCTestCase {
         model.cancelBrowserFavorite()
 
         XCTAssertNil(model.pendingFavoriteConfirmation)
-        XCTAssertFalse(model.browserFavoriteBusy)
 
         // Verify zero transport calls
         let calls = await transport.setFavoriteCalls
@@ -258,7 +257,48 @@ final class SelectionFavoritesAppTests: XCTestCase {
     }
 
     @MainActor
-    func testBrowserFavoriteWriteFailureIsReported() async throws {
+    func testRapidBrowserFavoritesOnDifferentPhotosAreAllSent() async throws {
+        let root = temporaryTestRoot("RapidFavorites")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AppMockTransport()
+        let repo = try makeRepository(transport: transport, root: root)
+        let section = TimelineSection(offset: 0, limit: 3,
+                                      list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 3)])
+        let timeline = TimelineSnapshot(sections: [section])
+        await transport.setTimeline(timeline)
+        await transport.setPage([makeItem(id: 1), makeItem(id: 2), makeItem(id: 3)], offset: 0)
+
+        let activity = ActivityCenter()
+        let model = LibraryModel(repository: repo, activity: activity)
+        await model.load()
+        for ordinal in 0..<2 {
+            model.installBrowserCommands(
+                snapshot: BrowserCommandSnapshot(
+                    owner: UUID(), active: true, canOpen: false, canToggleFavorite: true,
+                    collection: .library(.personal),
+                    indexFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
+                    selectionGeneration: "generation-\(ordinal)",
+                    selectedOrdinals: IndexSet(integer: ordinal),
+                    knownItemIDsByOrdinal: [ordinal: Int64(ordinal + 1)]
+                ),
+                handler: nil
+            )
+            XCTAssertTrue(model.canToggleBrowserFavorite)
+            model.toggleSelectionFavorite()
+        }
+
+        let sent = await waitUntil { await transport.setFavoriteCalls.count == 2 }
+        XCTAssertTrue(sent)
+        let calls = await transport.setFavoriteCalls
+        XCTAssertEqual(calls.map(\.itemIDs), [[1], [2]])
+        XCTAssertEqual(calls.map(\.favorite), [true, true])
+        let recorded = await waitUntil { activity.history.first?.title == "Favorited 2 photos" }
+        XCTAssertTrue(recorded)
+        XCTAssertTrue(activity.attention.isEmpty)
+    }
+
+    @MainActor
+    func testBrowserFavoriteWriteFailureIsReportedAndRetried() async throws {
         let root = temporaryTestRoot("FavoriteWriteFailure")
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = AppMockTransport()
@@ -274,7 +314,8 @@ final class SelectionFavoritesAppTests: XCTestCase {
         await transport.setTimeline(timeline)
         await transport.setPage([makeItem(id: 1)], offset: 0)
 
-        let model = LibraryModel(repository: repo)
+        let activity = ActivityCenter()
+        let model = LibraryModel(repository: repo, activity: activity)
         await model.load()
         model.installBrowserCommands(
             snapshot: BrowserCommandSnapshot(
@@ -294,12 +335,21 @@ final class SelectionFavoritesAppTests: XCTestCase {
         model.toggleSelectionFavorite()
         _ = await waitUntil { model.pendingFavoriteConfirmation != nil }
         model.confirmBrowserFavorite()
-        let reported = await waitUntil { model.browserFavoriteFailure != nil }
+        let reported = await waitUntil { !activity.attention.isEmpty }
 
         XCTAssertTrue(reported)
-        XCTAssertTrue(model.browserFavoriteFailure?.contains("Favorite update failed") == true)
-        model.dismissBrowserFavoriteFailure()
-        XCTAssertNil(model.browserFavoriteFailure)
+        let failure = try XCTUnwrap(activity.attention.first)
+        XCTAssertEqual(failure.title, "Favoriting failed for 1 photo")
+        XCTAssertEqual(failure.failedItems.map(\.photoID), [1])
+        XCTAssertTrue(failure.detail?.contains("Favorite write failed for testing.") == true)
+        XCTAssertTrue(activity.isPresented)
+
+        await transport.setFavoriteFailure(false)
+        activity.retry(failure.id)
+        let retried = await waitUntil { activity.history.first?.outcome == .succeeded }
+        XCTAssertTrue(retried)
+        XCTAssertTrue(activity.attention.isEmpty)
+        XCTAssertEqual(activity.history.first?.title, "Favorited 1 photo")
     }
 }
 

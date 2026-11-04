@@ -21,14 +21,14 @@ extension LibraryModel {
         guard itemDeletion == nil, albumOperation == nil, capabilities(for: captured.collection).allowsSpaceItemActions,
               let repository, let selection = captured.captureSelection(timeline: captured.timeline),
               selection.authority != nil, !selection.selectedOrdinals.isEmpty else { return }
-        let operation = ItemDeletion(count: selection.selectedOrdinals.count)
+        let operation = ItemDeletion(count: selection.selectedOrdinals.count, collection: selection.collection)
         itemDeletion = operation
         itemDeletionTask = Task { [weak self] in
             let resolved = await SelectionItemResolver(repository: repository).resolveWithReceipt(selection)
             guard !Task.isCancelled, let self, self.itemDeletion?.id == operation.id else { return }
             guard let resolved, !resolved.items.isEmpty else {
                 self.itemDeletion = nil
-                self.itemDeletionError = "The selected items could not be verified. Try again."
+                self.reportUnverified("Delete", message: "The selected items could not be verified. Try again.")
                 return
             }
             self.itemDeletion?.selection = resolved
@@ -38,24 +38,28 @@ extension LibraryModel {
     }
 
     func cancelItemDeletion() {
-        guard itemDeletion?.deleting != true else { return }
         itemDeletionTask?.cancel()
         itemDeletionTask = nil
         itemDeletion = nil
     }
 
+    /// Closes the sheet and deletes in the background as a tracked activity. Deletion is never
+    /// retried automatically.
     func confirmItemDeletion() {
-        guard var operation = itemDeletion, !operation.loading, !operation.deleting,
+        guard let operation = itemDeletion, !operation.loading,
               let selection = operation.selection, let repository else { return }
-        operation.deleting = true
-        itemDeletion = operation
-        itemDeletionTask = Task { [weak self] in
-            do { try await repository.deleteItems(selection) }
-            catch {
-                if !Task.isCancelled { self?.itemDeletionError = reportedFailure(error, operation: "Deletion") }
+        itemDeletion = nil
+        itemDeletionTask = nil
+        let collection = operation.collection
+        let handle = activity.begin(.deleteItems,
+                                    items: selection.items.map { ActivityItem(photo: $0, collection: collection) })
+        Task {
+            do {
+                try await repository.deleteItems(selection)
+                handle.succeed()
+            } catch {
+                handle.fail(error, operation: "Deletion")
             }
-            guard let self, self.itemDeletion?.id == operation.id else { return }
-            self.itemDeletion = nil
         }
     }
 }
@@ -64,7 +68,7 @@ extension LibraryModel {
 struct ItemDeletion: Identifiable {
     let id = UUID()
     var count: Int
+    let collection: PhotoCollectionDescriptor
     var selection: ResolvedPhotoSelection?
     var loading = true
-    var deleting = false
 }

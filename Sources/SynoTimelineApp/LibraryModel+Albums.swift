@@ -27,32 +27,67 @@ extension LibraryModel {
         albumOperation = operation
     }
 
+    /// Deletes an owned album in the background as a tracked activity; never retried.
     func deleteAlbum(_ id: Int64) {
-        guard deletingAlbumID == nil, albumOperation == nil, let repository else { return }
-        deletingAlbumID = id
-        Task { [weak self] in
-            do { try await repository.deleteAlbum(id: id) }
-            catch { self?.albumOperationError = reportedFailure(error, operation: "Album deletion") }
+        guard let repository else { return }
+        let handle = activity.begin(.deleteAlbum(name: albumName(id)), queued: true)
+        enqueueAlbumWrite(handle) { [weak self] in
+            do {
+                try await repository.deleteAlbum(id: id)
+                handle.succeed()
+            } catch {
+                handle.fail(error, operation: "Album deletion")
+            }
             guard let self else { return }
-            self.deletingAlbumID = nil
             self.albumsTask?.cancel()
             self.albumsTask = nil
             self.ensureAlbumsLoaded()
         }
     }
 
+    /// Renames in the album write queue. The rename sheet waits for the result and shows its own
+    /// error, so only History records it.
     func renameAlbum(_ id: Int64, name: String) async throws {
-        guard deletingAlbumID == nil, albumOperation == nil, let repository else {
-            throw RepositoryError.busy("Another album change is in progress. Try again.")
+        guard let repository else { throw RepositoryError.unavailable("The photo library is unavailable.") }
+        let previousName = albumName(id)
+        let kind = ActivityKind.renameAlbum(from: previousName, to: name.trimmingCharacters(in: .whitespacesAndNewlines))
+        do {
+            try await serializedAlbumWrite { try await repository.renameAlbum(id: id, name: name) }
+            activity.record(kind, outcome: .succeeded)
+        } catch {
+            let failure = ActivityFailure(error: error, operation: "Album rename")
+            activity.record(kind, outcome: failure.unconfirmed ? .unconfirmed : .failed, failure: failure)
+            throw error
         }
-        deletingAlbumID = id
-        defer {
-            deletingAlbumID = nil
-            albumsTask?.cancel()
-            albumsTask = nil
-            ensureAlbumsLoaded()
+        albumsTask?.cancel()
+        albumsTask = nil
+        ensureAlbumsLoaded()
+    }
+
+    /// Runs album writes one after another: the repository rejects a second concurrent album
+    /// mutation instead of waiting for it.
+    func serializedAlbumWrite<Value: Sendable>(_ body: @escaping @MainActor () async throws -> Value) async throws -> Value {
+        let previous = albumWriteTail
+        let write = Task { @MainActor in
+            await previous?.value
+            return try await body()
         }
-        try await repository.renameAlbum(id: id, name: name)
+        albumWriteTail = Task { _ = try? await write.value }
+        return try await write.value
+    }
+
+    /// Queues a tracked album write; its activity starts running when its turn comes.
+    func enqueueAlbumWrite(_ handle: ActivityHandle, _ body: @escaping @MainActor () async -> Void) {
+        Task { [weak self] in
+            try? await self?.serializedAlbumWrite {
+                handle.start()
+                await body()
+            }
+        }
+    }
+
+    func albumName(_ id: Int64) -> String {
+        albums.first { $0.id == id }?.name ?? "album"
     }
 
     func isNormalAlbum(_ id: Int64?) -> Bool {
@@ -74,14 +109,15 @@ extension LibraryModel {
         guard capabilities(for: selection.collection).allowsAlbumMembership, albumOperation == nil, let repository, selection.authority != nil,
               !selection.selectedOrdinals.isEmpty else { return }
         if kind == .remove && !isNormalAlbum(sourceAlbumID) { return }
-        let operation = AlbumOperation(kind: kind, sourceAlbumID: sourceAlbumID)
+        var operation = AlbumOperation(kind: kind, sourceAlbumID: sourceAlbumID)
+        operation.collection = selection.collection
         albumOperation = operation
         albumOperationTask = Task { [weak self] in
             let resolved = await SelectionItemResolver(repository: repository).resolveWithReceipt(selection)
             guard !Task.isCancelled, let self, self.albumOperation?.id == operation.id else { return }
             guard let resolved, !resolved.items.isEmpty else {
                 self.albumOperation = nil
-                self.albumOperationError = "The selected items could not be verified. Try again."
+                self.reportUnverified(kind.actionName, message: "The selected items could not be verified. Try again.")
                 return
             }
             self.albumOperation?.selection = resolved
@@ -93,47 +129,44 @@ extension LibraryModel {
                 } catch {
                     guard !Task.isCancelled else { return }
                     self.albumOperation = nil
-                    self.albumOperationError = reportedFailure(error, operation: "Album operation")
+                    self.activity.begin(.unverified(action: kind.actionName)).fail(error, operation: "Album operation")
                 }
             }
             self.albumOperation?.loading = false
         }
     }
 
-    /// Adds a captured selection independently of browser focus.
+    /// Adds a captured selection (menu or drag) independently of browser focus, without a sheet.
     @discardableResult
     func addCapturedSelection(_ selection: PhotoSelectionSnapshot, sourceAlbumID: Int64?, to albumID: Int64) -> Bool {
         guard capabilities(for: selection.collection).allowsAlbumMembership, albumOperation == nil, let repository, selection.authority != nil,
               (sessionSources[selection.collection] ?? selection.collection).incomingAlbumIdentity == nil,
               !selection.selectedOrdinals.isEmpty else { return false }
-        let operation = AlbumOperation(kind: .add, sourceAlbumID: sourceAlbumID)
-        albumOperation = operation
-        albumOperationTask = Task { [weak self] in
+        let name = albumName(albumID)
+        let handle = activity.begin(.addToAlbum(id: albumID, name: name), totalCount: selection.selectedOrdinals.count, queued: true)
+        enqueueAlbumWrite(handle) { [weak self] in
+            var attempted = false
             do {
                 let addable = try await repository.addableAlbums()
-                guard !Task.isCancelled, addable.contains(where: { $0.id == albumID }) else {
+                guard addable.contains(where: { $0.id == albumID }) else {
                     throw RepositoryError.stale("This album is no longer available for adding items.")
                 }
                 guard let resolved = await SelectionItemResolver(repository: repository).resolveWithReceipt(selection),
-                      !resolved.items.isEmpty, !Task.isCancelled else {
+                      !resolved.items.isEmpty else {
                     throw RepositoryError.stale("The selected items could not be verified. Try again.")
                 }
-                guard let self, self.albumOperation?.id == operation.id else { return }
                 if sourceAlbumID == albumID {
-                    self.albumOperation = nil
+                    handle.discard()
                     return
                 }
-                self.albumOperation?.writing = true
+                handle.setItems(resolved.items.map { ActivityItem(photo: $0, collection: selection.collection) })
+                attempted = true
                 try await repository.addMissingItems(resolved, toAlbum: albumID)
-                guard self.albumOperation?.id == operation.id else { return }
-                self.refreshAfterAlbumOperation(operation, destinationID: albumID)
-                self.albumOperation = nil
+                handle.succeed()
             } catch {
-                guard let self, self.albumOperation?.id == operation.id else { return }
-                if self.albumOperation?.writing == true { self.refreshAfterAlbumOperation(operation, destinationID: albumID) }
-                self.albumOperation = nil
-                if !Task.isCancelled { self.albumOperationError = reportedFailure(error, operation: "Album operation") }
+                handle.fail(error, operation: "Album operation")
             }
+            if attempted { self?.refreshAfterAlbumWrite(kind: .add, albumID: albumID) }
         }
         return true
     }
@@ -144,29 +177,29 @@ extension LibraryModel {
         guard collection.incomingAlbumIdentity != nil, capabilities(for: selection.collection).allowsPersonalActions, albumOperation == nil, let repository,
               (sessionSources[selection.collection] ?? selection.collection).incomingAlbumIdentity == nil,
               selection.authority != nil, !selection.selectedOrdinals.isEmpty else { return false }
-        let operation = AlbumOperation(kind: .add, sourceAlbumID: sourceAlbumID)
-        albumOperation = operation
-        albumOperationTask = Task { [weak self] in
+        let identity = collection.incomingAlbumIdentity
+        let name = receivedIncomingAlbums.first { $0.id == identity?.albumID && $0.ownerUserID == identity?.ownerID }?.name
+            ?? "shared album"
+        let handle = activity.begin(.addToIncomingAlbum(name: name), totalCount: selection.selectedOrdinals.count, queued: true)
+        enqueueAlbumWrite(handle) { [weak self] in
             do {
                 guard let resolved = await SelectionItemResolver(repository: repository).resolveWithReceipt(selection),
-                      !resolved.items.isEmpty, !Task.isCancelled else {
+                      !resolved.items.isEmpty else {
                     throw RepositoryError.stale("The selected items could not be verified. Try again.")
                 }
-                guard let self, self.albumOperation?.id == operation.id else { return }
-                self.albumOperation?.writing = true
+                handle.setItems(resolved.items.map { ActivityItem(photo: $0, collection: selection.collection) })
                 try await repository.addItems(resolved, toIncomingAlbum: collection)
-                guard self.albumOperation?.id == operation.id else { return }
-                self.albumOperation = nil
-                self.incomingAlbumsTask?.cancel()
-                self.incomingAlbumsTask = nil
-                self.startAlbumListFetchIfNeeded()
-                self.collectionFetchTasks.removeValue(forKey: collection)?.cancel()
-                if self.openedCollections.contains(collection) { self.startCollectionFetchIfNeeded(collection) }
+                handle.succeed()
             } catch {
-                guard let self, self.albumOperation?.id == operation.id else { return }
-                self.albumOperation = nil
-                if !Task.isCancelled { self.albumOperationError = reportedFailure(error, operation: "Album operation") }
+                handle.fail(error, operation: "Album operation")
+                return
             }
+            guard let self else { return }
+            self.incomingAlbumsTask?.cancel()
+            self.incomingAlbumsTask = nil
+            self.startAlbumListFetchIfNeeded()
+            self.collectionFetchTasks.removeValue(forKey: collection)?.cancel()
+            if self.openedCollections.contains(collection) { self.startCollectionFetchIfNeeded(collection) }
         }
         return true
     }
@@ -177,50 +210,60 @@ extension LibraryModel {
         albumOperation = nil
     }
 
+    /// Closes the sheet and runs the write in the album queue as a tracked activity. Album
+    /// creation and removal are not retried.
     func submitAlbumOperation(name: String = "", albumID: Int64? = nil) {
-        guard var operation = albumOperation, !operation.loading,
+        guard let operation = albumOperation, !operation.loading,
               operation.selection != nil || operation.createsEmptyAlbum,
               let repository else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if operation.kind == .create && trimmed.isEmpty { return }
         if operation.kind == .add && albumID == nil { return }
-        operation.loading = true
-        operation.writing = true
-        albumOperation = operation
-        albumOperationTask = Task { [weak self] in
+        albumOperation = nil
+        albumOperationTask = nil
+        let selection = operation.selection
+        let items = (selection?.items ?? []).map { ActivityItem(photo: $0, collection: operation.collection ?? .library(.personal)) }
+        let kind: ActivityKind
+        switch operation.kind {
+        case .create: kind = .createAlbum(name: trimmed)
+        case .add:
+            let id = albumID ?? 0
+            kind = .addToAlbum(id: id, name: operation.albums.first { $0.id == id }?.name ?? albumName(id))
+        case .remove:
+            let id = operation.sourceAlbumID ?? 0
+            kind = .removeFromAlbum(id: id, name: albumName(id))
+        }
+        let handle = activity.begin(kind, items: items, queued: true)
+        enqueueAlbumWrite(handle) { [weak self] in
             do {
                 switch operation.kind {
                 case .create:
                     if operation.createsEmptyAlbum {
                         _ = try await repository.createEmptyAlbum(name: trimmed)
-                    } else if let selection = operation.selection {
+                    } else if let selection {
                         _ = try await repository.createAlbum(name: trimmed, selection: selection)
                     }
                 case .add:
-                    guard let albumID, let selection = operation.selection else { return }
+                    guard let albumID, let selection else { return }
                     try await repository.addItems(selection, toAlbum: albumID)
                 case .remove:
-                    guard let source = operation.sourceAlbumID, let selection = operation.selection else { return }
+                    guard let source = operation.sourceAlbumID, let selection else { return }
                     try await repository.removeItems(selection, fromAlbum: source)
                 }
-                guard let self, self.albumOperation?.id == operation.id else { return }
-                self.refreshAfterAlbumOperation(operation, destinationID: albumID)
-                self.albumOperation = nil
+                handle.succeed()
             } catch {
-                guard let self, self.albumOperation?.id == operation.id else { return }
-                self.refreshAfterAlbumOperation(operation, destinationID: albumID)
-                self.albumOperation = nil
-                self.albumOperationError = reportedFailure(error, operation: "Album operation")
+                handle.fail(error, operation: "Album operation")
             }
+            self?.refreshAfterAlbumWrite(kind: operation.kind,
+                                         albumID: operation.kind == .remove ? operation.sourceAlbumID : albumID)
         }
     }
 
-    func refreshAfterAlbumOperation(_ operation: AlbumOperation, destinationID: Int64?) {
+    func refreshAfterAlbumWrite(kind: AlbumOperation.Kind, albumID: Int64?) {
         albumsTask?.cancel()
         albumsTask = nil
         if albumListRequested { startAlbumListFetchIfNeeded() }
-        let id = operation.kind == .remove ? operation.sourceAlbumID : destinationID
-        guard let id else { return }
+        guard let id = albumID else { return }
         let collection = PhotoCollectionDescriptor.album(id)
         changedAlbumID = id
         albumMembershipRevision &+= 1
@@ -231,13 +274,24 @@ extension LibraryModel {
 }
 
 struct AlbumOperation: Identifiable {
-    enum Kind { case create, add, remove }
+    enum Kind {
+        case create, add, remove
+
+        var actionName: String {
+            switch self {
+            case .create: "New Album"
+            case .add: "Add to Album"
+            case .remove: "Remove from Album"
+            }
+        }
+    }
     let id = UUID()
     let kind: Kind
     let sourceAlbumID: Int64?
+    /// The collection the selection was captured from.
+    var collection: PhotoCollectionDescriptor?
     var selection: ResolvedPhotoSelection?
     var createsEmptyAlbum = false
     var albums: [AlbumSummary] = []
     var loading = true
-    var writing = false
 }

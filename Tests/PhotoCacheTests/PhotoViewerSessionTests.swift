@@ -1034,7 +1034,8 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
                                                                item: first, page: [first, second],
                                                                pageVerified: true), allowNetwork: true)
         _ = await session.state()
-        await session.toggleFavorite()
+        let result = await session.toggleFavorite()
+        guard case .success = result else { return XCTFail("Expected a successful write") }
         let favoredState = await session.state()
         XCTAssertTrue(favoredState.item?.isFavorite == true)
         let writes = await transport.favoriteWrites
@@ -1069,7 +1070,8 @@ final class PhotoViewerFavoriteTests: PhotoViewerSessionTestCase {
                                                                item: first, page: [first], pageVerified: true),
                                          allowNetwork: true)
         _ = await session.state()
-        await session.toggleFavorite()
+        let result = await session.toggleFavorite()
+        guard case .failure = result else { return XCTFail("Expected a failed write, got \(String(describing: result))") }
         let state = await session.state()
         XCTAssertFalse(state.item?.isFavorite == true)
         XCTAssertFalse(state.favoriteUpdating)

@@ -48,7 +48,8 @@ public enum RepositoryError: LocalizedError, Sendable, Equatable {
         }
     }
 
-    private var caseName: String {
+    /// The case name, for diagnostics and activity details.
+    public var kindName: String {
         switch self {
         case .server: "server"
         case .busy: "busy"
@@ -65,7 +66,7 @@ public enum RepositoryError: LocalizedError, Sendable, Equatable {
     @discardableResult
     public static func record(_ error: any Error, operation: String) -> RepositoryError {
         let normalized = RepositoryError(error)
-        let kind = normalized.caseName
+        let kind = normalized.kindName
         let message = normalized.localizedDescription
         if normalized.isUnexpected {
             if case .server = normalized {

@@ -9,8 +9,6 @@ struct ItemDeletionView: View {
             Text(title).font(.headline)
             if deletion.loading {
                 ProgressView("Preparing…")
-            } else if deletion.deleting {
-                ProgressView("Deleting…")
             } else {
                 Text("This deletes \(deletion.count == 1 ? "this item" : "these items") from Synology Photos, including every album that contains \(deletion.count == 1 ? "it" : "them"). Synology Photos has no undo for this.")
                     .fixedSize(horizontal: false, vertical: true)
@@ -18,10 +16,9 @@ struct ItemDeletionView: View {
             HStack {
                 Spacer()
                 Button("Cancel") { model.cancelItemDeletion() }
-                    .disabled(deletion.deleting)
                     .keyboardShortcut(.cancelAction)
                 Button("Delete", role: .destructive) { model.confirmItemDeletion() }
-                    .disabled(deletion.loading || deletion.deleting)
+                    .disabled(deletion.loading)
             }
         }
         .interactiveDismissDisabled()

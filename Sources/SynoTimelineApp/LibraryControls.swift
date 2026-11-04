@@ -122,7 +122,7 @@ struct ViewerRotationControls: View {
             }
         }
         .disabled(!viewer.canRotate)
-        .help(viewer.rotationFailure ?? "Rotate photo")
+        .help("Rotate photo")
     }
 }
 
@@ -260,51 +260,9 @@ struct ViewerToolbarTitle: View {
     }
 }
 
-struct ConnectionToolbarItem: View {
-    @Environment(LibraryModel.self) private var library
-
-    var body: some View {
-        HStack(spacing: 7) {
-            Group {
-                switch library.authenticationStatus {
-                case .notStarted:
-                    Label(library.error(for: .library(.personal)) == nil ? "Opening library…" : "Library unavailable",
-                          systemImage: "circle.dotted")
-                case .loggingIn:
-                    ProgressView().controlSize(.mini)
-                    Text("Logging in…")
-                case .signedIn:
-                    Label(library.error(for: .library(.personal)) == nil ? "Connected" : "Metadata unavailable",
-                          systemImage: "checkmark.circle.fill")
-                        .symbolRenderingMode(.multicolor)
-                        .help(library.error(for: .library(.personal)) ?? "Signed in")
-                case .failed(let message):
-                    Label("Login failed", systemImage: "exclamationmark.circle.fill")
-                        .help(message)
-                }
-            }
-            .labelStyle(.titleAndIcon)
-            .foregroundStyle(.secondary)
-
-            if library.isRefreshing || library.isLoading {
-                ProgressView().controlSize(.mini)
-            } else {
-                Button { Task { await library.refresh() } } label: {
-                    Image(systemName: library.refreshFailure == nil ? "arrow.clockwise" : "exclamationmark.arrow.circlepath")
-                }
-                .buttonStyle(.borderless)
-                .help(library.refreshFailure ?? "Refresh from the NAS")
-                .accessibilityLabel("Refresh")
-            }
-        }
-        .frame(height: ToolbarMetrics.controlHeight)
-        .padding(.horizontal, 4)
-        .font(.caption)
-    }
-}
-
 struct LibraryCommands: Commands {
     @Bindable var model: LibraryModel
+    @Bindable var activity: ActivityCenter
     @ObservedObject var preferences: AppPreferences
     @ObservedObject var infoPanel: InfoPanelModel
     @ObservedObject var filter: LibraryFilterModel
@@ -344,6 +302,9 @@ struct LibraryCommands: Commands {
             .disabled(!model.canRotateThumbnails || model.thumbnailRotationProgress != nil)
         }
         CommandGroup(after: .toolbar) {
+            Button(activity.isPresented ? "Hide Activity" : "Show Activity") { activity.togglePresented() }
+                .keyboardShortcut("l", modifiers: [.command, .option])
+            Divider()
             Toggle("Show Filmstrip", isOn: $model.showsFilmstrip)
                 .disabled(!model.canCloseViewer)
             Toggle("Show Histogram", isOn: $model.showsHistogram)
@@ -411,7 +372,7 @@ struct LibraryCommands: Commands {
             Button("Add to Album…") { model.beginAlbumOperation(.add) }
                 .disabled(!model.canManageAlbumSelection)
             if model.canRemoveAlbumSelection {
-                Button("Remove from Album…") { model.beginAlbumOperation(.remove) }
+                Button("Remove from Album") { model.beginAlbumOperation(.remove) }
             }
             Divider()
             Button("Delete…") { model.beginItemDeletion() }

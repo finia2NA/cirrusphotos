@@ -10,7 +10,7 @@ struct AlbumOperationView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text(title).font(.headline)
             if operation.loading {
-                ProgressView(operation.writing ? "Updating album…" : "Preparing…")
+                ProgressView("Preparing…")
             } else {
                 switch operation.kind {
                 case .create:
@@ -32,7 +32,6 @@ struct AlbumOperationView: View {
             HStack {
                 Spacer()
                 Button("Cancel") { model.cancelAlbumOperation() }
-                    .disabled(operation.writing)
                 Button(actionTitle) { model.submitAlbumOperation(name: name, albumID: albumID) }
                     .disabled(operation.loading || (operation.kind == .create && name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) || (operation.kind == .add && albumID == nil))
                     .keyboardShortcut(.defaultAction)

@@ -147,6 +147,8 @@ struct PersonEditView: View {
         guard let repository, valid else { return }
         let capturedTarget = target?.id
         let capturedName = query
+        let kind: ActivityKind = target.map { .mergePerson(source: displayName(request.person), target: displayName($0)) }
+            ?? .renamePerson(name: capturedName)
         working = true
         Task {
             do {
@@ -155,9 +157,12 @@ struct PersonEditView: View {
                 } else {
                     try await repository.renamePerson(id: request.person.id, name: capturedName, space: request.space)
                 }
+                ActivityCenter.shared.record(kind, outcome: .succeeded)
                 onFinish(); dismiss()
             } catch {
-                onFinish(); self.error = reportedFailure(error, operation: "Person change"); working = false
+                let failure = ActivityFailure.recorded(error, operation: "Person change")
+                ActivityCenter.shared.record(kind, outcome: failure.unconfirmed ? .unconfirmed : .failed, failure: failure)
+                onFinish(); self.error = failure.message; working = false
             }
         }
     }

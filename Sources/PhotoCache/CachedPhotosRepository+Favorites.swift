@@ -23,7 +23,8 @@ extension CachedPhotosRepository {
     public func setFavorite(itemID: Int64, item: PhotoItem? = nil,
                             in section: TimelineSection,
                             collection: PhotoCollectionDescriptor,
-                            to favorite: Bool) async throws {
+                            to favorite: Bool,
+                            progress: (@Sendable (_ confirmedIDs: [Int64]) -> Void)? = nil) async throws {
         var itemsByID: [Int64: PhotoItem] = [:]
         if let item {
             itemsByID[itemID] = item
@@ -37,12 +38,15 @@ extension CachedPhotosRepository {
             collection: collection,
             itemsByID: itemsByID
         )
-        try await setFavoritesBatch(action: action)
+        try await setFavoritesBatch(action: action, progress: progress)
     }
 
     /// Executes an already-prepared batch favorite mutation with chunking, optimistic publication,
-    /// rollback on failure, and an authoritative Favorites refresh.
-    public func setFavoritesBatch(action: SelectionFavoriteAction) async throws {
+    /// rollback on failure, and an authoritative Favorites refresh. `progress` receives the IDs of
+    /// each confirmed chunk. A failure after the first chunk throws `BatchFavoriteError` naming
+    /// the failed and unsubmitted IDs; earlier failures affect every ID.
+    public func setFavoritesBatch(action: SelectionFavoriteAction,
+                                  progress: (@Sendable (_ confirmedIDs: [Int64]) -> Void)? = nil) async throws {
         let source = mediaCollection(for: action.collection)
         guard source.incomingAlbumIdentity == nil, !source.isSessionDerived else {
             throw RepositoryError.unavailable("Favorites are unavailable for shared album photos.")
@@ -127,6 +131,7 @@ extension CachedPhotosRepository {
                         attemptedWrite = true
                         try await self.client.setFavorite(itemIDs: chunk, favorite: target, space: space)
                         successfulIDs.append(contentsOf: chunk)
+                        progress?(chunk)
                         if await self.metadataTokenIsCurrent(metadataToken), self.metadata.initialized,
                            let admission = try? await self.store.metadataAdmission(scopedNamespace) {
                             try? await self.store.applyMetadataFavoriteValues(Dictionary(uniqueKeysWithValues: chunk.map { ($0, target) }),
@@ -175,7 +180,7 @@ extension CachedPhotosRepository {
 
                 let outcome = BatchFavoriteOutcome(
                     successfulCount: successfulIDs.count,
-                    failedCount: failedOrUnsubmittedIDs.count
+                    failedIDs: failedOrUnsubmittedIDs
                 )
                 throw BatchFavoriteError(
                     outcome: outcome,

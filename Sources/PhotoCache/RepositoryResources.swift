@@ -67,6 +67,13 @@ public struct SelectionAnnotationAction: Sendable {
 
     public var items: [PhotoItem] { itemIDs.compactMap { itemsByID[$0] } }
 
+    /// The same edit target for a subset of its items, for retrying failed ones. Ratings and tag
+    /// changes are absolute, so a repeat is safe; the subset is not tied to the original timeline.
+    public func restricted(to ids: Set<Int64>) -> SelectionAnnotationAction {
+        SelectionAnnotationAction(itemIDs: itemIDs.filter(ids.contains), collection: collection,
+                                  itemsByID: itemsByID.filter { ids.contains($0.key) })
+    }
+
     /// The rating shared by every item, or nil when they differ.
     public var commonRating: Int? {
         let ratings = Set(items.map(\.rating))
@@ -149,15 +156,25 @@ public struct SelectionFavoriteAction: Sendable {
         self.itemsByID = itemsByID
         self.expectedTimelineFingerprint = expectedTimelineFingerprint
     }
+
+    /// The same change for a subset of its items, for retrying failed ones. The target value is
+    /// absolute, so it is safe to repeat; the subset is not tied to the original timeline.
+    public func restricted(to ids: Set<Int64>) -> SelectionFavoriteAction {
+        SelectionFavoriteAction(affectedIDs: affectedIDs.filter(ids.contains), targetFavorite: targetFavorite,
+                                sectionsByID: sectionsByID.filter { ids.contains($0.key) }, collection: collection,
+                                itemsByID: itemsByID.filter { ids.contains($0.key) })
+    }
 }
 
 public struct BatchFavoriteOutcome: Sendable, Equatable {
+    /// Failed and never-submitted IDs, in submission order.
+    public let failedIDs: [Int64]
     public let successfulCount: Int
-    public let failedCount: Int
+    public var failedCount: Int { failedIDs.count }
 
-    public init(successfulCount: Int, failedCount: Int) {
+    public init(successfulCount: Int, failedIDs: [Int64]) {
         self.successfulCount = successfulCount
-        self.failedCount = failedCount
+        self.failedIDs = failedIDs
     }
 }
 

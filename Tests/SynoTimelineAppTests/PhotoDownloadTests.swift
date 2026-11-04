@@ -39,19 +39,21 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let transport = AlbumDownloadMockTransport()
         let repository = try CachedPhotosRepository(credentials: .init(username: "test", password: "test"),
                                                      budget: 100_000_000, cacheRoot: root.appendingPathComponent("cache"), transport: transport)
-        let manager = PhotoDownloadManager()
+        let activity = ActivityCenter()
+        let manager = PhotoDownloadManager(activity: activity)
         manager.start(repository: repository, source: .album(54), kind: .compressedJPEG, choose: false)
-        let completed = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
+        let completed = await waitUntil { activity.entries.first?.phase.isSettled == true }
         XCTAssertTrue(completed)
         let ids = await transport.downloadedIDs
         let kind = await transport.kind
         XCTAssertEqual(ids, [1, 2])
         XCTAssertEqual(kind, .compressedJPEG)
-        XCTAssertTrue(manager.jobs[0].status.contains("Saved to"))
+        XCTAssertTrue((activity.entries[0].detail ?? "").contains("Saved to"))
         manager.start(repository: repository, source: .album(55), kind: .original, choose: false)
-        let emptyCompleted = await waitUntil { manager.jobs.count == 2 && !manager.jobs[0].active }
+        let emptyCompleted = await waitUntil { activity.entries.count == 2 && activity.entries[0].phase.isSettled }
         XCTAssertTrue(emptyCompleted)
-        XCTAssertEqual(manager.jobs[0].status, "No eligible photos to download.")
+        XCTAssertEqual(activity.entries[0].detail, "No eligible photos to download.")
+        XCTAssertEqual(activity.entries[0].phase, .failed)
     }
 
     @MainActor
@@ -65,15 +67,16 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let transport = AlbumDownloadMockTransport(origin: .shared)
         let repository = try CachedPhotosRepository(credentials: .init(username: "test", password: "test"),
             cacheRoot: root.appendingPathComponent("cache"), transport: transport)
-        let manager = PhotoDownloadManager()
+        let activity = ActivityCenter()
+        let manager = PhotoDownloadManager(activity: activity)
         manager.start(repository: repository, source: .album(54), kind: .compressedJPEG, choose: false)
-        let finished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
+        let finished = await waitUntil { activity.entries.first?.phase.isSettled == true }
         XCTAssertTrue(finished)
         let space = await transport.downloadedSpace
         let ids = await transport.downloadedIDs
         XCTAssertEqual(space, .shared)
         XCTAssertEqual(ids, [1, 2])
-        XCTAssertTrue(manager.jobs[0].status.contains("Saved to"))
+        XCTAssertTrue((activity.entries[0].detail ?? "").contains("Saved to"))
     }
 
     @MainActor
@@ -85,11 +88,12 @@ final class PhotoDownloadDestinationTests: XCTestCase {
             cacheRoot: root.appendingPathComponent("cache"), transport: transport)
         let photo = try await transport.albumItems(ids: [1], albumID: 54)[0]
         var opened: URL?
-        let manager = PhotoDownloadManager(editDirectoryProvider: { root.appendingPathComponent("Edits") },
+        let activity = ActivityCenter()
+        let manager = PhotoDownloadManager(activity: activity, editDirectoryProvider: { root.appendingPathComponent("Edits") },
             editorOpener: { file, _ in opened = file })
         manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo, collection: .album(54),
             applicationURL: URL(fileURLWithPath: "/Applications/Editor.app"))
-        let finished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
+        let finished = await waitUntil { activity.entries.first?.phase.isSettled == true }
         XCTAssertTrue(finished)
         XCTAssertNotNil(opened)
         let space = await transport.downloadedSpace
@@ -105,16 +109,17 @@ final class PhotoDownloadDestinationTests: XCTestCase {
             cacheRoot: root.appendingPathComponent("cache"), transport: transport)
         let photo = try await transport.albumItems(ids: [1], albumID: 54)[0]
         var opened = false
-        let manager = PhotoDownloadManager(editDirectoryProvider: { root.appendingPathComponent("Edits") },
+        let activity = ActivityCenter()
+        let manager = PhotoDownloadManager(activity: activity, editDirectoryProvider: { root.appendingPathComponent("Edits") },
             editorOpener: { _, _ in opened = true })
         manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo, collection: .album(54),
             applicationURL: URL(fileURLWithPath: "/Applications/Editor.app"))
-        let finished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
+        let finished = await waitUntil { activity.entries.first?.phase.isSettled == true }
         XCTAssertTrue(finished)
         XCTAssertFalse(opened)
         let ids = await transport.downloadedIDs
         XCTAssertTrue(ids.isEmpty)
-        XCTAssertTrue(manager.jobs[0].status.contains("Personal Space"))
+        XCTAssertTrue((activity.entries[0].detail ?? "").contains("Personal Space"))
     }
 
     @MainActor
@@ -153,12 +158,13 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.dng\",\"time\":1,\"type\":\"photo\"}".utf8))
         let application = URL(fileURLWithPath: "/Applications/Editor.app")
         var opened: URL?
-        let manager = PhotoDownloadManager(editDirectoryProvider: { directory }, editorOpener: { file, app in
+        let activity = ActivityCenter()
+        let manager = PhotoDownloadManager(activity: activity, editDirectoryProvider: { directory }, editorOpener: { file, app in
             XCTAssertEqual(app, application)
             opened = file
         })
         manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo, collection: .library(.personal), applicationURL: application)
-        let finished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
+        let finished = await waitUntil { activity.entries.first?.phase.isSettled == true }
         XCTAssertTrue(finished)
         let file = try XCTUnwrap(opened)
         XCTAssertEqual(file, directory.appendingPathComponent("a.dng"))
@@ -167,7 +173,7 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let downloadedKind = await transport.kind
         XCTAssertEqual(downloadedIDs, [1])
         XCTAssertEqual(downloadedKind, .original)
-        XCTAssertTrue(manager.jobs[0].status.contains("Saved to"))
+        XCTAssertTrue((activity.entries[0].detail ?? "").contains("Saved to"))
     }
 
     @MainActor
@@ -182,10 +188,11 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let resource = try XCTUnwrap(photo.fullImageResource(in: .space(.personal)))
         for await _ in await repository.fullImage(resource) {}
         var opened: URL?
-        let manager = PhotoDownloadManager(editDirectoryProvider: { directory }, editorOpener: { file, _ in opened = file })
+        let activity = ActivityCenter()
+        let manager = PhotoDownloadManager(activity: activity, editDirectoryProvider: { directory }, editorOpener: { file, _ in opened = file })
         manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo, collection: .library(.personal),
                      applicationURL: URL(fileURLWithPath: "/Applications/Editor.app"))
-        let finished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
+        let finished = await waitUntil { activity.entries.first?.phase.isSettled == true }
         XCTAssertTrue(finished)
         let file = try XCTUnwrap(opened)
         XCTAssertEqual(try Data(contentsOf: file), Data("raw-image".utf8))
@@ -213,10 +220,11 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let download = try await repository.cachedOriginalForDownload(photo, collection: .library(.personal))
         XCTAssertNil(download)
         var opened: URL?
-        let manager = PhotoDownloadManager(editDirectoryProvider: { directory }, editorOpener: { file, _ in opened = file })
+        let activity = ActivityCenter()
+        let manager = PhotoDownloadManager(activity: activity, editDirectoryProvider: { directory }, editorOpener: { file, _ in opened = file })
         manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo, collection: .library(.personal),
                      applicationURL: URL(fileURLWithPath: "/Applications/Editor.app"))
-        let finished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
+        let finished = await waitUntil { activity.entries.first?.phase.isSettled == true }
         XCTAssertTrue(finished)
         let file = try XCTUnwrap(opened)
         XCTAssertEqual(file.lastPathComponent, "a.heic")
@@ -235,10 +243,11 @@ final class PhotoDownloadDestinationTests: XCTestCase {
                                                      budget: 100_000_000, cacheRoot: root.appendingPathComponent("cache"), transport: transport)
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.heic\",\"time\":1,\"type\":\"photo\",\"live_type\":\"live\",\"additional\":{\"thumbnail\":{\"unit_id\":1,\"cache_key\":\"v1\"}}}".utf8))
         var opened: URL?
-        let manager = PhotoDownloadManager(editDirectoryProvider: { directory }, editorOpener: { file, _ in opened = file })
+        let activity = ActivityCenter()
+        let manager = PhotoDownloadManager(activity: activity, editDirectoryProvider: { directory }, editorOpener: { file, _ in opened = file })
         manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo, collection: .library(.personal),
                      applicationURL: URL(fileURLWithPath: "/Applications/Editor.app"))
-        let finished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
+        let finished = await waitUntil { activity.entries.first?.phase.isSettled == true }
         XCTAssertTrue(finished)
         let file = try XCTUnwrap(opened)
         XCTAssertEqual(file.lastPathComponent, "a.heic")
@@ -261,15 +270,16 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.dng\",\"time\":1,\"type\":\"photo\",\"additional\":{\"thumbnail\":{\"unit_id\":1,\"cache_key\":\"v1\"}}}".utf8))
         let resource = try XCTUnwrap(photo.fullImageResource(in: .space(.personal)))
         for await _ in await repository.fullImage(resource) {}
-        let manager = PhotoDownloadManager()
+        let activity = ActivityCenter()
+        let manager = PhotoDownloadManager(activity: activity)
         manager.start(repository: repository, source: .item(photo, collection: .library(.personal)), kind: .original, choose: false)
-        let originalFinished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
+        let originalFinished = await waitUntil { activity.entries.first?.phase.isSettled == true }
         XCTAssertTrue(originalFinished)
         XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("a.dng")), Data("raw-image".utf8))
         let firstCalls = await transport.downloadedIDs
         XCTAssertTrue(firstCalls.isEmpty)
         manager.start(repository: repository, source: .item(photo, collection: .library(.personal)), kind: .compressedJPEG, choose: false)
-        let compressedFinished = await waitUntil { manager.jobs.count == 2 && !manager.jobs[0].active }
+        let compressedFinished = await waitUntil { activity.entries.count == 2 && activity.entries[0].phase.isSettled }
         XCTAssertTrue(compressedFinished)
         let kind = await transport.kind
         XCTAssertEqual(kind, .compressedJPEG)
@@ -283,13 +293,14 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let repository = try CachedPhotosRepository(credentials: .init(username: "test", password: "test"),
                                                      budget: 100_000_000, cacheRoot: root.appendingPathComponent("cache"), transport: EditingMockTransport())
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.dng\",\"time\":1,\"type\":\"photo\"}".utf8))
-        let manager = PhotoDownloadManager(editDirectoryProvider: { directory }, editorOpener: { _, _ in throw URLError(.cannotOpenFile) })
+        let activity = ActivityCenter()
+        let manager = PhotoDownloadManager(activity: activity, editDirectoryProvider: { directory }, editorOpener: { _, _ in throw URLError(.cannotOpenFile) })
         manager.edit(repository: repository, snapshot: nil, selection: nil, item: photo, collection: .library(.personal),
                      applicationURL: URL(fileURLWithPath: "/Applications/Editor.app"))
-        let finished = await waitUntil { !manager.jobs.isEmpty && !manager.jobs[0].active }
+        let finished = await waitUntil { activity.entries.first?.phase.isSettled == true }
         XCTAssertTrue(finished)
         XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent("a.dng")), Data("raw-image".utf8))
-        XCTAssertTrue(manager.jobs[0].status.contains("file saved to"))
+        XCTAssertTrue((activity.entries[0].detail ?? "").contains("File saved to"))
     }
 
     @MainActor
@@ -348,7 +359,8 @@ final class PhotoDownloadDestinationTests: XCTestCase {
         let payload = PhotoDragPayload(repository: repository, source: .item(photo, collection: .library(.personal)), count: 1,
                                        filename: "Album", delivery: .folder)
         XCTAssertEqual(payload.fileType, .folder)
-        let manager = PhotoDownloadManager()
+        let activity = ActivityCenter()
+        let manager = PhotoDownloadManager(activity: activity)
         let destination = root.appendingPathComponent("Album")
         let finished = expectation(description: "album folder")
         manager.fulfillPromise(payload, destination: destination) { error in

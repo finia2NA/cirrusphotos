@@ -45,7 +45,7 @@ extension LibraryModel {
         parent.submenu = submenu
         menu.addItem(parent)
         if isNormalAlbum(captured.sourceAlbumID) {
-            menu.addItem(PhotoDownloadMenuItem(title: "Remove from Album…") { [weak self] in
+            menu.addItem(PhotoDownloadMenuItem(title: "Remove from Album") { [weak self] in
                 guard let self, self.repository?.namespace == repository.namespace else { return }
                 self.beginAlbumOperation(.remove, captured: captured)
             })
@@ -79,7 +79,8 @@ extension LibraryModel {
                 let failed = NSMenuItem(title: "Could Not Load Albums", action: nil, keyEquivalent: "")
                 failed.isEnabled = false
                 submenu.addItem(failed)
-                self?.albumOperationError = reportedFailure(error, operation: "Album membership")
+                // The menu says the albums could not load; the failure is only logged.
+                _ = reportedFailure(error, operation: "Album membership")
             }
         }
     }

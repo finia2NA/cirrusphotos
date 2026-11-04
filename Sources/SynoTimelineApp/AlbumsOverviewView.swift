@@ -108,9 +108,9 @@ private struct AlbumCardView: View {
             if !album.isIncoming {
                 Divider()
                 Button("Rename Album…") { rename = true }
-                    .disabled(model.deletingAlbumID != nil || model.albumOperation != nil || album.type != "normal")
+                    .disabled(model.albumOperation != nil || album.type != "normal")
                 Button("Delete Album…", role: .destructive) { confirmDelete = true }
-                    .disabled(model.deletingAlbumID != nil || model.albumOperation != nil || album.type != "normal")
+                    .disabled(model.albumOperation != nil || album.type != "normal")
             }
         }
         .sheet(isPresented: $rename) { AlbumRenameView(album: album) }

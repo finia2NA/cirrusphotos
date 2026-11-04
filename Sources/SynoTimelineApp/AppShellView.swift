@@ -79,6 +79,11 @@ struct AppShellView: View {
         libraryFilter.activeCollection(for: sourceCollection) ?? sourceCollection
     }
 
+    /// Activity rows reveal photos of the collection the browser shows, not under a viewer.
+    private var activityRevealCollection: PhotoCollectionDescriptor? {
+        viewer == nil ? selectedCollection : nil
+    }
+
     private var sourceSnapshotRevision: Int {
         sourceCollection.map { model.snapshotRevision(for: $0) } ?? 0
     }
@@ -148,6 +153,10 @@ struct AppShellView: View {
             model.navigateBack()
         }
         .onAppear {
+            model.activity.revealHandler = { [browserBridge] item, _ in
+                browserBridge.reveal(BrowserRevealRequest(itemID: item.id, dayID: item.utcDayID,
+                                                          sectionOffsetHint: nil, selectOnCompletion: true))
+            }
             configureAlbumPresentation()
             updateBackHandler()
             libraryFilter.configure(library: model, source: sourceCollection)
@@ -155,6 +164,9 @@ struct AppShellView: View {
             metadataSync?.configure(library: model)
             metadataSync?.setFocus(sourceCollection)
             updateTimelineSectionLoadSource()
+        }
+        .onChange(of: activityRevealCollection, initial: true) { _, collection in
+            model.activity.revealableCollection = collection
         }
         .onChange(of: selectedDestination) { _, _ in
             updateBackHandler(); updateTimelineSectionLoadSource()
@@ -274,35 +286,6 @@ struct AppShellView: View {
                 model.cancelBrowserFavorite()
             }
         }
-        .alert(
-            "Favorite Update Failed",
-            isPresented: Binding(
-                get: { model.browserFavoriteFailure != nil },
-                set: { if !$0 { model.dismissBrowserFavoriteFailure() } }
-            )
-        ) {
-            Button("OK", role: .cancel) {
-                model.dismissBrowserFavoriteFailure()
-            }
-        } message: {
-            Text(model.browserFavoriteFailure ?? "The favorite update failed.")
-        }
-        .alert("Rotation Failed", isPresented: Binding(
-            get: { model.rotationFailure != nil || viewer?.rotationFailure != nil },
-            set: { if !$0 { model.dismissRotationFailure(); viewer?.dismissRotationFailure() } }
-        )) {
-            Button("OK") { model.dismissRotationFailure(); viewer?.dismissRotationFailure() }
-        } message: {
-            Text(model.rotationFailure ?? viewer?.rotationFailure ?? "The photo could not be rotated.")
-        }
-        .alert("Rating or Tag Failed", isPresented: Binding(
-            get: { model.annotationFailure != nil },
-            set: { if !$0 { model.dismissAnnotationFailure() } }
-        )) {
-            Button("OK") { model.dismissAnnotationFailure() }
-        } message: {
-            Text(model.annotationFailure ?? "The change could not be saved.")
-        }
         .sheet(item: $personEdit) { request in
             PersonEditView(request: request, people: indexEntries[.person] ?? [], repository: model.repository) {
                 peopleEditRevision &+= 1
@@ -313,22 +296,6 @@ struct AppShellView: View {
         }
         .sheet(item: Bindable(model).itemDeletion) { deletion in
             ItemDeletionView(model: model, deletion: deletion)
-        }
-        .alert("Delete Failed", isPresented: Binding(
-            get: { model.itemDeletionError != nil },
-            set: { if !$0 { model.itemDeletionError = nil } }
-        )) {
-            Button("OK") { model.itemDeletionError = nil }
-        } message: {
-            Text(model.itemDeletionError ?? "The items could not be deleted.")
-        }
-        .alert("Album Update Failed", isPresented: Binding(
-            get: { model.albumOperationError != nil },
-            set: { if !$0 { model.albumOperationError = nil } }
-        )) {
-            Button("OK") { model.albumOperationError = nil }
-        } message: {
-            Text(model.albumOperationError ?? "The album update failed.")
         }
         .sheet(isPresented: Binding(
             get: { model.thumbnailRotationProgress != nil },
@@ -939,9 +906,7 @@ struct AppShellView: View {
 
     @ToolbarContentBuilder
     private var statusToolbar: some CustomizableToolbarContent {
-        ToolbarItem(id: "uploads", placement: .primaryAction) { UploadsToolbarControl() }
-        ToolbarItem(id: "downloads", placement: .primaryAction) { DownloadsToolbarControl() }
-        ToolbarItem(id: "connection", placement: .primaryAction) { ConnectionToolbarItem() }
+        ToolbarItem(id: "activity", placement: .primaryAction) { ActivityToolbarItem() }
     }
 
     /// The single leading back button: closes the viewer, goes up a folder, or leaves the opened collection.

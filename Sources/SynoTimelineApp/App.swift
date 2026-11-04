@@ -47,7 +47,7 @@ struct SynoTimelineApp: App {
         .windowToolbarStyle(.unified)
         .defaultSize(width: 860, height: 820)
         .commands {
-            LibraryCommands(model: model, preferences: preferences, infoPanel: infoPanel, filter: libraryFilter,
+            LibraryCommands(model: model, activity: ActivityCenter.shared, preferences: preferences, infoPanel: infoPanel, filter: libraryFilter,
                             timelineSectionLoad: timelineSectionLoad)
         }
         Settings { CacheSettingsView().environment(model).environmentObject(preferences) }

@@ -18,17 +18,22 @@ extension LibraryModel {
         }
         guard canRotate, let repository else { return }
         rotationBusy = true
-        rotationFailure = nil
         let snapshot = browserCommandSnapshot
         Task { [weak self] in
             guard let self else { return }
             defer { rotationBusy = false }
             guard let action = await resolveRotation(snapshot, repository: repository) else {
-                rotationFailure = "The selected photos could not be verified or do not support rotation."
+                reportUnverified("Rotate", message: "The selected photos could not be verified or do not support rotation.")
                 return
             }
-            do { try await repository.rotate(action, direction: direction) }
-            catch { rotationFailure = reportedFailure(error, operation: "Rotation") }
+            // A rotation is relative, so it is never retried: a repeat could turn a photo twice.
+            let handle = activity.begin(.rotate(direction), items: action.activityItems)
+            do {
+                try await repository.rotate(action, direction: direction)
+                handle.succeed()
+            } catch {
+                handle.fail(error, operation: "Rotation")
+            }
         }
     }
 
@@ -99,11 +104,14 @@ extension LibraryModel {
         isFixingThumbnailRotations = false
     }
 
-    func dismissRotationFailure() { rotationFailure = nil }
 
     func resolveRotation(_ snapshot: BrowserCommandSnapshot,
                                  repository: CachedPhotosRepository) async -> SelectionRotationAction? {
         guard snapshot.active, let selection = snapshot.captureSelection(timeline: snapshots[snapshot.collection]) else { return nil }
         return await SelectionRotationResolver(repository: repository).resolve(selection)
     }
+}
+
+extension SelectionRotationAction {
+    var activityItems: [ActivityItem] { itemIDs.compactMap { itemsByID[$0] }.map { ActivityItem(photo: $0, collection: collection) } }
 }

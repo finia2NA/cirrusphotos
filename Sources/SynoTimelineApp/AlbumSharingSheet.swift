@@ -296,10 +296,12 @@ struct AlbumSharingSheet: View {
         guard let snapshot else { return }
         let delta = changes
         let access = accessChange, password = passwordChange, expiry = expiryChange
+        let kind = ActivityKind.albumSharing(name: snapshot.album.name)
         busy = true; saving = true; error = nil
         Task {
             do {
                 _ = try await repository.saveAlbumSharing(snapshot: snapshot, changes: delta, disable: disable, access: access, password: password, expiration: expiry)
+                ActivityCenter.shared.record(kind, outcome: .succeeded)
                 saving = false
                 if closeOnSuccess {
                     busy = false
@@ -309,7 +311,9 @@ struct AlbumSharingSheet: View {
                 }
             } catch {
                 saving = false
-                load(warning: reportedFailure(error, operation: "Album sharing"))
+                let failure = ActivityFailure.recorded(error, operation: "Album sharing")
+                ActivityCenter.shared.record(kind, outcome: failure.unconfirmed ? .unconfirmed : .failed, failure: failure)
+                load(warning: failure.message)
             }
         }
     }

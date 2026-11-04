@@ -27,11 +27,8 @@ final class LibraryModel {
     @ObservationIgnored var selectionAuthorities: [PhotoCollectionDescriptor: PhotoSelectionAuthority] = [:]
     @ObservationIgnored var sessionSources: [PhotoCollectionDescriptor: PhotoCollectionDescriptor] = [:]
     var albumOperation: AlbumOperation?
-    var albumOperationError: String?
     var itemDeletion: ItemDeletion?
-    var itemDeletionError: String?
     @ObservationIgnored var itemDeletionTask: Task<Void, Never>?
-    var deletingAlbumID: Int64?
     @ObservationIgnored var albumOperationTask: Task<Void, Never>?
     @ObservationIgnored var filterAuthorities: [PhotoCollectionDescriptor: [[Bool]]] = [:]
     @ObservationIgnored var filterMemberships: [PhotoCollectionDescriptor: [[Int64]]] = [:]
@@ -43,13 +40,13 @@ final class LibraryModel {
     @ObservationIgnored private(set) var snapshotRevisions: [PhotoCollectionDescriptor: Int] = [:] { didSet { collectionStateChanged() } }
     @ObservationIgnored private(set) var viewerSnapshotRevisions: [PhotoCollectionDescriptor: Int] = [:] { didSet { collectionStateChanged() } }
     @ObservationIgnored private(set) var timelineVerifications: [PhotoCollectionDescriptor: Bool] = [:] { didSet { collectionStateChanged() } }
-    @ObservationIgnored private(set) var collectionErrors: [PhotoCollectionDescriptor: String] = [:] { didSet { collectionStateChanged() } }
+    @ObservationIgnored private(set) var collectionErrors: [PhotoCollectionDescriptor: String] = [:] { didSet { collectionStateChanged(); noteConnectionState() } }
     private(set) var collectionStateRevision: UInt64 = 0
     @ObservationIgnored private var quietCollectionUpdates = false
     @ObservationIgnored private var pendingCollectionAnnouncement: Task<Void, Never>?
     private static let quietAnnouncementDelay: Duration = .seconds(1)
     private(set) var isLoading = true
-    private(set) var authenticationStatus: AuthenticationStatus = .notStarted
+    private(set) var authenticationStatus: AuthenticationStatus = .notStarted { didSet { noteConnectionState() } }
     private(set) var retryRevision = 0
     private(set) var canToggleViewerFavorite = false
     var showsFilmstrip = false
@@ -60,7 +57,7 @@ final class LibraryModel {
     private(set) var canNavigateBack = false
     private(set) var canOpenSelectedPhoto = false
     private(set) var browserCommandsActive = false
-    /// Whether the browser selection-favorite action may begin (selection non-empty, no active write).
+    /// Whether the browser selection-favorite action may begin (selection non-empty, no confirmation pending).
     private(set) var canToggleBrowserFavorite = false
     /// True when every item of a small browser selection is a favorite; fills the toolbar heart.
     var browserSelectionFavorited = false
@@ -70,10 +67,7 @@ final class LibraryModel {
     @ObservationIgnored var favoriteObserverRepository: ObjectIdentifier?
     /// Pending confirmation for a large selection-favorite action; nil when no confirmation is needed.
     var pendingFavoriteConfirmation: SelectionFavoriteConfirmation?
-    var browserFavoriteFailure: String?
-    var rotationFailure: String?
     var rotationBusy = false
-    var annotationFailure: String?
     var annotationBusy = false
     var thumbnailRotationProgress: ThumbnailRotationProgress?
     var isFixingThumbnailRotations = false
@@ -81,7 +75,10 @@ final class LibraryModel {
     private(set) var cacheResetInProgress = false
     private(set) var cacheResetError: String?
     private(set) var isRefreshing = false
-    private(set) var refreshFailure: String?
+    private(set) var refreshFailure: String? { didSet { noteConnectionState() } }
+    /// The last state `noteConnectionState` saw, and whether a lost-connection notice is showing.
+    @ObservationIgnored var lastConnectionState: ConnectionState?
+    @ObservationIgnored var connectionLossNoticed = false
     var albumMembershipRevision: UInt64 = 0
     @ObservationIgnored var changedAlbumID: Int64?
     private(set) var mapFilterInvalidationRevision: UInt64 = 0
@@ -97,8 +94,10 @@ final class LibraryModel {
     @ObservationIgnored var viewerCloseHandler: (() -> Void)?
     @ObservationIgnored var backHandler: (() -> Void)?
     @ObservationIgnored var thumbnailRotationTask: Task<Void, Never>?
-    /// True while a selection-favorite write (or resolution) is in progress.
-    @ObservationIgnored var browserFavoriteBusy = false
+    /// Browser and Info panel favorite changes run one after another.
+    @ObservationIgnored var favoriteWriteTail: Task<Void, Never>?
+    /// Resumes the queued favorite change waiting for the confirmation alert.
+    @ObservationIgnored var favoriteConfirmationReply: CheckedContinuation<Bool, Never>?
     var authenticationFailed: Bool {
         if case .failed = authenticationStatus { return true }
         return false
@@ -109,6 +108,10 @@ final class LibraryModel {
     private(set) var albumListError: String?
     private(set) var presentationNamespace: String?
     let session: AppSession
+    /// Where tracked changes report progress and failures.
+    @ObservationIgnored let activity: ActivityCenter
+    /// Album writes run one at a time; the repository rejects concurrent album mutations.
+    @ObservationIgnored var albumWriteTail: Task<Void, Never>?
     var repository: CachedPhotosRepository? { session.repository }
     @ObservationIgnored var started = false
     @ObservationIgnored var authenticationTask: Task<Void, Never>?
@@ -130,12 +133,14 @@ final class LibraryModel {
     @ObservationIgnored var preferenceObservations: Set<AnyCancellable> = []
     @ObservationIgnored var thumbnailPolicyRevision: UInt64 = 0
 
-    convenience init(repository: CachedPhotosRepository? = nil, preferences: AppPreferences = AppPreferences()) {
-        self.init(session: AppSession(preferences: preferences, repository: repository))
+    convenience init(repository: CachedPhotosRepository? = nil, preferences: AppPreferences = AppPreferences(),
+                     activity: ActivityCenter = .shared) {
+        self.init(session: AppSession(preferences: preferences, repository: repository), activity: activity)
     }
 
-    init(session: AppSession) {
+    init(session: AppSession, activity: ActivityCenter = .shared) {
         self.session = session
+        self.activity = activity
         self.presentationNamespace = session.repository?.namespace
         let preferences = session.preferences
         // The repository applies the thumbnail and budget preferences; latest change wins.
@@ -432,7 +437,6 @@ final class LibraryModel {
             browserCommandSnapshot.canToggleFavorite &&
             !browserCommandSnapshot.selectedOrdinals.isEmpty &&
             pendingFavoriteConfirmation == nil &&
-            !browserFavoriteBusy &&
             timelineVerified(for: browserCommandSnapshot.collection)
         if canToggleBrowserFavorite != available { canToggleBrowserFavorite = available }
     }
@@ -662,14 +666,48 @@ final class LibraryModel {
         }
         isRefreshing = true
         defer { isRefreshing = false }
+        let handle = activity.begin(.refresh, retry: { [weak self] _ in
+            guard let self else { return false }
+            Task { await self.refresh() }
+            return true
+        })
         do {
             try await repository.refreshMetadata()
             refreshFailure = nil
+            handle.succeed()
+            activity.resolveFailures(of: .refresh)
             resubscribeAfterRefresh()
         } catch {
-            refreshFailure = reportedFailure(error, operation: "Refresh")
+            activity.resolveFailures(of: .refresh)
+            refreshFailure = handle.fail(error, operation: "Refresh")
         }
     }
+
+    /// Posts a notice when the NAS becomes unavailable and when it is reachable again. A failed
+    /// Refresh is already reported as a failure, so it gets no lost-connection notice of its own.
+    func noteConnectionState() {
+        let state = connectionState
+        guard state != lastConnectionState else { return }
+        lastConnectionState = state
+        switch state {
+        case .connected:
+            activity.connectionIsHealthy = true
+            if connectionLossNoticed {
+                connectionLossNoticed = false
+                activity.notice("Connected to the NAS again", key: "connection")
+            }
+        case .degraded(let label, let detail), .failed(let label, let detail):
+            activity.connectionIsHealthy = false
+            let onlyRefreshFailed = refreshFailure != nil && error(for: .library(.personal)) == nil
+            if case .degraded = state, onlyRefreshFailed { return }
+            guard !connectionLossNoticed else { return }
+            connectionLossNoticed = true
+            activity.notice(label, detail: "\(detail) Showing cached content.", key: "connection")
+        case .connecting:
+            break
+        }
+    }
+
 
     /// Re-runs the album and collection streams without clearing what they show. Each starts
     /// from its cached value, which equals the current one, and merges the re-read result.
@@ -760,9 +798,7 @@ final class LibraryModel {
         albums = []
         albumListError = nil
         browserSelectionStates.removeAll()
-        pendingFavoriteConfirmation = nil
-        browserFavoriteFailure = nil
-        browserFavoriteBusy = false
+        answerFavoriteConfirmation(false)
         metadataInvalidationRevision = revision
         updateBrowserFavoriteAvailability()
 

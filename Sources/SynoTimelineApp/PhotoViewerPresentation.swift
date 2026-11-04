@@ -12,7 +12,6 @@ final class PhotoViewerPresentation: ObservableObject {
     @Published private(set) var isDecodingFullImage = false
     @Published private(set) var invalidationMessage: String?
     @Published private(set) var isClosing = false
-    @Published private(set) var rotationFailure: String?
     @Published private(set) var rotationPending = false
     @Published private(set) var isDisplayingFullResolution = false
     @Published var zoom: Double = 1
@@ -28,6 +27,8 @@ final class PhotoViewerPresentation: ObservableObject {
     let repository: CachedPhotosRepository
     let collection: PhotoCollectionDescriptor
     let isIncoming: Bool
+    /// Where favorite and rotation changes report progress and failures.
+    var activity: ActivityCenter = .shared
     private let videoQuality: VideoQualityPreference
 
     private var stateTask: Task<Void, Never>?
@@ -43,6 +44,7 @@ final class PhotoViewerPresentation: ObservableObject {
     private var lastFullData: Data?
     private var hasDisplayedFullImage = false
     private var adoptedNeighborPreview = false
+    private var lastFullImageFailureItemID: Int64?
 
     init(repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor,
          index: LibraryIndex, request: PhotoViewerOpenRequest,
@@ -168,8 +170,21 @@ final class PhotoViewerPresentation: ObservableObject {
     }
 
     func toggleFavorite() {
-        guard canToggleFavorite else { return }
-        Task { await session.toggleFavorite() }
+        guard canToggleFavorite, let item = state?.item, let state,
+              index.sections.indices.contains(state.desiredLocation.sectionIndex) else { return }
+        let section = index.sections[state.desiredLocation.sectionIndex]
+        let action = SelectionFavoriteAction(affectedIDs: [item.id], targetFavorite: !item.isFavorite,
+                                             sectionsByID: [item.id: section], collection: collection,
+                                             itemsByID: [item.id: item])
+        let handle = activity.begin(.favorite(!item.isFavorite), items: [ActivityItem(photo: item, collection: collection)],
+                                    retry: FavoriteActivity.retry(action, repository: repository, activity: activity))
+        Task {
+            switch await session.toggleFavorite() {
+            case nil: handle.discard()
+            case .success: handle.succeed()
+            case .failure(let error): handle.fail(error, operation: "Viewer favorite")
+            }
+        }
     }
 
     var canRotate: Bool {
@@ -202,21 +217,21 @@ final class PhotoViewerPresentation: ObservableObject {
     func rotate(_ direction: PhotoRotationDirection) {
         guard let action = rotationAction() else { return }
         rotationPending = true
-        rotationFailure = nil
         let priorImage = image
         let repository = repository
         if let image { self.image = Self.rotatedImage(image, direction: direction) }
+        let handle = activity.begin(.rotate(direction), items: action.activityItems)
         Task { [weak self] in
-            do { try await repository.rotate(action, direction: direction) }
-            catch {
+            do {
+                try await repository.rotate(action, direction: direction)
+                handle.succeed()
+            } catch {
                 self?.image = priorImage
-                self?.rotationFailure = reportedFailure(error, operation: "Viewer rotation")
+                handle.fail(error, operation: "Viewer rotation")
             }
             self?.rotationPending = false
         }
     }
-
-    func dismissRotationFailure() { rotationFailure = nil }
 
     func sectionOffsetHint(for location: PhotoViewerLocation) -> Int? {
         guard index.sections.indices.contains(location.sectionIndex) else { return nil }
@@ -297,6 +312,17 @@ final class PhotoViewerPresentation: ObservableObject {
         neighborPreviewTasks.removeAll()
     }
 
+    /// Notes, once per photo, that the opened photo's full resolution failed to load. Skipped
+    /// while the NAS is known to be unreachable, which the connection notice already covers.
+    private func noteFullImageFailure(_ next: PhotoViewerState) {
+        guard case .failure(let message) = next.fullImageStatus, let item = next.item,
+              item.id != lastFullImageFailureItemID else { return }
+        lastFullImageFailureItemID = item.id
+        guard activity.connectionIsHealthy else { return }
+        activity.notice("Couldn't load full resolution of \(item.filename ?? "photo")", detail: message,
+                        key: "viewer:\(item.id)")
+    }
+
     private func receive(_ next: PhotoViewerState) {
         guard !next.isClosed else { return }
         if currentGeneration != next.selection.generation {
@@ -327,6 +353,7 @@ final class PhotoViewerPresentation: ObservableObject {
         }
         state = next
         onInfoItemChanged?(next.item)
+        noteFullImageFailure(next)
         if let data = next.fullImageData, lastFullData != data {
             lastFullData = data
             decodeFull(data, selection: next.selection)

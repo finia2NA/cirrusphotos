@@ -30,6 +30,19 @@ public enum SynologyAPIError: LocalizedError, Sendable, Equatable {
         }
     }
 
+    /// The case and code without server text, for copied error reports.
+    public var diagnosticCode: String {
+        switch self {
+        case .configuration: "configuration"
+        case .transport: "transport"
+        case .invalidResponse: "invalidResponse"
+        case .http(let status): "http(\(status))"
+        case .api(let code): "api(\(code))"
+        case .unsupported: "unsupported"
+        case .responseTooLarge(let limit): "responseTooLarge(\(limit))"
+        }
+    }
+
     /// Whether this failure means the client and server disagree about the protocol,
     /// rather than an ordinary offline, authentication or permission condition.
     public var isUnexpected: Bool {

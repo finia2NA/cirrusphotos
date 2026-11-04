@@ -5,16 +5,10 @@ import SwiftUI
 import SynologyAPI
 import UniformTypeIdentifiers
 
-struct PhotoDownloadJob: Identifiable {
-    let id: UUID
-    var name: String
-    var progress: Double?
-    var status: String
-    var active: Bool
-}
-
 enum PhotoDownloadSource: Sendable {
     case item(PhotoItem, collection: PhotoCollectionDescriptor)
+    /// Already verified items, used to retry a resolved download.
+    case items([PhotoItem], collection: PhotoCollectionDescriptor)
     case selection(PhotoSelectionSnapshot)
     case album(Int64)
     case incomingAlbum(PhotoCollectionDescriptor)
@@ -23,6 +17,7 @@ enum PhotoDownloadSource: Sendable {
         let items: [PhotoItem]?
         switch self {
         case .item(let item, _): items = [item]
+        case .items(let resolved, _): items = resolved
         case .selection(let selection): items = await SelectionDownloadResolver(repository: repository).resolve(selection)
         case .album(let id): items = await AlbumSelectionResolver(repository: repository).resolve(albumID: id)
         case .incomingAlbum(let collection): items = await AlbumSelectionResolver(repository: repository).resolve(collection: collection)
@@ -35,7 +30,7 @@ enum PhotoDownloadSource: Sendable {
 
     var collection: PhotoCollectionDescriptor {
         switch self {
-        case .item(_, let collection): return collection
+        case .item(_, let collection), .items(_, let collection): return collection
         case .selection(let selection): return selection.collection
         case .album(let id): return .album(id)
         case .incomingAlbum(let collection): return collection
@@ -43,26 +38,38 @@ enum PhotoDownloadSource: Sendable {
     }
 
     var initialName: String {
-        if case .item(let item, _) = self { return item.filename ?? "Photo" }
-        return "Preparing download…"
+        switch self {
+        case .item(let item, _): return item.filename ?? "Photo"
+        case .items(let items, _) where !items.isEmpty: return PhotoDownloadManager.jobName(items)
+        default: return "Preparing download…"
+        }
+    }
+
+    /// A selection snapshot can be resolved only once, so it is retried with its resolved items.
+    var isRepeatable: Bool {
+        if case .selection = self { return false }
+        return true
     }
 }
 
+/// Runs downloads, editor handoffs and file promises. Their progress and results are
+/// reported to the Activity panel.
 @MainActor
-final class PhotoDownloadManager: ObservableObject {
+final class PhotoDownloadManager {
     static let shared = PhotoDownloadManager()
-    @Published private(set) var jobs: [PhotoDownloadJob] = []
-    @Published var isPresented = false
-    var hasActiveJobs: Bool { jobs.contains { $0.active } }
+    var hasActiveJobs: Bool { !tasks.isEmpty }
     private var tasks: [UUID: Task<Void, Never>] = [:]
+    private let activity: ActivityCenter
     private let editDirectoryProvider: @Sendable () throws -> URL
     private let editorOpener: @MainActor (URL, URL) async throws -> Void
 
-    init(editDirectoryProvider: @escaping @Sendable () throws -> URL = { try PhotoDownloadManager.editDirectory() },
+    init(activity: ActivityCenter = .shared,
+         editDirectoryProvider: @escaping @Sendable () throws -> URL = { try PhotoDownloadManager.editDirectory() },
          editorOpener: @escaping @MainActor (URL, URL) async throws -> Void = { file, application in
              _ = try await NSWorkspace.shared.open([file], withApplicationAt: application,
                                                    configuration: NSWorkspace.OpenConfiguration())
          }) {
+        self.activity = activity
         self.editDirectoryProvider = editDirectoryProvider
         self.editorOpener = editorOpener
     }
@@ -88,39 +95,53 @@ final class PhotoDownloadManager: ObservableObject {
     func start(repository: CachedPhotosRepository, source: PhotoDownloadSource,
                kind: PhotoDownloadKind, choose: Bool) {
         guard let directory = choose ? chooseDirectory() : Self.directory else { return }
+        start(repository: repository, source: source, kind: kind, directory: directory)
+    }
+
+    func start(repository: CachedPhotosRepository, source: PhotoDownloadSource,
+               kind: PhotoDownloadKind, directory: URL) {
         let id = UUID()
-        jobs.insert(PhotoDownloadJob(id: id, name: source.initialName, progress: nil,
-                                     status: "Preparing…", active: true), at: 0)
+        let handle = activity.begin(.download(name: source.initialName), id: id, cancel: { [weak self] in self?.cancel(id) })
+        handle.status("Preparing…")
+        func retry(_ source: PhotoDownloadSource) -> ActivityRetry {
+            { [weak self] _ in
+                guard let self else { return false }
+                start(repository: repository, source: source, kind: kind, directory: directory)
+                return true
+            }
+        }
+        if source.isRepeatable { handle.setRetry(retry(source)) }
         tasks[id] = Task { [weak self] in
             guard let self else { return }
             do {
                 let mediaCollection = await repository.mediaCollection(for: source.collection)
                 let items = try await source.resolve(repository: repository)
-                update(id) { $0.name = Self.jobName(items); $0.status = "Downloading…" }
+                handle.rename(.download(name: Self.jobName(items)))
+                handle.setRetry(retry(.items(items, collection: source.collection)))
+                handle.status("Downloading…")
                 let reusable = mediaCollection.incomingAlbumIdentity == nil && !mediaCollection.isLibraryFilter
                 let cached = try await (reusable && items.count == 1 && kind == .original
                     ? repository.cachedOriginalForDownload(items[0], collection: mediaCollection) : nil)
                 let result: PhotoDownloadResponse
                 if let cached { result = cached }
                 else {
-                    result = try await repository.downloadPhotos(itemIDs: items.map(\.id), kind: kind, collection: mediaCollection) { [weak self] progress in
-                        Task { @MainActor [weak self] in
-                            self?.update(id) { if $0.active { $0.progress = progress.fractionCompleted } }
-                        }
+                    result = try await repository.downloadPhotos(itemIDs: items.map(\.id), kind: kind, collection: mediaCollection) { progress in
+                        Task { @MainActor in handle.progress(fraction: progress.fractionCompleted) }
                     }
                 }
                 defer { try? FileManager.default.removeItem(at: result.temporaryURL.deletingLastPathComponent()) }
                 try Task.checkCancellation()
-                update(id) { $0.status = "Saving…" }
+                handle.status("Saving…")
                 let saveTask = Task.detached(priority: .utility) {
                     try Self.save(result.temporaryURL, filename: result.filename, directory: directory)
                 }
                 let final = try await withTaskCancellationHandler {
                     try await saveTask.value
                 } onCancel: { saveTask.cancel() }
-                update(id) { $0.progress = 1; $0.status = "Saved to \(final.path)"; $0.active = false }
+                handle.status("Saved to \(final.path)")
+                handle.succeed(savedURL: final)
             } catch {
-                update(id) { $0.status = error is CancellationError ? "Cancelled" : reportedFailure(error, operation: "Download"); $0.active = false }
+                handle.fail(error, operation: "Download")
             }
             tasks[id] = nil
         }
@@ -130,9 +151,20 @@ final class PhotoDownloadManager: ObservableObject {
               item: PhotoItem?, collection: PhotoCollectionDescriptor, applicationURL: URL) {
         let capturedSelection = selection?.captureSelection(timeline: snapshot)
         let id = UUID()
-        jobs.insert(PhotoDownloadJob(id: id, name: item?.filename ?? "Preparing photo…", progress: nil,
-                                     status: "Preparing…", active: true), at: 0)
-        isPresented = true
+        let application = Self.applicationName(applicationURL)
+        let handle = activity.begin(.editHandoff(name: item?.filename ?? "Preparing photo…", application: application),
+                                    id: id, cancel: { [weak self] in self?.cancel(id) })
+        handle.status("Preparing…")
+        func retry(_ photo: PhotoItem) -> ActivityRetry {
+            { [weak self] _ in
+                guard let self else { return false }
+                edit(repository: repository, snapshot: nil, selection: nil, item: photo,
+                     collection: capturedSelection?.collection ?? collection, applicationURL: applicationURL)
+                return true
+            }
+        }
+        if let item { handle.setRetry(retry(item)) }
+        activity.present()
         tasks[id] = Task { [weak self] in
             guard let self else { return }
             var saved: URL?
@@ -147,30 +179,30 @@ final class PhotoDownloadManager: ObservableObject {
                     photo = resolved
                 } else { throw DownloadFailure.message("No photo is selected.") }
                 try Task.checkCancellation()
+                handle.rename(.editHandoff(name: photo.filename ?? "Photo", application: application))
+                handle.setRetry(retry(photo))
                 let mediaCollection = try await repository.collectionForPhotoEditing(
                     itemID: photo.id, collection: capturedSelection?.collection ?? collection)
-                update(id) { $0.name = photo.filename ?? "Photo"; $0.status = "Downloading…" }
+                handle.status("Downloading…")
+                let progress: @Sendable (TransferProgress) -> Void = { value in
+                    Task { @MainActor in handle.progress(fraction: value.fractionCompleted) }
+                }
                 let cached = try await repository.cachedOriginalForDownload(photo, includeLivePhoto: true, collection: mediaCollection)
                 let response: PhotoDownloadResponse
                 if let cached { response = cached }
                 else if photo.mediaKind == .livePhoto {
-                    guard let still = try await repository.livePhotoStillForEditing(photo, collection: mediaCollection, progress: { [weak self] progress in
-                        Task { @MainActor [weak self] in
-                            self?.update(id) { if $0.active { $0.progress = progress.fractionCompleted } }
-                        }
-                    }) else { throw DownloadFailure.message("The Live Photo still is unavailable.") }
+                    guard let still = try await repository.livePhotoStillForEditing(photo, collection: mediaCollection, progress: progress) else {
+                        throw DownloadFailure.message("The Live Photo still is unavailable.")
+                    }
                     response = still
                 }
                 else {
-                    response = try await repository.downloadPhotos(itemIDs: [photo.id], kind: .original, collection: mediaCollection) { [weak self] progress in
-                        Task { @MainActor [weak self] in
-                            self?.update(id) { if $0.active { $0.progress = progress.fractionCompleted } }
-                        }
-                    }
+                    response = try await repository.downloadPhotos(itemIDs: [photo.id], kind: .original, collection: mediaCollection,
+                                                                   progress: progress)
                 }
                 defer { try? FileManager.default.removeItem(at: response.temporaryURL.deletingLastPathComponent()) }
                 try Task.checkCancellation()
-                update(id) { $0.status = "Saving…" }
+                handle.status("Saving…")
                 let directoryProvider = editDirectoryProvider
                 let saveTask = Task.detached(priority: .utility) {
                     let directory = try directoryProvider()
@@ -182,18 +214,20 @@ final class PhotoDownloadManager: ObservableObject {
                 } onCancel: { saveTask.cancel() }
                 saved = file
                 try Task.checkCancellation()
-                update(id) { $0.status = "Opening…" }
+                handle.status("Opening…")
                 try await editorOpener(file, applicationURL)
-                update(id) { $0.progress = 1; $0.status = "Saved to \(file.path)"; $0.active = false }
+                handle.status("Saved to \(file.path)")
+                handle.succeed(savedURL: file)
             } catch {
-                let description = error is CancellationError ? "Cancelled" : reportedFailure(error, operation: "File promise")
-                update(id) {
-                    $0.status = saved.map { "\(description) — file saved to \($0.path)" } ?? description
-                    $0.active = false
-                }
+                handle.fail(error, operation: "Edit With", note: saved.map { "File saved to \($0.path)" })
             }
             tasks[id] = nil
         }
+    }
+
+    nonisolated static func applicationName(_ url: URL) -> String {
+        let name = FileManager.default.displayName(atPath: url.path)
+        return name.hasSuffix(".app") ? String(name.dropLast(4)) : name
     }
 
     nonisolated static func editDirectory() throws -> URL {
@@ -205,18 +239,18 @@ final class PhotoDownloadManager: ObservableObject {
 
     func fulfillPromise(_ payload: PhotoDragPayload, destination: URL, completion: @escaping (Error?) -> Void) {
         let id = UUID()
-        jobs.insert(PhotoDownloadJob(id: id, name: payload.source.initialName,
-                                     progress: nil, status: "Preparing…", active: true), at: 0)
+        let handle = activity.begin(.filePromise(name: payload.source.initialName), id: id,
+                                    cancel: { [weak self] in self?.cancel(id) })
+        handle.status("Preparing…")
         tasks[id] = Task { [weak self] in
             guard let self else { completion(CancellationError()); return }
             do {
                 let mediaCollection = await payload.repository.mediaCollection(for: payload.source.collection)
                 let items = try await payload.source.resolve(repository: payload.repository)
-                update(id) { $0.name = Self.jobName(items); $0.status = "Downloading…" }
-                let progress: @Sendable (TransferProgress) -> Void = { [weak self] value in
-                    Task { @MainActor [weak self] in
-                        self?.update(id) { if $0.active { $0.progress = value.fractionCompleted } }
-                    }
+                handle.rename(.filePromise(name: Self.jobName(items)))
+                handle.status("Downloading…")
+                let progress: @Sendable (TransferProgress) -> Void = { value in
+                    Task { @MainActor in handle.progress(fraction: value.fractionCompleted) }
                 }
                 let response: PhotoDownloadResponse
                 if payload.delivery == .file, items.count == 1,
@@ -232,7 +266,7 @@ final class PhotoDownloadManager: ObservableObject {
                 }
                 defer { try? FileManager.default.removeItem(at: response.temporaryURL.deletingLastPathComponent()) }
                 try Task.checkCancellation()
-                update(id) { $0.status = payload.delivery == .folder ? "Unzipping…" : "Saving…" }
+                handle.status(payload.delivery == .folder ? "Unzipping…" : "Saving…")
                 let delivery = payload.delivery
                 let writeTask = Task.detached(priority: .utility) {
                     switch delivery {
@@ -243,10 +277,11 @@ final class PhotoDownloadManager: ObservableObject {
                 try await withTaskCancellationHandler {
                     try await writeTask.value
                 } onCancel: { writeTask.cancel() }
-                update(id) { $0.progress = 1; $0.status = "Saved to \(destination.path)"; $0.active = false }
+                handle.status("Saved to \(destination.path)")
+                handle.succeed(savedURL: destination)
                 completion(nil)
             } catch {
-                update(id) { $0.status = error is CancellationError ? "Cancelled" : reportedFailure(error, operation: "File promise"); $0.active = false }
+                handle.fail(error, operation: "File promise")
                 completion(error)
             }
             tasks[id] = nil
@@ -348,17 +383,9 @@ final class PhotoDownloadManager: ObservableObject {
     }
 
     func cancel(_ id: UUID) { tasks[id]?.cancel() }
+    /// Cancels every transfer; each settles as cancelled in the Activity panel.
     func cancelAll() {
         for task in tasks.values { task.cancel() }
-        for index in jobs.indices where jobs[index].active {
-            jobs[index].active = false
-            jobs[index].status = "Cancelled"
-        }
-    }
-    func clearFinished() { jobs.removeAll { !$0.active } }
-    private func update(_ id: UUID, _ change: (inout PhotoDownloadJob) -> Void) {
-        guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
-        change(&jobs[index])
     }
     nonisolated static func jobName(_ items: [PhotoItem]) -> String {
         if items.count == 1 { return items[0].filename ?? "Photo" }
@@ -402,35 +429,6 @@ private enum DownloadFailure: LocalizedError {
     var errorDescription: String? { if case .message(let message) = self { return message }; return nil }
 }
 
-struct DownloadsToolbarControl: View {
-    @ObservedObject private var downloads = PhotoDownloadManager.shared
-    var body: some View {
-        Button { downloads.isPresented.toggle() } label: {
-            Label("Downloads", systemImage: downloads.hasActiveJobs ? "arrow.down.circle.fill" : "arrow.down.circle")
-                .labelStyle(.iconOnly)
-        }
-            .help("Downloads")
-            .accessibilityLabel("Downloads")
-            .popover(isPresented: $downloads.isPresented) {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack { Text("Downloads").font(.headline); Spacer(); Button("Clear Finished") { downloads.clearFinished() }.disabled(!downloads.jobs.contains { !$0.active }) }
-                    if downloads.jobs.isEmpty { Text("No downloads").foregroundStyle(.secondary) }
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                            ForEach(downloads.jobs) { job in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack { Text(job.name).lineLimit(1); Spacer(); if job.active { Button("Cancel") { downloads.cancel(job.id) }.controlSize(.small) } }
-                                    if job.active { ProgressView(value: job.progress) }
-                                    Text(job.status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                                }
-                            }
-                        }
-                    }.frame(maxHeight: 300)
-                }.padding(16).frame(width: 340)
-            }
-    }
-}
-
 final class PhotoDownloadMenuItem: NSMenuItem {
     private let handler: () -> Void
     init(title: String, handler: @escaping () -> Void) {
@@ -460,9 +458,7 @@ func makeEditorMenu(applications: [URL], onChoose: @escaping (URL) -> Void,
                     onOther: @escaping () -> Void) -> NSMenu {
     let submenu = NSMenu(title: "Edit With")
     for application in applications {
-        let name = FileManager.default.displayName(atPath: application.path)
-        let title = name.hasSuffix(".app") ? String(name.dropLast(4)) : name
-        let item = PhotoDownloadMenuItem(title: title) { onChoose(application) }
+        let item = PhotoDownloadMenuItem(title: PhotoDownloadManager.applicationName(application)) { onChoose(application) }
         let icon = (NSWorkspace.shared.icon(forFile: application.path).copy() as? NSImage)
         icon?.size = NSSize(width: 16, height: 16)
         icon?.isTemplate = false

@@ -18,6 +18,23 @@ extension LibraryModel {
     private enum AnnotationRequest {
         case edit(PhotoAnnotationEdit)
         case newTag(String)
+
+        var activityKind: ActivityKind {
+            switch self {
+            case .edit(.rating(let rating)): .rating(rating)
+            case .edit(.addTags(let tags)): .addTags(tags.map(\.name))
+            case .edit(.removeTags(let tags)): .removeTags(tags.map(\.name))
+            case .newTag(let name): .newTag(name)
+            }
+        }
+
+        var actionName: String {
+            switch self {
+            case .edit(.rating): "Rating"
+            case .edit(.removeTags): "Remove Tag"
+            case .edit(.addTags), .newTag: "Add Tag"
+            }
+        }
     }
 
     var canAnnotate: Bool {
@@ -64,8 +81,6 @@ extension LibraryModel {
         if let viewer = activeViewer, let item = viewer.state?.item { return !item.tags.isEmpty }
         return true
     }
-
-    func dismissAnnotationFailure() { annotationFailure = nil }
 
     // MARK: Targets
 
@@ -123,7 +138,7 @@ extension LibraryModel {
             guard let self, let action = await target.resolve() else { return }
             let present = action.presentTags
             guard !present.isEmpty else {
-                annotationFailure = "The selected photos have no tags."
+                reportNotStarted("Remove Tag", error: .invalidInput("The selected photos have no tags."))
                 return
             }
             guard let tag = promptForTagToRemove(present) else { return }
@@ -216,22 +231,40 @@ extension LibraryModel {
     private func run(_ request: AnnotationRequest, on target: AnnotationTarget) {
         guard !annotationBusy, let repository else { return }
         annotationBusy = true
-        annotationFailure = nil
         Task { [weak self] in
             guard let self else { return }
             defer { annotationBusy = false }
             guard let action = await target.resolve() else {
-                annotationFailure = "The selected photos could not be verified. Try again."
+                reportUnverified(request.actionName)
                 return
             }
-            do {
-                switch request {
-                case .edit(let edit): try await repository.annotate(action, edit: edit)
-                case .newTag(let name): try await repository.addNewTag(named: name, to: action)
-                }
-            } catch {
-                annotationFailure = reportedFailure(error, operation: "Ratings and tags")
+            await runAnnotation(request, action: action, repository: repository)
+        }
+    }
+
+    /// Sends a resolved edit as a tracked activity. Ratings and tag changes are absolute, so their
+    /// failed photos can be retried; creating a tag is not retried.
+    private func runAnnotation(_ request: AnnotationRequest, action: SelectionAnnotationAction,
+                               repository: CachedPhotosRepository) async {
+        let items = action.items.map { ActivityItem(photo: $0, collection: action.collection) }
+        var retry: ActivityRetry?
+        if case .edit = request {
+            retry = { [weak self] retried in
+                let ids = Set(retried.compactMap(\.photoID))
+                guard let self, !ids.isEmpty else { return false }
+                Task { await self.runAnnotation(request, action: action.restricted(to: ids), repository: repository) }
+                return true
             }
+        }
+        let handle = activity.begin(request.activityKind, items: items, totalCount: max(action.itemIDs.count, 1), retry: retry)
+        do {
+            switch request {
+            case .edit(let edit): try await repository.annotate(action, edit: edit)
+            case .newTag(let name): try await repository.addNewTag(named: name, to: action)
+            }
+            handle.succeed()
+        } catch {
+            handle.fail(error, operation: "Ratings and tags")
         }
     }
 

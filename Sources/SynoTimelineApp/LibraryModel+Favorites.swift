@@ -12,15 +12,26 @@ extension LibraryModel {
             toggleViewerFavorite()
             return
         }
-        guard canToggleBrowserFavorite, !browserFavoriteBusy,
-              let repository else { return }
-        browserFavoriteFailure = nil
+        guard canToggleBrowserFavorite, let repository else { return }
         let snap = browserCommandSnapshot
         guard snap.active, !snap.selectedOrdinals.isEmpty else { return }
-        browserFavoriteBusy = true
-        updateBrowserFavoriteAvailability()
-        Task { [weak self] in
-            await self?.resolveThenMutateFavorites(snapshot: snap, repository: repository)
+        enqueueFavorite(snapshot: snap, repository: repository)
+    }
+
+    /// Captures the selection now and queues its favorite change. Presses never wait for or
+    /// drop each other: each is resolved and sent after the previous one, so a toggle sees the
+    /// result of the one before it.
+    private func enqueueFavorite(snapshot: BrowserCommandSnapshot, repository: CachedPhotosRepository) {
+        let selection = snapshot.captureSelection(timeline: snapshots[snapshot.collection])
+        let previous = favoriteWriteTail
+        favoriteWriteTail = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            guard let selection else {
+                reportUnverified("Favorite")
+                return
+            }
+            await resolveThenMutateFavorites(selection: selection, repository: repository)
         }
     }
 
@@ -82,7 +93,7 @@ extension LibraryModel {
     func canFavoriteFromInfoPanel(viewerActive: Bool, collection: PhotoCollectionDescriptor, selection: IndexSet) -> Bool {
         if viewerActive { return canToggleViewerFavorite }
         return capabilities(for: collection).allowsSpaceItemActions && timelineVerified(for: collection) &&
-            !browserFavoriteBusy && pendingFavoriteConfirmation == nil &&
+            pendingFavoriteConfirmation == nil &&
             infoPanelSnapshot(collection: collection, selection: selection)?.canToggleFavorite == true
     }
 
@@ -95,74 +106,52 @@ extension LibraryModel {
             return
         }
         guard let repository, let snapshot = infoPanelSnapshot(collection: collection, selection: selection) else { return }
-        browserFavoriteFailure = nil
-        browserFavoriteBusy = true
-        updateBrowserFavoriteAvailability()
-        Task { [weak self] in
-            await self?.resolveThenMutateFavorites(snapshot: snapshot, repository: repository)
-        }
+        enqueueFavorite(snapshot: snapshot, repository: repository)
     }
 
-    func resolveThenMutateFavorites(snapshot: BrowserCommandSnapshot,
-                                             repository: CachedPhotosRepository) async {
-        defer {
-            browserFavoriteBusy = false
-            updateBrowserFavoriteAvailability()
-        }
-        guard let selection = snapshot.captureSelection(timeline: snapshots[snapshot.collection]) else { return }
-        let selectedEntireCollection = !snapshot.selectedOrdinals.isEmpty &&
-            snapshot.selectedOrdinals.count == LibraryIndex(snapshot: selection.timeline).totalCount
+    private func resolveThenMutateFavorites(selection: PhotoSelectionSnapshot,
+                                            repository: CachedPhotosRepository) async {
+        let selectedEntireCollection = !selection.selectedOrdinals.isEmpty &&
+            selection.selectedOrdinals.count == LibraryIndex(snapshot: selection.timeline).totalCount
         guard let action = await SelectionFavoriteResolver(repository: repository).resolve(selection) else {
-            browserFavoriteFailure = "The selected photos could not be verified. Try again."
+            reportUnverified("Favorite")
             return
         }
 
         guard !action.affectedIDs.isEmpty else { return }
 
         if selectedEntireCollection || action.affectedIDs.count > 5 {
-            let confirmation = SelectionFavoriteConfirmation(action: action)
-            pendingFavoriteConfirmation = confirmation
-            return
+            // The queue waits for the answer, so later presses see this change's result.
+            let confirmed = await withCheckedContinuation { continuation in
+                favoriteConfirmationReply = continuation
+                pendingFavoriteConfirmation = SelectionFavoriteConfirmation(action: action)
+                updateBrowserFavoriteAvailability()
+            }
+            guard confirmed else { return }
         }
         await executeFavoriteAction(action, repository: repository)
     }
 
     func confirmBrowserFavorite() {
-        guard let confirmation = pendingFavoriteConfirmation,
-              let repository else {
-            pendingFavoriteConfirmation = nil
-            return
-        }
-        let action = confirmation.action
-        pendingFavoriteConfirmation = nil
-        browserFavoriteBusy = true
-        updateBrowserFavoriteAvailability()
-        Task { [weak self] in
-            defer {
-                self?.browserFavoriteBusy = false
-                self?.updateBrowserFavoriteAvailability()
-            }
-            await self?.executeFavoriteAction(action, repository: repository)
-        }
+        answerFavoriteConfirmation(true)
     }
 
     func cancelBrowserFavorite() {
-        pendingFavoriteConfirmation = nil
-        browserFavoriteBusy = false
-        updateBrowserFavoriteAvailability()
+        answerFavoriteConfirmation(false)
     }
 
-    func dismissBrowserFavoriteFailure() {
-        browserFavoriteFailure = nil
+    /// Clears the confirmation alert and lets the waiting favorite change continue or stop.
+    func answerFavoriteConfirmation(_ confirmed: Bool) {
+        pendingFavoriteConfirmation = nil
+        updateBrowserFavoriteAvailability()
+        let reply = favoriteConfirmationReply
+        favoriteConfirmationReply = nil
+        reply?.resume(returning: confirmed)
     }
 
     func executeFavoriteAction(_ action: SelectionFavoriteAction,
                                        repository: CachedPhotosRepository) async {
-        do {
-            try await repository.setFavoritesBatch(action: action)
-        } catch {
-            browserFavoriteFailure = reportedFailure(error, operation: "Favorites")
-        }
+        await FavoriteActivity.run(action, repository: repository, activity: activity)
     }
 }
 

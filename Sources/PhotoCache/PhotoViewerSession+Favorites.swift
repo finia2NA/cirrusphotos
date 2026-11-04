@@ -3,10 +3,12 @@ import SynologyAPI
 
 // Actor-isolated favorites coordination; task identities remain owned by the session.
 extension PhotoViewerSession {
-    public func toggleFavorite() async {
-        guard supportsItemActions else { return }
+    /// Toggles the current item's favorite. Returns the write's result, or nil when none started.
+    @discardableResult
+    public func toggleFavorite() async -> Result<Void, any Error>? {
+        guard supportsItemActions else { return nil }
         guard !closed, allowNetwork, metadataVerified, let item = currentItem,
-              !pendingFavoriteIDs.contains(item.id) else { return }
+              !pendingFavoriteIDs.contains(item.id) else { return nil }
         let itemID = item.id
         pendingFavoriteIDs.insert(itemID)
         favoriteFailures.removeValue(forKey: itemID)
@@ -23,6 +25,7 @@ extension PhotoViewerSession {
             playlistDidChange()
         }
         applyFavorite(itemID: itemID, value: target)
+        let result: Result<Void, any Error>
         do {
             try await repository.setFavorite(itemID: itemID, item: item, in: section,
                                               collection: collection, to: target)
@@ -33,6 +36,7 @@ extension PhotoViewerSession {
                 // the filtered endpoint changes.
                 playlistDidChange()
             }
+            result = .success(())
         } catch {
             if collection.favoriteOnly {
                 playlist.restore(previousPlaylistEntry, itemID: itemID)
@@ -40,9 +44,11 @@ extension PhotoViewerSession {
             }
             applyFavorite(itemID: itemID, value: item.isFavorite)
             favoriteFailures[itemID] = error.localizedDescription
+            result = .failure(error)
         }
         pendingFavoriteIDs.remove(itemID)
         publish()
+        return result
     }
 
     func reconstructPlaylistPage(_ live: [PhotoItem], plan: ViewerPlaylist.PagePlan,

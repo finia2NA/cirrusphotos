@@ -3,15 +3,19 @@ import PhotoCache
 import SwiftUI
 import SynologyAPI
 
+/// Uploads Finder drops one batch at a time. Progress and per-file failures are reported
+/// to the Activity panel.
 @MainActor
-final class PhotoUploadManager: ObservableObject {
+final class PhotoUploadManager {
     static let shared = PhotoUploadManager()
-    @Published var presented = false
-    @Published private(set) var status = ""
-    @Published private(set) var active = false
-    @Published private(set) var progress: Double?
+    private(set) var active = false
+    private let activity: ActivityCenter
     private var task: Task<Void, Never>?
     private var thumbnailPolls: [UUID: Task<Void, Never>] = [:]
+
+    init(activity: ActivityCenter = .shared) {
+        self.activity = activity
+    }
 
     static func fileURLs(_ sender: NSDraggingInfo) -> [URL] {
         guard sender.draggingPasteboard.availableType(from: [SelectionDragRegistry.type, AlbumDragRegistry.type]) == nil else { return [] }
@@ -23,38 +27,52 @@ final class PhotoUploadManager: ObservableObject {
         guard !active, !urls.isEmpty else { return false }
         let access = urls.map { $0.startAccessingSecurityScopedResource() }
         active = true
-        presented = true
-        let suffix = destinationName.map { " to \($0)" } ?? ""
-        status = "Preparing upload\(suffix)…"
+        let items = urls.map { ActivityItem(file: $0) }
+        let handle = activity.begin(.upload(destination: destinationName), items: items,
+                                    cancel: { [weak self] in self?.cancel() },
+                                    retry: { [weak self] retried in
+            self?.start(retried.compactMap(\.fileURL), repository: repository, destination: destination,
+                        destinationName: destinationName, finished: finished) ?? false
+        })
         task = Task { [self] in
             defer {
                 for (url, started) in zip(urls, access) where started { url.stopAccessingSecurityScopedResource() }
                 active = false
                 task = nil
             }
-            var errors: [String] = []
-            var completed = 0
+            var failed: [ActivityItem] = []
+            var firstError: (any Error)?
             var uploadedIDs: [Int64] = []
             for (index, url) in urls.enumerated() {
                 if Task.isCancelled { break }
-                status = "Uploading \(index + 1) of \(urls.count)\(suffix): \(url.lastPathComponent)"
-                progress = nil
+                handle.status("\(index + 1) of \(urls.count): \(url.lastPathComponent)")
+                handle.progress(fraction: nil)
                 do {
-                    let uploaded = try await repository.uploadPhoto(at: url, destination: destination) { [weak self] transfer in
-                        Task { @MainActor in
-                            guard let total = transfer.totalBytes, total > 0 else { return }
-                            self?.progress = Double(transfer.completedBytes) / Double(total)
-                        }
+                    let uploaded = try await repository.uploadPhoto(at: url, destination: destination) { transfer in
+                        guard let total = transfer.totalBytes, total > 0 else { return }
+                        let fraction = Double(transfer.completedBytes) / Double(total)
+                        Task { @MainActor in handle.progress(fraction: fraction) }
                     }
-                    completed += 1
                     uploadedIDs.append(uploaded.id)
                 } catch is CancellationError { break }
-                catch { errors.append("\(url.lastPathComponent): \(reportedFailure(error, operation: "Upload"))") }
+                catch {
+                    var item = items[index]
+                    item.message = reportedFailure(error, operation: "Upload")
+                    failed.append(item)
+                    if firstError == nil { firstError = error }
+                }
+                handle.progress(completed: index + 1)
             }
-            progress = nil
-            if Task.isCancelled { status = "Upload cancelled. Check the destination before retrying." }
-            else if errors.isEmpty { status = "Processed \(completed) \(completed == 1 ? "photo" : "photos")\(suffix)." }
-            else { status = "Processed \(completed) of \(urls.count)\(suffix).\n" + errors.joined(separator: "\n") }
+            if Task.isCancelled {
+                handle.status("Upload cancelled. Check the destination before retrying.")
+                handle.cancelled()
+            } else if let firstError {
+                handle.status(nil)
+                handle.fail(firstError, operation: "Upload", failedItems: failed, logs: false)
+            } else {
+                handle.status(nil)
+                handle.succeed()
+            }
             await finished()
             if !Task.isCancelled { pollThumbnails(of: uploadedIDs, repository: repository, destination: destination, finished: finished) }
         }
@@ -80,28 +98,6 @@ final class PhotoUploadManager: ObservableObject {
     }
 
     func cancel() { task?.cancel() }
-}
-
-struct UploadsToolbarControl: View {
-    @ObservedObject private var uploads = PhotoUploadManager.shared
-    var body: some View {
-        Button { uploads.presented.toggle() } label: {
-            Label("Uploads", systemImage: uploads.active ? "arrow.up.circle.fill" : "arrow.up.circle")
-                .labelStyle(.iconOnly)
-        }
-            .help("Uploads")
-            .accessibilityLabel("Uploads")
-            .popover(isPresented: $uploads.presented) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Uploads").font(.headline)
-                    Text(uploads.status.isEmpty ? "No uploads" : uploads.status).textSelection(.enabled)
-                    if uploads.active {
-                        if let progress = uploads.progress { ProgressView(value: progress) } else { ProgressView() }
-                        Button("Cancel") { uploads.cancel() }
-                    }
-                }.padding().frame(width: 300, alignment: .leading)
-            }
-    }
 }
 
 /// A Finder upload destination. Accepts concrete file URLs, never in-process

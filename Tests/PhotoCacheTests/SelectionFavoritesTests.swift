@@ -1,3 +1,4 @@
+import os
 import Foundation
 import XCTest
 import SynologyAPI
@@ -615,13 +616,16 @@ final class SelectionFavoritesTests: XCTestCase {
         )
 
         var changes = await repo.favoriteChanges(space: .personal).makeAsyncIterator()
+        let confirmed = OSAllocatedUnfairLock(initialState: [[Int64]]())
         do {
-            try await repo.setFavoritesBatch(action: action)
+            try await repo.setFavoritesBatch(action: action) { ids in confirmed.withLock { $0.append(ids) } }
             XCTFail("Expected partial failure")
         } catch let error as BatchFavoriteError {
             XCTAssertEqual(error.outcome.successfulCount, 100)
             XCTAssertEqual(error.outcome.failedCount, 150)
+            XCTAssertEqual(error.outcome.failedIDs, Array(101...250))
         }
+        XCTAssertEqual(confirmed.withLock { $0 }, [Array(1...100)])
 
         let optChange = await changes.next()
         XCTAssertEqual(optChange?.values.count, 250)

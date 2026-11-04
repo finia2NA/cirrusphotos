@@ -66,9 +66,9 @@ private struct AlbumSidebarRow: View {
                 AlbumDownloadCommands(albumID: albumID, repository: repository)
                 Divider()
                 Button("Rename Album…") { rename = true }
-                    .disabled(model.deletingAlbumID != nil || model.albumOperation != nil || album.type != "normal")
+                    .disabled(model.albumOperation != nil || album.type != "normal")
                 Button("Delete Album…", role: .destructive) { confirmDelete = true }
-                    .disabled(model.deletingAlbumID != nil || model.albumOperation != nil || album.type != "normal")
+                    .disabled(model.albumOperation != nil || album.type != "normal")
             }
         }
         .sheet(isPresented: $rename) { if let album { AlbumRenameView(album: album) } }
