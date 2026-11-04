@@ -102,6 +102,9 @@ final class PhotoViewerCanvasView: NSView {
     private var pendingLiveIndicatorVisible: (generation: UInt64, visible: Bool)?
     private var scrollMonitor: Any?
     private var image: NSImage?
+    /// A replacement image that arrived during the opening transition. Applying it then would
+    /// retarget the animation and restart its easing, so it waits until the transition ends.
+    private var deferredOpeningImage: NSImage?
     private var selectionGeneration: UInt64 = 0
     private var transform = PhotoViewportTransform(imageSize: CGSize(width: 1, height: 1), viewport: .zero)
     private var pagingTransform = PhotoViewportTransform(imageSize: CGSize(width: 1, height: 1), viewport: .zero)
@@ -448,6 +451,7 @@ final class PhotoViewerCanvasView: NSView {
         let selectionChanged = self.selectionGeneration != selectionGeneration
         if selectionChanged {
             self.selectionGeneration = selectionGeneration
+            deferredOpeningImage = nil
             image = next
             transform.configure(imageSize: next?.size ?? CGSize(width: 1, height: 1), viewport: viewportRect())
             transform.reset()
@@ -468,6 +472,10 @@ final class PhotoViewerCanvasView: NSView {
             if next != nil { beginOpeningIfPossible() }
             return
         }
+        if phase == .opening, next != nil {
+            deferredOpeningImage = image === next ? nil : next
+            return
+        }
         guard image !== next else { return }
         image = next
         updateImageContents()
@@ -478,8 +486,10 @@ final class PhotoViewerCanvasView: NSView {
             snapLayerToRest()
         case .interactiveDismissal, .awaitingDismissal:
             applyDraggedFrame()
-        case .opening, .returning:
+        case .returning:
             retargetActiveTransition(to: transform.imageFrame)
+        case .opening:
+            break
         case .closing:
             if let rect = activeTransition?.destinationInWindow,
                let target = convertWindowContentRect(rect) {
@@ -509,6 +519,7 @@ final class PhotoViewerCanvasView: NSView {
         guard phase != .closing else { return }
         selectionGeneration = generation
         committedPageShownGeneration = nil
+        deferredOpeningImage = nil
         image = next
         transform.configure(imageSize: next?.size ?? CGSize(width: 1, height: 1),
                             viewport: viewportRect())
@@ -549,6 +560,7 @@ final class PhotoViewerCanvasView: NSView {
         }
         selectionGeneration = generation
         committedPageShownGeneration = nil
+        deferredOpeningImage = nil
         cancelTransition()
         phase = .resting
         dismissTranslation = .zero
@@ -600,6 +612,7 @@ final class PhotoViewerCanvasView: NSView {
         if pendingPagingImage == nil {
             clearNeighborLayers()
         }
+        deferredOpeningImage = nil
         let from = currentPresentedFrame()
         let destination = reduceMotion ? nil : rectInWindow.flatMap(convertWindowContentRect)
         phase = .closing
@@ -1331,6 +1344,7 @@ final class PhotoViewerCanvasView: NSView {
                             destinationInWindow: nil, fadeOnly: false) { [weak self] in
                 guard let self, self.phase == .opening else { return }
                 self.phase = .resting
+                self.applyDeferredOpeningImage()
             }
         }
     }
@@ -1339,7 +1353,21 @@ final class PhotoViewerCanvasView: NSView {
         guard phase == .opening else { return }
         cancelTransition()
         phase = .resting
+        if !applyDeferredOpeningImage() { snapLayerToRest() }
+    }
+
+    /// Installs the image held back during the opening transition at rest, where a change in
+    /// aspect ratio snaps the frame instead of restarting an animation.
+    @discardableResult
+    private func applyDeferredOpeningImage() -> Bool {
+        guard let next = deferredOpeningImage else { return false }
+        deferredOpeningImage = nil
+        guard image !== next else { return false }
+        image = next
+        transform.configure(imageSize: next.size, viewport: viewportRect())
+        updateImageContents()
         snapLayerToRest()
+        return true
     }
 
     private func animateReturnToFit() {
