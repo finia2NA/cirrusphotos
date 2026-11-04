@@ -199,13 +199,14 @@ final class TimelineSectionLoadModel: ObservableObject {
     }
 
     private func refreshAvailabilityAndCheckRevisions() {
-        if let library {
-            canPresent = library.repository != nil &&
-                library.timelineVerified(for: .library(.personal)) &&
-                library.timelineVerified(for: .favorites(.personal))
-        } else {
-            canPresent = false
-        }
+        // Runs on every LibraryModel change; publishing an unchanged value would
+        // re-render every observer again.
+        let available = library.map {
+            $0.repository != nil &&
+                $0.timelineVerified(for: .library(.personal)) &&
+                $0.timelineVerified(for: .favorites(.personal))
+        } ?? false
+        if canPresent != available { canPresent = available }
         guard runActive, let library,
               let changed = targetRuns.first(where: {
                   library.snapshotRevision(for: $0.target.collection) != $0.target.revision

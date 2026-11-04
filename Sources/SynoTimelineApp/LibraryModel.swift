@@ -522,14 +522,19 @@ final class LibraryModel: ObservableObject {
     func receiveAlbums(_ event: ResourceEvent<[AlbumSummary]>, incoming: Bool) {
         switch event {
         case .value(let list, let verified):
-            // Never expose a provisional replacement under the preceding list’s authority.
-            albumsVerified = false
             if incoming { receivedIncomingAlbums = list; incomingAlbumsVerified = verified }
             else { ownedAlbums = list; ownedAlbumsVerified = verified }
-            albums = ownedAlbums + receivedIncomingAlbums
-            albumsVerified = ownedAlbumsVerified && incomingAlbumsVerified
+            let combined = ownedAlbums + receivedIncomingAlbums
+            let combinedVerified = ownedAlbumsVerified && incomingAlbumsVerified
+            // Never expose a provisional replacement under the preceding list’s authority.
+            // Unchanged values are not reassigned: each publish re-renders the whole window.
+            if albums != combined {
+                if albumsVerified { albumsVerified = false }
+                albums = combined
+            }
+            if albumsVerified != combinedVerified { albumsVerified = combinedVerified }
             if verified {
-                albumListError = nil
+                if albumListError != nil { albumListError = nil }
                 if incoming {
                     for collection in openedCollections where collection.incomingAlbumIdentity != nil {
                         collectionFetchTasks.removeValue(forKey: collection)?.cancel()
@@ -538,7 +543,8 @@ final class LibraryModel: ObservableObject {
                 }
             }
         case .failure(let message):
-            albumListError = message.localizedDescription
+            let description = message.localizedDescription
+            if albumListError != description { albumListError = description }
         }
     }
 
@@ -556,11 +562,13 @@ final class LibraryModel: ObservableObject {
                     viewerSnapshotRevisions[collection, default: 0] += 1
                 }
             }
-            timelineVerifications[collection] = verified
-            if verified { collectionErrors.removeValue(forKey: collection) }
+            // App-wide warming streams many collections; unchanged values are not reassigned.
+            if timelineVerifications[collection] != verified { timelineVerifications[collection] = verified }
+            if verified, collectionErrors[collection] != nil { collectionErrors.removeValue(forKey: collection) }
             updateBrowserFavoriteAvailability()
         case .failure(let message):
-            collectionErrors[collection] = message.localizedDescription
+            let description = message.localizedDescription
+            if collectionErrors[collection] != description { collectionErrors[collection] = description }
             updateBrowserFavoriteAvailability()
         }
     }
@@ -620,7 +628,10 @@ final class LibraryModel: ObservableObject {
     }
 
     func refreshUsage() async {
-        if let repository { cacheUsage = (try? await repository.usage()) ?? 0 }
+        if let repository {
+            let usage = (try? await repository.usage()) ?? 0
+            if cacheUsage != usage { cacheUsage = usage }
+        }
     }
 
     func clearCache() async {

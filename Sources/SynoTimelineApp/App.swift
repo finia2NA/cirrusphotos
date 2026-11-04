@@ -28,6 +28,7 @@ struct SynoTimelineApp: App {
                 .environmentObject(libraryFilter)
                 .environmentObject(timelineSectionLoad)
                 .environmentObject(metadataSync)
+                .environment(\.metadataSyncModel, metadataSync)
                 .frame(minWidth: 560, minHeight: 420)
                 .task {
                     let signposts = ModelChangeSignposts.shared

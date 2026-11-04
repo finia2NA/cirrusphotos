@@ -4,7 +4,8 @@ import SynologyAPI
 
 struct LibraryFilterToolbarControl: View {
     @EnvironmentObject private var filter: LibraryFilterModel
-    @EnvironmentObject private var metadataSync: MetadataSyncModel
+    /// Only handed to the popover, so it is not observed here.
+    @Environment(\.metadataSyncModel) private var metadataSync
 
     var body: some View {
         Button { filter.draft = filter.committed; filter.isPresented.toggle() } label: {
@@ -14,7 +15,9 @@ struct LibraryFilterToolbarControl: View {
                     : "line.3.horizontal.decrease.circle")
         }
         .disabled(!filter.isReady)
-        .popover(isPresented: $filter.isPresented) { LibraryFilterView().environmentObject(filter).environmentObject(metadataSync) }
+        .popover(isPresented: $filter.isPresented) {
+            if let metadataSync { LibraryFilterView().environmentObject(filter).environmentObject(metadataSync) }
+        }
         .accessibilityLabel("Filter Photos")
         .accessibilityValue(filter.isActive ? "\(filter.activeCount) active filters" : "No active filters")
         .help(filter.isReady ? "Filter Photos" : "Filter Photos (metadata loading)")

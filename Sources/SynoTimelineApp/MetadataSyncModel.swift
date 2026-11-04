@@ -1,3 +1,4 @@
+import SwiftUI
 import Combine
 import Foundation
 import Network
@@ -294,4 +295,11 @@ final class MetadataSyncModel: ObservableObject {
                             failed: values.reduce(0) { $0 + $1.failed },
                             running: true, currentTitle: title)
     }
+}
+
+extension EnvironmentValues {
+    /// The sync model without observing it. Views that only call its methods or pass it on
+    /// read this instead of `@EnvironmentObject`, so its frequent progress updates do not
+    /// re-render them.
+    @Entry var metadataSyncModel: MetadataSyncModel?
 }
