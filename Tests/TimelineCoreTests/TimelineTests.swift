@@ -43,6 +43,27 @@ final class TimelineTests: XCTestCase {
         XCTAssertNil(Timeline(days: []).index(keeping: "2025-01-07"))
     }
 
+    /// The binary search must keep the linear "first day on or before" rule.
+    func testDateSelectionMatchesLinearRuleAcrossLargeTimeline() {
+        var days: [LibraryDay] = []
+        for year in 2015...2025 {
+            for month in stride(from: 1, through: 12, by: 2) {
+                for day in [1, 9, 17, 28] { days.append(LibraryDay(year: year, month: month, day: day, count: 1, section: 0)) }
+            }
+        }
+        let timeline = Timeline(days: days)
+        var probes = ["2014-01-01", "2030-12-31", "not-a-day", "2020-1-5"]
+        for year in 2014...2026 {
+            for month in 1...12 { for day in [1, 8, 9, 10, 31] {
+                probes.append(String(format: "%04d-%02d-%02d", year, month, day))
+            } }
+        }
+        for probe in probes {
+            let linear = timeline.days.firstIndex(where: { $0.id <= probe }) ?? timeline.days.count - 1
+            XCTAssertEqual(timeline.index(keeping: probe), linear, probe)
+        }
+    }
+
     func testRepeatedDayJumpHasNewIdentity() {
         let first = DayJumpRequest(dayID: "2025-01-05")
         let second = DayJumpRequest(dayID: "2025-01-05")

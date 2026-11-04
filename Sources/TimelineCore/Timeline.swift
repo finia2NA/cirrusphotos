@@ -16,7 +16,8 @@ public struct LibraryDay: Identifiable, Sendable {
     public let day: Int
     public let count: Int
     public let section: Int
-    public var id: String { String(format: "%04d-%02d-%02d", year, month, day) }
+    /// `yyyy-mm-dd`, formatted once: views and lookups read it on hot paths.
+    public let id: String
     /// Chronological key (`yyyymmdd`) for hot paths; avoids formatting `id` strings.
     var sortKey: Int { year * 10_000 + month * 100 + day }
     public var monthLabel: String { String(format: "%04d / %02d", year, month) }
@@ -24,6 +25,15 @@ public struct LibraryDay: Identifiable, Sendable {
     public init(year: Int, month: Int, day: Int, count: Int, section: Int) {
         self.year = year; self.month = month; self.day = day
         self.count = count; self.section = section
+        id = String(format: "%04d-%02d-%02d", year, month, day)
+    }
+
+    /// The `sortKey` of a `yyyy-mm-dd` day ID, or nil when it is not in that form.
+    static func sortKey(dayID: String) -> Int? {
+        let parts = dayID.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2,
+              let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]) else { return nil }
+        return year * 10_000 + month * 100 + day
     }
 }
 
@@ -65,10 +75,19 @@ public struct Timeline: Sendable {
         return (Double(index) + 0.5) / Double(days.count)
     }
 
-    /// Keep a selected calendar day across a changed index. Dates are newest first.
+    /// Keep a selected calendar day across a changed index. Dates are newest first, so the
+    /// first day on or before `dayID` is found by binary search; views read this on every update.
     public func index(keeping dayID: String?) -> Int? {
         guard !days.isEmpty else { return nil }
         guard let dayID else { return 0 }
-        return days.firstIndex(where: { $0.id <= dayID }) ?? days.count - 1
+        guard let target = LibraryDay.sortKey(dayID: dayID) else {
+            return days.firstIndex(where: { $0.id <= dayID }) ?? days.count - 1
+        }
+        var low = 0, high = days.count
+        while low < high {
+            let middle = (low + high) / 2
+            if days[middle].sortKey <= target { high = middle } else { low = middle + 1 }
+        }
+        return low < days.count ? low : days.count - 1
     }
 }
