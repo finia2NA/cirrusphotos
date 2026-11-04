@@ -820,7 +820,7 @@ extension DiskCache {
     }
 
     public func evictMetadataDetails(namespace: MetadataNamespace, itemIDs: [Int64]) throws {
-        try database.write { db in
+        _ = try database.write { db in
             try ItemDetailRecord.filter { $0.namespace == namespace.key && itemIDs.contains($0.itemID) }.deleteAll(db)
         }
     }

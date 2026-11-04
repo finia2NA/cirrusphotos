@@ -115,9 +115,13 @@ final class VideoPlayerContainerView: NSView {
         let playerStarted = ContinuousClock.now
         let player = AVPlayer(playerItem: item)
         self.player = player
-        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self, weak player] _ in
-            guard let self, let player, self.player === player else { return }
-            self.onPlaybackFinished?()
+        endObserver = NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification,
+                                                             object: item, queue: .main) { [weak self, weak player] _ in
+            // Delivered on the main queue.
+            MainActor.assumeIsolated {
+                guard let self, let player, self.player === player else { return }
+                self.onPlaybackFinished?()
+            }
         }
         player.isMuted = isMuted
         playerView.player = player
@@ -128,7 +132,7 @@ final class VideoPlayerContainerView: NSView {
                 self.onMuteChanged(muted)
             }
         }
-        itemStatusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
+        itemStatusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self, weak player] item, _ in
             switch item.status {
             case .unknown:
                 SynologyDiagnostics.videoPlayer.debug(
@@ -143,7 +147,7 @@ final class VideoPlayerContainerView: NSView {
                 SynologyDiagnostics.videoPlayer.error(
                     "Video player item failed unit_id=\(resource.unitID, privacy: .public) quality=\(resource.variant.cacheComponent, privacy: .public) error_domain=\(error?.domain ?? "nil", privacy: .public) error_code=\(error?.code ?? 0, privacy: .public)"
                 )
-                Task { @MainActor [weak self, weak player] in
+                Task { @MainActor [weak self, player] in
                     guard let self, let player, self.player === player else { return }
                     self.loader?.cancelAll()
                     if !self.isMotionPlayback, case .converted = resource.variant {

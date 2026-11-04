@@ -127,7 +127,7 @@ public struct ThumbnailRangeDownloader: Sendable {
                                                       allowNetwork: true, priority: .prefetch) {
                 if Task.isCancelled { break }
                 switch event {
-                case .value(let items, let verified):
+                case .value(let items, _):
                     currentItems = items
                     if selectedOffsets.allSatisfy({ items.slot(at: $0)?.verified == true }) { break pageRead }
                 case .failure:

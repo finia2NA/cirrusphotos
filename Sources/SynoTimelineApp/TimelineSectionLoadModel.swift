@@ -68,7 +68,7 @@ final class TimelineSectionLoadModel: ObservableObject {
     /// Prepares an idle app-wide operation before the load window is opened.
     @discardableResult
     func prepare() -> Bool {
-        guard canPresent, let library else { return false }
+        guard canPresent, library != nil else { return false }
         if runActive { return true }
         shutdownPreparedLoaders()
         prepared = true

@@ -197,7 +197,7 @@ public actor DiskCache {
     public func markValidated(_ key: String, run: String, expectedGeneration: Int? = nil) throws {
         if let expectedGeneration, expectedGeneration != generation { return }
         pendingTouches.removeValue(forKey: key)
-        try database.write { db in
+        _ = try database.write { db in
             try CacheEntryRecord.filter(key: key).updateAll(db) { [
                 $0.validatedRun.set(to: run), $0.accessed.set(to: Date().timeIntervalSince1970)
             ] }
@@ -208,7 +208,7 @@ public actor DiskCache {
     public func promotePreviewThumbnail(_ key: String, expectedGeneration: Int? = nil) throws {
         if let expectedGeneration, expectedGeneration != generation { return }
         pendingTouches.removeValue(forKey: key)
-        try database.write { db in
+        _ = try database.write { db in
             try CacheEntryRecord.filter { $0.key == key && $0.kind == CacheKind.previewThumbnail.rawValue }.updateAll(db) { [
                 $0.kind.set(to: CacheKind.thumbnail.rawValue), $0.accessed.set(to: Date().timeIntervalSince1970)
             ] }

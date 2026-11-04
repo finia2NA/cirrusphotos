@@ -46,7 +46,7 @@ extension CachedPhotosRepository {
 
     func removeLibraryFilter(_ descriptor: PhotoCollectionDescriptor) {
         guard let id = descriptor.libraryFilterID,
-              let state = metadata.sessions.libraryFilters.removeValue(forKey: id) else { return }
+              metadata.sessions.libraryFilters.removeValue(forKey: id) != nil else { return }
         metadata.sessions.selectionRetentions.removeValue(forKey: descriptor)
         metadata.latestTimelines.removeValue(forKey: descriptor)
     }

@@ -36,7 +36,7 @@ public actor CachedPhotosRepository {
         // A repository with an injected transport and no server URL keys its cache under a placeholder host.
         let namespaceServer = server ?? URL(string: "https://nas.invalid")!
         namespace = CacheKey.namespace(server: namespaceServer, account: credentials.username)
-        client = try transport ?? SynologyClient(baseURL: namespaceServer)
+        client = transport ?? SynologyClient(baseURL: namespaceServer)
         let root: URL
         if let cacheRoot {
             root = cacheRoot
