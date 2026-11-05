@@ -6,7 +6,7 @@ This document is the source of truth for current product behavior and scope. See
 
 Cirrus Photos is a macOS 27+ SwiftUI client for browsing a very large Synology Photos library hosted on the NAS `cirrus`. Responsiveness with previously cached data matters more than minimizing request count. The application is an alpha: incompatible preferences and caches are discarded instead of migrated before 1.0.
 
-The Synology Photos service is authoritative. The client does not poll for external changes during a session. Demanded resources are normally validated once per run, while cached content remains usable when the network is slow, unavailable, or validation fails. Pages that the run's change feeds show as unchanged count as validated without being read again.
+The Synology Photos service is authoritative. The client does not poll for external changes during a session. Demanded resources are normally validated once per run (thumbnails excepted: a changed thumbnail always gets a new server cache key, so cached thumbnails are not revalidated), while cached content remains usable when the network is slow, unavailable, or validation fails. Pages that the run's change feeds show as unchanged count as validated without being read again.
 
 Sign-in uses the credentials described in the README (`.env`); if the NAS requires a one-time code, login reports an error asking for `OTP`.
 
@@ -110,7 +110,7 @@ One toolbar item opens the Activity panel (also View ▸ Show Activity, ⌥⌘L)
 - **Load All Timeline Sections** is an app-wide metadata warmer for Personal Library, Favorites and every owned normal album; **Include Shared Space** (default on, shared with the thumbnail window) adds Shared Library and Shared Favorites. Start discovers the album list and unopened album timelines, then loads all item pages; Map indexing stays separate. By default it validates every section; **Use Cached Pages** skips complete cached pages and repairs missing detail slots. It downloads no thumbnails.
 - **Download Thumbnails** warms Personal Library (optionally including Shared Library through the same preference) for an inclusive populated-day range chosen on a slider; with both libraries, the range applies independently to each. Each job captures its scope at Start and respects the cache budget.
 - Demanded video bytes are persisted in fixed-size segments under the same disk budget, with lower retention priority than every photo rendition, and are never prefetched for adjacent videos. A partially cached video is not presented as fully available offline.
-- Settings controls thumbnail rendition, large viewer previews, default video quality, pixel interpolation, inspection thresholds and a 200 MB–100 GB disk budget.
+- Settings controls thumbnail rendition, large viewer previews, default video quality, pixel interpolation, inspection thresholds and a 200 MB–100 GB budget. The budget limits stored data (cached photo, video and metadata contents), not exact disk use; database overhead and filesystem rounding add a few percent. Settings labels it "Maximum stored data".
 - Photo capture times are treated as capture-local wall-clock values: grouping and display preserve the encoded local time without inferring a timezone from the Mac or GPS data.
 
 ## Deferred scope

@@ -151,7 +151,7 @@ public actor DiskCache {
     }
 
     /// Checks an indexed thumbnail without reading or hashing its image bytes.
-    /// Bulk cache warming uses this to avoid network validation and full-file I/O for exact hits.
+    /// Bulk cache warming uses this to skip full-file I/O for exact hits.
     public func hasThumbnail(_ identity: ThumbnailCacheIdentity) throws -> Bool {
         let thumbnailKinds = [CacheKind.thumbnail, .previewThumbnail].map(\.rawValue)
         let record = try database.read {

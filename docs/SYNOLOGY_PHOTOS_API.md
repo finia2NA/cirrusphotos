@@ -624,20 +624,31 @@ The strongest application cache key available is:
 (server/account namespace, space, thumbnail.unit_id, thumbnail.cache_key, requested_size)
 ```
 
-`cache_key` is a server-provided rendition-version hint. If it changes, the URL and local cache key change naturally. The capture does not prove that it changes for every possible content edit. Do not key only by item ID or filename, or parse the key as a freshness timestamp.
+`cache_key` is the server's rendition version. Do not key only by item ID or filename, or parse the key as a freshness timestamp.
+
+A write probe on the disposable account (2026-11-05, Personal Space, `sm`/`m`/`xl`) found:
+
+- Rotation in both directions, `set_regenerating` plus upload, a mount overwrite with new pixels (also with the old mtime kept by `touch -r`) and an EXIF orientation edit all change bytes, ETag and `cache_key` together, with a Diff v7 `item.modify`.
+- `ConvertedFile.upload` without `set_regenerating`, and `restore_from_regenerating` alone, change nothing.
+- Rating and description edits rewrite the thumbnail files with identical bytes: only the ETag changes.
+- The server ignores `cache_key` in the request URL and serves the current file. The ETag is nginx-style `"hex(mtime)-hex(size)"`; `Last-Modified` is the file mtime.
+- On rotation, key and bytes switch together within 0.1 s. On a mount overwrite, new bytes are served under the old key for up to about 49 s before the key changes.
+- Shared Space edits and a NAS-wide thumbnail rebuild are untested.
+
+Bytes therefore never changed without a new `cache_key`, so the client trusts the key and does not revalidate thumbnails.
 
 Recommended native cache layers:
 
 1. An `NSCache` of decoded display images with a total-cost limit based on decoded bytes (`width × height × 4`), not compressed JPEG size.
 2. A disk cache of compressed JPEG data keyed by a hash of the tuple above.
 3. In-flight request coalescing so multiple cells asking for the same key share one task.
-4. Demand-driven validation once per app run, using `ETag`/`Last-Modified` for cached thumbnails until reliable rendition-version semantics have been established.
+4. No revalidation of cached thumbnails; a changed `cache_key` is a cache miss.
 
 The disk cache should have an explicit size limit and LRU eviction. Avoid storing session tokens in cache filenames or metadata.
 
 The [cache design proposal](https://github.com/finia2NA/syno/issues/28#issuecomment-6478636441) refines these recommendations with cached-first startup, category priorities, semantic request keys, and bounded UI state. Its freshness policy supersedes a generic time-based expiration policy.
 
-A subsequent read-only Cirrus probe confirmed both ETag and Last-Modified conditional requests return HTTP 304 with no body for an unchanged `sm` thumbnail. See the proposal for the probe's authentication details and limits; edit-driven invalidation remains unverified.
+A subsequent read-only Cirrus probe confirmed both ETag and Last-Modified conditional requests return HTTP 304 with no body for an unchanged `sm` thumbnail. See the proposal for the probe's authentication details and limits. Edit-driven behavior is covered by the write probe above.
 
 ## Recommended client architecture
 
@@ -900,7 +911,7 @@ Strong but not fully provable from one HAR:
 
 - The UI uses viewport virtualization/lazy image mounting. Request timing and partial thumbnail coverage strongly support this.
 - The second concurrently loaded section is directional prefetch. It may instead be needed to fill the measured viewport after a jump.
-- `cache_key` is a version identifier. Its placement and conventional usage strongly imply this, but Synology does not publish the contract.
+- `cache_key` is a version identifier. Synology does not publish the contract, but the 2026-11-05 write probe found no edit that changed thumbnail bytes without changing it.
 
 ## Open questions for focused probes
 
