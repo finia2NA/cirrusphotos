@@ -81,7 +81,7 @@ fileprivate actor ViewerTransport: TestPhotosTransport {
         return CollectionBatchResult(items: rows, profile: fields)
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
+                   space: PhotoSpace) async throws -> Data {
         thumbnailCalls.append(descriptor.unitID)
         thumbnailRequests.append((descriptor.unitID, size))
         if failImages { throw TestFailure("Offline") }
@@ -94,8 +94,7 @@ fileprivate actor ViewerTransport: TestPhotosTransport {
             cancelledThumbnails.insert(descriptor.unitID)
             throw CancellationError()
         }
-        return MediaResponse(data: Data([UInt8(truncatingIfNeeded: descriptor.unitID), 0x54]),
-                                 etag: "thumb-\(descriptor.unitID)", lastModified: nil)
+        return Data([UInt8(truncatingIfNeeded: descriptor.unitID), 0x54])
     }
     func fullImage(_ resource: FullImageResource,
                    etag: String?, lastModified: String?) async throws -> MediaResponse {
@@ -674,7 +673,9 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         await session.close()
     }
 
-    func testCachedImagesRemainVisibleWhenValidationFails() async throws {
+    /// Originals are still revalidated; an exact cached thumbnail is current for its cache_key
+    /// and makes no network request, so going offline does not mark it as failed.
+    func testCachedImagesRemainVisibleWhenOriginalValidationFails() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let selected = try item(7)
         let warmingTransport = ViewerTransport()
@@ -702,12 +703,14 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
             let state = await session.state()
             guard state.thumbnailData != nil, state.fullImageData != nil else { return false }
             if case .ready(verified: false, validationFailure: .some("Offline")) = state.fullImageStatus,
-               case .ready(verified: false, validationFailure: .some("Offline")) = state.thumbnailStatus {
+               case .ready(verified: true, validationFailure: nil) = state.thumbnailStatus {
                 return true
             }
             return false
         }
         XCTAssertTrue(failedAfterCache)
+        let offlineThumbnailRequests = await offlineTransport.thumbnailCalls
+        XCTAssertEqual(offlineThumbnailRequests, [])
         await session.close()
     }
 }

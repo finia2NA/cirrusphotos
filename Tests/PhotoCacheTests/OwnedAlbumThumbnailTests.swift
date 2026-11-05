@@ -11,14 +11,13 @@ private actor OwnedAlbumThumbnailTransport: TestPhotosTransport {
         detailAlbums.append(albumID)
         return try ids.map { try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":\($0),\"time\":100,\"type\":\"photo\"}".utf8)) }
     }
-    func albumThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, albumID: Int64,
-                        etag: String?, lastModified: String?) async throws -> MediaResponse {
+    func albumThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, albumID: Int64) async throws -> Data {
         albums.append(albumID)
-        return MediaResponse(data: Data("album".utf8), etag: nil, lastModified: nil)
+        return Data("album".utf8)
     }
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace) async throws -> Data {
         personalCount += 1
-        return MediaResponse(data: Data("personal".utf8), etag: nil, lastModified: nil)
+        return Data("personal".utf8)
     }
 }
 

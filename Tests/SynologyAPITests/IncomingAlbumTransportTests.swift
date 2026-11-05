@@ -27,8 +27,8 @@ final class IncomingAlbumTransportTests: XCTestCase {
         let items = try await client.incomingItems(ids: [5], reference: "item-reference")
         XCTAssertEqual(items.map(\.id), [5])
         let image = try await client.incomingThumbnail(ThumbnailInfo(unitID: 9, cacheKey: "key"), size: .xl,
-                                                       reference: "image-reference", etag: nil, lastModified: nil)
-        XCTAssertNotNil(image.data)
+                                                       reference: "image-reference")
+        XCTAssertFalse(image.isEmpty)
     }
 }
 

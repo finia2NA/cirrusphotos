@@ -44,8 +44,14 @@ extension CachedPhotosRepository {
                 if cached?.kind == .previewThumbnail, cachePurpose == .library {
                     try? await store.promotePreviewThumbnail(key)
                 }
-                if let cached { continuation.yield(.value(cached.data, verified: cached.validatedRun == runID)) }
-                guard allowNetwork && cached?.validatedRun != runID else { continuation.finish(); return }
+                // The NAS changes cache_key whenever rendition bytes change, so an exact
+                // entry is current whenever its descriptor comes from verified metadata.
+                if let cached {
+                    continuation.yield(.value(cached.data, verified: allowNetwork))
+                    continuation.finish()
+                    return
+                }
+                guard allowNetwork else { continuation.finish(); return }
                 do {
                     let task = registerImage(descriptor, size: size, key: key, collection: scope,
                                              subscriber: subscriber, priority: priority,
@@ -99,7 +105,7 @@ extension CachedPhotosRepository {
                     continuation.yield(.value(
                         ThumbnailRenditionValue(data: fallback.entry.data, size: fallback.size,
                                                 isExact: false),
-                        verified: fallback.entry.validatedRun == runID
+                        verified: allowNetwork
                     ))
                 }
                 guard !Task.isCancelled else { continuation.finish(); return }
@@ -154,22 +160,17 @@ extension CachedPhotosRepository {
     }
 
     /// Resolves one thumbnail while reporting bytes transferred in a successful image response.
-    /// Conditional 304 responses and current-run cache hits report zero downloaded bytes.
+    /// Exact cache hits are current for their cache_key and report zero downloaded bytes.
     public func cacheThumbnailMeasurement(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                                           collection: PhotoCollectionDescriptor,
-                                          priority: RequestPriority = .prefetch,
-                                          validateCached: Bool = true) async throws -> ThumbnailCacheMeasurement {
+                                          priority: RequestPriority = .prefetch) async throws -> ThumbnailCacheMeasurement {
         try Task.checkCancellation()
         let source = thumbnailCollection(for: collection)
         guard !source.isSessionDerived else { throw RepositoryError.stale("The source collection is no longer available.") }
         let identity = CacheKey.thumbnailIdentity(scope: source.contentScope, namespace: namespace, descriptor: descriptor, size: size, collection: source)
         let key = identity.key
-        if !validateCached, (try? await store.hasThumbnail(identity)) == true {
+        if (try? await store.hasThumbnail(identity)) == true {
             try? await store.promotePreviewThumbnail(key)
-            return ThumbnailCacheMeasurement(outcome: .reused, downloadedBytes: 0)
-        }
-        if let cached = try? await store.getThumbnail(identity), cached.validatedRun == runID {
-            if cached.kind == .previewThumbnail { try? await store.promotePreviewThumbnail(key) }
             return ThumbnailCacheMeasurement(outcome: .reused, downloadedBytes: 0)
         }
         try Task.checkCancellation()
@@ -213,8 +214,7 @@ extension CachedPhotosRepository {
             defer { Task { await gate.release(.thumbnail) } }
             try Task.checkCancellation()
             try await connect()
-            let prior = try? await store.getThumbnail(identity)
-            func request(etag: String?, lastModified: String?) async throws -> MediaResponse {
+            func request() async throws -> Data {
                 if collection.isSessionDerived {
                     throw RepositoryError.unexpected("Collection access is unavailable.")
                 }
@@ -222,32 +222,18 @@ extension CachedPhotosRepository {
                     guard let reference = incomingReference(for: collection) else {
                         throw RepositoryError.unavailable("Shared album access is unavailable.")
                     }
-                    return try await client.incomingThumbnail(descriptor, size: size, reference: reference,
-                                                              etag: etag, lastModified: lastModified)
+                    return try await client.incomingThumbnail(descriptor, size: size, reference: reference)
                 }
                 if let albumID = collection.albumID {
-                    return try await client.albumThumbnail(descriptor, size: size, albumID: albumID, etag: etag, lastModified: lastModified)
+                    return try await client.albumThumbnail(descriptor, size: size, albumID: albumID)
                 }
                 guard let space = collection.space else { throw RepositoryError.unexpected("Collection space is unavailable.") }
-                return try await client.thumbnail(descriptor, size: size, space: space, etag: etag, lastModified: lastModified)
+                return try await client.thumbnail(descriptor, size: size, space: space)
             }
-            var response = try await request(etag: prior?.etag, lastModified: prior?.lastModified)
-            if response.notModified && prior == nil {
-                response = try await request(etag: nil, lastModified: nil)
-            }
+            let data = try await request()
             try Task.checkCancellation()
-            if response.notModified, let prior {
-                do {
-                    try await store.markValidated(key, run: runID, expectedGeneration: generation)
-                    return ImageResolution(data: prior.data, outcome: .reused, downloadedBytes: 0)
-                } catch {
-                    return ImageResolution(data: prior.data, outcome: .cacheWriteFailed, downloadedBytes: 0)
-                }
-            }
-            guard let data = response.data else { throw SynologyAPIError.invalidResponse }
             do {
                 try await store.put(key, kind: cachePurpose.kind, data: data, validatedRun: runID,
-                                    etag: response.etag, lastModified: response.lastModified,
                                     expectedGeneration: generation, thumbnail: identity)
                 return ImageResolution(data: data, outcome: .fetched, downloadedBytes: data.count)
             } catch {

@@ -51,11 +51,10 @@ private actor RangeTransport: TestPhotosTransport {
         return CollectionBatchResult(items: rows, profile: fields)
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
+                   space: PhotoSpace) async throws -> Data {
         thumbnailCalls += 1
         if blockThumbnails { try await Task.sleep(for: .seconds(30)) }
-        return MediaResponse(data: Data([UInt8(truncatingIfNeeded: descriptor.unitID)]),
-                                 etag: "test", lastModified: nil)
+        return Data([UInt8(truncatingIfNeeded: descriptor.unitID)])
     }
 }
 

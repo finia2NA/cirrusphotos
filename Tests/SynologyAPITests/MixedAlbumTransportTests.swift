@@ -15,7 +15,7 @@ final class MixedAlbumTransportTests: XCTestCase {
         XCTAssertEqual(item.ownerUserID, 0)
         let thumbnail = try XCTUnwrap(item.additional?.thumbnail)
         let response = try await client.albumThumbnail(thumbnail, size: .xl, albumID: 3)
-        XCTAssertNotNil(response.data)
+        XCTAssertFalse(response.isEmpty)
         let still = try await client.fullImage(try XCTUnwrap(item.fullImageResource(in: .album(3))))
         XCTAssertNotNil(still.data)
     }

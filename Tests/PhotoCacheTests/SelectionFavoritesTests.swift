@@ -732,9 +732,9 @@ actor SelectionFavoritesMockTransport: TestPhotosTransport {
         for key in pages.keys { pages[key] = pages[key]?.map { itemIDs.contains($0.id) ? $0.withFavorite(favorite) : $0 } }
     }
 
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace) async throws -> Data {
         thumbnailCount += 1
-        return MediaResponse(data: Data([1, 2, 3]), etag: "etag", lastModified: "now")
+        return Data([1, 2, 3])
     }
 
     func fullImage(_ resource: FullImageResource, etag: String?, lastModified: String?) async throws -> MediaResponse {

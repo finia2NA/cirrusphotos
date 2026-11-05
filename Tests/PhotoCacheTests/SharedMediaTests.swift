@@ -20,8 +20,8 @@ private actor SharedMediaTransport: TestPhotosTransport {
         CollectionBatchResult(items: [try photo(try XCTUnwrap(request.collection.space))], profile: fields)
     }
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] { [try photo(space)] }
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
-        MediaResponse(data: Data(space.rawValue.utf8), etag: nil, lastModified: nil)
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace) async throws -> Data {
+        Data(space.rawValue.utf8)
     }
     func fullImage(_ resource: FullImageResource, etag: String?, lastModified: String?) async throws -> MediaResponse {
         originalScopes.append(resource.scope)

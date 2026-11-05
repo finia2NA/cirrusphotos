@@ -9,10 +9,10 @@ private actor PreviewThumbnailTransport: TestPhotosTransport {
 
     func releaseThumbnail() { releaseResponse = true }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
+                   space: PhotoSpace) async throws -> Data {
         thumbnailCalls += 1
         while !releaseResponse { try await Task.sleep(for: .milliseconds(2)) }
-        return MediaResponse(data: Data([4, 2]), etag: "preview", lastModified: nil)
+        return Data([4, 2])
     }
 }
 

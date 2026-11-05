@@ -33,11 +33,11 @@ private actor PresentationTransport: TestPhotosTransport {
         return []
     }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
+                   space: PhotoSpace) async throws -> Data {
         while !releasedThumbnails.contains(descriptor.unitID) {
             try await Task.sleep(for: .milliseconds(2))
         }
-        return MediaResponse(data: previews[descriptor.unitID] ?? preview, etag: nil, lastModified: nil)
+        return previews[descriptor.unitID] ?? preview
     }
     func fullImage(_ resource: FullImageResource,
                    etag: String?, lastModified: String?) async throws -> MediaResponse {
@@ -65,14 +65,14 @@ private actor ProgressivePresentationTransport: TestPhotosTransport {
     func releasePreview() { previewReleased = true }
     func releaseOriginal() { originalReleased = true }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
+                   space: PhotoSpace) async throws -> Data {
         thumbnailSizes.append(size)
         if size == .xl {
             while !previewReleased { try await Task.sleep(for: .milliseconds(2)) }
-            return MediaResponse(data: preview, etag: nil, lastModified: nil)
+            return preview
         }
         while !configuredReleased { try await Task.sleep(for: .milliseconds(2)) }
-        return MediaResponse(data: configuredThumbnail, etag: nil, lastModified: nil)
+        return configuredThumbnail
     }
     func fullImage(_ resource: FullImageResource,
                    etag: String?, lastModified: String?) async throws -> MediaResponse {

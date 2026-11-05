@@ -73,10 +73,10 @@ public extension TestPhotosTransport {
     func incomingItems(ids: [Int64], reference: String) async throws -> [PhotoItem] {
         throw UnexpectedTransportCall("incomingItems")
     }
-    func albumThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, albumID: Int64, etag: String?, lastModified: String?) async throws -> MediaResponse {
+    func albumThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, albumID: Int64) async throws -> Data {
         throw UnexpectedTransportCall("albumThumbnail")
     }
-    func incomingThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, reference: String, etag: String?, lastModified: String?) async throws -> MediaResponse {
+    func incomingThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, reference: String) async throws -> Data {
         throw UnexpectedTransportCall("incomingThumbnail")
     }
     func addItems(_ itemIDs: [Int64], toSharedAlbumReference reference: String) async throws {
@@ -131,7 +131,7 @@ public extension TestPhotosTransport {
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] {
         throw UnexpectedTransportCall("items")
     }
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace) async throws -> Data {
         throw UnexpectedTransportCall("thumbnail")
     }
     func setRegenerating(itemIDs: [Int64], space: PhotoSpace) async throws -> [RegeneratingThumbnailUnit] {

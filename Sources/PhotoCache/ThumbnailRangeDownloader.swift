@@ -175,8 +175,7 @@ public struct ThumbnailRangeDownloader: Sendable {
                         group.addTask {
                             if Task.isCancelled { return nil }
                             return try? await repository.cacheThumbnailMeasurement(
-                                descriptor, size: size, collection: collection, priority: .prefetch,
-                                validateCached: false)
+                                descriptor, size: size, collection: collection, priority: .prefetch)
                         }
                     }
                     var values: [ThumbnailCacheMeasurement?] = []

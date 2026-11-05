@@ -52,10 +52,9 @@ private actor SharedMapTransport: TestPhotosTransport {
         if blockBatch { await withCheckedContinuation { waiting.append($0) } }
         return CollectionBatchResult(items: duplicate ? [rows[0], rows[0]] : rows, profile: fields)
     }
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace,
-                   etag: String?, lastModified: String?) async throws -> MediaResponse {
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace) async throws -> Data {
         thumbnailSpaces.append(space)
-        return MediaResponse(data: Data("fixture-thumbnail".utf8), etag: nil, lastModified: nil)
+        return Data("fixture-thumbnail".utf8)
     }
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] {
         detailSpaces.append(space)

@@ -149,10 +149,8 @@ public protocol PhotosTransport: Sendable {
     func readIncomingCollectionBatch(_ request: CollectionPageRequest, reference: String, fields: ItemFieldProfile) async throws -> CollectionBatchResult
     func albumItems(ids: [Int64], albumID: Int64) async throws -> [PhotoItem]
     func incomingItems(ids: [Int64], reference: String) async throws -> [PhotoItem]
-    func albumThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, albumID: Int64,
-                        etag: String?, lastModified: String?) async throws -> MediaResponse
-    func incomingThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, reference: String,
-                           etag: String?, lastModified: String?) async throws -> MediaResponse
+    func albumThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, albumID: Int64) async throws -> Data
+    func incomingThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, reference: String) async throws -> Data
     func addItems(_ itemIDs: [Int64], toSharedAlbumReference reference: String) async throws
     func addableAlbums() async throws -> [AlbumSummary]
     func album(id: Int64) async throws -> AlbumSummary
@@ -177,7 +175,8 @@ public protocol PhotosTransport: Sendable {
     func userEvents(since cursor: DiffCursor) async throws -> UserEventDiff
 
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem]
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse
+    /// One rendition's image bytes. Renditions are versioned by `cache_key`, so no HTTP validators are sent.
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace) async throws -> Data
 
     func setRegenerating(itemIDs: [Int64], space: PhotoSpace) async throws -> [RegeneratingThumbnailUnit]
     func restoreFromRegenerating(unitIDs: [Int64], space: PhotoSpace) async throws

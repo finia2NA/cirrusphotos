@@ -251,8 +251,7 @@ extension CachedPhotosRepository {
             guard descriptor.isReady(size) else {
                 throw RepositoryError.unavailable("The \(size.rawValue) thumbnail is not ready.")
             }
-            let response = try await client.thumbnail(descriptor, size: size, space: space, etag: nil, lastModified: nil)
-            guard let data = response.data else { throw SynologyAPIError.invalidResponse }
+            let data = try await client.thumbnail(descriptor, size: size, space: space)
             downloaded[size] = data
             estimate.completeThumbnail(size)
             reporter.report(.downloading, itemID: id, progress: estimate.thumbnailProgress, detail: detail)

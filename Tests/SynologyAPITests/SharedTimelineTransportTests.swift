@@ -18,8 +18,8 @@ final class SharedTimelineTransportTests: XCTestCase {
         let details = try await client.items(ids: [5], space: .shared)
         XCTAssertEqual(details.first?.id, 5)
         let thumbnail = try await client.thumbnail(.init(unitID: 9, cacheKey: "key"), size: .sm,
-            space: .shared, etag: "fixture-etag", lastModified: nil)
-        XCTAssertNotNil(thumbnail.data)
+            space: .shared)
+        XCTAssertFalse(thumbnail.isEmpty)
         XCTAssertEqual(PhotoCollectionDescriptor(rawValue: "shared"), .library(.shared))
     }
 }
@@ -47,7 +47,8 @@ private final class SharedTimelineProtocol: URLProtocol, @unchecked Sendable {
             XCTAssertEqual(request.url!.path, "/synofoto/api/v2/t/Thumbnail/get")
             XCTAssertEqual(values["id"], "9")
             XCTAssertNil(values["album_id"])
-            XCTAssertEqual(request.value(forHTTPHeaderField: "If-None-Match"), "fixture-etag")
+            XCTAssertNil(request.value(forHTTPHeaderField: "If-None-Match"))
+            XCTAssertNil(request.value(forHTTPHeaderField: "If-Modified-Since"))
             payload = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aXcAAAAASUVORK5CYII=")!
         } else if values["api"] == "SYNO.API.Auth" {
             payload = Data(#"{"success":true,"data":{"sid":"fixture"}}"#.utf8)

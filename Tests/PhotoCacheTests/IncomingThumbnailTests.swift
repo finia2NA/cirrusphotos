@@ -7,15 +7,14 @@ private actor IncomingThumbnailTransport: TestPhotosTransport {
     var personalRequests = 0
     var references: [String] = []
 
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace) async throws -> Data {
         personalRequests += 1
-        return MediaResponse(data: Data("personal".utf8), etag: nil, lastModified: nil)
+        return Data("personal".utf8)
     }
 
-    func incomingThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, reference: String,
-                           etag: String?, lastModified: String?) async throws -> MediaResponse {
+    func incomingThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, reference: String) async throws -> Data {
         references.append(reference)
-        return MediaResponse(data: Data(reference.utf8), etag: nil, lastModified: nil)
+        return Data(reference.utf8)
     }
 }
 

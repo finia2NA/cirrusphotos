@@ -26,10 +26,9 @@ private actor SharedTimelineTransport: TestPhotosTransport {
         let item = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"time\":1704067200,\"filename\":\"\(name)\",\"type\":\"photo\"}".utf8))
         return CollectionBatchResult(items: [item], profile: fields)
     }
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace,
-                   etag: String?, lastModified: String?) async throws -> MediaResponse {
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace) async throws -> Data {
         thumbnailSpaces.append(space)
-        return MediaResponse(data: Data(space.rawValue.utf8), etag: nil, lastModified: nil)
+        return Data(space.rawValue.utf8)
     }
     var section: TimelineSection {
         TimelineSection(offset: 0, limit: 1, list: [TimelineDay(year: 2024, month: 1, day: 1, itemCount: 1)])

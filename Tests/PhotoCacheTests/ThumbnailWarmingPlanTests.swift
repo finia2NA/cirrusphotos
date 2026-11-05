@@ -5,10 +5,9 @@ import XCTest
 
 private actor ScopedWarmingTransport: TestPhotosTransport {
     var spaces: [PhotoSpace] = []
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace,
-                   etag: String?, lastModified: String?) async throws -> MediaResponse {
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace) async throws -> Data {
         spaces.append(space)
-        return MediaResponse(data: Data("fixture-thumbnail".utf8), etag: nil, lastModified: nil)
+        return Data("fixture-thumbnail".utf8)
     }
 }
 
@@ -35,9 +34,9 @@ final class ThumbnailWarmingPlanTests: XCTestCase, @unchecked Sendable {
         let transport = ScopedWarmingTransport()
         let repository = try CachedPhotosRepository(credentials: .init(username: "warm", password: "unused"), cacheRoot: root, transport: transport)
         let thumbnail = ThumbnailInfo(unitID: 1, cacheKey: "same-key")
-        _ = try await repository.cacheThumbnailMeasurement(thumbnail, size: .sm, collection: .library(.personal), validateCached: false)
-        let shared = try await repository.cacheThumbnailMeasurement(thumbnail, size: .sm, collection: .library(.shared), validateCached: false)
-        let cached = try await repository.cacheThumbnailMeasurement(thumbnail, size: .sm, collection: .library(.shared), validateCached: false)
+        _ = try await repository.cacheThumbnailMeasurement(thumbnail, size: .sm, collection: .library(.personal))
+        let shared = try await repository.cacheThumbnailMeasurement(thumbnail, size: .sm, collection: .library(.shared))
+        let cached = try await repository.cacheThumbnailMeasurement(thumbnail, size: .sm, collection: .library(.shared))
         XCTAssertEqual(shared.outcome, .fetched)
         XCTAssertEqual(cached.outcome, .reused)
         let spaces = await transport.spaces

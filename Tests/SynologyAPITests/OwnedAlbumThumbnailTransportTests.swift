@@ -13,8 +13,8 @@ final class OwnedAlbumThumbnailTransportTests: XCTestCase {
         let items = try await client.albumItems(ids: [5], albumID: 69)
         XCTAssertEqual(items.map(\.id), [5])
         let result = try await client.albumThumbnail(.init(unitID: 9, cacheKey: "key"), size: .sm,
-                                                     albumID: 69, etag: nil, lastModified: nil)
-        XCTAssertNotNil(result.data)
+                                                     albumID: 69)
+        XCTAssertFalse(result.isEmpty)
     }
 }
 

@@ -412,7 +412,7 @@ actor InfoResolverMockTransport: TestPhotosTransport {
     }
 
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
+                   space: PhotoSpace) async throws -> Data {
         throw TestFailure("Unexpected thumbnail request")
     }
 

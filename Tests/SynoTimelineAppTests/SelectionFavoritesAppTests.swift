@@ -396,8 +396,8 @@ actor AppMockTransport: TestPhotosTransport {
         if favoriteFailure { throw AppFavoriteFailure() }
     }
 
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
-        MediaResponse(data: Data([1]), etag: nil, lastModified: nil)
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace) async throws -> Data {
+        Data([1])
     }
 
     func fullImage(_ resource: FullImageResource, etag: String?, lastModified: String?) async throws -> MediaResponse {

@@ -607,9 +607,9 @@ private actor RotationTransport: TestPhotosTransport {
         if failRotate { throw TestFailure("rotation failed") }
     }
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] { [currentItem] }
-    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace, etag: String?,
-                   lastModified: String?) async throws -> MediaResponse {
-        MediaResponse(data: thumbnails[size], etag: nil, lastModified: nil)
+    func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace) async throws -> Data {
+        guard let data = thumbnails[size] else { throw SynologyAPIError.invalidResponse }
+        return data
     }
     func setRegenerating(itemIDs: [Int64], space: PhotoSpace) async throws -> [RegeneratingThumbnailUnit] {
         thumbnailOperationSpaces.append(space)

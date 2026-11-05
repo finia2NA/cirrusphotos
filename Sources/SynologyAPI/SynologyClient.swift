@@ -853,32 +853,29 @@ public actor SynologyClient: PhotosTransport {
         "[" + ids.map(String.init).joined(separator: ",") + "]"
     }
 
-    public func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace,
-                          etag: String?, lastModified: String?) async throws -> MediaResponse {
-        try await thumbnail(descriptor, size: size, albumID: nil, reference: nil, space: space, etag: etag, lastModified: lastModified)
+    public func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace) async throws -> Data {
+        try await thumbnail(descriptor, size: size, albumID: nil, reference: nil, space: space)
     }
 
-    public func albumThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, albumID: Int64,
-                               etag: String? = nil, lastModified: String? = nil) async throws -> MediaResponse {
+    public func albumThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, albumID: Int64) async throws -> Data {
         guard albumID > 0 else { throw SynologyAPIError.invalidResponse }
         // Keep the album authority on both endpoint candidates. A successful image
         // establishes only this scoped rendition, never canonical item origin.
         do {
-            return try await thumbnail(descriptor, size: size, albumID: albumID, reference: nil, space: .personal, etag: etag, lastModified: lastModified)
+            return try await thumbnail(descriptor, size: size, albumID: albumID, reference: nil, space: .personal)
         } catch {
             try Task.checkCancellation()
-            return try await thumbnail(descriptor, size: size, albumID: albumID, reference: nil, space: .shared, etag: nil, lastModified: nil)
+            return try await thumbnail(descriptor, size: size, albumID: albumID, reference: nil, space: .shared)
         }
     }
 
-    public func incomingThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, reference: String,
-                                  etag: String? = nil, lastModified: String? = nil) async throws -> MediaResponse {
+    public func incomingThumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, reference: String) async throws -> Data {
         guard !reference.isEmpty else { throw SynologyAPIError.invalidResponse }
-        return try await thumbnail(descriptor, size: size, albumID: nil, reference: reference, space: .personal, etag: etag, lastModified: lastModified)
+        return try await thumbnail(descriptor, size: size, albumID: nil, reference: reference, space: .personal)
     }
 
-    private func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, albumID: Int64?, reference: String?, space: PhotoSpace,
-                           etag: String?, lastModified: String?) async throws -> MediaResponse {
+    private func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, albumID: Int64?, reference: String?,
+                           space: PhotoSpace) async throws -> Data {
         let sid = try sessionID()
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
         components.path = space == .shared ? "/synofoto/api/v2/t/Thumbnail/get" : "/synofoto/api/v2/p/Thumbnail/get"
@@ -900,8 +897,6 @@ public actor SynologyClient: PhotosTransport {
         request.httpMethod = "GET"
         request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
         request.setValue("image/*", forHTTPHeaderField: "Accept")
-        if let etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
-        else if let lastModified { request.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since") }
         let data: Data
         let response: URLResponse
         do { (data, response) = try await session.data(for: request) }
@@ -911,18 +906,13 @@ public actor SynologyClient: PhotosTransport {
             throw SynologyAPIError.transport(error.localizedDescription)
         }
         guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
-        if http.statusCode == 304 {
-            return MediaResponse(data: nil, etag: http.value(forHTTPHeaderField: "ETag"),
-                                     lastModified: http.value(forHTTPHeaderField: "Last-Modified"))
-        }
         guard http.statusCode == 200 else { throw SynologyAPIError.http(http.statusCode) }
         guard http.value(forHTTPHeaderField: "Content-Type")?.lowercased().hasPrefix("image/") == true,
               PhotoDownloadValidation.containsImage(data) else {
             if let code = PhotoDownloadValidation.apiErrorCode(in: data) { throw SynologyAPIError.api(code) }
             throw SynologyAPIError.invalidResponse
         }
-        return MediaResponse(data: data, etag: http.value(forHTTPHeaderField: "ETag"),
-                                 lastModified: http.value(forHTTPHeaderField: "Last-Modified"))
+        return data
     }
 
     public func fullImage(_ resource: FullImageResource,

@@ -10,14 +10,13 @@ private actor FallbackThumbnailTransport: TestPhotosTransport {
     func failNextRequest() { failuresRemaining = 1 }
 
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
-                   space: PhotoSpace, etag: String?, lastModified: String?) async throws -> MediaResponse {
+                   space: PhotoSpace) async throws -> Data {
         requestedSizes.append(size)
         if failuresRemaining > 0 {
             failuresRemaining -= 1
             throw TestFailure("Thumbnail request failed")
         }
-        return MediaResponse(data: Data("network-\(size.rawValue)".utf8),
-                                 etag: size.rawValue, lastModified: nil)
+        return Data("network-\(size.rawValue)".utf8)
     }
 }
 
@@ -126,6 +125,49 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
         XCTAssertEqual(retriedValues.map(\.size), [.sm, .m])
         let requests = await transport.requestedSizes
         XCTAssertEqual(requests, [.m, .m])
+    }
+
+    func testExactRenditionCachedInEarlierRunIsCurrentWithoutRequest() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = FallbackThumbnailTransport()
+        let repository = try repository(root: root, transport: transport)
+        let descriptor = try descriptor()
+        let namespace = CacheKey.namespace(server: server, account: credentials.username)
+        let exact = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: descriptor, size: .m, collection: .library(.personal))
+        try await repository.store.put(exact.key, kind: .thumbnail, data: Data("cached-m".utf8),
+                                       validatedRun: "older-run", thumbnail: exact)
+
+        var events: [(ThumbnailRenditionValue, Bool)] = []
+        for await event in await repository.thumbnailWithFallback(descriptor, size: .m,
+                                                                   allowNetwork: true, collection: .library(.personal)) {
+            if case .value(let value, let verified) = event { events.append((value, verified)) }
+        }
+        XCTAssertEqual(events.map(\.0.data), [Data("cached-m".utf8)])
+        XCTAssertEqual(events.map(\.1), [true])
+        let outcome = try await repository.cacheThumbnail(descriptor, size: .m, collection: .library(.personal))
+        XCTAssertEqual(outcome, .reused)
+        let requestedSizes = await transport.requestedSizes
+        XCTAssertTrue(requestedSizes.isEmpty)
+    }
+
+    func testChangedCacheKeyDownloadsNewRendition() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = FallbackThumbnailTransport()
+        let repository = try repository(root: root, transport: transport)
+        let old = try descriptor(revision: "revision-1")
+        let namespace = CacheKey.namespace(server: server, account: credentials.username)
+        let exact = CacheKey.thumbnailIdentity(scope: .space(.personal), namespace: namespace, descriptor: old, size: .m, collection: .library(.personal))
+        try await repository.store.put(exact.key, kind: .thumbnail, data: Data("cached-m".utf8),
+                                       validatedRun: "older-run", thumbnail: exact)
+
+        var values: [ThumbnailRenditionValue] = []
+        for await event in await repository.thumbnailWithFallback(try descriptor(revision: "revision-2"), size: .m,
+                                                                   allowNetwork: true, collection: .library(.personal)) {
+            if case .value(let value, _) = event { values.append(value) }
+        }
+        XCTAssertEqual(values.last?.data, Data("network-m".utf8))
+        let requestedSizes = await transport.requestedSizes
+        XCTAssertEqual(requestedSizes, [.m])
     }
 
     func testManualCachingDoesNotTreatFallbackAsRequestedRendition() async throws {
