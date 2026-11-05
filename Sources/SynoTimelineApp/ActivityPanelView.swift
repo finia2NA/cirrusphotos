@@ -177,7 +177,7 @@ private struct ActivityEntryRow: View {
                 Spacer(minLength: 6)
                 controls
             }
-            if !entry.phase.isSettled && entry.kind.isTransfer {
+            if !entry.phase.isSettled && (entry.kind.isTransfer || entry.kind == .metadataSync) {
                 ProgressView(value: entry.fraction).controlSize(.small)
             }
             if let detail = entry.detail {

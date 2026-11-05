@@ -493,7 +493,7 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
             budget: 100_000_000, cacheRoot: root, transport: LivePhotoCanvasTransport())
         let (canvas, window) = makeCanvas()
         defer { window.contentView = nil; window.orderOut(nil) }
-        canvas.setLivePhoto(LivePhotoConfiguration(repository: repository, itemID: 12, space: .personal,
+        canvas.setLivePhoto(LivePhotoConfiguration(repository: repository, itemID: 12, collection: .library(.personal),
                                                    generation: 1, isMuted: true))
         let point = CGPoint(x: 400, y: 300)
         canvas.mouseDown(with: try mouseEvent(.leftMouseDown, at: point, in: window))

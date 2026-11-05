@@ -2,7 +2,10 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
-    public func livePhotoMotion(itemID: Int64, space: PhotoSpace) async throws -> VideoPlaybackResource? {
+    /// Looks up an item's Live Photo motion. Album members have no known origin
+    /// space, so it is verified on demand; an ambiguous origin throws.
+    public func livePhotoMotion(itemID: Int64, collection: PhotoCollectionDescriptor) async throws -> VideoPlaybackResource? {
+        let space = try await itemActionSpace(itemIDs: [itemID], collection: mediaCollection(for: collection))
         try await connect()
         defer { cancelIdleLogin() }
         return try await client.livePhotoMotion(itemID: itemID, space: space)

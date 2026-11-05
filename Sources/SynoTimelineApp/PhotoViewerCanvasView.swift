@@ -361,7 +361,7 @@ final class PhotoViewerCanvasView: NSView {
         setLiveLoading(true)
         motionTask = Task { @MainActor [weak self] in
             do {
-                let resource = try await configuration.repository.livePhotoMotion(itemID: configuration.itemID, space: configuration.space)
+                let resource = try await configuration.repository.livePhotoMotion(itemID: configuration.itemID, collection: configuration.collection)
                 try Task.checkCancellation()
                 guard let self, self.motionTrigger != nil,
                       self.livePhotoConfiguration?.generation == configuration.generation,

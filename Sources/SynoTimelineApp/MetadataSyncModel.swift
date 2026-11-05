@@ -332,6 +332,7 @@ final class MetadataSyncModel: ObservableObject {
         lastActivityStatus = now
         let title = progress.currentTitle ?? "Discovering collections"
         activityHandle.status(progress.total > 0 ? "\(title) · \(progress.verified) of \(progress.total) sections" : title)
+        activityHandle.progress(fraction: progress.total > 0 ? Double(progress.verified) / Double(progress.total) : nil)
     }
 
     private func endActivity() {
