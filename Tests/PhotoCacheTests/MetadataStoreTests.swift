@@ -505,6 +505,52 @@ final class MetadataStoreTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(runs[20], "earlier")
     }
 
+    // MARK: Album copies
+
+    func testAlbumCopiesAreProvenBySpaceFeedsAndInvalidatedByTheirChanges() async throws {
+        let (store, root) = try await open()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let album = MetadataNamespace(account: namespace.account, scope: .album(54))
+        let shared = MetadataNamespace(account: namespace.account, scope: .space(.shared))
+        let day = try CaptureDay(year: 2024, month: 1, day: 1)
+        try await store.storeMetadataDetails([item(1, day: day), item(2, day: day)], namespace: album, currentRun: "earlier",
+                                             admission: store.metadataAdmission(album))
+        func verified(_ run: String) async throws -> [Int64: Bool] {
+            try await store.metadataDetails(album, ids: [1, 2], currentRun: run).mapValues(\.verified)
+        }
+        var result = try await verified("now")
+        XCTAssertEqual(result, [1: false, 2: false], "no feed proved this run")
+
+        try await store.applyMetadataChanges(namespace: namespace, cursor: .init(diffVersion: 2, versionTime: 2), replacements: [item(1, day: day)],
+                                             deletedIDs: [], affectedDays: [day], invalidateAll: false, proven: true, currentRun: "now",
+                                             admission: store.metadataAdmission(namespace))
+        result = try await verified("now")
+        XCTAssertEqual(result, [1: false, 2: true], "the changed item's album copy is stale; the other is proven")
+        let albumState = try await store.metadataState(album)
+        XCTAssertGreaterThan(albumState.revision, 0, "an album read in flight is superseded")
+
+        // An account with a Shared feed needs it proven too.
+        try await store.applyMetadataChanges(namespace: shared, cursor: .init(diffVersion: 1, versionTime: 1), replacements: [], deletedIDs: [],
+                                             affectedDays: [], invalidateAll: false, proven: false, currentRun: "now",
+                                             admission: store.metadataAdmission(shared))
+        result = try await verified("now")
+        XCTAssertEqual(result[2], false)
+        try await store.applyMetadataChanges(namespace: shared, cursor: .init(diffVersion: 2, versionTime: 2), replacements: [], deletedIDs: [],
+                                             affectedDays: [], invalidateAll: false, proven: true, currentRun: "now",
+                                             admission: store.metadataAdmission(shared))
+        result = try await verified("now")
+        XCTAssertEqual(result[2], true)
+
+        // A space reset marks every album copy stale.
+        try await store.applyMetadataChanges(namespace: shared, cursor: .init(diffVersion: 3, versionTime: 3), replacements: [], deletedIDs: [],
+                                             affectedDays: [], invalidateAll: true, currentRun: "now", admission: store.metadataAdmission(shared))
+        try await store.applyMetadataChanges(namespace: shared, cursor: .init(diffVersion: 4, versionTime: 4), replacements: [], deletedIDs: [],
+                                             affectedDays: [], invalidateAll: false, proven: true, currentRun: "now",
+                                             admission: store.metadataAdmission(shared))
+        result = try await verified("now")
+        XCTAssertEqual(result, [1: false, 2: false])
+    }
+
     func testDiffProofVerifiesUntouchedCachedPagesInALaterRun() async throws {
         let (store, root) = try await open()
         defer { try? FileManager.default.removeItem(at: root) }

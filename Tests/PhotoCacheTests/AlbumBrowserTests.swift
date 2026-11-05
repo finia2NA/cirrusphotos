@@ -108,7 +108,23 @@ private actor AlbumFakeTransport: TestPhotosTransport {
     func login(credentials: SynologyCredentials) async throws {}
     func personalItems(ids: [Int64]) async throws -> [PhotoItem] { ids.compactMap { id in pageItems.first { $0.id == id } } }
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] { space == .personal ? try await personalItems(ids: ids) : [] }
-    func albumItems(ids: [Int64], albumID: Int64) async throws -> [PhotoItem] { try await personalItems(ids: ids) }
+    var albumItemCalls = 0
+    func albumItems(ids: [Int64], albumID: Int64) async throws -> [PhotoItem] { albumItemCalls += 1; return try await personalItems(ids: ids) }
+
+    /// Optional Diff feed: the first interval after the stored cursor reports `diffModified`.
+    var diffEnabled = false
+    var diffModified: [Int64] = []
+    func enableDiff(modified: [Int64] = []) { diffEnabled = true; diffModified = modified }
+    func diffVersion(space: PhotoSpace) async throws -> DiffCursor {
+        guard diffEnabled, space == .personal else { throw SynologyAPIError.api(103) }
+        return DiffCursor(diffVersion: 1, versionTime: 1)
+    }
+    func changes(since cursor: DiffCursor, space: PhotoSpace) async throws -> PhotoDiff {
+        guard diffEnabled, space == .personal else { throw SynologyAPIError.api(103) }
+        let next = DiffCursor(diffVersion: cursor.diffVersion + 1, versionTime: cursor.versionTime + 1)
+        guard cursor.diffVersion == 1 else { return PhotoDiff(cursor: cursor, modifiedItemIDs: [], deletedItemIDs: []) }
+        return PhotoDiff(cursor: next, modifiedItemIDs: diffModified, deletedItemIDs: [])
+    }
 
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog {
         collectionTimelineCalls.append((collection, initial))
@@ -920,6 +936,83 @@ final class AlbumBrowserTests: XCTestCase {
         let cached = try await repository.store.metadataPage(try XCTUnwrap(DayPageAddress(section: descriptor, collection: .album(54))), namespace: await repository.metadataNamespace(for: .album(54)), currentRun: repository.runID)
         XCTAssertEqual(cached?.slots.map(\.itemID), [7])
 
+    }
+
+    /// One run: validate the album list, the album timeline and its page. Callers keep each
+    /// run's repository alive, as the app does for a session, so its writes finish.
+    private func loadAlbum(_ repository: CachedPhotosRepository) async throws -> [PhotoItem] {
+        for await _ in await repository.albums() {}
+        var sections: [TimelineSection] = []
+        for await event in await repository.timeline(collection: .album(54)) {
+            if case .value(let snapshot, true) = event { sections = snapshot.sections }
+        }
+        var items: [PhotoItem] = []
+        for section in sections {
+            for await event in await repository.page(section, collection: .album(54)) {
+                if case .value(let page, true) = event { items = page.completeItems ?? [] }
+            }
+        }
+        return items
+    }
+
+    private func versionedAlbumTransport(version: Int64, shared: Bool = false) async throws -> AlbumFakeTransport {
+        let transport = AlbumFakeTransport()
+        let photo = try item(7)
+        await transport.configure(albumList: [AlbumSummary(id: 54, name: "Trip", itemCount: 1, type: "normal", ownerUserID: 11,
+                                                           shared: shared, version: version)],
+                                  albumEntriesByID: [54: [DayTimelineEntry(id: 7, time: photo.time)]], pageItems: [photo])
+        await transport.enableDiff()
+        return transport
+    }
+
+    func testUnchangedUnsharedAlbumNeedsNoReadInALaterRun() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let first = try await versionedAlbumTransport(version: 7)
+        let firstRepository = try makeRepository(root: root, transport: first)
+        let firstItems = try await loadAlbum(firstRepository)
+        XCTAssertEqual(firstItems.map(\.id), [7])
+        let firstCatalogs = await first.albumTimelineCalls
+        XCTAssertEqual(firstCatalogs, [54])
+
+        let second = try await versionedAlbumTransport(version: 7)
+        let secondItems = try await loadAlbum(try makeRepository(root: root, transport: second))
+        XCTAssertEqual(secondItems.map(\.id), [7])
+        let catalogs = await second.albumTimelineCalls
+        let pages = await second.itemRequests
+        let details = await second.albumItemCalls
+        XCTAssertEqual(catalogs, [], "the unchanged version proves the catalog")
+        XCTAssertTrue(pages.isEmpty, "membership is proven")
+        XCTAssertEqual(details, 0, "the Personal feed proves the album's copies")
+    }
+
+    func testChangedVersionOrSharedAlbumIsReadAgain() async throws {
+        for (version, shared) in [(Int64(8), false), (Int64(7), true)] {
+            let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+            let first = try await versionedAlbumTransport(version: 7, shared: shared)
+            let firstRepository = try makeRepository(root: root, transport: first)
+            _ = try await loadAlbum(firstRepository)
+            let second = try await versionedAlbumTransport(version: version, shared: shared)
+            let items = try await loadAlbum(try makeRepository(root: root, transport: second))
+            XCTAssertEqual(items.map(\.id), [7])
+            let catalogs = await second.albumTimelineCalls
+            XCTAssertEqual(catalogs, [54], "version \(version) shared \(shared)")
+        }
+    }
+
+    func testPersonalFeedChangeRereadsOnlyTheAlbumCopy() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let first = try await versionedAlbumTransport(version: 7)
+        let firstRepository = try makeRepository(root: root, transport: first)
+        _ = try await loadAlbum(firstRepository)
+        let second = try await versionedAlbumTransport(version: 7)
+        await second.enableDiff(modified: [7])
+        let items = try await loadAlbum(try makeRepository(root: root, transport: second))
+        XCTAssertEqual(items.map(\.id), [7])
+        let catalogs = await second.albumTimelineCalls
+        let details = await second.albumItemCalls
+        let pages = await second.itemRequests
+        XCTAssertEqual(catalogs, [], "a rating or description edit leaves the album version alone")
+        XCTAssertEqual(details + pages.count, 1, "the edited item's album copy is read again")
     }
 
     func testAlbumAndPersonalPageKeysAreIsolated() {

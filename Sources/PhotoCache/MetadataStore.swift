@@ -38,6 +38,7 @@ public struct StoredCollectionCatalog: Sendable {
     public let catalog: CollectionDayCatalog
     public let presentationRevision: Int64
     public let validatedRun: String?
+    public let sourceVersion: Int64?
 }
 public struct MetadataStoreAdmission: Sendable {
     public let namespace: MetadataNamespace
@@ -50,7 +51,7 @@ public struct MetadataStoreAdmission: Sendable {
 /// Typed record access on the existing cache actor. No transaction suspends.
 /// The normalized format is initialized explicitly when the engine enrolls it.
 extension DiskCache {
-    static let metadataFormatVersion = 9
+    static let metadataFormatVersion = 10
 
     public func initializeMetadataStore() throws {
         try database.inTransaction(.immediate) { db in
@@ -227,7 +228,8 @@ extension DiskCache {
     }
     private func metadataCatalog(_ db: Database, _ key: CollectionKey) throws -> StoredCollectionCatalog? {
         try CollectionStateRecord.row(key).fetchOne(db).map {
-            StoredCollectionCatalog(catalog: $0.catalog, presentationRevision: $0.presentationRevision, validatedRun: $0.validatedRun)
+            StoredCollectionCatalog(catalog: $0.catalog, presentationRevision: $0.presentationRevision, validatedRun: $0.validatedRun,
+                                    sourceVersion: $0.sourceVersion)
         }
     }
     public func metadataDayGeneration(_ key: CollectionKey, day: CaptureDay) throws -> Int64? {
@@ -260,7 +262,54 @@ extension DiskCache {
         }
     }
 
+    /// Records the album version a complete catalog and membership read happened under. It is
+    /// set only after every page of that read is stored, and only on the row that read wrote.
+    public func storeMetadataCatalogSourceVersion(_ version: Int64, key: CollectionKey, validatedRun: String,
+                                                  admission: MetadataStoreAdmission) throws {
+        try metadataWrite(enforceBudget: false) { db in
+            try admit(admission, namespace: key.namespace, db)
+            try CollectionStateRecord.row(key).filter { $0.validatedRun == validatedRun && $0.epoch == admission.resetEpoch }
+                .updateAll(db) { $0.sourceVersion.set(to: version) }
+        }
+    }
+
+    /// Validates a stored album catalog for this run without reading it, when the album's
+    /// current version equals the one its catalog and pages were read under and this run's
+    /// Diff reconciliation proved item content. Returns the catalog when it was validated.
+    public func validateMetadataCatalogByVersion(_ version: Int64, key: CollectionKey, currentRun: String,
+                                                 admission: MetadataStoreAdmission) throws -> CollectionDayCatalog? {
+        try metadataWrite(enforceBudget: false) { db in
+            try admit(admission, namespace: key.namespace, db)
+            let state = try metadataState(db, key.namespace)
+            guard try contentProven(db, key.namespace, state: state, currentRun: currentRun),
+                  let row = try CollectionStateRecord.row(key).fetchOne(db),
+                  row.epoch == state.resetEpoch, row.sourceVersion == version else { return nil }
+            try CollectionStateRecord.row(key).updateAll(db) { $0.validatedRun.set(to: currentRun) }
+            return row.catalog
+        }
+    }
+
     // MARK: Day pages
+
+    /// Whether this run's Diff reconciliation proves cached item content in `namespace`. A space
+    /// namespace needs its own proof. An owned album's namespace holds album-context copies that
+    /// no feed describes; the space feeds mark those copies stale when they report a change (see
+    /// `invalidateAlbumCopies`), so the copies are proven once Personal is proven this run and
+    /// Shared is too when this account has a Shared feed (a mixed album can hold its items).
+    /// Incoming albums have no such invalidation and are never proven.
+    private func contentProven(_ db: Database, _ namespace: MetadataNamespace, state: MetadataStoreVersion,
+                               currentRun: String) throws -> Bool {
+        switch namespace.scope {
+        case .space: return state.proofRun == currentRun
+        case .incomingAlbum: return false
+        case .album:
+            let personal = try metadataState(db, MetadataNamespace(account: namespace.account, scope: .space(.personal)))
+            guard personal.proofRun == currentRun else { return false }
+            let sharedKey = MetadataNamespace(account: namespace.account, scope: .space(.shared)).key
+            guard let shared = try MetadataStateRecord.fetchOne(db, key: sharedKey) else { return true }
+            return shared.proofRun == currentRun
+        }
+    }
 
     /// Content is proven when this run's Diff reconciliation of the namespace's space accounted
     /// for every change since the stored cursor. Membership additionally needs this run's day
@@ -268,12 +317,17 @@ extension DiskCache {
     /// new generations.
     private func changeProof(_ db: Database, _ key: CollectionKey, state: MetadataStoreVersion,
                              currentRun: String) throws -> (content: Bool, membership: Bool) {
-        let content = state.proofRun == currentRun
-        guard content, key.collection.membershipProvenByChanges else { return (content, false) }
+        let content = try contentProven(db, key.namespace, state: state, currentRun: currentRun)
+        let versioned = key.collection.albumID != nil
+        guard content, key.collection.membershipProvenByChanges || versioned else { return (content, false) }
         let catalog = try Row.fetchOne(db, CollectionStateRecord.row(key)
-            .select(CollectionStateRecord.Columns.validatedRun, CollectionStateRecord.Columns.epoch))
+            .select(CollectionStateRecord.Columns.validatedRun, CollectionStateRecord.Columns.epoch,
+                    CollectionStateRecord.Columns.sourceVersion))
+        // An album's membership is proven only when its catalog row carries the version that
+        // every stored page was read under (see `storeMetadataCatalogSourceVersion`).
         let membership = catalog.map { $0[CollectionStateRecord.Columns.validatedRun] as String? == currentRun
-            && $0[CollectionStateRecord.Columns.epoch] as Int64 == state.resetEpoch } ?? false
+            && $0[CollectionStateRecord.Columns.epoch] as Int64 == state.resetEpoch
+            && (!versioned || ($0[CollectionStateRecord.Columns.sourceVersion] as Int64?) != nil) } ?? false
         return (content, membership)
     }
 
@@ -492,7 +546,7 @@ extension DiskCache {
         guard ids.count <= 2000 else { throw CollectionCatalogError.exceedsLimit }
         return try database.read { db in
             let state = try metadataState(db, namespace)
-            let proven = state.proofRun == currentRun
+            let proven = try contentProven(db, namespace, state: state, currentRun: currentRun)
             return try itemDetails(db, namespace, ids: ids).mapValues {
                 PhotoItemSlot(itemID: $0.itemID, item: $0.payload,
                               verified: $0.contentEpoch == state.resetEpoch && ($0.annotationRun == currentRun || proven))
@@ -707,6 +761,35 @@ extension DiskCache {
                 try CollectionStateRecord.filter { $0.namespace == namespace.key && untouchedFolders.contains($0.collection) }
                     .updateAll(db) { $0.validatedRun.set(to: currentRun) }
             }
+            if namespace.scope.space != nil {
+                try invalidateAlbumCopies(db, account: namespace.account,
+                                          ids: invalidateAll ? nil : replacements.map(\.id) + deletedIDs + Array(favorites.keys))
+            }
+        }
+    }
+
+    /// Marks owned albums' copies of changed items stale, so `contentProven` can rely on them,
+    /// and advances each affected album namespace's revision so an album read already in flight
+    /// cannot store an older copy afterwards. `ids` nil (a space reset) marks every copy.
+    private func invalidateAlbumCopies(_ db: Database, account: String, ids: [Int64]?) throws {
+        let pattern = "\(account)|album:%"
+        var namespaces: Set<String> = []
+        func mark(_ request: QueryInterfaceRequest<ItemDetailRecord>) throws {
+            namespaces.formUnion(try String.fetchAll(db, request.select { $0.namespace }.distinct()))
+            try request.updateAll(db) { $0.contentEpoch.set(to: -1) }
+        }
+        if let ids {
+            guard !ids.isEmpty else { return }
+            for start in stride(from: 0, to: ids.count, by: 500) {
+                let batch = Array(ids[start..<min(start + 500, ids.count)])
+                try mark(ItemDetailRecord.filter { $0.namespace.like(pattern) && batch.contains($0.itemID) })
+            }
+        } else {
+            try mark(ItemDetailRecord.filter { $0.namespace.like(pattern) })
+        }
+        for key in namespaces {
+            guard let albumID = Int64(key.dropFirst(account.count + "|album:".count)) else { continue }
+            try advanceMetadataLocalRevision(db, MetadataNamespace(account: account, scope: .album(albumID)))
         }
     }
 
@@ -782,7 +865,7 @@ extension DiskCache {
     public func invalidateMetadataCollection(_ key: CollectionKey, admission: MetadataStoreAdmission) throws {
         try metadataWrite { db in
             try admitLifetime(admission, namespace: key.namespace)
-            try CollectionStateRecord.row(key).updateAll(db) { $0.validatedRun.set(to: nil) }
+            try CollectionStateRecord.row(key).updateAll(db) { [$0.validatedRun.set(to: nil), $0.sourceVersion.set(to: nil)] }
             try CollectionDayRecord.all(key).updateAll(db) { $0.membershipGeneration += 1 }
             try advanceMetadataLocalRevision(db, key.namespace)
         }
@@ -796,7 +879,8 @@ extension DiskCache {
         try metadataWrite { db in
             try admitLifetime(admission, namespace: namespace)
             try deleteItems(db, namespace, ids: Array(Set(deletedIDs)))
-            try CollectionStateRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try CollectionStateRecord.filter { $0.namespace == namespace.key }
+                .updateAll(db) { [$0.validatedRun.set(to: nil), $0.sourceVersion.set(to: nil)] }
             try AlbumSummariesRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
             try FolderDirectoryRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
             try FolderCoverRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }

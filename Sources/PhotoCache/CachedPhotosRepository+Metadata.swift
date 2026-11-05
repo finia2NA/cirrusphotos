@@ -215,6 +215,16 @@ extension CachedPhotosRepository {
         return try CollectionDayPager.snapshot(catalog: catalog)
     }
 
+    /// The current version of an unshared owned album from the album list validated this run.
+    /// Shared albums can gain items from recipients, which no probe has covered, so they get none.
+    private func unsharedAlbumVersion(_ collection: PhotoCollectionDescriptor) async -> Int64? {
+        guard let albumID = collection.albumID,
+              let cached = try? await store.metadataAlbumSummaries(personalMetadataNamespace),
+              cached.validatedRun == albumListValidationRun(),
+              let album = cached.albums.first(where: { $0.id == albumID && !$0.isIncoming }), !album.shared else { return nil }
+        return album.version
+    }
+
     private func registerTimeline(collection: PhotoCollectionDescriptor,
                                   subscriber: UUID) -> Task<TimelineSnapshot, Error> {
         if var job = metadata.timelineJobs[collection] {
@@ -229,6 +239,21 @@ extension CachedPhotosRepository {
             try await connect()
             try await reconcileMetadataSource(for: collection)
             let admission = try await store.metadataAdmission(metadataNamespace(for: collection))
+            let key = CollectionKey(namespace: metadataNamespace(for: collection), collection: collection)
+            // Observed before the read, so a recorded version never claims a newer catalog.
+            let albumVersion = await unsharedAlbumVersion(collection)
+            if let albumVersion {
+                guard mutationEpoch == metadata.mutationEpochs[collection, default: 0],
+                      await metadataTokenIsCurrent(token) else { throw CancellationError() }
+                if let stored = try await store.validateMetadataCatalogByVersion(albumVersion, key: key, currentRun: runID, admission: admission) {
+                    let snapshot = try CollectionDayPager.snapshot(catalog: stored)
+                    if metadata.latestTimelines[collection]?.sections != snapshot.sections {
+                        metadata.latestTimelines[collection] = snapshot
+                        publishTimelineProjection(snapshot, collection: collection)
+                    }
+                    return snapshot
+                }
+            }
             let acquired = try await acquireCollectionCatalog(collection)
             let catalog = acquired.catalog
             try Task.checkCancellation()
@@ -243,6 +268,9 @@ extension CachedPhotosRepository {
                     let read = try DayPageRead(address: address, dayCount: section.list[0].itemCount, membershipGeneration: UInt64(generation))
                     try await store.storeMetadataIdentityPage(read, entries: ids.map { DayTimelineEntry(id: $0, time: membership.times[$0]!) },
                                                              namespace: metadataNamespace(for: collection), currentRun: runID, admission: admission)
+                }
+                if let albumVersion {
+                    try await store.storeMetadataCatalogSourceVersion(albumVersion, key: key, validatedRun: runID, admission: admission)
                 }
             }
             guard await metadataTokenIsCurrent(token) else { throw MetadataAdmissionError.superseded }

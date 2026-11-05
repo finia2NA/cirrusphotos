@@ -66,6 +66,7 @@ enum CacheSchema {
         try table(CollectionStateRecord.self, db, key: [.namespace, .collection]) { t in
             t.column(.namespace, .text); t.column(.collection, .text); t.column(.catalog, .text)
             t.column(.presentationRevision, .integer); t.column(.validatedRun, .text, nullable: true); t.column(.epoch, .integer)
+            t.column(.sourceVersion, .integer, nullable: true)
         }
         try table(CollectionDayRecord.self, db, key: [.namespace, .collection, .day]) { t in
             t.column(.namespace, .text); t.column(.collection, .text); t.column(.day, .text)
@@ -352,9 +353,12 @@ struct CollectionStateRecord: Codable, FetchableRecord, PersistableRecord {
     var presentationRevision: Int64
     var validatedRun: String?
     var epoch: Int64
+    /// For an unshared owned album: the album `version` under which this catalog and every
+    /// page currently stored for it were read. Nil when unknown or for other collections.
+    var sourceVersion: Int64?
     enum CodingKeys: String, CodingKey, ColumnExpression {
         case namespace, collection, catalog, epoch
-        case presentationRevision = "presentation_revision", validatedRun = "validated_run"
+        case presentationRevision = "presentation_revision", validatedRun = "validated_run", sourceVersion = "source_version"
     }
     typealias Columns = CodingKeys
 }

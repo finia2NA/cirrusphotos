@@ -14,11 +14,24 @@ extension CachedPhotosRepository {
         return MetadataNamespace(account: namespace, scope: source.contentScope)
     }
 
-    /// Each space reconciles its own Diff feed. Album and incoming-album scopes have
-    /// no feed and keep current-run authoritative reads.
+    /// Each space reconciles its own Diff feed. An owned album has no feed of its own, but the
+    /// space feeds keep its copies current (`MetadataStore.contentProven`), so its reads wait for
+    /// Personal reconciliation, and for Shared when this account has a Shared cursor. A failed
+    /// reconciliation only withholds the proof; the album is then read as before. Incoming
+    /// albums keep current-run authoritative reads.
     func reconcileMetadataSource(for collection: PhotoCollectionDescriptor) async throws {
-        guard let space = mediaCollection(for: collection).contentScope.space else { try await initializeMetadataEngine(); return }
-        try await reconcileMetadataSource(space: space)
+        switch mediaCollection(for: collection).contentScope {
+        case .space(let space):
+            try await reconcileMetadataSource(space: space)
+        case .album:
+            try await initializeMetadataEngine()
+            try? await reconcileMetadataSource(space: .personal)
+            if (try? await store.metadataState(metadataNamespace(for: .shared)))?.cursor != nil {
+                try? await reconcileMetadataSource(space: .shared)
+            }
+        case .incomingAlbum:
+            try await initializeMetadataEngine()
+        }
     }
 
     /// Enroll the normalized format only when its consumer pipeline is admitted.

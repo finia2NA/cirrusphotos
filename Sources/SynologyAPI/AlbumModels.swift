@@ -62,9 +62,12 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
     /// Cached capabilities are provisional until the album list is verified.
     public let recipientCanUpload: Bool
     public let recipientCanDownload: Bool
+    /// The server's album revision. It advances with every change to membership or order
+    /// (and with renames and sharing changes), so an unchanged value proves cached membership.
+    public let version: Int64?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, additional, type, shared, isIncoming, recipientCanUpload, recipientCanDownload
+        case id, name, additional, type, shared, isIncoming, recipientCanUpload, recipientCanDownload, version
         case ownerUserID = "owner_user_id"
         case itemCount = "item_count"
         case createTime = "create_time"
@@ -107,7 +110,8 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
                 sortBy: String? = nil, sortDirection: String? = nil,
                 thumbnail: ThumbnailInfo? = nil, type: String? = nil, ownerUserID: Int64? = nil,
                 shared: Bool = false, sharingInfo: AlbumSharingInfo? = nil,
-                isIncoming: Bool = false, recipientCanUpload: Bool = false, recipientCanDownload: Bool = false) {
+                isIncoming: Bool = false, recipientCanUpload: Bool = false, recipientCanDownload: Bool = false,
+                version: Int64? = nil) {
         self.id = id
         self.name = name
         self.itemCount = itemCount
@@ -124,6 +128,7 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
         self.isIncoming = isIncoming
         self.recipientCanUpload = recipientCanUpload
         self.recipientCanDownload = recipientCanDownload
+        self.version = version
     }
 
     /// Stable identity for navigation and persistence, excluding sharing credentials.
@@ -139,7 +144,8 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
         AlbumSummary(id: id, name: name, itemCount: itemCount, createTime: createTime,
                      startTime: startTime, endTime: endTime, sortBy: sortBy, sortDirection: sortDirection,
                      thumbnail: thumbnail, type: type, ownerUserID: ownerUserID, shared: shared,
-                     sharingInfo: sharingInfo, isIncoming: true, recipientCanUpload: canUpload, recipientCanDownload: canDownload)
+                     sharingInfo: sharingInfo, isIncoming: true, recipientCanUpload: canUpload, recipientCanDownload: canDownload,
+                     version: version)
     }
 
     public init(from decoder: Decoder) throws {
@@ -158,6 +164,7 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
         isIncoming = try container.decodeIfPresent(Bool.self, forKey: .isIncoming) ?? false
         recipientCanUpload = try container.decodeIfPresent(Bool.self, forKey: .recipientCanUpload) ?? false
         recipientCanDownload = try container.decodeIfPresent(Bool.self, forKey: .recipientCanDownload) ?? false
+        version = try container.decodeIfPresent(Int64.self, forKey: .version)
         let additional = try container.decodeIfPresent(Additional.self, forKey: .additional)
         thumbnail = additional?.thumbnail
         sharingInfo = additional?.sharingInfo
@@ -176,6 +183,7 @@ public struct AlbumSummary: Codable, Hashable, Identifiable, Sendable {
         try container.encodeIfPresent(sortBy, forKey: .sortBy)
         try container.encodeIfPresent(sortDirection, forKey: .sortDirection)
         try container.encode(shared, forKey: .shared)
+        try container.encodeIfPresent(version, forKey: .version)
         if isIncoming { try container.encode(true, forKey: .isIncoming) }
         if isIncoming && recipientCanUpload { try container.encode(true, forKey: .recipientCanUpload) }
         if isIncoming && recipientCanDownload { try container.encode(true, forKey: .recipientCanDownload) }
