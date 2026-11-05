@@ -240,6 +240,17 @@ extension CachedPhotosRepository {
             try await reconcileMetadataSource(for: collection)
             let admission = try await store.metadataAdmission(metadataNamespace(for: collection))
             let key = CollectionKey(namespace: metadataNamespace(for: collection), collection: collection)
+            // Reconciliation can prove the stored catalog for this run (untouched folders).
+            if let stored = try await store.metadataCatalog(key), stored.validatedRun == runID {
+                guard mutationEpoch == metadata.mutationEpochs[collection, default: 0],
+                      await metadataTokenIsCurrent(token) else { throw CancellationError() }
+                let snapshot = try CollectionDayPager.snapshot(catalog: stored.catalog)
+                if metadata.latestTimelines[collection]?.sections != snapshot.sections {
+                    metadata.latestTimelines[collection] = snapshot
+                    publishTimelineProjection(snapshot, collection: collection)
+                }
+                return snapshot
+            }
             // Observed before the read, so a recorded version never claims a newer catalog.
             let albumVersion = await unsharedAlbumVersion(collection)
             if let albumVersion {

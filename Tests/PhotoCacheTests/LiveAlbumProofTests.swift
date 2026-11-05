@@ -24,8 +24,62 @@ private actor CountingTransport: TestPhotosTransport {
     func albumItems(ids: [Int64], albumID: Int64) async throws -> [PhotoItem] {
         count("albumItems"); return try await base.albumItems(ids: ids, albumID: albumID)
     }
+    func readFolderCatalogBatch(folderID: Int64, offset: Int, limit: Int, space: PhotoSpace) async throws -> [DayTimelineEntry] {
+        count("folderCatalog"); return try await base.readFolderCatalogBatch(folderID: folderID, offset: offset, limit: limit, space: space)
+    }
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult {
         count("collectionBatch"); return try await base.readCollectionBatch(request, fields: fields)
+    }
+}
+
+/// Opt-in end-to-end check of the folder catalog proof. A runner passes `LIVE_FOLDER_ID`
+/// for a folder that holds photos and `LIVE_FOLDER_MEMBER` for one of them.
+final class LiveFolderProofTests: XCTestCase {
+    func testFolderCatalogProofAgainstLiveNAS() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["RUN_LIVE_ALBUM_PROOF"] == "1",
+              let folderID = environment["LIVE_FOLDER_ID"].flatMap(Int64.init),
+              let member = environment["LIVE_FOLDER_MEMBER"].flatMap(Int64.init) else {
+            throw XCTSkip("Set RUN_LIVE_ALBUM_PROOF=1 with the folder fixture IDs.")
+        }
+        let credentials = try CredentialStore.load()
+        guard credentials.username.lowercased() == "phototest" else { throw XCTSkip("Runs only on the disposable account.") }
+        let root = temporaryTestRoot("SynoLiveFolderProof")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let collection = PhotoCollectionDescriptor.folder(folderID, space: .personal)
+        var repositories: [CachedPhotosRepository] = []
+
+        func run(_ label: String) async throws -> [String: Int] {
+            let transport = CountingTransport(base: try SynologyClient(credentials: credentials))
+            let repository = try CachedPhotosRepository(credentials: credentials, cacheRoot: root, transport: transport)
+            repositories.append(repository)
+            var sections: [TimelineSection] = []
+            for await event in await repository.timeline(collection: collection) {
+                if case .value(let snapshot, true) = event { sections = snapshot.sections }
+                if case .failure(let error) = event { XCTFail("\(label) timeline: \(error.localizedDescription)") }
+            }
+            for section in sections {
+                for await event in await repository.page(section, collection: collection) {
+                    if case .failure(let error) = event { XCTFail("\(label) page: \(error.localizedDescription)") }
+                }
+            }
+            let counts = await transport.counts
+            print("LIVE folder \(label): \(counts.sorted { $0.key < $1.key })")
+            return counts
+        }
+
+        let cold = try await run("cold")
+        XCTAssertEqual(cold["folderCatalog"], 1)
+        let warm = try await run("warm")
+        XCTAssertNil(warm["folderCatalog"], "an untouched folder needs no catalog read")
+        XCTAssertNil(warm["collectionBatch"])
+
+        let client = try SynologyClient(credentials: credentials)
+        try await client.login(credentials: credentials)
+        try await client.setRating(itemIDs: [member], rating: 4, space: .personal)
+        try await Task.sleep(for: .seconds(15))
+        let rated = try await run("rated")
+        XCTAssertEqual(rated["folderCatalog"], 1, "a changed member's folder is read again")
     }
 }
 
