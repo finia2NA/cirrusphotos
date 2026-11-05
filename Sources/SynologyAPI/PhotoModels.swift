@@ -65,6 +65,8 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
     public let type: String
     public let liveType: String?
     public let filesize: Int64?
+    /// The folder that holds the item's file, as Item and Diff records report it.
+    public let folderID: Int64?
     public var additional: Additional?
     /// Ephemeral UI projection while a normal server rotation is pending. It is
     /// deliberately excluded from cached/wire coding and returns to zero when the
@@ -76,6 +78,7 @@ public struct PhotoItem: Codable, Sendable, Identifiable, Equatable {
         case ownerUserID = "owner_user_id"
         case indexedTime = "indexed_time"
         case liveType = "live_type"
+        case folderID = "folder_id"
     }
 
     public struct Additional: Codable, Sendable, Equatable {

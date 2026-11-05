@@ -679,6 +679,10 @@ extension DiskCache {
         try metadataWrite { db in
             try admit(admission, namespace: namespace, db)
             let prior = try metadataState(db, namespace)
+            // Read before any change below: which folder catalogs this interval cannot have touched.
+            let untouchedFolders = proven && !invalidateAll
+                ? try untouchedFolderCatalogs(db, namespace, replacements: replacements, deletedIDs: deletedIDs, resetEpoch: prior.resetEpoch)
+                : []
             let changed = invalidateAll || !replacements.isEmpty || !deletedIDs.isEmpty || !favorites.isEmpty
             let revision = prior.revision + (changed ? 1 : 0)
             let epoch = prior.resetEpoch + (invalidateAll ? 1 : 0)
@@ -699,7 +703,61 @@ extension DiskCache {
             try writeState(db, namespace, revision: revision, resetEpoch: epoch, cursor: cursor,
                            inventoryComplete: !invalidateAll && prior.inventoryComplete,
                            proofRun: proven && !invalidateAll ? currentRun : nil)
+            if !untouchedFolders.isEmpty {
+                try CollectionStateRecord.filter { $0.namespace == namespace.key && untouchedFolders.contains($0.collection) }
+                    .updateAll(db) { $0.validatedRun.set(to: currentRun) }
+            }
         }
+    }
+
+    /// Folder catalogs that a proven interval leaves unchanged, so they count as validated this
+    /// run without a read. A folder's membership and day counts change only through items the
+    /// item feed reports: each changed or deleted item's previous folders come from the cached
+    /// folder pages that list it, and a replacement names its current folder. A folder qualifies
+    /// only when it was validated in an earlier run under this reset epoch and its stored pages
+    /// list every member of every day, so no previous member can be missing from that lookup.
+    /// Pages need not carry the current day generation: a folder catalog read rewrites all of its
+    /// pages, and any later change to its membership marks the folder touched.
+    /// Any replacement without a folder ID disables the shortcut for the interval.
+    private func untouchedFolderCatalogs(_ db: Database, _ namespace: MetadataNamespace, replacements: [PhotoItem],
+                                         deletedIDs: [Int64], resetEpoch: Int64) throws -> Set<String> {
+        guard let space = namespace.scope.space else { return [] }
+        let prefix = PhotoCollectionDescriptor.folder(0, space: space).rawValue.dropLast(1)
+        let pattern = "\(prefix)%"
+        var candidates = Set(try String.fetchAll(db, CollectionStateRecord
+            .filter { $0.namespace == namespace.key && $0.collection.like(pattern) && $0.validatedRun != nil && $0.epoch == resetEpoch }
+            .select { $0.collection }))
+        guard !candidates.isEmpty else { return [] }
+
+        var touched: Set<String> = []
+        for item in replacements {
+            guard let folderID = item.folderID else { return [] }
+            touched.insert(PhotoCollectionDescriptor.folder(folderID, space: space).rawValue)
+        }
+        let ids = replacements.map(\.id) + deletedIDs
+        for start in stride(from: 0, to: ids.count, by: 500) {
+            let batch = Array(ids[start..<min(start + 500, ids.count)])
+            touched.formUnion(try String.fetchAll(db, PageItemRecord
+                .filter { $0.namespace == namespace.key && $0.collection.like(pattern) && batch.contains($0.itemID) }
+                .select { $0.collection }.distinct()))
+            for detail in try ItemDetailRecord.filter({ $0.namespace == namespace.key && batch.contains($0.itemID) }).fetchAll(db) {
+                if let folderID = detail.payload.folderID { touched.insert(PhotoCollectionDescriptor.folder(folderID, space: space).rawValue) }
+            }
+        }
+        candidates.subtract(touched)
+        guard !candidates.isEmpty else { return [] }
+
+        // A folder whose stored pages do not cover every day could hide a previous member.
+        let names = Array(candidates)
+        var expected: [String: [String: Int]] = [:]
+        for day in try CollectionDayRecord.filter({ $0.namespace == namespace.key && names.contains($0.collection) }).fetchAll(db) {
+            expected[day.collection, default: [:]][day.day] = day.itemCount
+        }
+        var stored: [String: [String: Int]] = [:]
+        for page in try DayPageRecord.filter({ $0.namespace == namespace.key && names.contains($0.collection) && $0.epoch == resetEpoch }).fetchAll(db) {
+            stored[page.collection, default: [:]][page.day, default: 0] += page.actualCount
+        }
+        return candidates.filter { (expected[$0] ?? [:]) == (stored[$0] ?? [:]) }
     }
 
     /// Patches favorite flags and marks only the Favorites days that can contain the

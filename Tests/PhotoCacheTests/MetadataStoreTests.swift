@@ -386,6 +386,125 @@ final class MetadataStoreTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(facetRecord?.facets, ItemFacets(payload))
         XCTAssertNil(facetRecord?.annotationRun)
     }
+    // MARK: Folder catalog proof
+
+    private func folderItem(_ id: Int64, day: CaptureDay, folder: Int64?) throws -> PhotoItem {
+        let folderField = folder.map { ",\"folder_id\":\($0)" } ?? ""
+        return try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":\(id),\"time\":\(day.startTime),\"type\":\"photo\"\(folderField)}".utf8))
+    }
+
+    /// Two folders, each with one complete day page, validated in an earlier run. A folder in
+    /// `missingPage` also has a second day whose page was never stored.
+    private func seedFolders(_ store: DiskCache, missingPage: Set<Int64> = []) async throws -> CaptureDay {
+        let day = try CaptureDay(year: 2024, month: 1, day: 1)
+        let unstored = try CaptureDay(year: 2023, month: 6, day: 1)
+        let members: [Int64: [Int64]] = [10: [1, 2], 20: [3]]
+        for (folder, ids) in members {
+            let collection = PhotoCollectionDescriptor.folder(folder, space: .personal)
+            let key = CollectionKey(namespace: namespace, collection: collection)
+            let admission = try await store.metadataAdmission(namespace)
+            let extra: [CollectionDayCount] = missingPage.contains(folder) ? [try .init(day: unstored, count: 1)] : []
+            let catalog = try CollectionDayCatalog(days: [.init(day: day, count: ids.count)] + extra, completeness: .complete)
+            try await store.storeMetadataCatalog(catalog, key: key, validatedRun: "earlier", admission: admission)
+            let stored0 = try await store.metadataDayGeneration(key, day: day)
+            let generation = try XCTUnwrap(stored0)
+            let page = try DayPageRead(address: .init(collection: collection, day: day, offset: 0), dayCount: ids.count,
+                                       membershipGeneration: UInt64(generation))
+            try await store.storeMetadataIdentityPage(page, entries: ids.map { DayTimelineEntry(id: $0, time: day.startTime) },
+                                                     namespace: namespace, currentRun: "earlier", admission: admission)
+        }
+        return day
+    }
+
+    private func folderValidatedRuns(_ store: DiskCache) async throws -> [Int64: String?] {
+        var result: [Int64: String?] = [:]
+        for folder: Int64 in [10, 20] {
+            let key = CollectionKey(namespace: namespace, collection: .folder(folder, space: .personal))
+            result[folder] = try await store.metadataCatalog(key)?.validatedRun
+        }
+        return result
+    }
+
+    func testProvenIntervalValidatesOnlyUntouchedFolderCatalogs() async throws {
+        let (store, root) = try await open()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let day = try await seedFolders(store)
+        try await store.applyMetadataChanges(namespace: namespace, cursor: .init(diffVersion: 2, versionTime: 2),
+                                             replacements: [folderItem(1, day: day, folder: 10)], deletedIDs: [],
+                                             affectedDays: [day], invalidateAll: false, proven: true, currentRun: "now",
+                                             admission: store.metadataAdmission(namespace))
+        let runs = try await folderValidatedRuns(store)
+        XCTAssertEqual(runs[10], .some(nil), "the changed item's folder is read again")
+        XCTAssertEqual(runs[20], "now")
+    }
+
+    func testFolderProofCoversMovesDeletionsAndEmptyIntervals() async throws {
+        let (store, root) = try await open()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let day = try await seedFolders(store)
+        // Item 3 moved from folder 20 to folder 10: both folders change.
+        try await store.applyMetadataChanges(namespace: namespace, cursor: .init(diffVersion: 2, versionTime: 2),
+                                             replacements: [folderItem(3, day: day, folder: 10)], deletedIDs: [],
+                                             affectedDays: [day], invalidateAll: false, proven: true, currentRun: "move",
+                                             admission: store.metadataAdmission(namespace))
+        var runs = try await folderValidatedRuns(store)
+        XCTAssertEqual(runs[10], .some(nil))
+        XCTAssertEqual(runs[20], .some(nil))
+
+        let (other, otherRoot) = try await open()
+        defer { try? FileManager.default.removeItem(at: otherRoot) }
+        _ = try await seedFolders(other)
+        try await other.applyMetadataChanges(namespace: namespace, cursor: .init(diffVersion: 2, versionTime: 2),
+                                             replacements: [], deletedIDs: [3], affectedDays: [day], invalidateAll: false,
+                                             proven: true, currentRun: "delete", admission: other.metadataAdmission(namespace))
+        runs = try await folderValidatedRuns(other)
+        XCTAssertEqual(runs[10], "delete")
+        XCTAssertEqual(runs[20], .some(nil), "a deleted member's folder is read again")
+
+        try await other.applyMetadataChanges(namespace: namespace, cursor: .init(diffVersion: 3, versionTime: 3),
+                                             replacements: [], deletedIDs: [], affectedDays: [], invalidateAll: false,
+                                             proven: true, currentRun: "quiet", admission: other.metadataAdmission(namespace))
+        runs = try await folderValidatedRuns(other)
+        XCTAssertEqual(runs[10], "quiet", "an empty interval validates every complete folder")
+        XCTAssertEqual(runs[20], .some(nil), "a withdrawn catalog stays withdrawn")
+    }
+
+    func testFolderProofIsWithheldWhenEvidenceIsIncomplete() async throws {
+        // A replacement without a folder ID disables the shortcut.
+        let (store, root) = try await open()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let day = try await seedFolders(store)
+        try await store.applyMetadataChanges(namespace: namespace, cursor: .init(diffVersion: 2, versionTime: 2),
+                                             replacements: [folderItem(1, day: day, folder: nil)], deletedIDs: [],
+                                             affectedDays: [day], invalidateAll: false, proven: true, currentRun: "now",
+                                             admission: store.metadataAdmission(namespace))
+        var runs = try await folderValidatedRuns(store)
+        XCTAssertEqual(runs[10], .some(nil))
+        XCTAssertEqual(runs[20], .some(nil))
+
+        // A folder whose pages do not list every member could hide the changed item.
+        let (partial, partialRoot) = try await open()
+        defer { try? FileManager.default.removeItem(at: partialRoot) }
+        _ = try await seedFolders(partial, missingPage: [10])
+        try await partial.applyMetadataChanges(namespace: namespace, cursor: .init(diffVersion: 2, versionTime: 2),
+                                               replacements: [], deletedIDs: [], affectedDays: [], invalidateAll: false,
+                                               proven: true, currentRun: "now", admission: partial.metadataAdmission(namespace))
+        runs = try await folderValidatedRuns(partial)
+        XCTAssertEqual(runs[10], "earlier", "incomplete pages keep the earlier validation, so the catalog is read again")
+        XCTAssertEqual(runs[20], "now")
+
+        // An unproven interval validates nothing.
+        let (unproven, unprovenRoot) = try await open()
+        defer { try? FileManager.default.removeItem(at: unprovenRoot) }
+        _ = try await seedFolders(unproven)
+        try await unproven.applyMetadataChanges(namespace: namespace, cursor: .init(diffVersion: 2, versionTime: 2),
+                                                replacements: [], deletedIDs: [], affectedDays: [], invalidateAll: false,
+                                                proven: false, currentRun: "now", admission: unproven.metadataAdmission(namespace))
+        runs = try await folderValidatedRuns(unproven)
+        XCTAssertEqual(runs[10], "earlier")
+        XCTAssertEqual(runs[20], "earlier")
+    }
+
     func testDiffProofVerifiesUntouchedCachedPagesInALaterRun() async throws {
         let (store, root) = try await open()
         defer { try? FileManager.default.removeItem(at: root) }
