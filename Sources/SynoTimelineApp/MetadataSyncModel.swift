@@ -62,6 +62,11 @@ final class MetadataSyncModel: ObservableObject {
     private var focusChanges = 0
     private var started = false
     private var startedInvalidationRevision: UInt64 = 0
+    /// The Activity entry while a pass runs. It has no cancel action and, while running,
+    /// cannot be dismissed; it is discarded when the pass ends, so it never enters History.
+    private var activityHandle: ActivityHandle?
+    private var lastActivityStatus: ContinuousClock.Instant?
+    private static let activityStatusInterval: Duration = .seconds(1)
     private let pathMonitor = NWPathMonitor()
     private var networkAvailable = true
     private var networkReturns = 0
@@ -149,6 +154,7 @@ final class MetadataSyncModel: ObservableObject {
         let loaders = loaders
         Task { for loader in loaders { await loader.shutdown() } }
         self.loaders = []
+        endActivity()
         baseTargets = []
         verifiedCollections = []
         unavailableCollections = []
@@ -161,6 +167,7 @@ final class MetadataSyncModel: ObservableObject {
         while !Task.isCancelled {
             if await pass(includeSharedSpace: includeSharedSpace) { break }
             guard !Task.isCancelled else { return }
+            endActivity()
             progress.running = false
             progress.currentTitle = nil
             progress.nextRetry = Date.now.addingTimeInterval(TimeInterval(delay.components.seconds))
@@ -168,6 +175,7 @@ final class MetadataSyncModel: ObservableObject {
             delay = min(delay * 2, Self.maximumRetryDelay)
         }
         guard !Task.isCancelled else { return }
+        endActivity()
         progress.running = false
         progress.currentTitle = nil
         progress.nextRetry = nil
@@ -192,6 +200,7 @@ final class MetadataSyncModel: ObservableObject {
         progress.running = true
         progress.nextRetry = nil
         progress.currentTitle = "Discovering collections"
+        beginActivity(library.activity)
         unavailableCollections = []
         var complete = true
         if await runFocusIfNeeded(repository) == .incomplete { complete = false }
@@ -305,6 +314,29 @@ final class MetadataSyncModel: ObservableObject {
                             verified: values.reduce(0) { $0 + $1.verified },
                             failed: values.reduce(0) { $0 + $1.failed },
                             running: true, currentTitle: title)
+        updateActivityStatus()
+    }
+
+    private func beginActivity(_ center: ActivityCenter) {
+        guard activityHandle == nil else { return }
+        activityHandle = center.begin(.metadataSync)
+        lastActivityStatus = nil
+        updateActivityStatus()
+    }
+
+    /// At most once a second, so per-page progress does not re-render the Activity panel and toolbar.
+    private func updateActivityStatus() {
+        guard let activityHandle else { return }
+        let now = ContinuousClock.now
+        if let lastActivityStatus, now - lastActivityStatus < Self.activityStatusInterval { return }
+        lastActivityStatus = now
+        let title = progress.currentTitle ?? "Discovering collections"
+        activityHandle.status(progress.total > 0 ? "\(title) · \(progress.verified) of \(progress.total) sections" : title)
+    }
+
+    private func endActivity() {
+        activityHandle?.discard()
+        activityHandle = nil
     }
 }
 

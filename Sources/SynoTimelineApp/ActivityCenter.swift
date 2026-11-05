@@ -22,6 +22,8 @@ enum ActivityKind: Equatable, Sendable {
     case unverified(action: String)
     /// A manual Refresh. Not a change, so it is never added to History.
     case refresh
+    /// The background metadata sync. Shown only while it runs; never added to History.
+    case metadataSync
     /// Information without an outcome, such as a lost connection.
     case notice(title: String)
 
@@ -45,7 +47,7 @@ enum ActivityKind: Equatable, Sendable {
     /// Refresh and notices are not changes; History lists changes and transfers only.
     var recordsHistory: Bool {
         switch self {
-        case .refresh, .notice: false
+        case .refresh, .metadataSync, .notice: false
         default: true
         }
     }

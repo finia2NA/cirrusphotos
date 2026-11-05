@@ -71,6 +71,40 @@ final class TimelineSectionLoadModelTests: XCTestCase {
         XCTAssertTrue(syncing)
     }
 
+    func testMetadataSyncShowsAnActivityEntryOnlyWhileRunning() async throws {
+        let root = temporaryTestRoot("TimelineSectionLoadModel")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = LoadModelTransport(snapshot: TimelineSnapshot(sections: [section()]), item: try item(),
+                                           delay: .milliseconds(200))
+        let session = AppSession(preferences: AppPreferences()) { _ in
+            try CachedPhotosRepository(
+                credentials: .init(username: "load-model", password: "unused", otpSecret: "unused"),
+                baseURL: URL(string: "https://load-model.example.invalid")!,
+                cacheRoot: root,
+                transport: transport
+            )
+        }
+        let library = LibraryModel(session: session)
+        let sync = MetadataSyncModel()
+        sync.configure(library: library)
+        await library.load()
+
+        let syncEntry = { @MainActor in library.activity.entries.first { $0.kind == .metadataSync } }
+        let appeared = await waitUntil(attempts: 2_000) { @MainActor in syncEntry() != nil }
+        XCTAssertTrue(appeared)
+        let entry = try XCTUnwrap(syncEntry())
+        XCTAssertFalse(entry.phase.isSettled, "a running entry has no dismiss button")
+        XCTAssertNil(entry.cancel)
+        XCTAssertTrue(library.activity.inProgress.contains { $0.id == entry.id })
+
+        // The pass either finishes or waits to retry; the entry goes away in both cases.
+        let ended = await waitUntil(attempts: 4_000) { @MainActor in
+            !sync.progress.running && syncEntry() == nil
+        }
+        XCTAssertTrue(ended)
+        XCTAssertFalse(library.activity.history.contains { $0.kind == .metadataSync })
+    }
+
     func testAppWideRunLoadsLibraryFavoritesAndEveryAlbumAndUpdatesFilterThroughRepository() async throws {
         let (library, filter, model, transport, root) = try await makeModels()
         defer { try? FileManager.default.removeItem(at: root) }

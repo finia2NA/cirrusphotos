@@ -61,6 +61,8 @@ enum ActivityWording {
                         "Merging \(source) into \(target) failed")
         case .refresh:
             return pick(stage, "Refreshing from the NAS", "Refreshed from the NAS", "Refresh failed")
+        case .metadataSync:
+            return pick(stage, "Syncing library metadata", "Synced library metadata", "Metadata sync failed")
         case .notice(let title):
             return title
         case .unverified(let action):
