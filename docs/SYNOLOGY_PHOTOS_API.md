@@ -875,6 +875,18 @@ A probe on the disposable `phototest` account took a fresh `get_version` v7 curs
 - **Not tested:**
   - People and Subjects changes; `phototest` has no people and one generated subject.
   - Mixing these feeds with more than one change per interval.
+- **Folder layout (2026-11-05, `phototest`, Personal Space).** Each change was read from a fresh cursor, waiting up to 150 seconds for the cursor to advance, then through `Diff.get` and `Diff.list` v7:
+
+  | Change | Parent listing | Diff cursor | Diff groups |
+  | --- | --- | --- | --- |
+  | Empty folder created on the mount | gained the folder | not advanced by the folder | none |
+  | Folder with a photo renamed on the mount | renamed | not advanced | none |
+  | Empty folder removed on the mount | lost the folder | not advanced | none |
+  | `Browse.Folder create` v1 (`target_id`, `name`) | gained the folder | not advanced | none |
+  | `Browse.Folder rename` v1 (`id`, `name`) | renamed | not advanced | none |
+  | `Browse.Folder delete` v1 (`id: [..]`) of an empty folder | lost the folder | not advanced | none |
+
+  `Browse.Folder move` v1 with `id: [..]` and `target_id` returned error 120. `Diff.get` v7 returns only `item` and `album` groups. Folder `get` and `list` v2 rows carry `id`, `name`, `parent`, `owner_user_id`, `passphrase`, `shared`, `sort_by`, `sort_direction` and `additional`, with no version or modification time. Folder layout therefore cannot be proven from the feeds; only item changes inside folders are reported.
 - **Album feed (2026-11-05, `phototest`, Personal Space).** Each write was read from a fresh cursor through `Diff.get` v7, with an untouched control album that never appeared:
 
   | Change | `album` group | Album summary fields that changed |
