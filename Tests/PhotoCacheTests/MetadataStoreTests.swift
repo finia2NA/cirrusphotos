@@ -64,6 +64,34 @@ final class MetadataStoreTests: XCTestCase, @unchecked Sendable {
         let after = try await store.metadataStorageCost()
         XCTAssertLessThan(after, before)
     }
+    /// Eviction subtracts the cost it removed from the usage estimate. That cost must be
+    /// the same quantity the full scan sums, including for non-ASCII text.
+    func testMetadataEvictionKeepsUsageEstimateEqualToFreshScan() async throws {
+        let (store, root) = try await open()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let day = try CaptureDay(year: 2024, month: 1, day: 1)
+        let rows = try (1...6).map { id -> PhotoItem in
+            try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":\(id),\"time\":\(day.startTime),\"type\":\"photo\",\"filename\":\"Zürich 東京 \(id).jpg\",\"additional\":{\"favorite\":true,\"gps\":{\"latitude\":47.37,\"longitude\":8.54}}}".utf8))
+        }
+        let admission = try await store.metadataAdmission(namespace)
+        for collection in [PhotoCollectionDescriptor.library(.personal), .favorites(.personal)] {
+            let catalog = try CollectionDayCatalog(days: [.init(day: day, count: rows.count)], completeness: .complete)
+            try await store.storeMetadataCatalog(catalog, key: .init(namespace: namespace, collection: collection), validatedRun: "run", admission: admission)
+            let page = try DayPageRead(address: .init(collection: collection, day: day, offset: 0), dayCount: rows.count, membershipGeneration: 1)
+            try await store.storeMetadataPage(page, items: rows, profile: .fullPage, namespace: namespace, currentRun: "run", admission: admission)
+        }
+        var limit = try await store.usage()
+        XCTAssertGreaterThan(limit, 0)
+        while limit > 0 {
+            limit = limit * 3 / 4
+            try await store.setBudget(limit)
+            let estimate = await store.estimatedUsage
+            let fresh = try await store.usage()
+            XCTAssertEqual(estimate, fresh, "estimate drifted from a fresh scan at budget \(limit)")
+        }
+        let remaining = try await store.usage()
+        XCTAssertEqual(remaining, 0)
+    }
     func testCatalogPresentationDoesNotDirtyUnrelatedDay() async throws {
         let (store, root) = try await open()
         defer { try? FileManager.default.removeItem(at: root) }

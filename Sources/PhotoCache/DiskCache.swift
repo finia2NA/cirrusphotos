@@ -45,7 +45,7 @@ public actor DiskCache {
     private var configuredThumbnailSize: ThumbnailSize = .m
     /// Usage from the last full scan, adjusted by media writes and evictions since then.
     /// Measuring metadata cost reads every stored payload, so it is not repeated per write.
-    private var estimatedUsage: Int64?
+    private(set) var estimatedUsage: Int64?
     private var metadataWritesSinceUsageCheck = 0
     private var lastUsageCheck = ContinuousClock.now
     /// Metadata growth is not tracked per write; it is re-measured at most this often.

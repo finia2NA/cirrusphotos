@@ -863,18 +863,14 @@ extension DiskCache {
             + total(AlbumSummariesRecord.self, length(AlbumSummariesRecord.Columns.payload))
     }
 
-    /// Approximates a stored JSON column's length for eviction accounting.
-    private static func encodedSize<Value: Encodable>(_ value: Value) -> Int64 {
-        Int64((try? JSONEncoder().encode(value).count) ?? 0)
-    }
-
     private enum EvictionVictim {
         case detail(ItemDetailRecord), page(DayPageRecord), index(ItemIndexRecord), collection(CollectionStateRecord), albums(AlbumSummariesRecord)
     }
 
     /// Eviction preserves page slots when details leave, and removes membership items
     /// together with their page. The compact inventory has Map's retention priority.
-    /// Returns the estimated cost removed (as counted by `metadataStorageCost`), or nil
+    /// Returns the cost removed, measured with the same stored-column expressions as
+    /// `metadataStorageCost` so the usage estimate stays equal to a fresh scan, or nil
     /// when nothing at or below `throughRank` remained.
     func trimNormalizedMetadata(throughRank: Int) throws -> Int64? {
         let pageRank = CachePriorityPolicy.evictionRank(for: .metadataPage)
@@ -895,29 +891,37 @@ extension DiskCache {
             guard let victim = candidates.min(by: { ($0.rank, $0.accessed) < ($1.rank, $1.accessed) })?.victim else { return nil }
             switch victim {
             case .detail(let detail):
+                let cost = try Int64.fetchOne(db, ItemDetailRecord.filter { $0.namespace == detail.namespace && $0.itemID == detail.itemID }
+                    .select(length(ItemDetailRecord.Columns.payload))) ?? 0
                 try detail.delete(db)
-                return Self.encodedSize(detail.payload)
+                return cost
             case .page(let page):
                 try PageItemRecord.page(of: page).deleteAll(db)
                 try page.delete(db)
                 return Int64(page.actualCount) * 16 + 128
             case .index(let index):
                 try markInventoryIncomplete(db, index.namespace, cause: "cache budget evicted an item index row")
+                let cost = try Int64.fetchOne(db, ItemIndexRecord.filter { $0.namespace == index.namespace && $0.itemID == index.itemID }
+                    .select((length(ItemIndexRecord.Columns.projection) ?? 0) + 64)) ?? 64
                 try index.delete(db)
-                return (index.projection.map(Self.encodedSize) ?? 0) + 64
+                return cost
             case .collection(let state):
                 try MetadataStateRecord.filter(key: state.namespace).updateAll(db) { $0.revision += 1 }
                 let namespace = state.namespace, collection = state.collection
                 let pages = DayPageRecord.filter { $0.namespace == namespace && $0.collection == collection }
                 let pageCost = try Int64.fetchOne(db, pages.select(sum(DayPageRecord.Columns.actualCount * 16 + 128) ?? 0)) ?? 0
+                let catalogCost = try Int64.fetchOne(db, CollectionStateRecord.filter { $0.namespace == namespace && $0.collection == collection }
+                    .select(length(CollectionStateRecord.Columns.catalog) + 128)) ?? 128
                 try PageItemRecord.filter { $0.namespace == namespace && $0.collection == collection }.deleteAll(db)
                 try pages.deleteAll(db)
                 try CollectionDayRecord.filter { $0.namespace == namespace && $0.collection == collection }.deleteAll(db)
                 try state.delete(db)
-                return pageCost + Self.encodedSize(state.catalog) + 128
+                return pageCost + catalogCost
             case .albums(let albums):
+                let cost = try Int64.fetchOne(db, AlbumSummariesRecord.filter { $0.namespace == albums.namespace }
+                    .select(length(AlbumSummariesRecord.Columns.payload))) ?? 0
                 try albums.delete(db)
-                return Self.encodedSize(albums.payload)
+                return cost
             }
         }
     }

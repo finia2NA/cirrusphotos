@@ -55,7 +55,7 @@ struct CacheSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack {
-                Text("Maximum cache")
+                Text("Maximum stored data")
                 Slider(value: $preferences.budgetFraction, in: 0...1)
                 Text(ByteCountFormatter.string(
                     fromByteCount: CacheBudget.bytes(at: preferences.budgetFraction),
@@ -73,6 +73,9 @@ struct CacheSettingsView: View {
                 Button("Clear Cache") { Task { await library.clearCache() } }
                     .disabled(library.cacheResetInProgress)
             }
+            Text("Counts cached photos, videos and metadata. Database overhead and filesystem rounding are not included, so the folder in Finder can be a few percent larger.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             HStack {
                 Text("Cached metadata is checked against the NAS")
                     .foregroundStyle(.secondary)

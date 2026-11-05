@@ -141,6 +141,31 @@ final class PhotoCacheTests: XCTestCase {
         XCTAssertEqual(usage, Int64(block))
     }
 
+    /// The running estimate between full scans must equal a fresh scan after new writes,
+    /// replacements, removals and evictions.
+    func testMediaUsageEstimateTracksFreshScan() async throws {
+        let root = temporaryTestRoot("SynoUsageEstimateTracking")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = try DiskCache(root: root, budget: 200_000_000)
+        func assertEstimateMatches(_ step: String) async throws {
+            let estimate = await cache.estimatedUsage
+            let fresh = try await cache.usage()
+            XCTAssertEqual(estimate, fresh, step)
+        }
+        try await cache.put("a", kind: .thumbnail, data: Data(repeating: 1, count: 1_000), validatedRun: nil)
+        try await cache.put("b", kind: .fullImage, data: Data(repeating: 2, count: 20_000), validatedRun: nil)
+        try await cache.put("c", kind: .videoSegment, data: Data(repeating: 3, count: 300), validatedRun: nil)
+        try await assertEstimateMatches("after writes")
+        try await cache.put("b", kind: .fullImage, data: Data(repeating: 4, count: 5_000), validatedRun: nil)
+        try await assertEstimateMatches("after replacement")
+        try await cache.remove("a")
+        try await assertEstimateMatches("after removal")
+        try await cache.setBudget(4_000)
+        try await assertEstimateMatches("after budget reduction")
+        let usage = try await cache.usage()
+        XCTAssertLessThanOrEqual(usage, 4_000)
+    }
+
     func testThumbnailEvictionUsesReadRecency() async throws {
         let root = temporaryTestRoot("ThumbnailLRU")
         defer { try? FileManager.default.removeItem(at: root) }
