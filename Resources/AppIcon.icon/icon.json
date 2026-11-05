@@ -1,0 +1,107 @@
+{
+  "fill" : "system-dark",
+  "groups" : [
+    {
+      "blur-material" : null,
+      "layers" : [
+        {
+          "glass" : false,
+          "image-name" : "Central glow.svg",
+          "name" : "Central glow",
+          "opacity-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : 0
+            }
+          ],
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              3.884488238675317,
+              74.68743303330666
+            ]
+          }
+        },
+        {
+          "fill" : "automatic",
+          "glass" : true,
+          "image-name" : "Cloud.svg",
+          "name" : "Cloud",
+          "opacity-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : 1
+            }
+          ],
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              120.8748895892627
+            ]
+          }
+        },
+        {
+          "blend-mode" : "soft-light",
+          "image-name" : "Sun.svg",
+          "name" : "Sun",
+          "opacity" : 1,
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              -84.6251104107373
+            ]
+          }
+        },
+        {
+          "image-name" : "Pink petal.svg",
+          "name" : "Pink petal",
+          "opacity" : 1,
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              -165.731,
+              -25
+            ]
+          }
+        },
+        {
+          "blend-mode" : "normal",
+          "fill" : "automatic",
+          "image-name" : "Blue petal.svg",
+          "name" : "Blue petal",
+          "opacity" : 1,
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              166.5,
+              -25
+            ]
+          }
+        }
+      ],
+      "position" : {
+        "scale" : 1.06,
+        "translation-in-points" : [
+          0,
+          20
+        ]
+      },
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.3
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

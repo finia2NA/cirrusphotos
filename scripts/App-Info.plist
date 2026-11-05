@@ -4,6 +4,8 @@
     <key>CFBundleExecutable</key><string>SynoTimeline</string>
     <key>CFBundleIdentifier</key><string>local.cirrus.syno-timeline</string>
     <key>CFBundleName</key><string>Cirrus Photos</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleIconName</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>27.0</string>
