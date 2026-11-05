@@ -874,8 +874,23 @@ A probe on the disposable `phototest` account took a fresh `get_version` v7 curs
   The probe left an unused `diffprobe` general tag on `phototest`.
 - **Not tested:**
   - People and Subjects changes; `phototest` has no people and one generated subject.
-  - Album deletion in `album.delete`.
   - Mixing these feeds with more than one change per interval.
+- **Album feed (2026-11-05, `phototest`, Personal Space).** Each write was read from a fresh cursor through `Diff.get` v7, with an untouched control album that never appeared:
+
+  | Change | `album` group | Album summary fields that changed |
+  | --- | --- | --- |
+  | Create (empty or with items) | `modify` | new album |
+  | `NormalAlbum add_item` / `delete_item` | `modify` | `item_count`, `version` (plus `start_time`/`end_time` when the range moves) |
+  | `Album set_name` | `modify` | `name`, `version` |
+  | `Sharing.Passphrase set_shared` on or off | `modify` | `shared`, `passphrase`, `sharing_info`, `version` |
+  | Member rotated | `modify` | `thumbnail`, `version` |
+  | Member capture time changed via the mount | `modify` | `start_time`, `end_time`, `thumbnail`, `version` |
+  | Member deleted from the library | `modify` | `item_count`, time range, `thumbnail`, `version` |
+  | Member description or rating | none | none |
+  | Member moved to another folder | none | none |
+  | `Album delete` | `delete` (bare ID) | album gone |
+
+  Every change that can alter an album's membership or order also changed its summary `version`, and nothing else did. `Diff.get` `item` groups reported deletions but no modifications; item modifications come from `list`. Not tested: items added by a share recipient (Provider), incoming albums, and Shared Space albums.
 - **Live Photo merges (2026-11-04, `phototest`):** three iPhone Live Photos and three JPEGs uploaded by the user produced one terminal `list` interval with the six surviving items in `item.modify` and `item.merge: [id, id, id]`, bare integers, one per Live Photo. The merge IDs fill the gaps between the Live HEIC IDs and appear in neither `modify` nor `delete`; `Browse.Item get` no longer returns them, so each is the video's temporary item that the NAS folded into its still. Surviving stills have type `live` and `additional.live_type: "live"`. `Diff.get` v7 reported the same `modify`, `delete` and `merge`. Synthetic same-basename JPEG/HEIC + MOV pairs without Apple MakerNote content identifiers produced no merge and stayed two items (MOV type `live`). `Browse.Item get` v7 omits unknown or deleted IDs from `list` without an error.
 - `SYNO.FotoTeam.Browse.Diff get_version` v7 returned error 801 for `phototest`, which has no Shared Space access.
 - **Shared Space (main account, read-only):**
