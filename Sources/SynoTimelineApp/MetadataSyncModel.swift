@@ -213,14 +213,17 @@ final class MetadataSyncModel: ObservableObject {
         for target in pending where collections[target.collection] == nil {
             collections[target.collection] = CollectionProgress(total: target.snapshot.sections.count)
         }
-        var folders: [(id: Int64, space: PhotoSpace)] = [(0, .personal)] + (includeSharedSpace ? [(0, .shared)] : [])
+        // A child carries its summary from the parent's listing when that listing was verified this run.
+        var folders: [(id: Int64, space: PhotoSpace, known: FolderSummary?)] =
+            [(0, .personal, nil)] + (includeSharedSpace ? [(0, .shared, nil)] : [])
         while !Task.isCancelled {
             if await runFocusIfNeeded(repository) == .incomplete { complete = false }
             if pending.isEmpty {
                 guard !folders.isEmpty else { break }
                 let next = folders.removeFirst()
-                guard let directory = await folderDirectory(repository, id: next.id, space: next.space) else { complete = false; continue }
-                folders += directory.children.map { ($0.id, next.space) }
+                guard let (directory, verified) = await folderDirectory(repository, id: next.id, space: next.space, known: next.known)
+                else { complete = false; continue }
+                folders += directory.children.map { ($0.id, next.space, verified ? $0 : nil) }
                 let collection = PhotoCollectionDescriptor.folder(directory.folder.id, space: next.space)
                 guard !verifiedCollections.contains(collection) else { continue }
                 guard let snapshot = await verifiedSnapshot(repository, collection: collection) else { complete = false; continue }
@@ -299,11 +302,12 @@ final class MetadataSyncModel: ObservableObject {
         return nil
     }
 
-    private func folderDirectory(_ repository: CachedPhotosRepository, id: Int64, space: PhotoSpace) async -> FolderDirectory? {
-        var latest: FolderDirectory?
-        for await event in await repository.folderDirectory(id: id, space: space) {
+    private func folderDirectory(_ repository: CachedPhotosRepository, id: Int64, space: PhotoSpace,
+                                 known: FolderSummary?) async -> (FolderDirectory, verified: Bool)? {
+        var latest: (FolderDirectory, verified: Bool)?
+        for await event in await repository.folderDirectory(id: id, space: space, known: known) {
             if Task.isCancelled { return nil }
-            if case .value(let directory, _) = event { latest = directory }
+            if case .value(let directory, let verified) = event { latest = (directory, verified) }
         }
         return latest
     }

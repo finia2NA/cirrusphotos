@@ -7,8 +7,10 @@ private actor AlbumFakeTransport: TestPhotosTransport {
     var folderCatalogCalls: [Int64] = []
     var folderFailure = false
     func setFolderFailure() { folderFailure = true }
+    var folderGetCalls: [Int64] = []
     func folder(id: Int64, space: PhotoSpace) async throws -> FolderSummary {
         if folderFailure { throw TestFailure("Offline") }
+        folderGetCalls.append(id)
         return try JSONDecoder().decode(FolderSummary.self, from: Data(#"{"id":2,"name":"/","parent":2}"#.utf8))
     }
     func folders(parentID: Int64, space: PhotoSpace) async throws -> [FolderSummary] {
@@ -850,6 +852,24 @@ final class AlbumBrowserTests: XCTestCase {
         }
         XCTAssertTrue(cached)
         XCTAssertTrue(failed)
+    }
+
+    func testChildDirectoryUsesKnownSummaryInsteadOfFolderGet() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = AlbumFakeTransport()
+        let repository = try makeRepository(root: root, transport: transport)
+        var child: FolderSummary?
+        for await event in await repository.folderDirectory(id: 0, space: .personal) {
+            if case .value(let directory, true) = event { child = directory.children.first }
+        }
+        let known = try XCTUnwrap(child)
+        var resolved: FolderDirectory?
+        for await event in await repository.folderDirectory(id: known.id, space: .personal, known: known) {
+            if case .value(let directory, true) = event { resolved = directory }
+        }
+        XCTAssertEqual(resolved?.folder, known)
+        let gets = await transport.folderGetCalls
+        XCTAssertEqual(gets, [0], "only the root needs Browse.Folder get")
     }
 
     func testFolderTimelineUsesScopedCatalog() async throws {

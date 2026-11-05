@@ -7,11 +7,16 @@ public struct FolderDirectory: Codable, Sendable, Equatable {
 }
 
 extension CachedPhotosRepository {
-    public func folderDirectory(id: Int64, space: PhotoSpace, priority: RequestPriority = .visible) -> AsyncStream<ResourceEvent<FolderDirectory>> {
-        metadataIndex(key: PhotoCollectionDescriptor.folder(id, space: space), space: space, name: "Folders", priority: priority, jobs: \.folderJobs,
+    /// The folder and its child listing. `known` is the folder's summary from its parent's
+    /// listing verified this run; it saves the folder's own `get` request, so a walk of the tree
+    /// costs one listing request per folder. The root always needs `get` to resolve its ID.
+    public func folderDirectory(id: Int64, space: PhotoSpace, known: FolderSummary? = nil,
+                                priority: RequestPriority = .visible) -> AsyncStream<ResourceEvent<FolderDirectory>> {
+        let known = id != 0 && known?.id == id ? known : nil
+        return metadataIndex(key: PhotoCollectionDescriptor.folder(id, space: space), space: space, name: "Folders", priority: priority, jobs: \.folderJobs,
             cached: { try await $0.metadataFolderDirectory($1, id: id) },
             fetch: { client in
-                let folder = try await client.folder(id: id, space: space)
+                let folder = if let known { known } else { try await client.folder(id: id, space: space) }
                 let children = try await client.folders(parentID: folder.id, space: space)
                 return FolderDirectory(folder: folder, children: children)
             },
