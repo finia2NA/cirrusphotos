@@ -1,6 +1,6 @@
 # Cirrus Photos
 
-A macOS 27+ SwiftUI client for browsing Cirrus Synology Photos Personal Space.
+A macOS 27+ SwiftUI client for browsing a Synology Photos library (Personal and Shared Space, albums, People, Subjects, Tags, folders and a location Map) with cached-first loading.
 
 Run from the repository root:
 

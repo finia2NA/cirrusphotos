@@ -2,6 +2,8 @@
 
 What was tested against the Synology Photos service, and what was found. Each file is a sanitized summary of private evidence kept in the ignored `docs/captures/` directory (HAR files, runner output, Android proxy captures). The raw evidence is not synced; no hostnames, credentials, sharing references, item IDs or cursors appear here.
 
+Other documents cite evidence through these files and name raw captures only as "local only".
+
 Current API behavior lives in [`../SYNOLOGY_PHOTOS_API.md`](../SYNOLOGY_PHOTOS_API.md). These files record how that behavior was established and what remains unverified.
 
 | File | Topic |

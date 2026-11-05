@@ -2,7 +2,7 @@
 
 ## Item deletion
 
-Captures `docs/captures/deleting.har` and `deleting2.har` (single and paired deletion in both spaces) were extended by `phototest` (Personal Space) and real-account (Shared Space) probes on 2026-11-02 using disposable items.
+The local-only captures `deleting.har` and `deleting2.har` (single and paired deletion in both spaces) were extended by `phototest` (Personal Space) and real-account (Shared Space) probes on 2026-11-02 using disposable items.
 
 - Request: `POST /webapi/entry.cgi/SYNO.Foto.BackgroundTask.File` (Personal) or `SYNO.FotoTeam.BackgroundTask.File` (Shared), `version=1`, `method=delete`, `item_id=[<IDs>]`, `folder_id=[]`. The response is `data.task_info` with `id`, `status: "waiting"`, `error: 0` and `total`.
 - Status: `SYNO.Foto.BackgroundTask.Info` v1 `get_status` with `id=[<task id>]` returns the task with `status: "done"` roughly one second after submission in every probe (1, 2, 3 and 5 items, both spaces). There is no `SYNO.FotoTeam.BackgroundTask.Info`; the Personal API reports both spaces' tasks. `list_user_task` was empty throughout, including while a task was `waiting`, and `Info get` returned error 103.
@@ -13,13 +13,13 @@ Captures `docs/captures/deleting.har` and `deleting2.har` (single and paired del
 
 ## Personal Space favorites
 
-The viewer and Favorites album captures in `docs/captures/favorites.har` and `favoritesAlbum.har` show that Personal Space item lists include `additional.favorite: true` for favorited items and omit the field for other items. The existing item-list request already asks for `favorite` in its `additional` array. The Favorites album filters normal `Browse.Timeline.get` and `Browse.Item.list` requests with `favorite_only=true`. The capture does not establish that `get_init_timeline` accepts this filter, so the client uses full `get` for Favorites.
+The viewer and Favorites album captures `favorites.har` and `favoritesAlbum.har` (local only) show that Personal Space item lists include `additional.favorite: true` for favorited items and omit the field for other items. The existing item-list request already asks for `favorite` in its `additional` array. The Favorites album filters normal `Browse.Timeline.get` and `Browse.Item.list` requests with `favorite_only=true`. The capture does not establish that `get_init_timeline` accepts this filter, so the client uses full `get` for Favorites.
 
 The web client changes favorite status with a form-encoded `POST /webapi/entry.cgi/SYNO.Foto.Browse.Item`: `api=SYNO.Foto.Browse.Item`, `version=7`, `method=set_favorite`, `id=[<item IDs>]`, and `favorite=true` or `false`. `favorites.har` captured the one-item form. `favoriteunfavorite2photos.har` confirmed that the endpoint accepts several IDs in one request: the web client sent the same two-item array once with `favorite=true` and once with `favorite=false`, and both returned `{"success":true}`. This endpoint is implemented for Personal Space favorites; the accompanying `SYNO.Foto.Udc.send_event` request is telemetry.
 
 ## Tags and ratings
 
-Captured in `docs/captures/tagsandratings.har` (web client, Personal and Shared Space) and verified with writes on `phototest`; see [capturefindings/tags-and-ratings.md](capturefindings/tags-and-ratings.md). Every call exists as `SYNO.Foto.…` and `SYNO.FotoTeam.…`; tags and their IDs belong to one space.
+Captured in the local-only `tagsandratings.har` (web client, Personal and Shared Space) and verified with writes on `phototest`; see [capturefindings/tags-and-ratings.md](capturefindings/tags-and-ratings.md). Every call exists as `SYNO.Foto.…` and `SYNO.FotoTeam.…`; tags and their IDs belong to one space.
 
 | Operation | Request | Success response |
 | --- | --- | --- |
@@ -498,7 +498,7 @@ latter shape used its thumbnail `unit_id` and `cache_key` with the ordinary
 resolution. Treat every `type: "live"` item as having a displayable still image;
 only `type: "video"` enters the unsupported video-playback path.
 
-A web capture of Live Photo playback (`docs/captures/livephoto.har`) and a bounded read-only probe show `SYNO.Foto.Browse.Unit` v1 `get` with `id_item` as an ID array and `additional` containing `orientation`, `resolution`, `thumbnail`, `video_meta`, and `video_convert`. Its `list` associates the requested `id_item` with a `unit` array containing separate `live_type: "photo"` and `live_type: "video"` members. The video member's thumbnail unit ID and cache key plus an advertised quality address the ordinary `SYNO.Foto.Streaming` v2 `type="unit"` stream. The observed High rendition returned a valid partial MP4 response. The web client suppresses motion when the still's current and original orientation differ.
+A web capture of Live Photo playback (`livephoto.har`, local only) and a bounded read-only probe show `SYNO.Foto.Browse.Unit` v1 `get` with `id_item` as an ID array and `additional` containing `orientation`, `resolution`, `thumbnail`, `video_meta`, and `video_convert`. Its `list` associates the requested `id_item` with a `unit` array containing separate `live_type: "photo"` and `live_type: "video"` members. The video member's thumbnail unit ID and cache key plus an advertised quality address the ordinary `SYNO.Foto.Streaming` v2 `type="unit"` stream. The observed High rendition returned a valid partial MP4 response. The web client suppresses motion when the still's current and original orientation differ.
 
 The section identity should include space plus the values supplied by the server, rather than only the array index:
 
@@ -776,8 +776,7 @@ the existing strict v1 decoder intentionally rejects those shapes. This probe
 does not establish v6/v7 cursor-pair compatibility or semantics. Fresh controlled
 baselines are needed before relying on those versions.
 
-Private evidence and follow-up summaries remain under
-`docs/captures/map-diff-run-20261025T215418Z-1e90a26b/` (ignored by Git), including
+Private evidence stays local (not synced); sanitized summaries are in `docs/capturefindings/`. The overnight run directory `map-diff-run-20261025T215418Z-1e90a26b/` includes
 `report.json`, `events.jsonl`, `investigation.json`, and
 `diff-version-shapes.json`. No NAS data was changed during the investigation.
 
@@ -915,6 +914,53 @@ Before hardening the production data layer, record or directly test:
 6. Session expiry and reauthentication error codes on the Photos endpoints.
 7. Whether `m` is preferable to `sm` on high-density displays at the intended grid cell size.
 
+## Uploads
+
+Uploads are multipart POSTs to `SYNO.Foto.Upload.Item` v8 (`SYNO.FotoTeam.Upload.Item` for Shared Space). The destination is chosen by method and fields:
+
+| Destination | Method | Destination fields |
+| --- | --- | --- |
+| Timeline (either space) | `upload` | `uploadDestination="timeline"`, `folder=["PhotoLibrary"]` |
+| Owned album (Personal endpoint) | `upload` | `album_id`, `folder=["PhotoLibrary"]` |
+| Folder | `upload_to_folder` | `target_folder_id` only |
+
+Every request carries `duplicate="ignore"`, `name` (JSON string), `mtime` (epoch seconds) and the file part. The folder form was captured from the web app (no `folder`, no `uploadDestination`, no client-generated thumbnails); its Shared Space form is unverified. A successful response names the item and an `action` of `new` or `ignore` (an already-present file). The NAS indexes asynchronously and generates thumbnails after the transfer, so an immediate listing can lack the item or show its thumbnails as not ready. Poll `Browse.Item` `get` for the uploaded IDs until every thumbnail is ready.
+
+## Album sharing and incoming albums
+
+Detailed request shapes, evidence and open points are in the [album-sharing capture summary](capturefindings/album-sharing.md). The facts the client depends on:
+
+- Sharing is an attribute of an owned normal album. `Sharing.Passphrase` v1 `set_shared` and `update` manage access to the same album ID; the album stays `type: normal` in `Browse.Album` v4 `list` (`category: normal`), and `additional.sharing_info` carries the sharing metadata.
+- `permission` updates are incremental. Adding public view access leaves an existing named-user downloader in place. Public access is written as a `member` of `type: public` but read back as `privacy_type`. Password and expiry are fields of the same `update`: an empty JSON string clears the password, expiry `0` clears the expiry, and `action: delete` revokes one grant. `set_shared(enabled: false)` clears grants and the link in the readback but can leave a nested sharing reference, so use the `shared` flag and effective permissions.
+- Two ID spaces: permission writes use DSM UIDs; `UserInfo.me.id` and permission `user_id` use Photos internal IDs.
+- Public-link visitors use `/mo/sharing/webapi` with `Core.Sharing.Login` and passphrase-scoped reads. Signed-in recipients use the normal `/webapi` endpoint with passphrase-scoped `Album` get and `Item` list; both keep the owner's album and item IDs. `Sharing.Passphrase.get_permission` reports effective view, download, manage, own and upload capability.
+- Incoming albums are listed with `Sharing.Misc` `list_shared_with_me_album` (v2). An album identity is the owner ID plus the album ID; the sharing reference is what selects other-owned content (a get by album ID alone returns nothing).
+- A Provider (role `upload`) adds a personal photo with `NormalAlbum` `add_item` carrying the sharing reference and item IDs. Recipient downloads use `Download` v2 with the passphrase; the single-original form is verified, compressed and multi-item forms are not.
+
+## Collection indexes, folders and Recently Added
+
+- **People**: `Browse.Person` v1 `count`/`list` with `show_more=true`, `show_hidden=false` and `additional=["thumbnail"]`, 100 per page. `suggest` is v3 (`name_prefix`, limit 10); rename is v1 `set`; merge is v2 `merge`. A person's photos use the ordinary Timeline v6 and Item v7 requests with `person_id`.
+- **Subjects**: `Browse.Concept` v2 with `show_hidden=false`; photos use `concept_id`.
+- **Tags**: `Browse.GeneralTag` v2; photos use `general_tag_id`.
+- **Folders**: `Browse.Folder` v2 `get` resolves the root, `list` enumerates children; direct items are `Browse.Item` v7 `list` with `folder_id`. Folder root and child enumeration are captured for Shared Space; pagination and restricted-permission behavior are not.
+- **Recently Added**: `Browse.RecentlyAdded` v6 `get_timeline` and `list`. Day membership follows `indexed_time` (milliseconds); the item's `time` stays the capture time. The server decides the window; its expiry boundary is not known. There is no verified Shared Space form.
+- All indexes return a count; the client reads it before and after paging and rejects the result if it changed or if IDs repeat.
+
+## Video and Live Photo requests
+
+Item pages list the converted renditions in `additional.video_convert` (`mobile`, `low`, `medium`, `high`, `orig_h264`). `SYNO.Foto.Streaming` v2 serves converted ranges and `SYNO.Foto.Download` v2 serves the stored original, both as `206` responses with a `Content-Range`. `SYNO.Foto.Browse.Unit` v1 `get` for an item returns its Live Photo members; the motion video is the single video unit. Synology's display `orientation` can differ from the original's, and the web client suppresses motion in that case. See the [video streaming summary](capturefindings/video-streaming.md) for the range behavior.
+
+## Shared Space: captured versus inferred
+
+- Captured (web app, Shared Space account): Library and Favorites timelines (`FotoTeam.Browse.Timeline` v6, `Browse.Item` v7, `/t/` thumbnails), original stills (`FotoTeam.Download` v2 with unit IDs), explicit downloads (item IDs), original video ranges (item ID kept separately from the unit ID), favorite writes, counter-clockwise rotation, folder root and child listing, and adding Shared Space items to a Personal album (`NormalAlbum` `add_item`/`create` by item ID alone, with no space parameter).
+- Inferred from the matching Personal contract and covered only by fixtures: People, Subjects and Tags timelines (same constraint fields), `FotoTeam.Streaming` v2, `FotoTeam.Browse.Unit` v1, clockwise rotation, favorite removal, and thumbnail regeneration (see above).
+- Not available: Shared Recently Added, a Shared Favorites change feed (`list_user_event` is read only for Personal Space), and any verified Shared Space contribution to an incoming album.
+- Restricted-account behavior has not been observed.
+
+## Album member origin
+
+An album can contain items from either space, and neither numeric item IDs nor `owner_user_id` identify a member's space (the observed `owner_user_id` of zero is not a general rule). Album reads use `Browse.Item` v7 `get` with `album_id`; stills use `Download` v2 `unit_id` with `album_id`, even for Shared Space members; thumbnails try `/p/` and then `/t/` contextually. The only available discriminator is a metadata match against `Item` get results from both spaces (ID, owner, capture time, type, Live Photo type, filename, size and thumbnail unit and revision). A targeted mixed-album capture would replace this heuristic.
+
 ## References
 
 - Synology, DSM Login Web API Guide: <https://kb.synology.com/en-us/DG/DSM_Login_Web_API_Guide/2>
@@ -929,7 +975,7 @@ Keep authentication out of persistent identity and logs. Use unit ID plus cache 
 
 ### Explicit downloads
 
-The web-app capture `docs/captures/downloads.har` shows a separate form-encoded POST to `SYNO.Foto.Download` v2, method `download`, with `force_download=true`, `item_id` as a JSON array of item IDs, and `download_type` as the JSON string `"source"` or `"optimized_jpeg"`. A single item returned an attachment named for the original or a server-generated compressed filename. Two items returned a server-generated `download.zip` for both modes; the archive responses did not advertise a content length in this capture. The capture does not establish the maximum number of IDs, compressed-mode fallback response, or error response behavior. A separate read-only check found that the original item download for one Live Photo was a ZIP rather than the still returned by the unit-based viewer request. Preserve the returned filename and reject error payloads rather than assuming that compressed mode always produces a JPEG.
+The local-only web-app capture `downloads.har` shows a separate form-encoded POST to `SYNO.Foto.Download` v2, method `download`, with `force_download=true`, `item_id` as a JSON array of item IDs, and `download_type` as the JSON string `"source"` or `"optimized_jpeg"`. A single item returned an attachment named for the original or a server-generated compressed filename. Two items returned a server-generated `download.zip` for both modes; the archive responses did not advertise a content length in this capture. The capture does not establish the maximum number of IDs, compressed-mode fallback response, or error response behavior. A separate read-only check found that the original item download for one Live Photo was a ZIP rather than the still returned by the unit-based viewer request. Preserve the returned filename and reject error payloads rather than assuming that compressed mode always produces a JPEG.
 
 ## Photo locations and map data
 

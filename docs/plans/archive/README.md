@@ -17,3 +17,5 @@ Historical plans are preserved in closed GitHub issues. They may describe supers
 - [Albums and sharing](https://github.com/finia2NA/syno/issues/58) through [#67](https://github.com/finia2NA/syno/issues/67)
 - [Folder browsing](https://github.com/finia2NA/syno/issues/14)
 - [AirPlay investigation](https://github.com/finia2NA/syno/issues/18#issuecomment-6478636860) — closed without implementation.
+- [Activity panel](https://github.com/finia2NA/syno/issues/89)
+- [Filter scan batching and stored facets](https://github.com/finia2NA/syno/issues/79) and [Diff-proven cached pages](https://github.com/finia2NA/syno/issues/91) — the plan files `filter-step1-scan-batching.md` and `filter-step3-facets.md` are in git history (commits 2d004ff and 39d2bbb).
