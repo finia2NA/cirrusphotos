@@ -117,7 +117,9 @@ final class LibraryModel {
     @ObservationIgnored let activity: ActivityCenter
     /// Album writes run one at a time; the repository rejects concurrent album mutations.
     @ObservationIgnored var albumWriteTail: Task<Void, Never>?
-    var repository: CachedPhotosRepository? { session.repository }
+    /// Tracked so observers that check it (warming, command availability) re-run once
+    /// `load()` opens the repository.
+    private(set) var repository: CachedPhotosRepository?
     @ObservationIgnored var started = false
     @ObservationIgnored var authenticationTask: Task<Void, Never>?
     @ObservationIgnored var refreshTasks: [PhotoCollectionDescriptor: Task<Void, Never>] = [:]
@@ -145,6 +147,7 @@ final class LibraryModel {
 
     init(session: AppSession, activity: ActivityCenter = .shared) {
         self.session = session
+        self.repository = session.repository
         self.activity = activity
         self.presentationNamespace = session.repository?.namespace
         let preferences = session.preferences
@@ -517,6 +520,7 @@ final class LibraryModel {
         collectionErrors.removeAll()
         do {
             let repository = try session.start()
+            if self.repository !== repository { self.repository = repository }
             presentationNamespace = repository.namespace
             try await repository.setConfiguredThumbnailSize(preferences.thumbnailSize)
             if albumSharingObservationTask == nil {

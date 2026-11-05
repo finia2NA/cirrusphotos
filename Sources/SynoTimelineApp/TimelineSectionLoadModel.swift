@@ -57,7 +57,8 @@ final class TimelineSectionLoadModel: ObservableObject {
         }
     }
 
-    /// Re-checks whenever library state read by the check changes.
+    /// Re-checks whenever library state read by the check changes. Every library property
+    /// the check depends on must be tracked, including `repository`.
     private func observeLibrary(_ observation: UInt64) {
         guard observation == libraryObservation else { return }
         withObservationTracking {

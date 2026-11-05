@@ -39,6 +39,38 @@ final class TimelineSectionLoadModelTests: XCTestCase {
         return (library, filter, coordinator, transport, root)
     }
 
+    /// The shell configures both models in `onAppear`, before `load()` opens the
+    /// repository; they must notice the repository and verified timelines on their own.
+    func testModelsConfiguredBeforeLoadStartSyncAndBecomeAvailable() async throws {
+        let root = temporaryTestRoot("TimelineSectionLoadModel")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = LoadModelTransport(snapshot: TimelineSnapshot(sections: [section()]), item: try item(), delay: .zero)
+        let session = AppSession(preferences: AppPreferences()) { _ in
+            try CachedPhotosRepository(
+                credentials: .init(username: "load-model", password: "unused", otpSecret: "unused"),
+                baseURL: URL(string: "https://load-model.example.invalid")!,
+                cacheRoot: root,
+                transport: transport
+            )
+        }
+        let library = LibraryModel(session: session)
+        XCTAssertNil(library.repository)
+        let filter = LibraryFilterModel()
+        filter.configure(library: library, source: .library(.personal))
+        let load = TimelineSectionLoadModel()
+        load.configure(library: library, filter: filter)
+        let sync = MetadataSyncModel()
+        sync.configure(library: library)
+        sync.setFocus(.library(.personal))
+        XCTAssertFalse(load.canPresent)
+
+        await library.load()
+        let available = await waitUntil { @MainActor in load.canPresent }
+        let syncing = await waitUntil { @MainActor in sync.collections[.library(.personal)] != nil }
+        XCTAssertTrue(available)
+        XCTAssertTrue(syncing)
+    }
+
     func testAppWideRunLoadsLibraryFavoritesAndEveryAlbumAndUpdatesFilterThroughRepository() async throws {
         let (library, filter, model, transport, root) = try await makeModels()
         defer { try? FileManager.default.removeItem(at: root) }

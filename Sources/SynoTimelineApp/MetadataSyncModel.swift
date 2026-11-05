@@ -90,7 +90,9 @@ final class MetadataSyncModel: ObservableObject {
         observeLibrary(libraryObservation)
     }
 
-    /// Re-checks whenever library state read by the check changes.
+    /// Re-checks whenever library state read by the check changes. Every library property
+    /// the check depends on must be tracked: a guard that returns on an untracked read
+    /// registers no dependency, and the check would never run again.
     private func observeLibrary(_ observation: UInt64) {
         guard observation == libraryObservation else { return }
         withObservationTracking {

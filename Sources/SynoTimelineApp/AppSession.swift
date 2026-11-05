@@ -1,26 +1,30 @@
 import PhotoCache
 import SynologyAPI
 
-/// The signed-in account. It creates the repository from a credential source and
+/// The signed-in account. It creates the repository from the stored credentials and
 /// is the one place account-specific state hangs from, so sign-in, sign-out and
 /// account switching (#3) replace this object rather than reaching into models.
 @MainActor
 final class AppSession {
     let preferences: AppPreferences
     private(set) var repository: CachedPhotosRepository?
-    private let credentials: () throws -> SynologyCredentials
+    private let makeRepository: @MainActor (AppPreferences) throws -> CachedPhotosRepository
 
     init(preferences: AppPreferences, repository: CachedPhotosRepository? = nil,
-         credentials: @escaping () throws -> SynologyCredentials = CredentialStore.load) {
+         makeRepository: @escaping @MainActor (AppPreferences) throws -> CachedPhotosRepository = AppSession.storedAccountRepository) {
         self.preferences = preferences
         self.repository = repository
-        self.credentials = credentials
+        self.makeRepository = makeRepository
+    }
+
+    static func storedAccountRepository(_ preferences: AppPreferences) throws -> CachedPhotosRepository {
+        try CachedPhotosRepository(credentials: CredentialStore.load(), budget: preferences.budgetBytes)
     }
 
     /// Opens the account's repository on first use.
     func start() throws -> CachedPhotosRepository {
         if let repository { return repository }
-        let repository = try CachedPhotosRepository(credentials: credentials(), budget: preferences.budgetBytes)
+        let repository = try makeRepository(preferences)
         self.repository = repository
         return repository
     }
