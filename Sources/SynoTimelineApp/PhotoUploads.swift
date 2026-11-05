@@ -3,17 +3,19 @@ import PhotoCache
 import SwiftUI
 import SynologyAPI
 
-/// Uploads Finder drops one batch at a time. Progress and per-file failures are reported
-/// to the Activity panel.
+/// Uploads one session's Finder drops, one batch at a time. Progress and per-file failures
+/// are reported to the session's Activity panel. Once ended it refuses new work.
 @MainActor
 final class PhotoUploadManager {
-    static let shared = PhotoUploadManager()
     private(set) var active = false
+    private(set) var isEnded = false
     private let activity: ActivityCenter
     private var task: Task<Void, Never>?
-    private var thumbnailPolls: [UUID: Task<Void, Never>] = [:]
+    /// Thumbnail polls with the browser that started them, if any.
+    private var thumbnailPolls: [UUID: (owner: UUID?, task: Task<Void, Never>)] = [:]
+    var thumbnailPollCount: Int { thumbnailPolls.count }
 
-    init(activity: ActivityCenter = .shared) {
+    init(activity: ActivityCenter) {
         self.activity = activity
     }
 
@@ -22,9 +24,12 @@ final class PhotoUploadManager {
         return (sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
     }
 
+    /// `owner` identifies the browser that accepted the drop; its thumbnail poll stops when
+    /// that browser goes away.
     func start(_ urls: [URL], repository: CachedPhotosRepository, destination: PhotoUploadDestination,
-               destinationName: String? = nil, finished: @escaping @MainActor () async -> Void) -> Bool {
-        guard !active, !urls.isEmpty else { return false }
+               destinationName: String? = nil, owner: UUID? = nil,
+               finished: @escaping @MainActor () async -> Void) -> Bool {
+        guard !isEnded, !active, !urls.isEmpty else { return false }
         let access = urls.map { $0.startAccessingSecurityScopedResource() }
         active = true
         let items = urls.map { ActivityItem(file: $0) }
@@ -32,7 +37,7 @@ final class PhotoUploadManager {
                                     cancel: { [weak self] in self?.cancel() },
                                     retry: { [weak self] retried in
             self?.start(retried.compactMap(\.fileURL), repository: repository, destination: destination,
-                        destinationName: destinationName, finished: finished) ?? false
+                        destinationName: destinationName, owner: owner, finished: finished) ?? false
         })
         task = Task { [self] in
             defer {
@@ -74,30 +79,44 @@ final class PhotoUploadManager {
                 handle.succeed()
             }
             await finished()
-            if !Task.isCancelled { pollThumbnails(of: uploadedIDs, repository: repository, destination: destination, finished: finished) }
+            if !Task.isCancelled, !isEnded {
+                pollThumbnails(of: uploadedIDs, repository: repository, destination: destination, owner: owner, finished: finished)
+            }
         }
         return true
     }
 
     /// The NAS generates thumbnails after the transfer. The bounded poll ends on completion, on
-    /// its own schedule, or when the browser that started it goes away.
-    private func pollThumbnails(of ids: [Int64], repository: CachedPhotosRepository, destination: PhotoUploadDestination,
-                                finished: @escaping @MainActor () async -> Void) {
-        guard !ids.isEmpty else { return }
+    /// its own schedule, when the browser that started it goes away, or when the session ends.
+    func pollThumbnails(of ids: [Int64], repository: CachedPhotosRepository, destination: PhotoUploadDestination,
+                        owner: UUID?, finished: @escaping @MainActor () async -> Void) {
+        guard !isEnded, !ids.isEmpty else { return }
         let key = UUID()
-        thumbnailPolls[key] = Task { [weak self] in
+        let task = Task { [weak self] in
             defer { self?.thumbnailPolls[key] = nil }
             let ready = (try? await repository.refreshWhenUploadedThumbnailsAreReady(itemIDs: ids, destination: destination)) ?? false
             if ready, !Task.isCancelled { await finished() }
         }
+        thumbnailPolls[key] = (owner, task)
     }
 
-    func cancelThumbnailPolling() {
-        thumbnailPolls.values.forEach { $0.cancel() }
-        thumbnailPolls.removeAll()
+    /// Stops the thumbnail polls started from one browser.
+    func cancelThumbnailPolling(owner: UUID) {
+        for (key, poll) in thumbnailPolls where poll.owner == owner {
+            poll.task.cancel()
+            thumbnailPolls[key] = nil
+        }
     }
 
     func cancel() { task?.cancel() }
+
+    /// Cancels the running batch and every thumbnail poll, and refuses new uploads.
+    func end() {
+        isEnded = true
+        cancel()
+        thumbnailPolls.values.forEach { $0.task.cancel() }
+        thumbnailPolls.removeAll()
+    }
 }
 
 /// A Finder upload destination. Accepts concrete file URLs, never in-process
@@ -107,15 +126,18 @@ struct PhotoUploadDrop {
     let destination: PhotoUploadDestination
     var destinationName: String?
     let repository: CachedPhotosRepository
+    let uploads: PhotoUploadManager
+    /// The browser that accepts the drop.
+    var owner: UUID?
     let finished: @MainActor () async -> Void
 
     func operation(for sender: NSDraggingInfo) -> NSDragOperation {
-        !PhotoUploadManager.shared.active && !PhotoUploadManager.fileURLs(sender).isEmpty ? .copy : []
+        !uploads.isEnded && !uploads.active && !PhotoUploadManager.fileURLs(sender).isEmpty ? .copy : []
     }
 
     func perform(_ sender: NSDraggingInfo) -> Bool {
-        PhotoUploadManager.shared.start(PhotoUploadManager.fileURLs(sender), repository: repository,
-                                        destination: destination, destinationName: destinationName, finished: finished)
+        uploads.start(PhotoUploadManager.fileURLs(sender), repository: repository, destination: destination,
+                      destinationName: destinationName, owner: owner, finished: finished)
     }
 }
 

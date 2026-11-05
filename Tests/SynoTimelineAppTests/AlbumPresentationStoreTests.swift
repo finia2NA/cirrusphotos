@@ -98,14 +98,15 @@ final class AlbumPresentationStoreTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = AlbumPresentationStore(defaults: defaults)
         store.configure(namespace: "account")
+        let registry = AlbumDragRegistry()
         let cards = HStack(spacing: 20) {
             ForEach(1...3, id: \.self) { id in
                 Color.gray.frame(width: 100, height: 100)
                     .background(AlbumDragSourceView { _, _ in
                         started.append(id)
-                        let nonce = AlbumDragRegistry.register(collection: .album(Int64(id)), namespace: "account")
-                        defer { AlbumDragRegistry.remove(nonce) }
-                        return AlbumDragRegistry.insert(nonce.uuidString, namespace: "account", before: nil, presentation: store)
+                        let nonce = registry.register(collection: .album(Int64(id)), namespace: "account")
+                        defer { registry.remove(nonce) }
+                        return registry.insert(nonce.uuidString, namespace: "account", before: nil, presentation: store)
                     })
             }
         }.frame(width: 340, height: 100)
@@ -182,9 +183,11 @@ final class AlbumPresentationStoreTests: XCTestCase {
         let selection = PhotoSelectionSnapshot(collection: .favorites(.personal), timeline: timeline,
             timelineFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
             selectedOrdinals: IndexSet(integer: 1), knownItemIDsByOrdinal: [1: 42])
-        let nonce = SelectionDragRegistry.register(.init(selection: selection, sourceAlbumID: nil, namespace: "a"))
-        defer { SelectionDragRegistry.remove(nonce) }
+        let registry = SelectionDragRegistry()
+        let nonce = registry.register(.init(selection: selection, sourceAlbumID: nil, namespace: "a"))
+        defer { registry.remove(nonce) }
         let target = AlbumOverviewSpringTarget.TargetView()
+        target.selections = registry
         target.namespace = "b"
         target.hoverDelay = 0.02
         let opened = expectation(description: "overview opens")
@@ -197,7 +200,7 @@ final class AlbumPresentationStoreTests: XCTestCase {
         XCTAssertTrue(target.beginHover(nonce.uuidString))
         await fulfillment(of: [opened], timeout: 1)
         XCTAssertEqual(opens, 1)
-        XCTAssertNotNil(SelectionDragRegistry.lookup(nonce.uuidString, namespace: "a"))
+        XCTAssertNotNil(registry.lookup(nonce.uuidString, namespace: "a"))
     }
 
     func testDragEndObserverSurvivesAcceptedSelectionAndFiresOnce() {
@@ -205,14 +208,15 @@ final class AlbumPresentationStoreTests: XCTestCase {
         let selection = PhotoSelectionSnapshot(collection: .favorites(.personal), timeline: timeline,
             timelineFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
             selectedOrdinals: IndexSet(integer: 1), knownItemIDsByOrdinal: [1: 42])
-        let nonce = SelectionDragRegistry.register(.init(selection: selection, sourceAlbumID: nil, namespace: "a"))
+        let registry = SelectionDragRegistry()
+        let nonce = registry.register(.init(selection: selection, sourceAlbumID: nil, namespace: "a"))
         var ended = 0
-        XCTAssertFalse(SelectionDragRegistry.observeEnd(nonce.uuidString, namespace: "b") { ended += 1 })
-        XCTAssertTrue(SelectionDragRegistry.observeEnd(nonce.uuidString, namespace: "a") { ended += 1 })
-        XCTAssertNotNil(SelectionDragRegistry.take(nonce.uuidString, namespace: "a"))
+        XCTAssertFalse(registry.observeEnd(nonce.uuidString, namespace: "b") { ended += 1 })
+        XCTAssertTrue(registry.observeEnd(nonce.uuidString, namespace: "a") { ended += 1 })
+        XCTAssertNotNil(registry.take(nonce.uuidString, namespace: "a"))
         XCTAssertEqual(ended, 0)
-        SelectionDragRegistry.remove(nonce)
-        SelectionDragRegistry.remove(nonce)
+        registry.remove(nonce)
+        registry.remove(nonce)
         XCTAssertEqual(ended, 1)
     }
 
@@ -221,29 +225,31 @@ final class AlbumPresentationStoreTests: XCTestCase {
         let selection = PhotoSelectionSnapshot(collection: .favorites(.personal), timeline: timeline,
             timelineFingerprint: LibraryIndex(snapshot: timeline).fingerprint,
             selectedOrdinals: IndexSet(integer: 1), knownItemIDsByOrdinal: [1: 42])
-        let nonce = SelectionDragRegistry.register(.init(selection: selection, sourceAlbumID: nil, namespace: "a"))
-        XCTAssertNil(SelectionDragRegistry.take(nonce.uuidString, namespace: "b"))
-        XCTAssertNil(AlbumDragRegistry.album(nonce.uuidString, namespace: "a"))
-        XCTAssertEqual(SelectionDragRegistry.take(nonce.uuidString, namespace: "a")?.selection.knownItemIDsByOrdinal[1], 42)
-        XCTAssertNil(SelectionDragRegistry.take(nonce.uuidString, namespace: "a"))
-        SelectionDragRegistry.remove(nonce)
+        let registry = SelectionDragRegistry()
+        let nonce = registry.register(.init(selection: selection, sourceAlbumID: nil, namespace: "a"))
+        XCTAssertNil(registry.take(nonce.uuidString, namespace: "b"))
+        XCTAssertNil(AlbumDragRegistry().album(nonce.uuidString, namespace: "a"))
+        XCTAssertEqual(registry.take(nonce.uuidString, namespace: "a")?.selection.knownItemIDsByOrdinal[1], 42)
+        XCTAssertNil(registry.take(nonce.uuidString, namespace: "a"))
+        registry.remove(nonce)
     }
 
     func testAlbumNonceIsScopedAndRemoved() {
-        let nonce = AlbumDragRegistry.register(collection: .album(42), namespace: "account-a")
-        XCTAssertEqual(AlbumDragRegistry.album(nonce.uuidString, namespace: "account-a"), .album(42))
-        XCTAssertNil(AlbumDragRegistry.album(nonce.uuidString, namespace: "account-b"))
-        XCTAssertNil(AlbumDragRegistry.album(UUID().uuidString, namespace: "account-a"))
+        let registry = AlbumDragRegistry()
+        let nonce = registry.register(collection: .album(42), namespace: "account-a")
+        XCTAssertEqual(registry.album(nonce.uuidString, namespace: "account-a"), .album(42))
+        XCTAssertNil(registry.album(nonce.uuidString, namespace: "account-b"))
+        XCTAssertNil(registry.album(UUID().uuidString, namespace: "account-a"))
         let suite = "AlbumDispatchTests.\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = AlbumPresentationStore(defaults: defaults)
         store.configure(namespace: "account-a")
-        XCTAssertFalse(AlbumDragRegistry.insert(nonce.uuidString, namespace: "account-b", before: nil, presentation: store))
-        XCTAssertTrue(AlbumDragRegistry.insert(nonce.uuidString, namespace: "account-a", before: nil, presentation: store))
+        XCTAssertFalse(registry.insert(nonce.uuidString, namespace: "account-b", before: nil, presentation: store))
+        XCTAssertTrue(registry.insert(nonce.uuidString, namespace: "account-a", before: nil, presentation: store))
         XCTAssertEqual(store.pinnedIDs, [42])
-        AlbumDragRegistry.remove(nonce)
-        XCTAssertNil(AlbumDragRegistry.album(nonce.uuidString, namespace: "account-a"))
+        registry.remove(nonce)
+        XCTAssertNil(registry.album(nonce.uuidString, namespace: "account-a"))
     }
 
     func testProvisionalOrFailedListDoesNotPruneAndVerifiedListDoes() {

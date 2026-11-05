@@ -207,6 +207,8 @@ struct LibraryBrowserView: View {
     /// Held, not observed: scrolling past days re-renders only the scrubber.
     @State private var daySelection = BrowserDaySelection()
     @State private var jumpRequest: DayJumpRequest?
+    /// Identifies this browser's upload thumbnail polls, which stop when it goes away.
+    @State private var uploadOwner = UUID()
 
     private var isAlbum: Bool { library.capabilities(for: collection).sourceAlbumID != nil || library.capabilities(for: collection).isIncoming }
     private var upload: PhotoUploadDrop? {
@@ -218,7 +220,8 @@ struct LibraryBrowserView: View {
         default: return nil
         }
         guard let repository = library.repository else { return nil }
-        return PhotoUploadDrop(destination: destination, destinationName: uploadFolderName, repository: repository) { [weak library] in await library?.reload() }
+        return PhotoUploadDrop(destination: destination, destinationName: uploadFolderName, repository: repository,
+                               uploads: library.session.uploads, owner: uploadOwner) { [weak library] in await library?.reload() }
     }
     private var browserHeader: BrowserHeaderConfiguration? { customHeader ?? albumHeader }
     private var shouldHideEmptyCollectionState: Bool {
@@ -300,7 +303,8 @@ struct LibraryBrowserView: View {
                                              upload: upload,
                                              revision: library.snapshotRevision(for: collection),
                                              retryRevision: library.retryRevision,
-                                             repository: repository, allowNetwork: library.timelineVerified(for: collection),
+                                             repository: repository, session: library.session,
+                                             allowNetwork: library.timelineVerified(for: collection),
                                              thumbnailSize: preferences.thumbnailSize,
                                              itemsPerRow: preferences.itemsPerRow,
                                              cropsThumbnailsToSquare: preferences.cropsThumbnailsToSquare,
@@ -389,11 +393,11 @@ struct LibraryBrowserView: View {
         }
         .sheet(isPresented: $showingSharing) {
             if let albumID = library.capabilities(for: collection).sourceAlbumID, let repository = library.repository {
-                AlbumSharingSheet(albumID: albumID, repository: repository)
+                AlbumSharingSheet(albumID: albumID, repository: repository, activity: library.activity)
             }
         }
         .background(FileUploadTarget(upload: upload))
-        .onDisappear { PhotoUploadManager.shared.cancelThumbnailPolling() }
+        .onDisappear { library.session.uploads.cancelThumbnailPolling(owner: uploadOwner) }
         .background(Color(nsColor: .textBackgroundColor))
         .onChange(of: library.snapshotRevision(for: collection)) { _, _ in
             guard let timeline = library.snapshot(for: collection)?.timeline,
@@ -427,6 +431,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let revision: Int
     let retryRevision: Int
     let repository: CachedPhotosRepository
+    let session: AppSession
     let allowNetwork: Bool
     let thumbnailSize: ThumbnailSize
     let itemsPerRow: Int

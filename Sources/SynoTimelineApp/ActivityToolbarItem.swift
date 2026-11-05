@@ -61,7 +61,7 @@ extension LibraryModel {
 /// Activity panel.
 struct ActivityToolbarItem: View {
     @Environment(LibraryModel.self) private var library
-    @Bindable private var activity = ActivityCenter.shared
+    @Bindable var activity: ActivityCenter
 
     var body: some View {
         let state = library.connectionState

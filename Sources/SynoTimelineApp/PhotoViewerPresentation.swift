@@ -31,7 +31,7 @@ final class PhotoViewerPresentation: ObservableObject {
     let collection: PhotoCollectionDescriptor
     let isIncoming: Bool
     /// Where favorite and rotation changes report progress and failures.
-    var activity: ActivityCenter = .shared
+    let activity: ActivityCenter
     private let videoQuality: VideoQualityPreference
     private let thumbnailSize: ThumbnailSize
     private let loadsLargePreviews: Bool
@@ -66,8 +66,9 @@ final class PhotoViewerPresentation: ObservableObject {
          index: LibraryIndex, request: PhotoViewerOpenRequest,
          thumbnailSize: ThumbnailSize, loadsLargePreviews: Bool = false,
          videoQuality: VideoQualityPreference = .automatic,
-         isIncoming: Bool = false,
+         isIncoming: Bool = false, activity: ActivityCenter = ActivityCenter(),
          allowNetwork: Bool, snapshotRevision: Int) {
+        self.activity = activity
         source = request.source
         originalItemID = request.seed.item.id
         initialItem = request.seed.item

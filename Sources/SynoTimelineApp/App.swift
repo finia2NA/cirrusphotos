@@ -41,13 +41,14 @@ struct SynoTimelineApp: App {
                     signposts.observe(libraryFilter, name: "LibraryFilterModel")
                     signposts.observe(timelineSectionLoad, name: "TimelineSectionLoadModel")
                     signposts.observe(metadataSync, name: "MetadataSyncModel")
+                    delegate.model = model
                     await model.load()
                 }
         }
         .windowToolbarStyle(.unified)
         .defaultSize(width: 860, height: 820)
         .commands {
-            LibraryCommands(model: model, activity: ActivityCenter.shared, preferences: preferences, infoPanel: infoPanel, filter: libraryFilter,
+            LibraryCommands(model: model, activity: model.activity, preferences: preferences, infoPanel: infoPanel, filter: libraryFilter,
                             timelineSectionLoad: timelineSectionLoad)
         }
         Settings { CacheSettingsView().environment(model).environmentObject(preferences) }
@@ -74,13 +75,16 @@ struct SynoTimelineApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// The open library, whose session's transfers quitting would cancel.
+    weak var model: LibraryModel?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        confirmStoppingDownloads() ? .terminateNow : .terminateCancel
+        confirmStoppingDownloads(model?.session) ? .terminateNow : .terminateCancel
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

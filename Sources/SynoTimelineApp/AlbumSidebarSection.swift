@@ -3,6 +3,7 @@ import SwiftUI
 import SynologyAPI
 
 struct AlbumSidebarSection: View {
+    @Environment(LibraryModel.self) private var model
     @ObservedObject var presentation: AlbumPresentationStore
     let albums: [AlbumSummary]
     let repository: CachedPhotosRepository?
@@ -12,10 +13,12 @@ struct AlbumSidebarSection: View {
         Section("Albums") {
             Label("Albums", systemImage: "rectangle.stack")
                 .tag(SidebarSelection.destination(.albums))
-                .background(AlbumOverviewSpringTarget(namespace: repository?.namespace, open: showOverviewForDrag))
+                .background(AlbumOverviewSpringTarget(namespace: repository?.namespace, selections: model.session.drags.selections,
+                                                      open: showOverviewForDrag))
                 .overlay(alignment: .bottom) {
                     if presentation.pinnedCollections.isEmpty {
-                        AlbumInsertionTarget(before: nil, namespace: repository?.namespace, presentation: presentation)
+                        AlbumInsertionTarget(before: nil, namespace: repository?.namespace,
+                                             albums: model.session.drags.albums, presentation: presentation)
                             .frame(height: 8)
                     }
                 }
@@ -24,12 +27,14 @@ struct AlbumSidebarSection: View {
                 AlbumSidebarRow(id: id, album: album, repository: repository, presentation: presentation)
                     .tag(SidebarSelection.album(id))
                     .overlay(alignment: .top) {
-                        AlbumInsertionTarget(before: id, namespace: repository?.namespace, presentation: presentation)
+                        AlbumInsertionTarget(before: id, namespace: repository?.namespace,
+                                             albums: model.session.drags.albums, presentation: presentation)
                             .frame(height: 8)
                     }
                     .overlay(alignment: .bottom) {
                         if id == presentation.pinnedCollections.last {
-                            AlbumInsertionTarget(before: nil, namespace: repository?.namespace, presentation: presentation)
+                            AlbumInsertionTarget(before: nil, namespace: repository?.namespace,
+                                             albums: model.session.drags.albums, presentation: presentation)
                                 .frame(height: 8)
                         }
                     }
@@ -57,7 +62,7 @@ private struct AlbumSidebarRow: View {
             Text(album?.name ?? "Unavailable Album").lineLimit(1)
         }
         .modifier(AlbumDragGesture(collection: id, name: album?.name ?? "Album",
-                                     repository: repository, preview: dragPreview))
+                                     repository: repository, session: model.session, preview: dragPreview))
         .background(AlbumMembershipTarget(collection: id, model: model))
         .contextMenu {
             Button("Remove from Sidebar") { presentation.remove(id) }

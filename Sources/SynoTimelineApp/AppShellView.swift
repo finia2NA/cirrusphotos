@@ -145,7 +145,7 @@ struct AppShellView: View {
         } detail: {
             detail
         }
-        .background(DownloadCloseGuard().frame(width: 0, height: 0))
+        .background(DownloadCloseGuard(session: model.session).frame(width: 0, height: 0))
         .toolbar(removing: .title)
         .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         .toolbar(id: "main") { applicationToolbar.customizationBehavior(.disabled) }
@@ -287,7 +287,8 @@ struct AppShellView: View {
             }
         }
         .sheet(item: $personEdit) { request in
-            PersonEditView(request: request, people: indexEntries[.person] ?? [], repository: model.repository) {
+            PersonEditView(request: request, people: indexEntries[.person] ?? [], repository: model.repository,
+                           activity: model.activity) {
                 peopleEditRevision &+= 1
             }
         }
@@ -554,7 +555,7 @@ struct AppShellView: View {
     private func showAlbumsOverviewForDrag(_ nonce: String) {
         guard sourceCollection != nil, dragOverviewNonce != nonce,
               let namespace = model.repository?.namespace else { return }
-        guard SelectionDragRegistry.observeEnd(nonce, namespace: namespace, action: {
+        guard model.session.drags.selections.observeEnd(nonce, namespace: namespace, action: {
             if dragOverviewNonce == nonce { dragOverviewNonce = nil }
         }) else { return }
         dragOverviewNonce = nonce
@@ -698,6 +699,7 @@ struct AppShellView: View {
                                          loadsLargePreviews: preferences.loadsLargeViewerPreviews,
                                          videoQuality: preferences.videoQuality,
                                          isIncoming: model.capabilities(for: collection).isIncoming,
+                                         activity: model.activity,
                                          allowNetwork: model.timelineVerified(for: collection),
                                          snapshotRevision: model.viewerSnapshotRevision(for: collection))
         lastViewerFollowSelection = nil
@@ -906,7 +908,7 @@ struct AppShellView: View {
 
     @ToolbarContentBuilder
     private var statusToolbar: some CustomizableToolbarContent {
-        ToolbarItem(id: "activity", placement: .primaryAction) { ActivityToolbarItem() }
+        ToolbarItem(id: "activity", placement: .primaryAction) { ActivityToolbarItem(activity: model.activity) }
     }
 
     /// The single leading back button: closes the viewer, goes up a folder, or leaves the opened collection.

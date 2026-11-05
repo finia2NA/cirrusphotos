@@ -52,18 +52,18 @@ enum PhotoDownloadSource: Sendable {
     }
 }
 
-/// Runs downloads, editor handoffs and file promises. Their progress and results are
-/// reported to the Activity panel.
+/// Runs one session's downloads, editor handoffs and file promises. Their progress and
+/// results are reported to the session's Activity panel. Once ended it refuses new work.
 @MainActor
 final class PhotoDownloadManager {
-    static let shared = PhotoDownloadManager()
     var hasActiveJobs: Bool { !tasks.isEmpty }
+    private(set) var isEnded = false
     private var tasks: [UUID: Task<Void, Never>] = [:]
     private let activity: ActivityCenter
     private let editDirectoryProvider: @Sendable () throws -> URL
     private let editorOpener: @MainActor (URL, URL) async throws -> Void
 
-    init(activity: ActivityCenter = .shared,
+    init(activity: ActivityCenter,
          editDirectoryProvider: @escaping @Sendable () throws -> URL = { try PhotoDownloadManager.editDirectory() },
          editorOpener: @escaping @MainActor (URL, URL) async throws -> Void = { file, application in
              _ = try await NSWorkspace.shared.open([file], withApplicationAt: application,
@@ -81,7 +81,7 @@ final class PhotoDownloadManager {
         return FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
     }
 
-    func chooseDirectory() -> URL? {
+    static func chooseDirectory() -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -94,18 +94,19 @@ final class PhotoDownloadManager {
 
     func start(repository: CachedPhotosRepository, source: PhotoDownloadSource,
                kind: PhotoDownloadKind, choose: Bool) {
-        guard let directory = choose ? chooseDirectory() : Self.directory else { return }
+        guard !isEnded, let directory = choose ? Self.chooseDirectory() : Self.directory else { return }
         start(repository: repository, source: source, kind: kind, directory: directory)
     }
 
     func start(repository: CachedPhotosRepository, source: PhotoDownloadSource,
                kind: PhotoDownloadKind, directory: URL) {
+        guard !isEnded else { return }
         let id = UUID()
         let handle = activity.begin(.download(name: source.initialName), id: id, cancel: { [weak self] in self?.cancel(id) })
         handle.status("Preparing…")
         func retry(_ source: PhotoDownloadSource) -> ActivityRetry {
             { [weak self] _ in
-                guard let self else { return false }
+                guard let self, !isEnded else { return false }
                 start(repository: repository, source: source, kind: kind, directory: directory)
                 return true
             }
@@ -149,6 +150,7 @@ final class PhotoDownloadManager {
 
     func edit(repository: CachedPhotosRepository, snapshot: TimelineSnapshot?, selection: BrowserCommandSnapshot?,
               item: PhotoItem?, collection: PhotoCollectionDescriptor, applicationURL: URL) {
+        guard !isEnded else { return }
         let capturedSelection = selection?.captureSelection(timeline: snapshot)
         let id = UUID()
         let application = Self.applicationName(applicationURL)
@@ -157,7 +159,7 @@ final class PhotoDownloadManager {
         handle.status("Preparing…")
         func retry(_ photo: PhotoItem) -> ActivityRetry {
             { [weak self] _ in
-                guard let self else { return false }
+                guard let self, !isEnded else { return false }
                 edit(repository: repository, snapshot: nil, selection: nil, item: photo,
                      collection: capturedSelection?.collection ?? collection, applicationURL: applicationURL)
                 return true
@@ -237,7 +239,9 @@ final class PhotoDownloadManager {
         return documents.appendingPathComponent("SynoTimeline Edits", isDirectory: true)
     }
 
+    /// Finder can ask for a promised file after the drag, so an ended session fails it here.
     func fulfillPromise(_ payload: PhotoDragPayload, destination: URL, completion: @escaping (Error?) -> Void) {
+        guard !isEnded else { completion(CancellationError()); return }
         let id = UUID()
         let handle = activity.begin(.filePromise(name: payload.source.initialName), id: id,
                                     cancel: { [weak self] in self?.cancel(id) })
@@ -387,6 +391,11 @@ final class PhotoDownloadManager {
     func cancelAll() {
         for task in tasks.values { task.cancel() }
     }
+    /// Cancels every transfer and refuses new ones; used when the session ends.
+    func end() {
+        isEnded = true
+        cancelAll()
+    }
     nonisolated static func jobName(_ items: [PhotoItem]) -> String {
         if items.count == 1 { return items[0].filename ?? "Photo" }
         let formatter = DateFormatter()
@@ -494,30 +503,32 @@ func addEditMenu(to menu: NSMenu, filename: String?, onChoose: @escaping (URL) -
 }
 
 @MainActor
-func confirmStoppingDownloads() -> Bool {
-    guard PhotoDownloadManager.shared.hasActiveJobs || PhotoUploadManager.shared.active else { return true }
+func confirmStoppingDownloads(_ session: AppSession?) -> Bool {
+    guard let session, session.hasActiveTransfers else { return true }
     let alert = NSAlert()
     alert.messageText = "Transfers Are Running"
     alert.informativeText = "Closing the app will cancel active uploads and downloads. Check upload destinations before retrying."
     alert.addButton(withTitle: "Close and Cancel Transfers")
     alert.addButton(withTitle: "Keep Open")
     guard alert.runModal() == .alertFirstButtonReturn else { return false }
-    PhotoDownloadManager.shared.cancelAll()
-    PhotoUploadManager.shared.cancel()
+    session.cancelTransfers()
     return true
 }
 
 struct DownloadCloseGuard: NSViewRepresentable {
+    let session: AppSession
     func makeNSView(context: Context) -> DownloadCloseGuardView { DownloadCloseGuardView() }
-    func updateNSView(_ view: DownloadCloseGuardView, context: Context) {}
+    func updateNSView(_ view: DownloadCloseGuardView, context: Context) { view.session = session }
 }
 
 final class DownloadCloseGuardView: NSView {
+    weak var session: AppSession? { didSet { proxy?.session = session } }
     private var proxy: DownloadWindowDelegate?
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard let window, proxy == nil else { return }
         let delegate = DownloadWindowDelegate(original: window.delegate)
+        delegate.session = session
         proxy = delegate
         window.delegate = delegate
     }
@@ -525,10 +536,11 @@ final class DownloadCloseGuardView: NSView {
 
 final class DownloadWindowDelegate: NSObject, NSWindowDelegate {
     weak var original: (any NSWindowDelegate)?
+    weak var session: AppSession?
     init(original: (any NSWindowDelegate)?) { self.original = original }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard original?.windowShouldClose?(sender) ?? true else { return false }
-        return confirmStoppingDownloads()
+        return confirmStoppingDownloads(session)
     }
     override func responds(to selector: Selector!) -> Bool {
         super.responds(to: selector) || (original?.responds(to: selector) ?? false)

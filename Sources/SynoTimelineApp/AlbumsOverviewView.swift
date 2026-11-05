@@ -97,7 +97,8 @@ private struct AlbumCardView: View {
             }
         }
         .buttonStyle(.plain)
-        .modifier(AlbumDragGesture(collection: collection, name: album.name, repository: repository, preview: dragPreview))
+        .modifier(AlbumDragGesture(collection: collection, name: album.name, repository: repository,
+                                   session: model.session, preview: dragPreview))
         .background(AlbumMembershipTarget(collection: collection, model: model))
         .contextMenu {
             Button("Add to Sidebar") { presentation.add(collection) }
@@ -129,6 +130,7 @@ private struct AlbumCardView: View {
 
 /// Shared by album surfaces without opening the album or changing selection.
 struct AlbumDownloadCommands: View {
+    @Environment(LibraryModel.self) private var library
     let albumID: Int64
     let repository: CachedPhotosRepository?
     var incomingCollection: PhotoCollectionDescriptor? = nil
@@ -137,8 +139,8 @@ struct AlbumDownloadCommands: View {
         ForEach(Array(photoDownloadActions.enumerated()), id: \.offset) { _, action in
             Button(action.0) {
                 guard let repository else { return }
-                PhotoDownloadManager.shared.start(repository: repository, source: incomingCollection.map { .incomingAlbum($0) } ?? .album(albumID),
-                                                  kind: action.1, choose: action.2)
+                library.session.downloads.start(repository: repository, source: incomingCollection.map { .incomingAlbum($0) } ?? .album(albumID),
+                                                kind: action.1, choose: action.2)
             }.disabled(repository == nil)
         }
     }

@@ -16,7 +16,7 @@ struct CacheSettingsView: View {
                 Spacer()
                 Text(downloadDirectory.isEmpty ? PhotoDownloadManager.directory.path : downloadDirectory).lineLimit(1).truncationMode(.middle)
                 Button("Choose…") {
-                    if let url = PhotoDownloadManager.shared.chooseDirectory() {
+                    if let url = PhotoDownloadManager.chooseDirectory() {
                         UserDefaults.standard.set(url.path, forKey: AppPreferences.Key.photoDownloadDirectory)
                         downloadDirectory = url.path
                     }

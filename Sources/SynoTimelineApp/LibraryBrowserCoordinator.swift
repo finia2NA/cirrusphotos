@@ -57,6 +57,8 @@ extension LibraryBrowserScrollView {
         var allowNetwork = false
         var thumbnailSize: ThumbnailSize = .m
         var repository: CachedPhotosRepository?
+        /// Owns file drags started from this browser.
+        weak var session: AppSession?
         var collection: PhotoCollectionDescriptor = .library(.personal)
         var onVisibleDay: ((String) -> Void)?
         var lastVisibleDay: String?
@@ -136,6 +138,7 @@ extension LibraryBrowserScrollView {
                 (self?.scroll as? TimelineScrollView)?.focusTimeline()
             }
             repository = input.repository
+            session = input.session
             let insetAnchor = geometry?.anchor(at: visibleTop(in: scroll))
             let oldInsets = scroll.contentInsets
             let horizontalInset = CGFloat(FixedPhotoGrid.gap)

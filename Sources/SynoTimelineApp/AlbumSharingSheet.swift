@@ -32,6 +32,7 @@ struct SharingPasswordDraft {
 struct AlbumSharingSheet: View {
     let albumID: Int64
     let repository: CachedPhotosRepository
+    let activity: ActivityCenter
     @Environment(\.dismiss) private var dismiss
     @State private var snapshot: AlbumSharingSnapshot?
     @State private var roles: [Int64: String] = [:]
@@ -301,7 +302,7 @@ struct AlbumSharingSheet: View {
         Task {
             do {
                 _ = try await repository.saveAlbumSharing(snapshot: snapshot, changes: delta, disable: disable, access: access, password: password, expiration: expiry)
-                ActivityCenter.shared.record(kind, outcome: .succeeded)
+                activity.record(kind, outcome: .succeeded)
                 saving = false
                 if closeOnSuccess {
                     busy = false
@@ -312,7 +313,7 @@ struct AlbumSharingSheet: View {
             } catch {
                 saving = false
                 let failure = ActivityFailure.recorded(error, operation: "Album sharing")
-                ActivityCenter.shared.record(kind, outcome: failure.unconfirmed ? .unconfirmed : .failed, failure: failure)
+                activity.record(kind, outcome: failure.unconfirmed ? .unconfirmed : .failed, failure: failure)
                 load(warning: failure.message)
             }
         }

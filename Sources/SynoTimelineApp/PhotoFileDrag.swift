@@ -24,10 +24,16 @@ private final class PromiseCompletion: @unchecked Sendable {
     init(_ callback: @escaping (Error?) -> Void) { self.callback = callback }
 }
 
+/// Finder can fulfil a promise after the drag ended. The delegate holds the session's download
+/// manager weakly, so a promise from a released session fails, and an ended one refuses it.
 @MainActor
 final class PhotoPromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
     let payload: PhotoDragPayload
-    init(payload: PhotoDragPayload) { self.payload = payload }
+    private weak var downloads: PhotoDownloadManager?
+    init(payload: PhotoDragPayload, downloads: PhotoDownloadManager) {
+        self.payload = payload
+        self.downloads = downloads
+    }
 
     func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, fileNameForType fileType: String) -> String {
         payload.filename
@@ -37,7 +43,8 @@ final class PhotoPromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
                                          completionHandler: @escaping (Error?) -> Void) {
         let completion = PromiseCompletion(completionHandler)
         Task { @MainActor in
-            PhotoDownloadManager.shared.fulfillPromise(payload, destination: url) { error in
+            guard let downloads else { completion.callback(CancellationError()); return }
+            downloads.fulfillPromise(payload, destination: url) { error in
                 completion.callback(error)
             }
         }
@@ -46,31 +53,34 @@ final class PhotoPromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
 
 @MainActor
 final class PhotoFileDragSource: NSObject, NSDraggingSource {
-    private static var active: [UUID: PhotoFileDragSource] = [:]
     private let id = UUID()
+    /// The session's registry, which keeps this source alive while AppKit runs the drag.
+    private weak var drags: LocalDragRegistry?
     private var localNonce: UUID?
     private var selectionNonce: UUID?
     private var onEnd: (() -> Void)?
 
-    static func begin(payload: PhotoDragPayload, previews: [NSImage], cropsToSquare: Bool,
+    static func begin(session: AppSession, payload: PhotoDragPayload, previews: [NSImage], cropsToSquare: Bool,
                       from view: NSView, event: NSEvent, albumCollection: PhotoCollectionDescriptor? = nil,
                       localSelection: SelectionDragRegistry.Entry? = nil, promisesFile: Bool = true,
                       text: String? = nil, onEnd: (() -> Void)? = nil) -> Bool {
-        guard payload.count > 0, !payload.filename.isEmpty else { return false }
+        guard !session.isEnded, payload.count > 0, !payload.filename.isEmpty else { return false }
+        let drags = session.drags
         let source = PhotoFileDragSource()
+        source.drags = drags
         source.onEnd = onEnd
-        let delegate = PhotoPromiseDelegate(payload: payload)
+        let delegate = PhotoPromiseDelegate(payload: payload, downloads: session.downloads)
         let provider = LocalHandlePromiseProvider(fileType: payload.fileType.identifier, delegate: delegate)
         provider.userInfo = delegate
         provider.text = text
         let writer: NSPasteboardWriting
         if let albumCollection {
-            let nonce = AlbumDragRegistry.register(collection: albumCollection, namespace: payload.repository.namespace)
+            let nonce = drags.albums.register(collection: albumCollection, namespace: payload.repository.namespace)
             source.localNonce = nonce
             provider.localType = AlbumDragRegistry.type; provider.nonce = nonce
             writer = promisesFile ? provider : LocalHandleWriter(type: AlbumDragRegistry.type, nonce: nonce, text: text)
         } else if let localSelection {
-            let nonce = SelectionDragRegistry.register(localSelection)
+            let nonce = drags.selections.register(localSelection)
             source.selectionNonce = nonce
             provider.localType = SelectionDragRegistry.type; provider.nonce = nonce
             writer = promisesFile ? provider : LocalHandleWriter(type: SelectionDragRegistry.type, nonce: nonce, text: text)
@@ -81,9 +91,9 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
         let point = view.convert(event.locationInWindow, from: nil)
         item.setDraggingFrame(NSRect(x: point.x - 30, y: point.y - 30,
                                      width: image.size.width, height: image.size.height), contents: image)
-        active[source.id] = source
-        let session = view.beginDraggingSession(with: [item], event: event, source: source)
-        session.animatesToStartingPositionsOnCancelOrFail = true
+        drags.retain(source, id: source.id)
+        let dragSession = view.beginDraggingSession(with: [item], event: event, source: source)
+        dragSession.animatesToStartingPositionsOnCancelOrFail = true
         return true
     }
 
@@ -92,9 +102,9 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
     }
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-        if let localNonce { AlbumDragRegistry.remove(localNonce) }
-        if let selectionNonce { SelectionDragRegistry.remove(selectionNonce) }
-        Self.active[id] = nil
+        if let localNonce { drags?.albums.remove(localNonce) }
+        if let selectionNonce { drags?.selections.remove(selectionNonce) }
+        drags?.release(id)
         onEnd?()
     }
 

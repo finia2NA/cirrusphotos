@@ -113,8 +113,8 @@ final class LibraryModel {
     private(set) var albumListError: String?
     private(set) var presentationNamespace: String?
     let session: AppSession
-    /// Where tracked changes report progress and failures.
-    @ObservationIgnored let activity: ActivityCenter
+    /// The session's Activity panel, where tracked changes report progress and failures.
+    var activity: ActivityCenter { session.activity }
     /// Album writes run one at a time; the repository rejects concurrent album mutations.
     @ObservationIgnored var albumWriteTail: Task<Void, Never>?
     /// Tracked so observers that check it (warming, command availability) re-run once
@@ -141,14 +141,13 @@ final class LibraryModel {
     @ObservationIgnored var thumbnailPolicyRevision: UInt64 = 0
 
     convenience init(repository: CachedPhotosRepository? = nil, preferences: AppPreferences = AppPreferences(),
-                     activity: ActivityCenter = .shared) {
-        self.init(session: AppSession(preferences: preferences, repository: repository), activity: activity)
+                     activity: ActivityCenter = ActivityCenter()) {
+        self.init(session: AppSession(preferences: preferences, repository: repository, activity: activity))
     }
 
-    init(session: AppSession, activity: ActivityCenter = .shared) {
+    init(session: AppSession) {
         self.session = session
         self.repository = session.repository
-        self.activity = activity
         self.presentationNamespace = session.repository?.namespace
         let preferences = session.preferences
         // The repository applies the thumbnail and budget preferences; latest change wins.
@@ -492,23 +491,23 @@ final class LibraryModel {
 
     func downloadSelection(_ selection: BrowserCommandSnapshot, kind: PhotoDownloadKind, choose: Bool) {
         guard capabilities(for: selection.collection).allowsDownloads, let repository, let captured = selection.captureSelection(timeline: selection.timeline) else { return }
-        PhotoDownloadManager.shared.start(repository: repository, source: .selection(captured), kind: kind, choose: choose)
+        session.downloads.start(repository: repository, source: .selection(captured), kind: kind, choose: choose)
     }
 
     func editSelection(_ selection: BrowserCommandSnapshot, application: URL) {
         guard capabilities(for: selection.collection).allowsPersonalActions, let repository, let timeline = selection.timeline else { return }
-        PhotoDownloadManager.shared.edit(repository: repository, snapshot: timeline, selection: selection,
-                                        item: nil, collection: selection.collection, applicationURL: application)
+        session.downloads.edit(repository: repository, snapshot: timeline, selection: selection,
+                               item: nil, collection: selection.collection, applicationURL: application)
     }
 
     func editViewerItem(_ item: PhotoItem, repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor, application: URL) {
-        PhotoDownloadManager.shared.edit(repository: repository, snapshot: nil, selection: nil,
-                                        item: item, collection: collection, applicationURL: application)
+        session.downloads.edit(repository: repository, snapshot: nil, selection: nil,
+                               item: item, collection: collection, applicationURL: application)
     }
 
     func downloadViewerItem(_ item: PhotoItem, repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor,
                             kind: PhotoDownloadKind, choose: Bool) {
-        PhotoDownloadManager.shared.start(repository: repository, source: .item(item, collection: collection), kind: kind, choose: choose)
+        session.downloads.start(repository: repository, source: .item(item, collection: collection), kind: kind, choose: choose)
     }
 
     // MARK: - Lifecycle

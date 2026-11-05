@@ -241,11 +241,10 @@ final class ActivityHandle {
     func cancelled() { center?.cancelled(id) }
 }
 
-/// Session-only record of running work, failures and settled user-initiated changes.
-/// Call sites begin an activity and settle it through the returned handle.
+/// One session's record of running work, failures and settled user-initiated changes, owned
+/// by `AppSession`. Call sites begin an activity and settle it through the returned handle.
 @MainActor @Observable
 final class ActivityCenter {
-    static let shared = ActivityCenter()
     static let historyLimit = 500
     static let settledEntryLimit = 200
     static let mergeWindow: TimeInterval = 60
@@ -447,6 +446,19 @@ final class ActivityCenter {
 
     func dismissHistory(_ id: UUID) {
         history.removeAll { $0.id == id }
+    }
+
+    /// Ends the session: running and queued work settles as cancelled, and no entry keeps a
+    /// cancel or retry closure, since both would act on the ended session's repository.
+    func end() {
+        for id in entries.filter({ !$0.phase.isSettled }).map(\.id) { cancelled(id) }
+        for index in entries.indices {
+            entries[index].cancel = nil
+            entries[index].retry = nil
+        }
+        revealHandler = nil
+        revealableCollection = nil
+        isPresented = false
     }
 
     /// Removes everything settled; running and queued work stays.

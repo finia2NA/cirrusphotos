@@ -13,6 +13,7 @@ struct PersonEditView: View {
     let request: PersonEditRequest
     let people: [CollectionIndexEntry]
     let repository: CachedPhotosRepository?
+    let activity: ActivityCenter
     let onFinish: () -> Void
     @State private var name: String
     @State private var target: CollectionIndexEntry?
@@ -22,10 +23,12 @@ struct PersonEditView: View {
     @State private var error: String?
     @State private var confirming = false
 
-    init(request: PersonEditRequest, people: [CollectionIndexEntry], repository: CachedPhotosRepository?, onFinish: @escaping () -> Void) {
+    init(request: PersonEditRequest, people: [CollectionIndexEntry], repository: CachedPhotosRepository?, activity: ActivityCenter,
+         onFinish: @escaping () -> Void) {
         self.request = request
         self.people = people
         self.repository = repository
+        self.activity = activity
         self.onFinish = onFinish
         _name = State(initialValue: request.person.name)
         _hasEdited = State(initialValue: false)
@@ -157,11 +160,11 @@ struct PersonEditView: View {
                 } else {
                     try await repository.renamePerson(id: request.person.id, name: capturedName, space: request.space)
                 }
-                ActivityCenter.shared.record(kind, outcome: .succeeded)
+                activity.record(kind, outcome: .succeeded)
                 onFinish(); dismiss()
             } catch {
                 let failure = ActivityFailure.recorded(error, operation: "Person change")
-                ActivityCenter.shared.record(kind, outcome: failure.unconfirmed ? .unconfirmed : .failed, failure: failure)
+                activity.record(kind, outcome: failure.unconfirmed ? .unconfirmed : .failed, failure: failure)
                 onFinish(); self.error = failure.message; working = false
             }
         }

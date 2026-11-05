@@ -16,7 +16,7 @@ extension LibraryBrowserScrollView.Coordinator {
     func beginFileDrag(at point: CGPoint, event: NSEvent) -> Bool {
         guard allowsFileDrag else { return false }
         guard let ordinal = geometry?.ordinal(at: point), let clicked = loadedItem(ordinal),
-              let document, let repository,
+              let document, let repository, let session,
               let timelineSnapshot, let index else { return false }
         if !selection.contains(ordinal) { selection.replace(with: ordinal); publishSelection() }
         let selected = selection.indexes
@@ -51,7 +51,7 @@ extension LibraryBrowserScrollView.Coordinator {
                                        filename: "Photos", delivery: .folder)
         }
         cancelPointerInteraction()
-        return PhotoFileDragSource.begin(payload: payload, previews: previews,
+        return PhotoFileDragSource.begin(session: session, payload: payload, previews: previews,
                                          cropsToSquare: geometry?.cropsThumbnailsToSquare ?? false,
                                          from: document, event: event,
                                          localSelection: allowsAlbumMembership ? .init(selection: captured, sourceAlbumID: sourceAlbumID, namespace: repository.namespace) : nil,

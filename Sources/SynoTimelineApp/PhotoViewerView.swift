@@ -124,7 +124,7 @@ struct PhotoViewerView: View {
                                 let payload = PhotoDragPayload(repository: viewer.repository, source: .item(item, collection: viewer.collection),
                                                                count: 1, filename: name)
                                 let preview = state.thumbnailData.flatMap { NSImage(data: $0) } ?? viewer.source.image ?? viewer.image
-                                return PhotoFileDragSource.begin(payload: payload, previews: [preview].compactMap { $0 },
+                                return PhotoFileDragSource.begin(session: library.session, payload: payload, previews: [preview].compactMap { $0 },
                                                                  cropsToSquare: cropsThumbnailsToSquare,
                                                                  from: view, event: event,
                                                                  text: SelectionText.csv(for: [item]))

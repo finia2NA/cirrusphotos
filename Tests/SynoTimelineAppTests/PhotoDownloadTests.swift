@@ -313,21 +313,23 @@ final class PhotoDownloadDestinationTests: XCTestCase {
                                                      budget: 100_000_000, cacheRoot: root.appendingPathComponent("cache"), transport: transport)
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.dng\",\"time\":1,\"type\":\"photo\"}".utf8))
         let payload = PhotoDragPayload(repository: repository, source: .item(photo, collection: .library(.personal)), count: 1, filename: "a.dng")
-        let delegate = PhotoPromiseDelegate(payload: payload)
+        let downloads = PhotoDownloadManager(activity: ActivityCenter())
+        let delegate = PhotoPromiseDelegate(payload: payload, downloads: downloads)
         let provider = LocalHandlePromiseProvider(fileType: UTType.data.identifier, delegate: delegate)
         provider.userInfo = delegate
         XCTAssertEqual(delegate.filePromiseProvider(provider, fileNameForType: UTType.data.identifier), "a.dng")
         let plainTypes = NSFilePromiseProvider(fileType: UTType.data.identifier, delegate: delegate)
             .writableTypes(for: NSPasteboard(name: .init("test.\(UUID())")))
-        let nonce = AlbumDragRegistry.register(collection: .album(7), namespace: repository.namespace)
+        let registry = AlbumDragRegistry()
+        let nonce = registry.register(collection: .album(7), namespace: repository.namespace)
         provider.localType = AlbumDragRegistry.type; provider.nonce = nonce
         let pasteboard = NSPasteboard(name: .init("test.\(UUID())"))
-        defer { AlbumDragRegistry.remove(nonce); pasteboard.releaseGlobally() }
+        defer { registry.remove(nonce); pasteboard.releaseGlobally() }
         let types = provider.writableTypes(for: pasteboard)
         XCTAssertTrue(types.contains(AlbumDragRegistry.type))
         XCTAssertTrue(Set(plainTypes).isSubset(of: Set(types)))
         XCTAssertEqual(provider.pasteboardPropertyList(forType: AlbumDragRegistry.type) as? String, nonce.uuidString)
-        XCTAssertEqual(AlbumDragRegistry.album(nonce.uuidString, namespace: repository.namespace), .album(7))
+        XCTAssertEqual(registry.album(nonce.uuidString, namespace: repository.namespace), .album(7))
         provider.localType = SelectionDragRegistry.type
         XCTAssertFalse(provider.writableTypes(for: pasteboard).contains(AlbumDragRegistry.type))
         XCTAssertTrue(provider.writableTypes(for: pasteboard).contains(SelectionDragRegistry.type))
