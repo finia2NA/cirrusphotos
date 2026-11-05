@@ -20,7 +20,7 @@ Deletion was returned by v1 `get` and v7 `list`. v7 replay matched and the retur
 
 Conclusion: the mobile item feed is v7 `list`; changing the version on `get` is not enough.
 
-## Third runner (`make test-map-diff-3`)
+## Third runner
 
 Ran 2 h 33 min: 48 pass, 4 inconclusive, 0 fail, 0 skipped (pass count includes cleanup checks).
 

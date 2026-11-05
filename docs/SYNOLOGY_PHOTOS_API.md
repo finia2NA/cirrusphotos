@@ -787,9 +787,8 @@ the existing strict v1 decoder intentionally rejects those shapes. This probe
 does not establish v6/v7 cursor-pair compatibility or semantics. Fresh controlled
 baselines are needed before relying on those versions.
 
-Private evidence stays local (not synced); sanitized summaries are in `docs/capturefindings/`. The overnight run directory `map-diff-run-20261025T215418Z-1e90a26b/` includes
-`report.json`, `events.jsonl`, `investigation.json`, and
-`diff-version-shapes.json`. No NAS data was changed during the investigation.
+Private evidence stays local (not synced); sanitized summaries are in `docs/capturefindings/`. The overnight run's report, event log, investigation
+and Diff version shapes are kept only in that local evidence. No NAS data was changed during the investigation.
 
 ### Overnight filesystem run (2026-10-26)
 
@@ -817,7 +816,7 @@ cohort passed. Both GPS-removal cases retained prior coordinates through a
 10-minute timeout. There were no scan retries or API/transport errors. Current
 dates therefore did not restore modification coverage under the tested contract;
 the earlier bulk observation artifacts do not explain this result. See the
-[focused results](capturefindings/map-diff-v1-runs.md#focused-run-make-test-map-diff-2)
+[focused results](capturefindings/map-diff-v1-runs.md#focused-run-second-runner)
 for exact scope and evidence limitations. Account and request/path differences
 from the earlier successful probes remain unresolved.
 
@@ -843,7 +842,7 @@ A controlled one-photo addition used an owned geotagged JPEG in the disposable f
 
 The Android Places map visibly displayed that fixture. A subsequent warm startup after emulator restart used Diff v7 `list` without repeating Item `list_all` in its captured startup sequence; only the tiny disposable library was tested. This establishes an actionable method/version distinction and positive coverage for one addition, not bulk, edit, access-change, reset, or continuation completeness. The prior v1 negative results do not establish v7 `list` coverage. Production Diff validation remains disabled pending controlled coverage and completeness tests. The ignored private capture directory is `docs/captures/android-photos-session-2026-10-26/`; request/response JSON is sanitized before writing, with no raw credential-bearing HAR recorded. The initial record is a Mac proxy connectivity probe; subsequent Android requests establish actual app interception.
 
-The separate [third runner](capturefindings/map-diff-v7-mobile.md), `make test-map-diff-3`, now tests the captured v7 item feed with the focused edit matrix and a 5,000-photo batch. It records and rejects `has_next=true` instead of guessing continuation, checks candidate `list_all` pagination against owned/folder inventories, and keeps production validation unchanged. Its completed 2026-10-26 run passed 12 focused additions, eight same-ID edits and 12 deletions, with no observed direct visibility gaps. GPS removal remained inconclusive because the NAS retained coordinates. Bulk responses contained 2,000 modifications with `has_next=true`; continuation and complete bulk coverage remain unproven. All 5,012 known test IDs were absent after cleanup. See [third-runner analysis](capturefindings/map-diff-v7-mobile.md#third-runner-make-test-map-diff-3).
+The separate [third runner](capturefindings/map-diff-v7-mobile.md) (retired) tested the captured v7 item feed with the focused edit matrix and a 5,000-photo batch. It recorded and rejected `has_next=true` instead of guessing continuation, checked candidate `list_all` pagination against owned/folder inventories, and left production validation unchanged. Its completed 2026-10-26 run passed 12 focused additions, eight same-ID edits and 12 deletions, with no observed direct visibility gaps. GPS removal remained inconclusive because the NAS retained coordinates. Bulk responses contained 2,000 modifications with `has_next=true`; continuation and complete bulk coverage remain unproven. All 5,012 known test IDs were absent after cleanup. See [third-runner analysis](capturefindings/map-diff-v7-mobile.md#third-runner).
 
 A subsequent bounded Android refresh returned all 5,012 test tombstones in one terminal v7 `list` response (`has_next=false`). A read-only replay matched both the capture and exact known-ID set, then fenced empty; the final inventory had one original item. Deletion response length must not be assumed to share the observed 2,000-modification page behavior. Modification continuation remains unobserved. The initial product plan now deliberately handles only bounded terminal intervals and rebuilds for partial/large intervals, so another bulk capture is not a prerequisite. See [follow-up evidence](capturefindings/map-diff-v7-mobile.md#bounded-follow-up).
 

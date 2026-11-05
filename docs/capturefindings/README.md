@@ -15,14 +15,14 @@ Current API behavior lives in [`../SYNOLOGY_PHOTOS_API.md`](../SYNOLOGY_PHOTOS_A
 | [album-sharing.md](album-sharing.md) | Album membership, sharing, public links, recipients and Provider access |
 | [tags-and-ratings.md](tags-and-ratings.md) | Tag creation and assignment, ratings, and how both reach the cache |
 
-## Runners
+## Map/Diff runners (retired)
 
-The experiments ran against the disposable `phototest` account using journal-scoped cleanup (only generated files recorded in an ownership journal are removed). Run output goes to `docs/captures/map-diff-run-*/`.
+Three filesystem-driven runners produced the Map/Diff findings. They ran against the disposable `phototest` account with journal-scoped cleanup (only generated files recorded in an ownership journal were removed). The experiments are finished and the runners were removed in #82; their raw output stays in the ignored `docs/captures/`.
 
-| Target | Script | Scope |
-| --- | --- | --- |
-| `make test-map-diff` | `scripts/test_map_diff.py` | Bulk: single edits, 1,200 equal-time photos, 2,500–20,000 photo batches, one-hour cursor age |
-| `make test-map-diff-2` | `scripts/test_map_diff_focused.py` | 12 isolated fixtures across January 2020 and current-date cohorts |
-| `make test-map-diff-3` | `scripts/test_map_diff_mobile.py` | The 12 fixtures plus a 5,000-photo batch using the captured v7 requests |
+| Runner | Scope |
+| --- | --- |
+| First (bulk) | Single edits, 1,200 equal-time photos, 2,500–20,000 photo batches, one-hour cursor age |
+| Second (focused) | 12 isolated fixtures across January 2020 and current-date cohorts |
+| Third (mobile v7) | The 12 fixtures plus a 5,000-photo batch using the captured v7 requests |
 
-Common rules: a 90-second unchanged window before a state counts as settled, 15–30 second polling, a separate settling deadline, deletion claims only after filesystem unlink plus direct-ID absence, and exit codes 0 (all pass), 1 (failed checks), 2 (inconclusive, skipped or setup error), 130 (interrupted). Permission changes, service resets and long cursor retention were never tested. Offline script tests: `make test-map-diff-script`, `-2-script`, `-3-script`.
+Common rules were a 90-second unchanged window before a state counts as settled, 15–30 second polling, a separate settling deadline, deletion claims only after filesystem unlink plus direct-ID absence, and exit codes 0 (all pass), 1 (failed checks), 2 (inconclusive, skipped or setup error), 130 (interrupted). Permission changes, service resets and long cursor retention were never tested.

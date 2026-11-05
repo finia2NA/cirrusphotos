@@ -2,7 +2,7 @@
 
 Goal: decide whether Diff can prove cached Map/Library metadata unchanged. Filesystem fixtures were written to the `phototest` mount, and the NAS indexed them. Diff v1 `get` with a saved cursor was compared against whole-library, folder and direct-ID reads.
 
-## Bulk run (`make test-map-diff`)
+## Bulk run (first runner)
 
 Run took about 5 h 42 min and made 2,433 requests (870 MB received). Result counts (16 pass, 12 fail, 12 inconclusive, 6 skipped) include setup and cleanup stages and are not a feature pass rate.
 
@@ -17,7 +17,7 @@ Run took about 5 h 42 min and made 2,433 requests (870 MB received). Result coun
 
 Runner defects exposed: 152 duplicate-ID scan failures during indexing ended stages that should have retried, so the 1,200-photo and 2,500/10,000/20,000 stages never produced stable inventories and the quiet pagination tests were skipped. No addition response approached 4 MiB, so truncation behavior was not exercised.
 
-## Focused run (`make test-map-diff-2`)
+## Focused run (second runner)
 
 About 1 h 55 min. Identical results for January 2020 and current-date cohorts.
 
