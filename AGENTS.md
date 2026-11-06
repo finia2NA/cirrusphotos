@@ -8,6 +8,7 @@
 - **Data contract:** The NAS is authoritative. Metadata and media are delivered cached-first and metadata is normally validated once per run (Diff v7 feeds prove cached pages unchanged, or a background sync reads them); stale cached content stays useful when validation fails. Nothing polls for external changes; manual Refresh (⌘R) re-validates in place.
 - **Architecture:** A process-shared repository actor owns authentication, cached-first metadata coordination, filter indexing, persistence, mutations and media work behind typed domain APIs. SwiftUI provides the shell, an AppKit viewport virtualizes the shared browser, GRDB records over SQLite hold metadata and compressed media is stored as files in the ignored `.cache/` directory (location changes with #84).
 - **Credentials:** `.env` holds `NAS_URL`, `USER`, `PW` and optional `OTP` (see `.env.example`); in-app sign-in replaces this with #83.
+- **Diagnostics:** Unified logging under subsystem `local.cirrus.syno-timeline`; the bundle's `OSLogPreferences` keeps info and debug on disk, so `log show --last 15m --info --debug --predicate 'subsystem == "local.cirrus.syno-timeline"'` shows what preceded a crash. Crash reports are in `~/Library/Logs/DiagnosticReports/SynoTimeline-*.ips`.
 - **Test environment:** The disposable `phototest` account (`.env.test`) is for risky operations.
 - **Sources of truth:** The Synology Photos service on `cirrus`; Synology's DSM Login Web API documentation; observed/reverse-engineered Photos endpoints (`docs/SYNOLOGY_PHOTOS_API.md`).
 
