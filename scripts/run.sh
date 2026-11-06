@@ -21,7 +21,7 @@ cp "$bin_dir/SynoTimeline" "$app_bundle/Contents/MacOS/"
 xcrun actool --compile "$app_bundle/Contents/Resources" \
     --platform macosx --minimum-deployment-target 27.0 \
     --app-icon AppIcon --output-partial-info-plist "$PWD/.build/AppIcon-Info.plist" \
-    Resources/AppIcon.icon
+    Resources/AppIcon.icon >/dev/null
 # The NAS host comes from NAS_URL in .env (read only for that key; nothing is printed).
 nas_url="$(sed -n 's/^NAS_URL=//p' .env | head -1 | tr -d "\"'")"
 nas_host="${nas_url#*://}"; nas_host="${nas_host%%[:/]*}"
