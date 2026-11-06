@@ -27,7 +27,7 @@ final class MetadataCacheResetAppTests: XCTestCase {
             )
         ])
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            credentials: SynologyCredentials(username: "test", password: "unused"),
             baseURL: URL(string: "https://reset.example.invalid")!,
             cacheRoot: root,
             transport: MetadataResetAppTransport(snapshot: snapshot)

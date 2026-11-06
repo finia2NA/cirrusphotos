@@ -38,7 +38,7 @@ extension ThumbnailBatchSummary {
         result.interrupted = interrupted || other.interrupted
         result.downloadedThumbnails = downloadedThumbnails + other.downloadedThumbnails
         result.downloadedBytes = downloadedBytes + other.downloadedBytes
-        result.downloadElapsedSeconds = downloadElapsedSeconds + other.downloadElapsedSeconds
+        result.elapsedSeconds = elapsedSeconds + other.elapsedSeconds
         return result
     }
 }

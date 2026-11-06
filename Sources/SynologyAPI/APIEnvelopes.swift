@@ -9,11 +9,20 @@ struct APIError: Decodable { let code: Int }
 struct LoginData: Decodable {
     let sid: String
     let synoToken: String?
+    /// The trusted-device token; returned by v6 logins.
+    let did: String?
 
     enum CodingKeys: String, CodingKey {
-        case sid
+        case sid, did
         case synoToken = "synotoken"
     }
+}
+
+public struct SignInResult: Sendable, Equatable {
+    /// Lets later logins skip the code when the login proved one.
+    public let deviceToken: String?
+
+    public init(deviceToken: String?) { self.deviceToken = deviceToken }
 }
 
 struct TimelineData: Decodable { let section: [TimelineSection] }

@@ -274,7 +274,7 @@ final class BrowserPhotoCellView: NSView, PhotoViewerSourceActivating, PhotoView
     // MARK: Loading
 
     private func decodedKey(family: String, size: ThumbnailSize, repository: CachedPhotosRepository) -> String {
-        "\(ObjectIdentifier(repository).hashValue):\(family):\(size.rawValue):\(Self.maxPixel)"
+        "\(repository.namespace):\(family):\(size.rawValue):\(Self.maxPixel)"
     }
 
     private func cancelLoad() {
@@ -317,7 +317,7 @@ final class BrowserPhotoCellView: NSView, PhotoViewerSourceActivating, PhotoView
             return
         }
         let size = content.size, collection = content.collection
-        let keyPrefix = "\(ObjectIdentifier(repository).hashValue):\(family)"
+        let keyPrefix = "\(repository.namespace):\(family)"
         loadTask = Task.detached(priority: .userInitiated) { [weak self] in
             // Start to first repository result: repository actor wait plus "Cache lookup".
             var firstResult: OSSignpostIntervalState? = signposter.beginInterval("Thumbnail first result",

@@ -46,7 +46,7 @@ final class LibraryFilterControllerTests: XCTestCase {
     }
 
     private func repository(transport: ScannerTransport, root: URL) throws -> CachedPhotosRepository {
-        try CachedPhotosRepository(credentials: .init(username: "filter", password: "pw", otpSecret: "unused"),
+        try CachedPhotosRepository(credentials: .init(username: "filter", password: "pw"),
                                    cacheRoot: root, transport: transport)
     }
 

@@ -278,6 +278,7 @@ struct LibraryBrowserView: View {
                 }
             }
         }
+        .detailPlaceholder(topInset: contentTopInset)
     }
 
     var body: some View {
@@ -383,12 +384,14 @@ struct LibraryBrowserView: View {
                     Label(isAlbum ? "Album unavailable" : "Library unavailable",
                           systemImage: "photo.badge.exclamationmark")
                 } description: {
-                    Text(error)
+                    Text(error).textSelection(.enabled)
                 } actions: {
                     Button("Try Again") { Task { await library.reload() } }.disabled(library.isLoading)
                 }
+                .detailPlaceholder(topInset: contentTopInset)
             } else {
                 ProgressView(loadingText)
+                    .detailPlaceholder(topInset: contentTopInset)
             }
         }
         .sheet(isPresented: $showingSharing) {

@@ -81,7 +81,7 @@ final class VideoRangeCacheTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = VideoRangeTestTransport(totalLength: CachedPhotosRepository.videoSegmentSize * 2 + 19)
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "video", password: "unused", otpSecret: "unused"),
+            credentials: SynologyCredentials(username: "video", password: "unused"),
             baseURL: URL(string: "https://photos.invalid")!,
             budget: 8 * 1_024 * 1_024,
             cacheRoot: root,
@@ -111,7 +111,7 @@ final class VideoRangeCacheTests: XCTestCase {
         let size = CachedPhotosRepository.videoSegmentSize
         let transport = VideoRangeTestTransport(totalLength: size * 2, etag: "v1")
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "video", password: "unused", otpSecret: "unused"),
+            credentials: SynologyCredentials(username: "video", password: "unused"),
             baseURL: URL(string: "https://photos.invalid")!, budget: 8 * 1_024 * 1_024,
             cacheRoot: root, transport: transport)
         let resource = VideoPlaybackResource(scope: .space(.personal), unitID: 9, cacheKey: "revision", filename: nil,

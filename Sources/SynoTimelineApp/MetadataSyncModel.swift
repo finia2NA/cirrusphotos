@@ -148,6 +148,14 @@ final class MetadataSyncModel: ObservableObject {
         }
     }
 
+    /// Detaches from the library for sign-out or an account switch.
+    func end() {
+        library = nil
+        libraryObservation &+= 1
+        stop()
+        started = false
+    }
+
     private func stop() {
         task?.cancel()
         task = nil

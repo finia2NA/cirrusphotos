@@ -67,17 +67,7 @@ extension CachedPhotosRepository {
             imageWork.fullImageFinishWithoutSubscribers.formUnion(imageWork.fullImageJobs.keys)
             for job in imageWork.videoWindowJobs.values { await job.window.retainUntilFinished() }
         } else {
-            for job in imageWork.thumbnailJobs.values { job.task.cancel() }
-            for job in imageWork.fullImageJobs.values {
-                job.task.cancel()
-                Task { await fullImageGate.release(job.id) }
-            }
-            imageWork.thumbnailJobs.removeAll()
-            imageWork.fullImageJobs.removeAll()
-            for job in imageWork.videoWindowJobs.values { await job.window.cancel() }
-            imageWork.videoWindowJobs.removeAll()
-            imageWork.thumbnailFinishWithoutSubscribers.removeAll()
-            imageWork.fullImageFinishWithoutSubscribers.removeAll()
+            await cancelAllImageWork()
         }
 
         cancelMetadataJobsForReset()
@@ -105,6 +95,29 @@ extension CachedPhotosRepository {
             metadata.resetInProgress = false
             throw error
         }
+    }
+
+    /// Supersedes and cancels everything in flight, for `shutdown()`.
+    func stopAllWork() async {
+        metadata.admissionEpoch &+= 1
+        await cancelAllImageWork()
+        cancelMetadataJobsForReset()
+        for observer in metadata.resetObservers.values { observer.finish() }
+        metadata.resetObservers.removeAll()
+    }
+
+    private func cancelAllImageWork() async {
+        for job in imageWork.thumbnailJobs.values { job.task.cancel() }
+        for job in imageWork.fullImageJobs.values {
+            job.task.cancel()
+            Task { await fullImageGate.release(job.id) }
+        }
+        imageWork.thumbnailJobs.removeAll()
+        imageWork.fullImageJobs.removeAll()
+        for job in imageWork.videoWindowJobs.values { await job.window.cancel() }
+        imageWork.videoWindowJobs.removeAll()
+        imageWork.thumbnailFinishWithoutSubscribers.removeAll()
+        imageWork.fullImageFinishWithoutSubscribers.removeAll()
     }
 
     private func cancelMetadataJobsForReset() {

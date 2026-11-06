@@ -21,7 +21,7 @@ private actor FallbackThumbnailTransport: TestPhotosTransport {
 }
 
 final class ThumbnailFallbackCacheTests: XCTestCase {
-    private let credentials = SynologyCredentials(username: "fallback", password: "unused", otpSecret: "unused")
+    private let credentials = SynologyCredentials(username: "fallback", password: "unused")
     private let server = URL(string: "https://fallback.example.invalid")!
 
     private func root() -> URL { temporaryTestRoot("SynoFallbackCache") }

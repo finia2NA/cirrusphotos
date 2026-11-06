@@ -120,7 +120,7 @@ fileprivate actor ViewerTransport: TestPhotosTransport {
 
 class PhotoViewerSessionTestCase: XCTestCase {
     fileprivate let server = URL(string: "https://viewer.example.invalid")!
-    fileprivate let credentials = SynologyCredentials(username: "viewer", password: "unused", otpSecret: "unused")
+    fileprivate let credentials = SynologyCredentials(username: "viewer", password: "unused")
 
     fileprivate func root() -> URL { temporaryTestRoot("SynoViewerTest") }
 

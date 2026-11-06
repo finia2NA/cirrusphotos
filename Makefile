@@ -32,5 +32,7 @@ clean:
 cloc:
 	@python3 scripts/cloc_report.py
 
+# Switches the development account: make switch-user TARGET=real|test|none.
+# none removes .env so the app signs in itself, with a fresh cache deleted on leaving none.
 switch-user:
-	@python3 scripts/switch_user.py
+	@python3 scripts/switch_user.py '$(TARGET)'

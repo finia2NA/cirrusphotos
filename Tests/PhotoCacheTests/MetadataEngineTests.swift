@@ -41,7 +41,7 @@ private actor FavoriteEventTransport: TestPhotosTransport {
 }
 final class MetadataEngineTests: XCTestCase, @unchecked Sendable {
     private func repository(_ transport: EngineTransport, root: URL) throws -> CachedPhotosRepository {
-        try CachedPhotosRepository(credentials: .init(username: "fixture", password: "fixture", otpSecret: nil), cacheRoot: root, transport: transport)
+        try CachedPhotosRepository(credentials: .init(username: "fixture", password: "fixture"), cacheRoot: root, transport: transport)
     }
     private func seedCheckpoint(_ repository: CachedPhotosRepository) async throws -> MetadataStoreVersion {
         try await repository.initializeMetadataEngine()
@@ -71,7 +71,7 @@ final class MetadataEngineTests: XCTestCase, @unchecked Sendable {
         for unsupported in [false, true] {
             let root = temporaryTestRoot("engine-favorite-events")
             defer { try? FileManager.default.removeItem(at: root) }
-            let repository = try CachedPhotosRepository(credentials: .init(username: "fixture", password: "fixture", otpSecret: nil), cacheRoot: root,
+            let repository = try CachedPhotosRepository(credentials: .init(username: "fixture", password: "fixture"), cacheRoot: root,
                                                         transport: FavoriteEventTransport(unsupported: unsupported))
             let old = try await seedCheckpoint(repository)
             try await repository.reconcileMetadataSource()

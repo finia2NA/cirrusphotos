@@ -30,11 +30,13 @@ To remove build artifacts so the next `make` or `make debug` performs a clean bu
 make clean
 ```
 
+`make switch-user TARGET=real|test|none` switches the development account while the app is quit: `real` and `test` activate `.env.real` or `.env.test` with their own caches, and `none` removes `.env` so the app shows its own sign-in, with a fresh cache that is deleted when switching away from `none`. Accounts signed in from the app stay in the Keychain until signed out.
+
 Run `make cloc` for line counts by language and directory (up to two directory levels). It counts Git-tracked files and excludes submodules. Install the dependency with `brew install cloc` if needed.
 
 Open `Package.swift` in Xcode to build and run there instead. Run model tests with `swift test`. Building requires the macOS 27 SDK.
 
-The app reads `NAS_URL`, `USER`, `PW`, and `OTP` from the ignored `.env`. On a warm launch it displays cached timeline, page, and thumbnail data while signing in and validating demanded resources. A cold launch shows Synology's initial timeline while fetching the full index. The toolbar status shows login progress, connection, or failure, with a Retry action when recovery is needed. Library data remains fixed after validation during that app run.
+Without a `.env` file, the app opens a sign-in window (server, username, password, and a six-digit code when the account uses two-factor authentication) and keeps the account in the Keychain. For development, an ignored `.env` beside the project with `NAS_URL`, `USER`, `PW`, and optionally the TOTP secret `OTP` takes precedence. On a warm launch it displays cached timeline, page, and thumbnail data while signing in and validating demanded resources. A cold launch shows Synology's initial timeline while fetching the full index. The toolbar status shows login progress, connection, or failure, with a Retry action when recovery is needed. Library data remains fixed after validation during that app run.
 
 **Personal Library**, **Favorites**, opened Personal Space albums, and location-filtered results use a day-grouped grid with 3–10 square slots per row. Photos keep their aspect ratio and are centered in each slot. The toolbar slider changes the number of items per row while retaining your position; it does not change the cached image rendition. The sidebar's Albums destination opens an overview of album covers, names, and item counts; albums are read-only. Map clusters the Personal Library's geotagged photos locally and opens a pin or cluster in the same browser. The sidebar button hides or shows navigation. The interface follows the macOS light or dark appearance and uses native translucent navigation and toolbar controls.
 

@@ -489,7 +489,7 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         let root = temporaryTestRoot("LivePhotoHold")
         defer { try? FileManager.default.removeItem(at: root) }
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "test", password: "test", otpSecret: ""),
+            credentials: SynologyCredentials(username: "test", password: "test"),
             budget: 100_000_000, cacheRoot: root, transport: LivePhotoCanvasTransport())
         let (canvas, window) = makeCanvas()
         defer { window.contentView = nil; window.orderOut(nil) }
@@ -534,7 +534,7 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         let root = temporaryTestRoot("VideoMute")
         defer { try? FileManager.default.removeItem(at: root) }
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "test", password: "test", otpSecret: ""),
+            credentials: SynologyCredentials(username: "test", password: "test"),
             budget: 100_000_000, cacheRoot: root, transport: AppMockTransport())
         let view = VideoPlayerContainerView()
         var muted = false
@@ -562,7 +562,7 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         let root = temporaryTestRoot("VideoCanvasPaging")
         defer { try? FileManager.default.removeItem(at: root) }
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "test", password: "test", otpSecret: ""),
+            credentials: SynologyCredentials(username: "test", password: "test"),
             budget: 100_000_000, cacheRoot: root, transport: AppMockTransport())
         let (canvas, window) = makeCanvas()
         defer { window.contentView = nil; window.orderOut(nil) }
@@ -591,7 +591,7 @@ final class PhotoViewerCanvasViewTests: XCTestCase {
         let root = temporaryTestRoot("VideoAnimationAnchor")
         defer { try? FileManager.default.removeItem(at: root) }
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "test", password: "test", otpSecret: ""),
+            credentials: SynologyCredentials(username: "test", password: "test"),
             budget: 100_000_000, cacheRoot: root, transport: AppMockTransport())
         let (canvas, window) = makeCanvas()
         defer { window.contentView = nil; window.orderOut(nil) }

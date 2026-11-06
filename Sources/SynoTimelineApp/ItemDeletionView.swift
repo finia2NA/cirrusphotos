@@ -5,29 +5,28 @@ struct ItemDeletionView: View {
     let deletion: ItemDeletion
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(title).font(.headline)
+        SheetScaffold(title: title) {
             if deletion.loading {
-                ProgressView("Preparing…")
+                SheetPlaceholder(state: .loading("Preparing…"), minHeight: 80)
             } else {
-                Text("This deletes \(deletion.count == 1 ? "this item" : "these items") from Synology Photos, including every album that contains \(deletion.count == 1 ? "it" : "them"). Synology Photos has no undo for this.")
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Synology Photos has no undo for this.", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("\(deletion.count == 1 ? "This item is" : "These items are") deleted from Synology Photos, including every album that contains \(deletion.count == 1 ? "it" : "them").")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            HStack {
-                Spacer()
-                Button("Cancel") { model.cancelItemDeletion() }
-                    .keyboardShortcut(.cancelAction)
-                Button("Delete", role: .destructive) { model.confirmItemDeletion() }
-                    .disabled(deletion.loading)
-            }
+        } trailing: {
+            Button("Cancel") { model.cancelItemDeletion() }
+                .keyboardShortcut(.cancelAction)
+            Button("Delete", role: .destructive) { model.confirmItemDeletion() }
+                .disabled(deletion.loading)
         }
         .interactiveDismissDisabled()
-        .padding(20)
-        .frame(width: 400)
     }
 
     private var title: String {
         let noun = deletion.count == 1 ? "Item" : "Items"
-        return "Delete \(deletion.count) \(noun)?"
+        return "Delete \(deletion.count.formatted()) \(noun)?"
     }
 }

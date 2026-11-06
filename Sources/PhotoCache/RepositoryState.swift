@@ -8,6 +8,9 @@ struct RepositoryAuthenticationState {
     var task: Task<Void, Error>?
     var attempt: UUID?
     var connected = false
+    /// Set by `shutdown()`; no further NAS work is admitted.
+    var shutDown = false
+    var renewalHandlerInstalled = false
     var status: AuthenticationStatus = .notStarted
     var observers: [UUID: AsyncStream<AuthenticationStatus>.Continuation] = [:]
 

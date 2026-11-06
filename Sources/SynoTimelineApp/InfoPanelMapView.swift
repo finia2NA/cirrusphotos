@@ -31,6 +31,9 @@ struct InfoPanelMapView: View {
                     position = .automatic
                 }
             }
+            // Keeps automatically framed markers clear of the edges and the Legal label.
+            .safeAreaPadding(.horizontal, 18)
+            .safeAreaPadding(.vertical, 14)
             .frame(height: 150)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .accessibilityElement(children: .ignore)

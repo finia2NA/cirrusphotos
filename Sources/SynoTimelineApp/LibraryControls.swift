@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import SynologyAPI
 import PhotoCache
@@ -278,39 +279,71 @@ struct LibraryCommands: Commands {
     @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some Commands {
-        CommandGroup(after: .pasteboard) {
-            Divider()
-            Button { model.rotateSelection(.counterClockwise) } label: {
-                Label("Rotate Photo Left", systemImage: "rotate.left")
-                    .labelStyle(.titleAndIcon)
+        CommandGroup(replacing: .newItem) {}
+        CommandGroup(replacing: .help) {}
+        // Edit: the pasteboard actions reach text fields and the browser through the
+        // responder chain; Select All and Delete act on photos while the browser is active.
+        CommandGroup(replacing: .pasteboard) {
+            Button("Cut") { NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil) }
+                .keyboardShortcut("x", modifiers: .command)
+            Button("Copy") { NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil) }
+                .keyboardShortcut("c", modifiers: .command)
+            Button("Paste") { NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil) }
+                .keyboardShortcut("v", modifiers: .command)
+            Button("Delete…") { model.beginItemDeletion() }
+                .keyboardShortcut(.delete, modifiers: [.command])
+                .disabled(!model.canDeleteSelection)
+            Button("Select All") {
+                if model.browserCommandsActive { model.performBrowserCommand(.selectAll) }
+                else { NSApp.sendAction(#selector(NSResponder.selectAll(_:)), to: nil, from: nil) }
             }
-            .disabled(!model.canRotate)
-            Button { model.rotateSelection(.clockwise) } label: {
-                Label("Rotate Photo Right", systemImage: "rotate.right")
-                    .labelStyle(.titleAndIcon)
+            .keyboardShortcut("a", modifiers: [.command])
+            Menu("Move Selection") {
+                Button("Left") { model.performBrowserCommand(.move(.left, extending: false)) }
+                    .keyboardShortcut(.leftArrow, modifiers: [])
+                Button("Right") { model.performBrowserCommand(.move(.right, extending: false)) }
+                    .keyboardShortcut(.rightArrow, modifiers: [])
+                Button("Up") { model.performBrowserCommand(.move(.up, extending: false)) }
+                    .keyboardShortcut(.upArrow, modifiers: [])
+                Button("Down") { model.performBrowserCommand(.move(.down, extending: false)) }
+                    .keyboardShortcut(.downArrow, modifiers: [])
+                Divider()
+                Button("Extend Left") { model.performBrowserCommand(.move(.left, extending: true)) }
+                    .keyboardShortcut(.leftArrow, modifiers: [.shift])
+                Button("Extend Right") { model.performBrowserCommand(.move(.right, extending: true)) }
+                    .keyboardShortcut(.rightArrow, modifiers: [.shift])
+                Button("Extend Up") { model.performBrowserCommand(.move(.up, extending: true)) }
+                    .keyboardShortcut(.upArrow, modifiers: [.shift])
+                Button("Extend Down") { model.performBrowserCommand(.move(.down, extending: true)) }
+                    .keyboardShortcut(.downArrow, modifiers: [.shift])
             }
-            .disabled(!model.canRotate)
-            Divider()
-            Button { model.rotateThumbnailPreviews(.counterClockwise) } label: {
-                Label("Rotate Thumbnail Previews Left…", systemImage: "rotate.left")
-                    .labelStyle(.titleAndIcon)
-            }
-            .disabled(!model.canRotateThumbnails || model.thumbnailRotationProgress != nil)
-            Button { model.rotateThumbnailPreviews(.clockwise) } label: {
-                Label("Rotate Thumbnail Previews Right…", systemImage: "rotate.right")
-                    .labelStyle(.titleAndIcon)
-            }
-            .disabled(!model.canRotateThumbnails || model.thumbnailRotationProgress != nil)
-            Divider()
-            Button { model.fixThumbnailRotations() } label: {
-                Label("Fix Thumbnail Rotations…", systemImage: "wand.and.stars")
-                    .labelStyle(.titleAndIcon)
-            }
-            .disabled(!model.canRotateThumbnails || model.thumbnailRotationProgress != nil)
+            .disabled(!model.browserCommandsActive)
         }
+        SidebarCommands()
         CommandGroup(after: .toolbar) {
+            Button(infoPanel.isVisible ? "Hide Info" : "Show Info") {
+                if infoPanel.isVisible {
+                    dismissWindow(id: InfoPanelScene.id)
+                } else {
+                    openWindow(id: InfoPanelScene.id)
+                }
+            }
+            .keyboardShortcut("i", modifiers: [.command])
             Button(activity.isPresented ? "Hide Activity" : "Show Activity") { activity.togglePresented() }
                 .keyboardShortcut("l", modifiers: [.command, .option])
+            Divider()
+            Button("Back") { model.navigateBack() }
+                .keyboardShortcut(.cancelAction)
+                .disabled(!model.canNavigateBack)
+            Divider()
+            Button("Larger Thumbnails") { preferences.adjustItemsPerRow(by: -1) }
+                .keyboardShortcut("+", modifiers: .command)
+                .disabled(preferences.itemsPerRow <= 3)
+            Button("Smaller Thumbnails") { preferences.adjustItemsPerRow(by: 1) }
+                .keyboardShortcut("-", modifiers: .command)
+                .disabled(preferences.itemsPerRow >= 10)
+            Toggle("Crop Thumbnails to Square", isOn: $preferences.cropsThumbnailsToSquare)
+            Toggle("Always Show Timeline", isOn: $preferences.alwaysShowsTimeline)
             Divider()
             Toggle("Show Filmstrip", isOn: $model.showsFilmstrip)
                 .disabled(!model.canCloseViewer)
@@ -321,72 +354,15 @@ struct LibraryCommands: Commands {
             Toggle("Show Focus Edges", isOn: $model.showsFocusEdges)
                 .disabled(!model.canCloseViewer)
         }
-        CommandMenu("Library") {
-            Button("Refresh from NAS") { Task { await model.refresh() } }
-                .keyboardShortcut("r", modifiers: .command)
-                .disabled(model.isRefreshing || model.isLoading)
-            Divider()
-            Button("Back") { model.navigateBack() }
-                .keyboardShortcut(.cancelAction)
-                .disabled(!model.canNavigateBack)
-            Divider()
-            Button("Increase Thumbnail Size") { preferences.adjustItemsPerRow(by: -1) }
-                .keyboardShortcut("+", modifiers: .command)
-                .disabled(preferences.itemsPerRow <= 3)
-            Button("Decrease Thumbnail Size") { preferences.adjustItemsPerRow(by: 1) }
-                .keyboardShortcut("-", modifiers: .command)
-                .disabled(preferences.itemsPerRow >= 10)
-            Divider()
-            Toggle("Crop Thumbnails to Square", isOn: $preferences.cropsThumbnailsToSquare)
-            Toggle("Always Show Timeline", isOn: $preferences.alwaysShowsTimeline)
-            Divider()
-            Button("Select Left") { model.performBrowserCommand(.move(.left, extending: false)) }
-                .keyboardShortcut(.leftArrow, modifiers: [])
-                .disabled(!model.browserCommandsActive)
-            Button("Select Right") { model.performBrowserCommand(.move(.right, extending: false)) }
-                .keyboardShortcut(.rightArrow, modifiers: [])
-                .disabled(!model.browserCommandsActive)
-            Button("Select Up") { model.performBrowserCommand(.move(.up, extending: false)) }
-                .keyboardShortcut(.upArrow, modifiers: [])
-                .disabled(!model.browserCommandsActive)
-            Button("Select Down") { model.performBrowserCommand(.move(.down, extending: false)) }
-                .keyboardShortcut(.downArrow, modifiers: [])
-                .disabled(!model.browserCommandsActive)
-            Button("Extend Selection Left") { model.performBrowserCommand(.move(.left, extending: true)) }
-                .keyboardShortcut(.leftArrow, modifiers: [.shift])
-                .disabled(!model.browserCommandsActive)
-            Button("Extend Selection Right") { model.performBrowserCommand(.move(.right, extending: true)) }
-                .keyboardShortcut(.rightArrow, modifiers: [.shift])
-                .disabled(!model.browserCommandsActive)
-            Button("Extend Selection Up") { model.performBrowserCommand(.move(.up, extending: true)) }
-                .keyboardShortcut(.upArrow, modifiers: [.shift])
-                .disabled(!model.browserCommandsActive)
-            Button("Extend Selection Down") { model.performBrowserCommand(.move(.down, extending: true)) }
-                .keyboardShortcut(.downArrow, modifiers: [.shift])
-                .disabled(!model.browserCommandsActive)
-            Button("Select All") { model.performBrowserCommand(.selectAll) }
-                .keyboardShortcut("a", modifiers: [.command])
-                .disabled(!model.browserCommandsActive)
-            Button(model.canCloseViewer ? "Close Viewer" : "Open Selected Photo") {
+        CommandMenu("Photo") {
+            Button(model.canCloseViewer ? "Close Viewer" : "Open") {
                 if model.canCloseViewer { model.closeViewer() }
                 else { model.performBrowserCommand(.openSelected) }
             }
-                .keyboardShortcut(.space, modifiers: [])
-                .disabled(!model.canCloseViewer && !model.canOpenSelectedPhoto)
+            .keyboardShortcut(.space, modifiers: [])
+            .disabled(!model.canCloseViewer && !model.canOpenSelectedPhoto)
             Divider()
-            Button("New Album…") { model.beginAlbumOperation(.create) }
-                .disabled(!model.canManageAlbumSelection)
-            Button("Add to Album…") { model.beginAlbumOperation(.add) }
-                .disabled(!model.canManageAlbumSelection)
-            if model.canRemoveAlbumSelection {
-                Button("Remove from Album") { model.beginAlbumOperation(.remove) }
-            }
-            Divider()
-            Button("Delete…") { model.beginItemDeletion() }
-                .keyboardShortcut(.delete, modifiers: [.command])
-                .disabled(!model.canDeleteSelection)
-            Divider()
-            Button("Toggle Favorite") { model.toggleSelectionFavorite() }
+            Button("Favorite or Unfavorite") { model.toggleSelectionFavorite() }
                 .keyboardShortcut(".", modifiers: [])
                 .disabled(!model.canToggleFavorite)
             Menu("Rating") {
@@ -401,25 +377,41 @@ struct LibraryCommands: Commands {
             Button("Remove Tag…") { model.promptRemoveTag() }
                 .disabled(!model.canRemoveTag)
             Divider()
-            Button(infoPanel.isVisible ? "Hide Info" : "Show Info") {
-                if infoPanel.isVisible {
-                    dismissWindow(id: InfoPanelScene.id)
-                } else {
-                    openWindow(id: InfoPanelScene.id)
-                }
-            }
-            .keyboardShortcut("i", modifiers: [.command])
+            Button("Add to Album…") { model.beginAlbumOperation(.add) }
+                .disabled(!model.canManageAlbumSelection)
+            Button("Remove from Album…") { model.beginAlbumOperation(.remove) }
+                .disabled(!model.canRemoveAlbumSelection)
+            Divider()
+            Button("Rotate Left") { model.rotateSelection(.counterClockwise) }
+                .disabled(!model.canRotate)
+            Button("Rotate Right") { model.rotateSelection(.clockwise) }
+                .disabled(!model.canRotate)
+        }
+        CommandMenu("Library") {
+            Button("Refresh from NAS") { Task { await model.refresh() } }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(model.isRefreshing || model.isLoading)
+            Divider()
+            Button("New Album…") { model.beginAlbumOperation(.create) }
+                .disabled(!model.canManageAlbumSelection)
             Divider()
             Button("Download Thumbnails…") { openWindow(id: "thumbnail-download") }
                 .disabled(model.snapshot(for: .library(.personal))?.timeline.days.isEmpty != false || model.repository == nil ||
                           !model.timelineVerified(for: .library(.personal)))
-            Divider()
-            Button("Load All Timeline Sections") {
+            Button("Load All Timeline Sections…") {
                 if timelineSectionLoad.prepare() {
                     openWindow(id: "timeline-section-load")
                 }
             }
             .disabled(!timelineSectionLoad.canPresent)
+            Divider()
+            Menu("Thumbnail Maintenance") {
+                Button("Rotate Thumbnail Previews Left") { model.rotateThumbnailPreviews(.counterClockwise) }
+                Button("Rotate Thumbnail Previews Right") { model.rotateThumbnailPreviews(.clockwise) }
+                Divider()
+                Button("Fix Thumbnail Rotations") { model.fixThumbnailRotations() }
+            }
+            .disabled(!model.canRotateThumbnails || model.thumbnailRotationProgress != nil)
         }
     }
 }

@@ -1,3 +1,4 @@
+import SynologyAPI
 import AppKit
 import PhotoCache
 import SwiftUI
@@ -53,6 +54,11 @@ extension LibraryModel {
             return .failed(label: "Login failed", detail: message)
         case .unreachable(let message):
             return .failed(label: "NAS unreachable", detail: message)
+        case .needsSignIn(let message):
+            return .failed(label: "Sign-in required", detail: message)
+        case .untrustedCertificate:
+            return .failed(label: "Certificate not trusted",
+                           detail: SynologyAPIError.untrustedCertificate(sha256: "").localizedDescription)
         }
     }
 }

@@ -20,7 +20,7 @@ final class SelectionFavoritesTests: XCTestCase {
         transport: SelectionFavoritesMockTransport,
         root: URL
     ) throws -> CachedPhotosRepository {
-        let creds = SynologyCredentials(username: "alice", password: "pw", otpSecret: "unused")
+        let creds = SynologyCredentials(username: "alice", password: "pw")
         return try CachedPhotosRepository(credentials: creds, budget: 100_000_000, cacheRoot: root, transport: transport)
     }
 

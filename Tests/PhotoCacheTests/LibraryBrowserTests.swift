@@ -93,7 +93,7 @@ fileprivate actor FakeTransport: TestPhotosTransport {
 
 class LibraryBrowserTestCase: XCTestCase {
     fileprivate let server = URL(string: "https://example.invalid")!
-    fileprivate let credentials = SynologyCredentials(username: "test", password: "unused", otpSecret: "unused")
+    fileprivate let credentials = SynologyCredentials(username: "test", password: "unused")
 
     fileprivate func section(_ day: Int, offset: Int = 0, limit: Int = 1, count: Int = 1) -> TimelineSection {
         TimelineSection(offset: offset, limit: limit,

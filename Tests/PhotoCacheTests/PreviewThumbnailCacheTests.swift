@@ -25,7 +25,7 @@ private func consumePreviewStream(_ stream: AsyncStream<ResourceEvent<Data>>) as
 }
 
 final class PreviewThumbnailCacheTests: XCTestCase {
-    private let credentials = SynologyCredentials(username: "preview", password: "unused", otpSecret: "unused")
+    private let credentials = SynologyCredentials(username: "preview", password: "unused")
     private let server = URL(string: "https://preview.example.invalid")!
 
     private func root() -> URL { temporaryTestRoot("SynoPreviewCache") }

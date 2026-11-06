@@ -35,8 +35,16 @@ private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelega
 public actor SynologyClient: PhotosTransport {
     private let baseURL: URL
     private let session: URLSession
+    private let trustDelegate: CirrusTrustDelegate?
     private var sid: String?
     private var synoToken: String?
+    /// Credentials that renew an expired session without user input; nil until signed in
+    /// and after logout. A typed code is replaced by the trusted-device token it earned.
+    private var renewal: SynologyCredentials?
+    private var renewalTask: Task<Void, Error>?
+    private var renewalFailureHandler: (@Sendable (SynologyAPIError) -> Void)?
+    /// Increments with every new session, so concurrent expiries renew only once.
+    private var sessionGeneration = 0
 
     public func uploadPhoto(at url: URL, destination: PhotoUploadDestination,
                             progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoUploadResult {
@@ -127,10 +135,10 @@ public actor SynologyClient: PhotosTransport {
         guard let serverURL = credentials.serverURL else {
             throw SynologyAPIError.configuration("The credentials do not name a NAS URL.")
         }
-        self.init(baseURL: serverURL)
+        self.init(baseURL: serverURL, trust: credentials.serverTrust)
     }
 
-    public init(baseURL: URL) {
+    public init(baseURL: URL, trust: ServerTrust = .system) {
         self.baseURL = baseURL
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = HTTPCookieStorage()
@@ -139,26 +147,78 @@ public actor SynologyClient: PhotosTransport {
         // Request timeouts are inactivity timeouts and reset as data moves. Keep a
         // generous absolute cap so large originals are not killed while progressing.
         configuration.timeoutIntervalForResource = 24 * 60 * 60
-        let delegate = CirrusTrustDelegate(allowedHost: baseURL.host ?? "")
+        let delegate = CirrusTrustDelegate(allowedHost: baseURL.host ?? "", trust: trust)
+        self.trustDelegate = delegate
         self.session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
     }
 
     init(baseURL: URL, session: URLSession) {
         self.baseURL = baseURL
         self.session = session
+        self.trustDelegate = nil
     }
 
     public func login(credentials: SynologyCredentials) async throws {
+        try await signIn(credentials)
+    }
+
+    /// Signs in and keeps what is needed to renew the session when DSM expires it.
+    /// The returned device token lets later logins skip the code.
+    @discardableResult
+    public func signIn(_ credentials: SynologyCredentials) async throws -> SignInResult {
+        let result = try await authenticate(credentials)
+        if case .code = credentials.secondFactor, let token = result.deviceToken {
+            renewal = SynologyCredentials(username: credentials.username, password: credentials.password,
+                                          secondFactor: .deviceToken(token), serverURL: credentials.serverURL,
+                                          serverTrust: credentials.serverTrust)
+        } else if case .code = credentials.secondFactor {
+            renewal = nil
+        } else {
+            renewal = credentials
+        }
+        return result
+    }
+
+    public func onSessionRenewalFailure(_ handler: @escaping @Sendable (SynologyAPIError) -> Void) async {
+        renewalFailureHandler = handler
+    }
+
+    /// Ends the DSM session. Failures are ignored: the session expires on its own.
+    public func logout() async {
+        renewal = nil
+        renewalTask?.cancel()
+        renewalTask = nil
+        guard let sid else { return }
+        let _: APIEnvelope<EmptyData>? = try? await post(
+            path: "/webapi/entry.cgi",
+            parameters: ["api": "SYNO.API.Auth", "version": "6", "method": "logout", "session": "webui", "_sid": sid],
+            authenticated: true)
+        self.sid = nil
+        synoToken = nil
+    }
+
+    static let deviceName = "Cirrus Photos"
+
+    private func authenticate(_ credentials: SynologyCredentials) async throws -> SignInResult {
         for attempt in 0...1 {
             var parameters = [
                 "api": "SYNO.API.Auth", "version": "6", "method": "login",
                 "account": credentials.username, "passwd": credentials.password,
                 "session": "webui", "format": "sid",
                 "enable_syno_token": "yes", "enable_device_token": "no",
-                "device_name": "SynoTimeline"
+                "device_name": Self.deviceName
             ]
-            if let secret = credentials.otpSecret {
+            switch credentials.secondFactor {
+            case .none:
+                break
+            case .totpSecret(let secret):
                 parameters["otp_code"] = try TOTP.generate(secret: secret)
+            case .code(let code):
+                parameters["otp_code"] = code
+                parameters["enable_device_token"] = "yes"
+            case .deviceToken(let token):
+                parameters["device_id"] = token
+                parameters["enable_device_token"] = "yes"
             }
             let response: APIEnvelope<LoginData> = try await post(
                 path: "/webapi/entry.cgi",
@@ -167,20 +227,41 @@ public actor SynologyClient: PhotosTransport {
             if response.success, let data = response.data {
                 sid = data.sid
                 synoToken = data.synoToken
-                return
+                sessionGeneration &+= 1
+                return SignInResult(deviceToken: data.did.flatMap { $0.isEmpty ? nil : $0 })
             }
             let code = response.error?.code ?? -1
-            if credentials.otpSecret == nil, [403, 404, 406].contains(code) {
-                throw SynologyAPIError.configuration(
-                    "The NAS requires two-factor authentication for this account. Set OTP in .env to its base32 secret or otpauth URL."
-                )
-            }
-            guard credentials.otpSecret != nil, attempt == 0, code == 403 || code == 404 else {
+            switch (credentials.secondFactor, code) {
+            case (.none, 403), (.deviceToken, 403):
+                // No code, or DSM no longer trusts this device.
+                throw SynologyAPIError.secondFactorRequired
+            case (.totpSecret, 403), (.totpSecret, 404) where attempt == 0:
+                // DSM rejects a TOTP already used by a previous session. Retry once with a fresh window.
+                let remainder = Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 30)
+                try await Task.sleep(for: .seconds(31 - remainder))
+            default:
                 throw SynologyAPIError.api(code)
             }
-            // DSM rejects a TOTP already used by a previous session. Retry once with a fresh window.
-            let remainder = Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 30)
-            try await Task.sleep(for: .seconds(31 - remainder))
+        }
+        throw SynologyAPIError.api(404)
+    }
+
+    /// Renews an expired session once for all requests that saw it expire.
+    private func renewSession(expiredGeneration: Int) async throws {
+        guard sessionGeneration == expiredGeneration else { return }
+        if let renewalTask { return try await renewalTask.value }
+        guard let renewal else { throw SynologyAPIError.api(119) }
+        let task = Task { _ = try await self.authenticate(renewal) }
+        renewalTask = task
+        defer { renewalTask = nil }
+        do {
+            try await task.value
+            SynologyDiagnostics.authentication.info("Renewed an expired DSM session")
+        } catch let error as SynologyAPIError {
+            if case .transport = error { throw error }
+            self.renewal = nil
+            renewalFailureHandler?(error)
+            throw error
         }
     }
 
@@ -1152,7 +1233,7 @@ public actor SynologyClient: PhotosTransport {
         let data: Data
         let response: URLResponse
         do { (data, response) = try await session.data(for: request) }
-        catch { throw SynologyAPIError.transport(error.localizedDescription) }
+        catch { throw transportError(error) }
         guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else { throw SynologyAPIError.http(http.statusCode) }
         do { return try decoder.decode(Response.self, from: data) }
@@ -1181,7 +1262,7 @@ public actor SynologyClient: PhotosTransport {
         let response: URLResponse
         do { (bytes, response) = try await session.bytes(for: request) }
         catch is CancellationError { throw CancellationError() }
-        catch { throw SynologyAPIError.transport(error.localizedDescription) }
+        catch { throw transportError(error) }
         guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else { throw SynologyAPIError.http(http.statusCode) }
         if let expected = http.value(forHTTPHeaderField: "Content-Length").flatMap(Int.init),
@@ -1217,6 +1298,14 @@ public actor SynologyClient: PhotosTransport {
         String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
     }
 
+    /// A refused certificate becomes `untrustedCertificate`, everything else `transport`.
+    private func transportError(_ error: Error) -> SynologyAPIError {
+        if let fingerprint = trustDelegate?.takeRejectedFingerprint() {
+            return .untrustedCertificate(sha256: fingerprint)
+        }
+        return .transport(error.localizedDescription)
+    }
+
     /// The current session for transfers that cannot use `request`, such as uploads and media.
     private func sessionID() throws -> String {
         guard let sid else { throw SynologyAPIError.api(119) }
@@ -1227,6 +1316,17 @@ public actor SynologyClient: PhotosTransport {
     /// Every JSON Web API call passes through here, so session state has one owner.
     private func request<Value: Decodable>(_ api: String, version: Int, method: String, _ parameters: [String: String] = [:],
                                            decoder: JSONDecoder = JSONDecoder(), maximumBytes: Int? = nil) async throws -> APIEnvelope<Value> {
+        let generation = sessionGeneration
+        let response: APIEnvelope<Value> = try await send(api, version: version, method: method, parameters,
+                                                          decoder: decoder, maximumBytes: maximumBytes)
+        guard !response.success, let code = response.error?.code,
+              SynologyAPIError.sessionCodes.contains(code), renewal != nil else { return response }
+        try await renewSession(expiredGeneration: generation)
+        return try await send(api, version: version, method: method, parameters, decoder: decoder, maximumBytes: maximumBytes)
+    }
+
+    private func send<Value: Decodable>(_ api: String, version: Int, method: String, _ parameters: [String: String],
+                                        decoder: JSONDecoder, maximumBytes: Int?) async throws -> APIEnvelope<Value> {
         let sid = try sessionID()
         let form = parameters.merging(["api": api, "version": String(version), "method": method, "_sid": sid]) { _, new in new }
         let path = "/webapi/entry.cgi/" + api

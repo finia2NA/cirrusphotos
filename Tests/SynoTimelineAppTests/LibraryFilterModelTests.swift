@@ -64,7 +64,7 @@ final class LibraryFilterModelTests: XCTestCase {
             snapshot: TimelineSnapshot(sections: sections), pages: [0: [video], 1: [photo]], delay: .milliseconds(100)
         )
         let repository = try CachedPhotosRepository(
-            credentials: .init(username: "filter-model", password: "unused", otpSecret: "unused"),
+            credentials: .init(username: "filter-model", password: "unused"),
             baseURL: URL(string: "https://filter-model.example.invalid")!, cacheRoot: root,
             transport: transport
         )
@@ -132,7 +132,7 @@ final class LibraryFilterModelTests: XCTestCase {
         let transport = FilterModelTransport(snapshot: .init(sections: [section]),
                                              pages: [0: [video]], delay: .zero)
         let repository = try CachedPhotosRepository(
-            credentials: .init(username: "filter-reset", password: "unused", otpSecret: "unused"),
+            credentials: .init(username: "filter-reset", password: "unused"),
             cacheRoot: root, transport: transport)
         let library = LibraryModel(repository: repository)
         await library.load()

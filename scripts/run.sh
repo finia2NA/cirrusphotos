@@ -22,12 +22,16 @@ xcrun actool --compile "$app_bundle/Contents/Resources" \
     --platform macosx --minimum-deployment-target 27.0 \
     --app-icon AppIcon --output-partial-info-plist "$PWD/.build/AppIcon-Info.plist" \
     Resources/AppIcon.icon >/dev/null
-# The NAS host comes from NAS_URL in .env (read only for that key; nothing is printed).
-nas_url="$(sed -n 's/^NAS_URL=//p' .env | head -1 | tr -d "\"'")"
-nas_host="${nas_url#*://}"; nas_host="${nas_host%%[:/]*}"
-if [[ -z "$nas_host" ]]; then
-    echo "NAS_URL is missing or invalid in .env (see .env.example)." >&2
-    exit 1
+# The .env NAS host gets an ATS exception (read only for that key; nothing is printed).
+# Without .env the app signs in from its own window over HTTPS and needs no exception.
+nas_host=localhost
+if [[ -f .env ]]; then
+    nas_url="$(sed -n 's/^NAS_URL=//p' .env | head -1 | tr -d "\"'")"
+    nas_host="${nas_url#*://}"; nas_host="${nas_host%%[:/]*}"
+    if [[ -z "$nas_host" ]]; then
+        echo "NAS_URL is missing or invalid in .env (see .env.example)." >&2
+        exit 1
+    fi
 fi
 sed "s/__NAS_HOST__/$nas_host/" scripts/App-Info.plist > "$app_bundle/Contents/Info.plist"
 codesign --force --deep --sign - "$app_bundle"

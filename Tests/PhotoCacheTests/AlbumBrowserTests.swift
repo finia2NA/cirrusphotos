@@ -242,7 +242,7 @@ private actor AlbumFakeTransport: TestPhotosTransport {
 
 final class AlbumBrowserTests: XCTestCase {
     private let server = URL(string: "https://example.invalid")!
-    private let credentials = SynologyCredentials(username: "test", password: "unused", otpSecret: "unused")
+    private let credentials = SynologyCredentials(username: "test", password: "unused")
 
     private func root() -> URL { temporaryTestRoot("SynoAlbumTest") }
 

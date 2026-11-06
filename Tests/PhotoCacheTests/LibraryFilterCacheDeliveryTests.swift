@@ -22,7 +22,7 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         let root = temporaryTestRoot("AuditOrdinaryPage")
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = AuditBlockedTransport(snapshot: .init(sections: [section]), items: [try photo()])
-        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw", otpSecret: "unused"), cacheRoot: root, transport: transport)
+        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw"), cacheRoot: root, transport: transport)
         try await seed(repository)
         let values = AuditValues()
         let reading = Task { [section] in
@@ -42,7 +42,7 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         let root = temporaryTestRoot("AuditFilteredPage")
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = AuditBlockedTransport(snapshot: .init(sections: [section]), items: [try photo()])
-        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw", otpSecret: "unused"), cacheRoot: root, transport: transport)
+        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw"), cacheRoot: root, transport: transport)
         for await _ in await repository.timeline(collection: .library(.personal)) {}
         try await seed(repository)
         let descriptor = PhotoCollectionDescriptor.libraryFilter(UUID(), scope: .space(.personal))
@@ -93,7 +93,7 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let snapshot = TimelineSnapshot(sections: [section])
         let transport = AuditBlockedTransport(snapshot: snapshot, items: [try photo()])
-        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw", otpSecret: "unused"), cacheRoot: root, transport: transport)
+        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw"), cacheRoot: root, transport: transport)
         let controller = LibraryFilterController(repository: repository, snapshot: snapshot, sourceCollection: .library(.personal))
         await controller.indexCachedPages()
         // Direct store seeding bypasses repository page notifications.
@@ -116,7 +116,7 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let snapshot = TimelineSnapshot(sections: [section])
         let transport = AuditBlockedTransport(snapshot: snapshot, items: [try photo()])
-        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw", otpSecret: "unused"), cacheRoot: root, transport: transport)
+        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw"), cacheRoot: root, transport: transport)
         let controller = LibraryFilterController(repository: repository, snapshot: snapshot, sourceCollection: .library(.personal))
         _ = await controller.apply(LibraryFilter(cameras: ["Audit Camera"]))
         let values = AuditFilterEvents()
@@ -162,7 +162,7 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         let root = temporaryTestRoot("FilterValidationFailure")
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = AuditBlockedTransport(snapshot: .init(sections: [section]), items: [], failAfterRelease: true)
-        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw", otpSecret: "unused"), cacheRoot: root, transport: transport)
+        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw"), cacheRoot: root, transport: transport)
         for await _ in await repository.timeline(collection: .library(.personal)) {}
         try await seed(repository)
         let descriptor = PhotoCollectionDescriptor.libraryFilter(UUID(), scope: .space(.personal))
@@ -197,7 +197,7 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
         let root = temporaryTestRoot("FilterLateValidation")
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = AuditBlockedTransport(snapshot: .init(sections: [section]), items: [try photo()])
-        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw", otpSecret: "unused"), cacheRoot: root, transport: transport)
+        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw"), cacheRoot: root, transport: transport)
         for await _ in await repository.timeline(collection: .library(.personal)) {}
         try await seed(repository)
         let descriptor = PhotoCollectionDescriptor.libraryFilter(UUID(), scope: .space(.personal))
@@ -234,7 +234,7 @@ final class LibraryFilterCacheDeliveryTests: XCTestCase {
                 list: [TimelineDay(year: 2024, month: 4, day: day, itemCount: 1)])
         }
         let transport = AuditBlockedTransport(snapshot: .init(sections: sections), items: [])
-        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw", otpSecret: "unused"), cacheRoot: root, transport: transport)
+        let repository = try CachedPhotosRepository(credentials: .init(username: "audit", password: "pw"), cacheRoot: root, transport: transport)
         let observation = await repository.observeCollectionPages(collection: .library(.personal), sections: Set(sections))
         await repository.publishCollectionPagesForTests(sections)
         let pending = await repository.takeCollectionPageChanges(observation.id)

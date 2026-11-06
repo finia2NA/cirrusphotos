@@ -119,7 +119,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         let preview = try previewData()
         let transport = PresentationTransport(preview: preview)
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            credentials: SynologyCredentials(username: "test", password: "unused"),
             baseURL: URL(string: "https://presentation.example.invalid")!, cacheRoot: root, transport: transport)
         let items = try [item(1), item(2)]
         let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 2,
@@ -157,7 +157,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         await transport.setPreview(nextPreview, for: 2)
         await transport.releaseThumbnail(2)
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            credentials: SynologyCredentials(username: "test", password: "unused"),
             baseURL: URL(string: "https://instant-navigation.example.invalid")!, cacheRoot: root,
             transport: transport)
         let items = try [item(1), item(2)]
@@ -204,7 +204,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
             preview: try previewData(width: 12, height: 8),
             original: try previewData(width: 30, height: 20))
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            credentials: SynologyCredentials(username: "test", password: "unused"),
             baseURL: URL(string: "https://neighbor-preview.example.invalid")!, cacheRoot: root,
             transport: transport)
         let items = try [item(1), item(2)]
@@ -241,7 +241,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         let transport = PresentationTransport(preview: firstPreview)
         await transport.setPreview(nextPreview, for: 2)
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            credentials: SynologyCredentials(username: "test", password: "unused"),
             baseURL: URL(string: "https://late-neighbor.example.invalid")!, cacheRoot: root,
             transport: transport)
         let items = try [item(1), item(2)]
@@ -279,7 +279,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
             configuredThumbnail: clicked, preview: preview, original: original
         )
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            credentials: SynologyCredentials(username: "test", password: "unused"),
             baseURL: URL(string: "https://progressive.example.invalid")!, cacheRoot: root, transport: transport)
         let selected = try item(1)
         let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 1,
@@ -331,7 +331,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
             preview: try previewData(width: 12, height: 8),
             original: try previewData(width: 30, height: 20))
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            credentials: SynologyCredentials(username: "test", password: "unused"),
             baseURL: URL(string: "https://late-configured.example.invalid")!, cacheRoot: root,
             transport: transport)
         let selected = try item(1)
@@ -368,7 +368,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
             preview: try previewData(width: 12, height: 8),
             original: try previewData(width: 30, height: 20))
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            credentials: SynologyCredentials(username: "test", password: "unused"),
             baseURL: URL(string: "https://late-preview.example.invalid")!, cacheRoot: root, transport: transport)
         let selected = try item(1)
         let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 1,
@@ -420,7 +420,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let preview = try previewData()
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            credentials: SynologyCredentials(username: "test", password: "unused"),
             baseURL: URL(string: "https://presentation.example.invalid")!, cacheRoot: root,
             transport: PresentationTransport(preview: preview))
         let favored = try item(7, favorite: true)
@@ -447,7 +447,7 @@ final class LibraryModelTests: PhotoViewerPresentationTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = PresentationTransport(preview: try previewData())
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            credentials: SynologyCredentials(username: "test", password: "unused"),
             baseURL: URL(string: "https://model.example.invalid")!, cacheRoot: root,
             transport: transport)
         let model = LibraryModel(repository: repository)
@@ -482,7 +482,7 @@ final class LibraryModelTests: PhotoViewerPresentationTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let transport = PresentationTransport(preview: try previewData())
         let repository = try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "test", password: "unused", otpSecret: "unused"),
+            credentials: SynologyCredentials(username: "test", password: "unused"),
             baseURL: URL(string: "https://model.example.invalid")!, cacheRoot: root,
             transport: transport)
         let model = LibraryModel(repository: repository)

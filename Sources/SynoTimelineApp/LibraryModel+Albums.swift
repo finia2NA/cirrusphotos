@@ -127,9 +127,8 @@ extension LibraryModel {
                     guard !Task.isCancelled, self.albumOperation?.id == operation.id else { return }
                     self.albumOperation?.albums = albums
                 } catch {
-                    guard !Task.isCancelled else { return }
-                    self.albumOperation = nil
-                    self.activity.begin(.unverified(action: kind.actionName)).fail(error, operation: "Album operation")
+                    guard !Task.isCancelled, self.albumOperation?.id == operation.id else { return }
+                    self.albumOperation?.loadError = error.localizedDescription
                 }
             }
             self.albumOperation?.loading = false
@@ -294,4 +293,6 @@ struct AlbumOperation: Identifiable {
     var createsEmptyAlbum = false
     var albums: [AlbumSummary] = []
     var loading = true
+    /// Why the album list could not be read; the sheet stays open to show it.
+    var loadError: String?
 }

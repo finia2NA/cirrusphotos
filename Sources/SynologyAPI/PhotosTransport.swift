@@ -137,6 +137,8 @@ public protocol PhotosTransport: Sendable {
     func downloadIncomingPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, reference: String,
                                 progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse
     func login(credentials: SynologyCredentials) async throws
+    func logout() async
+    func onSessionRenewalFailure(_ handler: @escaping @Sendable (SynologyAPIError) -> Void) async
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult
     func readAlbumCatalogBatch(albumID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry]
@@ -203,4 +205,12 @@ public protocol PhotosTransport: Sendable {
     func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, space: PhotoSpace,
                         progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse
 
+}
+
+extension PhotosTransport {
+    /// Ends the server session. Test transports have none.
+    public func logout() async {}
+    /// Called when renewing an expired session failed for a reason other than reachability,
+    /// such as a changed password or a removed trusted device.
+    public func onSessionRenewalFailure(_ handler: @escaping @Sendable (SynologyAPIError) -> Void) async {}
 }

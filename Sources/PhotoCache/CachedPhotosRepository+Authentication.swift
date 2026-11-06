@@ -18,7 +18,7 @@ extension CachedPhotosRepository {
     /// the NAS is not: the next request starts a new attempt.
     public func retryAuthentication() {
         switch authenticationState.status {
-        case .failed, .unreachable: authenticationState.resetAttempt()
+        case .failed, .unreachable, .needsSignIn, .untrustedCertificate: authenticationState.resetAttempt()
         case .notStarted, .loggingIn, .signedIn: break
         }
     }
@@ -29,9 +29,21 @@ extension CachedPhotosRepository {
 
     func connect() async throws {
         try Task.checkCancellation()
+        if authenticationState.shutDown { throw CancellationError() }
         if authenticationState.connected { return }
-        if case .failed(let message) = authenticationState.status {
+        switch authenticationState.status {
+        case .failed(let message), .needsSignIn(let message):
             throw AuthenticationAttemptError.previousFailure(message)
+        case .untrustedCertificate(let fingerprint):
+            throw SynologyAPIError.untrustedCertificate(sha256: fingerprint)
+        case .notStarted, .loggingIn, .signedIn, .unreachable:
+            break
+        }
+        if !authenticationState.renewalHandlerInstalled {
+            authenticationState.renewalHandlerInstalled = true
+            await client.onSessionRenewalFailure { [weak self] error in
+                Task { await self?.sessionRenewalFailed(error) }
+            }
         }
         if authenticationState.task == nil {
             authenticationState.setStatus(.loggingIn)
@@ -51,13 +63,53 @@ extension CachedPhotosRepository {
                 authenticationState.attempt == attempt && !authenticationState.connected {
                 authenticationState.task = nil
                 authenticationState.attempt = nil
-                if case SynologyAPIError.transport = error {
-                    authenticationState.setStatus(.unreachable(error.localizedDescription))
-                } else {
-                    authenticationState.setStatus(.failed(error.localizedDescription))
-                }
+                authenticationState.setStatus(Self.status(after: error))
             }
             throw error
+        }
+    }
+}
+
+extension CachedPhotosRepository {
+    /// Stops all work for sign-out or an account switch: no NAS request or cache write
+    /// is admitted afterwards, running jobs are cancelled and the DSM session is ended.
+    /// Observers finish. Idempotent; a new repository serves the next account.
+    public func shutdown() async {
+        guard !authenticationState.shutDown else { return }
+        authenticationState.shutDown = true
+        authenticationState.task?.cancel()
+        authenticationState.task = nil
+        authenticationState.attempt = nil
+        authenticationState.connected = false
+        for observer in authenticationState.observers.values { observer.finish() }
+        authenticationState.observers.removeAll()
+        await stopAllWork()
+        await client.logout()
+    }
+
+    /// DSM refused to renew an expired session (for example a changed password or a
+    /// removed trusted device). Later requests stop until the user signs in again.
+    func sessionRenewalFailed(_ error: SynologyAPIError) {
+        guard !authenticationState.shutDown else { return }
+        authenticationState.connected = false
+        authenticationState.task = nil
+        authenticationState.attempt = nil
+        authenticationState.setStatus(Self.status(after: error))
+    }
+
+    static func status(after error: Error) -> AuthenticationStatus {
+        guard let error = error as? SynologyAPIError else { return .failed(error.localizedDescription) }
+        switch error {
+        case .transport:
+            return .unreachable(error.localizedDescription)
+        case .untrustedCertificate(let fingerprint):
+            return .untrustedCertificate(sha256: fingerprint)
+        case .secondFactorRequired:
+            return .needsSignIn(error.localizedDescription)
+        case .api(let code) where [400, 401, 403, 404, 408, 409, 410].contains(code):
+            return .needsSignIn(error.localizedDescription)
+        default:
+            return .failed(error.localizedDescription)
         }
     }
 }

@@ -25,7 +25,7 @@ final class TimelineSectionLoadModelTests: XCTestCase {
         let snapshot = TimelineSnapshot(sections: [section()])
         let transport = LoadModelTransport(snapshot: snapshot, item: try item(), delay: delay)
         let repository = try CachedPhotosRepository(
-            credentials: .init(username: "load-model", password: "unused", otpSecret: "unused"),
+            credentials: .init(username: "load-model", password: "unused"),
             baseURL: URL(string: "https://load-model.example.invalid")!,
             cacheRoot: root,
             transport: transport
@@ -47,7 +47,7 @@ final class TimelineSectionLoadModelTests: XCTestCase {
         let transport = LoadModelTransport(snapshot: TimelineSnapshot(sections: [section()]), item: try item(), delay: .zero)
         let session = AppSession(preferences: AppPreferences()) { _ in
             try CachedPhotosRepository(
-                credentials: .init(username: "load-model", password: "unused", otpSecret: "unused"),
+                credentials: .init(username: "load-model", password: "unused"),
                 baseURL: URL(string: "https://load-model.example.invalid")!,
                 cacheRoot: root,
                 transport: transport
@@ -78,7 +78,7 @@ final class TimelineSectionLoadModelTests: XCTestCase {
                                            delay: .milliseconds(200))
         let session = AppSession(preferences: AppPreferences()) { _ in
             try CachedPhotosRepository(
-                credentials: .init(username: "load-model", password: "unused", otpSecret: "unused"),
+                credentials: .init(username: "load-model", password: "unused"),
                 baseURL: URL(string: "https://load-model.example.invalid")!,
                 cacheRoot: root,
                 transport: transport

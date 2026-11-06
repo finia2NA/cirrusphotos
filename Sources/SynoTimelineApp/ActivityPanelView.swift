@@ -8,7 +8,7 @@ struct ActivityPanelView: View {
     @Bindable var activity: ActivityCenter
     @State private var contentHeight: CGFloat = 0
 
-    private static let minListHeight: CGFloat = 160
+    private static let minListHeight: CGFloat = 96
     private static let maxListHeight: CGFloat = 420
 
     var body: some View {
@@ -60,6 +60,8 @@ struct ActivityPanelView: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
+                // The popover would otherwise draw its first-responder ring around this button.
+                .focusEffectDisabled()
                 .help("Refresh from NAS (⌘R)")
                 .accessibilityLabel("Refresh")
             }
@@ -102,7 +104,7 @@ struct ActivityPanelView: View {
         let inProgress = activity.inProgress
         let notices = activity.notices
         if attention.isEmpty && transfers.isEmpty && inProgress.isEmpty && notices.isEmpty {
-            Text("No current activity").foregroundStyle(.secondary)
+            emptyState("No Activity", symbol: "checkmark.circle")
         }
         section("Needs Attention", attention)
         section("Transfers", transfers)
@@ -127,7 +129,7 @@ struct ActivityPanelView: View {
 
     @ViewBuilder private var historyRows: some View {
         if activity.history.isEmpty {
-            Text("No changes in this session").foregroundStyle(.secondary)
+            emptyState("No Changes in This Session", symbol: "clock")
         }
         ForEach(activity.history) { record in
             HistoryRow(record: record, activity: activity)
@@ -136,22 +138,34 @@ struct ActivityPanelView: View {
 
     // MARK: Footer
 
-    private var footer: some View {
-        HStack {
-            Spacer()
-            switch activity.selectedTab {
-            case .activity:
+    private func emptyState(_ title: String, symbol: String) -> some View {
+        Label(title, systemImage: symbol)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, minHeight: Self.minListHeight - 8)
+    }
+
+    /// Shown only when it has something to act on, so an empty panel stays compact.
+    @ViewBuilder private var footer: some View {
+        switch activity.selectedTab {
+        case .activity where activity.hasRetryableFailures || activity.hasSettledEntries:
+            HStack {
+                Spacer()
                 if activity.hasRetryableFailures {
                     Button("Retry All Failed") { activity.retryAllFailed() }
                 }
                 Button("Clear") { activity.clearActivity() }
                     .disabled(!activity.hasSettledEntries)
-            case .history:
-                Button("Clear History") { activity.clearHistory() }
-                    .disabled(activity.history.isEmpty)
             }
+            .controlSize(.small)
+        case .history where !activity.history.isEmpty:
+            HStack {
+                Spacer()
+                Button("Clear History") { activity.clearHistory() }
+            }
+            .controlSize(.small)
+        default:
+            EmptyView()
         }
-        .controlSize(.small)
     }
 }
 

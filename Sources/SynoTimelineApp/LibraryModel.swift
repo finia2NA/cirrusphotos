@@ -103,7 +103,7 @@ final class LibraryModel {
     @ObservationIgnored var favoriteConfirmationReply: CheckedContinuation<Bool, Never>?
     var authenticationFailed: Bool {
         switch authenticationStatus {
-        case .failed, .unreachable: true
+        case .failed, .unreachable, .needsSignIn, .untrustedCertificate: true
         case .notStarted, .loggingIn, .signedIn: false
         }
     }
@@ -511,6 +511,26 @@ final class LibraryModel {
     }
 
     // MARK: - Lifecycle
+
+    /// Stops observing the repository and cancels this model's work, for sign-out or an
+    /// account switch. The session's `end()` and the repository's `shutdown()` follow.
+    func end() {
+        var tasks: [Task<Void, Never>?] = [
+            itemDeletionTask, albumOperationTask, pendingCollectionAnnouncement, favoriteStateTask,
+            thumbnailRotationTask, favoriteWriteTail, albumWriteTail, authenticationTask, albumsTask,
+            incomingAlbumsTask, metadataResetTask, albumSharingObservationTask, mapFilterInvalidationTask
+        ]
+        tasks += favoriteObserverTasks.map { $0 }
+        tasks += refreshTasks.values.map { $0 }
+        tasks += collectionFetchTasks.values.map { $0 }
+        for task in tasks { task?.cancel() }
+        favoriteObserverTasks.removeAll()
+        refreshTasks.removeAll()
+        collectionFetchTasks.removeAll()
+        favoriteConfirmationReply?.resume(returning: false)
+        favoriteConfirmationReply = nil
+        session.end()
+    }
 
     func load() async {
         guard !started else { return }

@@ -59,7 +59,7 @@ private actor RangeTransport: TestPhotosTransport {
 }
 
 final class ThumbnailRangeDownloaderTests: XCTestCase {
-    private let credentials = SynologyCredentials(username: "range", password: "unused", otpSecret: "unused")
+    private let credentials = SynologyCredentials(username: "range", password: "unused")
     private let server = URL(string: "https://range.example.invalid")!
 
     private func item(_ id: Int, ready: Bool = true) throws -> PhotoItem {
@@ -101,7 +101,9 @@ final class ThumbnailRangeDownloaderTests: XCTestCase {
         XCTAssertEqual(range.estimatedThumbnailCount(in: snapshot), 5)
         XCTAssertEqual(range.dayIDs(in: snapshot), ["2024-04-03", "2024-04-02"])
 
-        let downloader = ThumbnailRangeDownloader(repository: try repository(transport: transport, root: root))
+        let clock = TestClock()
+        let downloader = ThumbnailRangeDownloader(repository: try repository(transport: transport, root: root),
+                                                  now: { clock.tick() })
         let first = await downloader.download(snapshot: snapshot, range: range, size: .m, collection: .library(.personal)) { _ in }
         XCTAssertEqual(first.estimated, 5)
         XCTAssertEqual(first.processed, 5)
@@ -121,7 +123,7 @@ final class ThumbnailRangeDownloaderTests: XCTestCase {
         // A new repository has a new validation run. Manual warming should still reuse the
         // indexed exact files without issuing conditional requests for all of them.
         let secondDownloader = ThumbnailRangeDownloader(
-            repository: try repository(transport: transport, root: root))
+            repository: try repository(transport: transport, root: root), now: { clock.tick() })
         let second = await secondDownloader.download(snapshot: snapshot, range: range, size: .m, collection: .library(.personal)) { _ in }
         XCTAssertEqual(second.estimated, 5)
         XCTAssertEqual(second.processed, 5)
@@ -134,22 +136,37 @@ final class ThumbnailRangeDownloaderTests: XCTestCase {
         XCTAssertNil(second.averageDownloadedThumbnailBytes)
         XCTAssertNil(second.estimatedDownloadBytes)
         XCTAssertNil(second.bytesPerSecond)
-        XCTAssertNil(second.estimatedRemainingSeconds)
+        XCTAssertEqual(second.estimatedRemainingSeconds, 0)
         let secondCalls = await transport.thumbnailCalls
         XCTAssertEqual(secondCalls, 4)
     }
 
-    func testRunMetricsProjectSizeSpeedAndRemainingTime() {
-        var summary = ThumbnailBatchSummary(estimated: 10)
-        summary.processed = 4
-        summary.downloadedThumbnails = 2
-        summary.downloadedBytes = 1_000
-        summary.downloadElapsedSeconds = 2
+    func testRunMetricsProjectWholeRunAverages() {
+        var summary = ThumbnailBatchSummary(estimated: 100)
+        summary.processed = 20
+        summary.downloadedThumbnails = 10
+        summary.downloadedBytes = 10_000
+        summary.elapsedSeconds = 4
 
-        XCTAssertEqual(summary.averageDownloadedThumbnailBytes, 500)
-        XCTAssertEqual(summary.estimatedDownloadBytes, 4_000)
-        XCTAssertEqual(summary.bytesPerSecond, 500)
-        XCTAssertEqual(summary.estimatedRemainingSeconds, 6)
+        // Half of the processed items were cache hits, so 1,000 bytes per downloaded
+        // thumbnail projects 500 bytes per remaining item.
+        XCTAssertEqual(summary.averageDownloadedThumbnailBytes, 1_000)
+        XCTAssertEqual(summary.estimatedDownloadBytes, 50_000)
+        XCTAssertEqual(summary.bytesPerSecond, 2_500)
+        XCTAssertEqual(summary.estimatedRemainingSeconds, 16)
+    }
+
+    func testRunMetricsWaitForMinimumSample() {
+        var summary = ThumbnailBatchSummary(estimated: 100)
+        summary.processed = ThumbnailBatchSummary.minimumSample - 1
+        summary.downloadedThumbnails = 1
+        summary.downloadedBytes = 1_000
+        summary.elapsedSeconds = 1
+
+        XCTAssertEqual(summary.averageDownloadedThumbnailBytes, 1_000)
+        XCTAssertNil(summary.estimatedDownloadBytes)
+        XCTAssertNil(summary.bytesPerSecond)
+        XCTAssertNil(summary.estimatedRemainingSeconds)
     }
 
     func testChronologicalSliderMapsOldestLeftAndNewestRight() {
@@ -215,4 +232,11 @@ final class ThumbnailRangeDownloaderTests: XCTestCase {
         let thumbnailCalls = await transport.thumbnailCalls
         XCTAssertEqual(thumbnailCalls, 0)
     }
+}
+
+/// Advances one second per reading so elapsed time is deterministic and positive.
+private final class TestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: TimeInterval = 0
+    func tick() -> TimeInterval { lock.withLock { value += 1; return value } }
 }

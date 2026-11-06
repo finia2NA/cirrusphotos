@@ -59,7 +59,7 @@ private actor FullImageTransport: TestPhotosTransport {
 }
 
 final class FullImageRepositoryTests: XCTestCase {
-    private let credentials = SynologyCredentials(username: "full-image", password: "unused", otpSecret: "unused")
+    private let credentials = SynologyCredentials(username: "full-image", password: "unused")
     private let server = URL(string: "https://full-image.example.invalid")!
 
     private func root() -> URL { temporaryTestRoot("SynoFullImageTest") }

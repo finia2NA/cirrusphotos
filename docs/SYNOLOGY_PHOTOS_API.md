@@ -268,7 +268,13 @@ The official DSM flow is:
 
 A read-only authentication comparison on 2026-10-25 with the disposable non-admin test account found that `SYNO.API.Auth.login` v6 rejected `session=SynologyPhotos` with error 402 but accepted `session=webui` with otherwise identical parameters. With the latter session, Personal initial/full timelines and the Favorites timeline all succeeded. The captured web client also uses `session=webui` for Auth resume. The native client and login probe therefore use `webui`; the probe logs out the same named session. Error 402 alone must not be described as proof that Photos application permission is missing.
 
-For TOTP accounts, the current six-digit value is passed as `otp_code`. The login probe in `scripts/test_synology_login.py` implements this flow without persisting a trusted-device token.
+For TOTP accounts, the current six-digit value is passed as `otp_code`. Login probes on 2026-11-06 (non-OTP test account and a TOTP account, `SYNO.API.Auth` v6, `session=webui`) established:
+
+- **Second factor.** A TOTP account without `otp_code` fails with 403 and `error.errors = {token, types: [{type: "otp"}]}`. A correct code succeeds.
+- **Trusted device.** Every successful v6 login returns `data.did` (86 characters), even with `enable_device_token=no` and for accounts without two-factor. After a login with `otp_code` and `enable_device_token=yes`, a later login with `device_id=<did>` and no code succeeds. `device_name` need not match and `enable_device_token` may be omitted. An unknown `device_id` falls back to 403. v7 returns the token as `device_id` (with `account` and `ik_message`) instead of `did`.
+- **Sessions.** A session is bound to `sid` plus `SynoToken`, not to the connection. A fresh client succeeds with `_sid` or cookie `id=<sid>` together with `X-SYNO-TOKEN`; either without the token fails with 119. Two `webui` sessions of one account coexist. After logout, and for a missing or unknown `sid`, Photos calls fail with 119.
+
+Wrong codes (404) and wrong passwords (400) were not probed, because failed attempts count toward DSM's IP auto-block.
 
 On 2026-10-02, `cirrus` advertised:
 

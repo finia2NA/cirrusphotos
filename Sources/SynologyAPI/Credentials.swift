@@ -1,24 +1,53 @@
 import CryptoKit
 import Foundation
 
+/// How a login proves the second factor, if the account has one.
+public enum SecondFactor: Sendable, Equatable {
+    case none
+    /// A base32 TOTP secret or otpauth URL from `.env`; a code is generated per login.
+    case totpSecret(String)
+    /// A six-digit code typed by the user. The login asks DSM to trust this device.
+    case code(String)
+    /// The DSM trusted-device token (`did`) from an earlier login with a code.
+    case deviceToken(String)
+}
+
+/// Which server certificates a client accepts.
+public enum ServerTrust: Sendable, Equatable {
+    /// Normal system validation.
+    case system
+    /// System validation, or else exactly this leaf certificate (SHA-256 of its DER bytes, hex),
+    /// which the user accepted for a NAS whose certificate macOS cannot verify.
+    case pinned(sha256: String)
+}
+
 public struct SynologyCredentials: Sendable {
     public let username: String
     public let password: String
-    public let otpSecret: String?
-    /// The NAS base URL from `.env`; nil only for credentials built outside the loader.
+    public let secondFactor: SecondFactor
+    /// The NAS base URL; nil only for credentials built outside the loaders.
     public let serverURL: URL?
+    public let serverTrust: ServerTrust
 
-    public init(username: String, password: String, otpSecret: String? = nil, serverURL: URL? = nil) {
+    public init(username: String, password: String, secondFactor: SecondFactor = .none,
+                serverURL: URL? = nil, serverTrust: ServerTrust = .system) {
         self.username = username
         self.password = password
         self.serverURL = serverURL
-        let trimmed = otpSecret?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.otpSecret = trimmed?.isEmpty == false ? trimmed : nil
+        self.serverTrust = serverTrust
+        if case .totpSecret(let secret) = secondFactor {
+            let trimmed = secret.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.secondFactor = trimmed.isEmpty ? .none : .totpSecret(trimmed)
+        } else {
+            self.secondFactor = secondFactor
+        }
     }
 }
 
 public enum CredentialStore {
-    public static func load() throws -> SynologyCredentials {
+    /// The `.env` file beside the project or app build, if one exists. Its presence selects
+    /// development credentials over the accounts signed in from the app.
+    public static func environmentFile() -> URL? {
         let fileManager = FileManager.default
         let workingDirectory = URL(fileURLWithPath: fileManager.currentDirectoryPath)
         let bundleParent = Bundle.main.bundleURL.deletingLastPathComponent()
@@ -28,7 +57,11 @@ public enum CredentialStore {
             bundleParent.deletingLastPathComponent().appendingPathComponent(".env")
         ]
 
-        guard let url = candidates.first(where: { fileManager.fileExists(atPath: $0.path) }) else {
+        return candidates.first(where: { fileManager.fileExists(atPath: $0.path) })
+    }
+
+    public static func load() throws -> SynologyCredentials {
+        guard let url = environmentFile() else {
             throw SynologyAPIError.configuration("No .env file was found beside the project or app build.")
         }
         return try credentials(from: Data(contentsOf: url))
@@ -44,7 +77,7 @@ public enum CredentialStore {
             throw SynologyAPIError.configuration("NAS_URL in .env must be a full URL such as https://nas.example.com:5001.")
         }
         return SynologyCredentials(username: values["USER"]!, password: values["PW"]!,
-                                   otpSecret: values["OTP"], serverURL: serverURL)
+                                   secondFactor: .totpSecret(values["OTP"] ?? ""), serverURL: serverURL)
     }
 
     static func parseEnv(_ data: Data) throws -> [String: String] {
@@ -110,5 +143,27 @@ enum TOTP {
             }
         }
         return result
+    }
+}
+
+public enum ServerAddress {
+    /// Reads a typed NAS address. Without a scheme it means DSM's HTTPS default,
+    /// `https://host:5001`; `https://host` keeps port 443. Plain HTTP would send the
+    /// password unencrypted and is rejected, as are paths, queries and credentials.
+    public static func url(from input: String) -> URL? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains(" ") else { return nil }
+        let hasScheme = trimmed.contains("://")
+        guard var components = URLComponents(string: hasScheme ? trimmed : "https://" + trimmed),
+              let scheme = components.scheme?.lowercased(), scheme == "https",
+              let host = components.host, !host.isEmpty,
+              components.user == nil, components.password == nil,
+              components.query == nil, components.fragment == nil,
+              components.path.isEmpty || components.path == "/" else { return nil }
+        components.scheme = scheme
+        components.host = host.lowercased()
+        components.path = ""
+        if !hasScheme, components.port == nil { components.port = 5001 }
+        return components.url
     }
 }

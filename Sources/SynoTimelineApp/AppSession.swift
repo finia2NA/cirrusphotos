@@ -1,12 +1,9 @@
 import PhotoCache
 import SynologyAPI
 
-/// The signed-in account. It creates the repository from the stored credentials and owns the
-/// account's transfers, in-process drag handles and Activity panel, so sign-in, sign-out and
-/// account switching (#83) replace this object rather than reaching into models.
-///
-/// Signing out calls `end()` and then builds a new session and a new `LibraryModel`:
-/// the model keeps its own tracked repository reference, so it is replaced, not cleared.
+/// The signed-in account. It creates the repository through its factory and owns the
+/// account's transfers, in-process drag handles and Activity panel. `AccountController`
+/// replaces the whole `AccountContext`, including this object, on sign-out and switching.
 @MainActor
 final class AppSession {
     let preferences: AppPreferences
@@ -19,7 +16,7 @@ final class AppSession {
     private let makeRepository: @MainActor (AppPreferences) throws -> CachedPhotosRepository
 
     init(preferences: AppPreferences, repository: CachedPhotosRepository? = nil, activity: ActivityCenter = ActivityCenter(),
-         makeRepository: @escaping @MainActor (AppPreferences) throws -> CachedPhotosRepository = AppSession.storedAccountRepository) {
+         makeRepository: @escaping @MainActor (AppPreferences) throws -> CachedPhotosRepository = AppSession.noAccount) {
         self.preferences = preferences
         self.repository = repository
         self.activity = activity
@@ -29,8 +26,8 @@ final class AppSession {
         self.makeRepository = makeRepository
     }
 
-    static func storedAccountRepository(_ preferences: AppPreferences) throws -> CachedPhotosRepository {
-        try CachedPhotosRepository(credentials: CredentialStore.load(), budget: preferences.budgetBytes)
+    static func noAccount(_ preferences: AppPreferences) throws -> CachedPhotosRepository {
+        throw SynologyAPIError.configuration("No account is signed in.")
     }
 
     /// Opens the account's repository on first use. An ended session does not reopen it.

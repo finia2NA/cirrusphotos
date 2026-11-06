@@ -11,6 +11,7 @@ public enum SynologyDiagnostics {
     public static let viewer = Logger(subsystem: subsystem, category: "viewer.assets")
     public static let originals = Logger(subsystem: subsystem, category: "repository.originals")
     public static let transport = Logger(subsystem: subsystem, category: "transport.originals")
+    public static let authentication = Logger(subsystem: subsystem, category: "transport.authentication")
     public static let videoTransport = Logger(subsystem: subsystem, category: "transport.video")
     public static let videoPlayback = Logger(subsystem: subsystem, category: "repository.video")
     public static let videoPlayer = Logger(subsystem: subsystem, category: "viewer.video")

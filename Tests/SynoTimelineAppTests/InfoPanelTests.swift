@@ -377,7 +377,7 @@ final class InfoPanelTests: XCTestCase {
         if !items.isEmpty {
             await transport.setPage(items, start: section.dateBounds!.start)
         }
-        let credentials = SynologyCredentials(username: "alice", password: "pw", otpSecret: "unused")
+        let credentials = SynologyCredentials(username: "alice", password: "pw")
         let repo = try CachedPhotosRepository(credentials: credentials, budget: 100_000_000,
                                               cacheRoot: root, transport: transport)
         return Context(model: InfoPanelModel(), repo: repo, transport: transport,

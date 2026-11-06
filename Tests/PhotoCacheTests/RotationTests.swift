@@ -39,7 +39,7 @@ final class RotationTests: XCTestCase {
 
     private func repository(_ transport: RotationTransport, root: URL) throws -> CachedPhotosRepository {
         try CachedPhotosRepository(
-            credentials: SynologyCredentials(username: "rotation", password: "pw", otpSecret: "unused"),
+            credentials: SynologyCredentials(username: "rotation", password: "pw"),
             budget: 100_000_000, cacheRoot: root, transport: transport
         )
     }

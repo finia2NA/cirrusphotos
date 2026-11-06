@@ -14,6 +14,12 @@ public enum AuthenticationStatus: Sendable, Equatable {
     case failed(String)
     /// The NAS could not be reached. The next request tries again.
     case unreachable(String)
+    /// The NAS no longer accepts the stored credentials or trusted device.
+    /// Only signing in again resolves it.
+    case needsSignIn(String)
+    /// macOS could not verify the NAS certificate; the user decides whether to trust
+    /// this one (SHA-256 of the leaf certificate).
+    case untrustedCertificate(sha256: String)
 }
 
 public struct FavoriteChange: Sendable {

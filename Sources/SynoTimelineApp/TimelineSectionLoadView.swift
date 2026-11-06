@@ -2,53 +2,82 @@ import SwiftUI
 
 struct TimelineSectionLoadView: View {
     @EnvironmentObject private var model: TimelineSectionLoadModel
-    @State private var useCachedPages = false
+    @Environment(\.dismiss) private var dismiss
+    @State private var useCachedPages = true
     @AppStorage(AppPreferences.Key.warmingIncludesSharedSpace) private var includesSharedSpace = true
 
+    private var running: Bool { model.progress.state == .running }
+    private var started: Bool { model.progress.state != .idle }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Load Timeline Sections").font(.title2.weight(.semibold))
-            if model.targetTitle != nil {
-                Text(includesSharedSpace ? "Personal and Shared Library, Favorites, and All Albums" : "Personal Library, Favorites, and All Albums")
-                    .foregroundStyle(.secondary)
+        Form {
+            Section {
+                Toggle("Include Shared Space", isOn: $includesSharedSpace)
+                Toggle("Skip sections already cached", isOn: $useCachedPages)
+            } footer: {
+                Text("Reads every timeline section of the library, favorites and albums, so filters and search cover everything.")
             }
-            ProgressView(value: Double(model.progress.processed), total: Double(max(1, model.progress.total)))
-            Text("\(model.progress.processed) of \(model.progress.total) sections")
-            if let matches = model.progress.matchCount { Text("\(matches) matching items") }
-            if let current = model.progress.currentSectionLabel { Text(current).foregroundStyle(.secondary) }
-            if model.progress.cached > 0 { Text("\(model.progress.cached) cached pages skipped") }
-            if let stale = model.staleTimelineMessage {
-                Text(stale).foregroundStyle(.orange)
+            .disabled(running)
+
+            if started {
+                Section {
+                    ProgressView(value: Double(model.progress.processed), total: Double(max(1, model.progress.total)))
+                    HStack {
+                        Text("\(model.progress.processed.formatted()) of \(model.progress.total.formatted()) sections")
+                        Spacer()
+                        if model.progress.state == .finished { Text("Done").fontWeight(.medium) }
+                        if model.progress.state == .cancelled { Text("Stopped").fontWeight(.medium) }
+                    }
+                    .monospacedDigit()
+                    if let current = model.progress.currentSectionLabel {
+                        Text(current).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    let details = [
+                        model.progress.matchCount.map { "\($0.formatted()) matching items" },
+                        model.progress.cached > 0 ? "\(model.progress.cached.formatted()) already cached" : nil
+                    ].compactMap { $0 }
+                    if !details.isEmpty {
+                        Text(details.joined(separator: " · ")).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                }
             }
-            if model.progress.failed > 0 {
-                Text("\(model.progress.failed) failed").foregroundStyle(.orange)
-                ScrollView { VStack(alignment: .leading) { ForEach(model.progress.failures, id: \.self) { Text($0).font(.caption) } } }
-                    .frame(maxHeight: 120)
-            }
-            Toggle("Include Shared Space", isOn: $includesSharedSpace)
-                .disabled(model.progress.state == .running)
-            Toggle("Use Cached Pages", isOn: $useCachedPages)
-                .disabled(model.progress.state == .running)
-            if model.progress.state != .finished || model.progress.failed > 0 {
-                HStack {
-                    Spacer()
-                    if model.progress.state == .running {
-                        Button("Cancel") { model.cancel() }
-                    } else {
-                        if model.progress.failed > 0 {
-                            Button("Retry Failed") { model.retryFailed() }
-                                .disabled(model.staleTimelineMessage != nil)
+            if model.progress.failed > 0 || model.staleTimelineMessage != nil {
+                Section {
+                    if let stale = model.staleTimelineMessage {
+                        Label(stale, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                    }
+                    if model.progress.failed > 0 {
+                        Label("\(model.progress.failed.formatted()) failed", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                        ScrollView {
+                            VStack(alignment: .leading) {
+                                ForEach(model.progress.failures, id: \.self) { Text($0).font(.caption).textSelection(.enabled) }
+                            }
                         }
-                        Button("Start") { model.start(useCachedPages: useCachedPages, includeSharedSpace: includesSharedSpace) }
-                            .disabled(model.staleTimelineMessage != nil)
+                        .frame(maxHeight: 100)
                     }
                 }
             }
         }
-        .padding(20)
-        .frame(width: 460)
-        .onDisappear {
-            if model.progress.state == .running { model.cancel() }
+        .formStyle(.grouped)
+        .scrollDisabled(true)
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                Spacer()
+                if running {
+                    Button("Stop") { model.cancel() }
+                } else if model.progress.failed > 0 {
+                    Button("Retry Failed") { model.retryFailed() }
+                        .disabled(model.staleTimelineMessage != nil)
+                }
+                Button("Close") { dismiss() }
+                Button("Start") { model.start(useCachedPages: useCachedPages, includeSharedSpace: includesSharedSpace) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(running || model.staleTimelineMessage != nil)
+            }
+            .padding([.horizontal, .bottom], 20)
         }
+        .frame(width: 460)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }

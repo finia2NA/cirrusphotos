@@ -317,6 +317,7 @@ struct AppShellView: View {
             ZStack(alignment: .topLeading) {
                 if selectedSpace == .shared && selectedDestination == .recentlyAdded {
                     ContentUnavailableView("Unavailable in Shared Space", systemImage: "photo.on.rectangle")
+                        .detailPlaceholder(topInset: topInset)
                 } else if selectedDestination == .personalLibrary && showsFolders {
                     folderDetail(topInset: topInset)
                         .allowsHitTesting(viewer == nil)
@@ -435,11 +436,17 @@ struct AppShellView: View {
 
     @ViewBuilder private func indexDetail(_ kind: CollectionIndexKind, topInset: CGFloat) -> some View {
         let style = IndexOverviewStyle(kind)
-        if let entries = indexEntries[kind] {
+        if let entries = indexEntries[kind], entries.isEmpty {
+            ContentUnavailableView {
+                Label("No \(style.title)", systemImage: style.symbol)
+            } description: {
+                if let error = indexErrors[kind] { Text(error).textSelection(.enabled) }
+            }
+            .detailPlaceholder(topInset: topInset)
+        } else if let entries = indexEntries[kind] {
             ScrollView {
                 if let error = indexErrors[kind] { Text(error).font(.caption).foregroundStyle(.secondary) }
-                if entries.isEmpty { ContentUnavailableView("No \(style.title)", systemImage: style.symbol) }
-                else {
+                VStack {
                     LazyVGrid(columns: CardGrid.columns(preferences.itemsPerRow), alignment: .leading, spacing: CardGrid.spacing) {
                         ForEach(entries) { entry in
                             Button { openIndexEntry(entry, kind: kind) } label: {
@@ -459,8 +466,12 @@ struct AppShellView: View {
                 }
             }.contentMargins(.top, topInset + 24).contentMargins(.horizontal, 24)
         } else if let error = indexErrors[kind] {
-            ContentUnavailableView { Label("\(style.title) unavailable", systemImage: style.symbol) } description: { Text(error) } actions: { Button("Try Again") { Task { await model.reload() } } }
-        } else { ProgressView("Loading \(style.title.lowercased())…") }
+            ContentUnavailableView { Label("\(style.title) unavailable", systemImage: style.symbol) } description: { Text(error).textSelection(.enabled) } actions: { Button("Try Again") { Task { await model.reload() } } }
+                .detailPlaceholder(topInset: topInset)
+        } else {
+            ProgressView("Loading \(style.title.lowercased())…")
+                .detailPlaceholder(topInset: topInset)
+        }
     }
 
     private struct FolderLoadKey: Hashable {
@@ -512,8 +523,12 @@ struct AppShellView: View {
                     }).id(collection)
             }
         } else if let folderError {
-            ContentUnavailableView { Label("Folders unavailable", systemImage: "folder.badge.questionmark") } description: { Text(folderError) } actions: { Button("Try Again") { Task { await model.reload() } } }
-        } else { ProgressView("Loading folders…") }
+            ContentUnavailableView { Label("Folders unavailable", systemImage: "folder.badge.questionmark") } description: { Text(folderError).textSelection(.enabled) } actions: { Button("Try Again") { Task { await model.reload() } } }
+                .detailPlaceholder(topInset: topInset)
+        } else {
+            ProgressView("Loading folders…")
+                .detailPlaceholder(topInset: topInset)
+        }
     }
 
     private func folderHeader(_ children: [FolderSummary]) -> BrowserHeaderConfiguration? {

@@ -38,12 +38,14 @@ struct AlbumsOverviewView: View {
                 ContentUnavailableView {
                     Label("Albums unavailable", systemImage: "rectangle.stack.badge.exclamationmark")
                 } description: {
-                    Text(error)
+                    Text(error).textSelection(.enabled)
                 } actions: {
                     Button("Try Again") { Task { await model.reload() } }.disabled(model.isLoading)
                 }
+                .detailPlaceholder(topInset: contentTopInset)
             } else {
                 ProgressView("Loading albums…")
+                    .detailPlaceholder(topInset: contentTopInset)
             }
         }
         .background(Color(nsColor: .textBackgroundColor))

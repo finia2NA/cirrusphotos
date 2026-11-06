@@ -25,6 +25,7 @@ struct InfoPanelView: View {
         case .empty:
             Text("Select photos to view info.")
                 .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 80)
                 .accessibilityLabel("Info")
         case .failure(let message):
             Label(message, systemImage: "exclamationmark.triangle")
