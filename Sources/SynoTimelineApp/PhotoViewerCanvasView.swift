@@ -141,7 +141,7 @@ final class PhotoViewerCanvasView: NSView {
     private var hasAcquiredFocus = false
 
     override var acceptsFirstResponder: Bool { true }
-    override var isFlipped: Bool { false }
+    override nonisolated var isFlipped: Bool { false }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)

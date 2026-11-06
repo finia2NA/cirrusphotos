@@ -5,7 +5,7 @@ import SynologyAPI
 import TimelineCore
 
 final class FlippedDocumentView: NSView {
-    override var isFlipped: Bool { true }
+    override nonisolated var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     var interaction: ((InteractionPhase) -> Void)?
     var commandHandler: ((BrowserSelectionCommand) -> Void)?
@@ -117,7 +117,7 @@ extension NSEvent {
 }
 
 final class SelectionOverlayView: NSView {
-    override var isFlipped: Bool { true }
+    override nonisolated var isFlipped: Bool { true }
     /// Only the changed frames are invalidated; the overlay spans the whole document.
     var selectionFrames: [CGRect] = [] {
         didSet {

@@ -40,22 +40,26 @@ extension LibraryBrowserScrollView.Coordinator {
             selectionGeneration: selectionState.generation, selectedOrdinals: selected,
             knownItemIDsByOrdinal: known, timeline: timelineSnapshot, authority: selectionAuthority, sourceAlbumID: sourceAlbumID)
         guard let captured = command.captureSelection(timeline: timelineSnapshot) else { return false }
-        // Several photos use the server's ZIP download and are promised as one folder of unzipped originals.
-        let payload: PhotoDragPayload
-        if count == 1 {
+        // Loaded photos with distinct names are promised one file each, also when several arrive
+        // in one ZIP; otherwise the selection is promised as one folder of unzipped originals.
+        let loaded = selected.compactMap { loadedItem($0)?.photo }
+        let stills = loaded.filter(\.hasDisplayableStillImage)
+        let delivery: PhotoDragPayload.Delivery
+        if loaded.count == count, let files = PhotoDragPayload.files(for: stills) {
+            delivery = .files(files)
+        } else if count == 1 {
             let name = clicked.photo.filename.flatMap { $0.isEmpty ? nil : $0 } ?? "Photo-\(clicked.photo.id)"
-            payload = PhotoDragPayload(repository: repository, source: .selection(captured), count: 1,
-                                       filename: URL(fileURLWithPath: name).lastPathComponent)
+            delivery = .files([PromisedFile(itemID: clicked.photo.id, filename: URL(fileURLWithPath: name).lastPathComponent)])
         } else {
-            payload = PhotoDragPayload(repository: repository, source: .selection(captured), count: count,
-                                       filename: "Photos", delivery: .folder)
+            delivery = .folder(name: "Photos")
         }
+        let payload = PhotoDragPayload(repository: repository, source: .selection(captured), count: count, delivery: delivery)
         cancelPointerInteraction()
         return PhotoFileDragSource.begin(session: session, payload: payload, previews: previews,
                                          cropsToSquare: geometry?.cropsThumbnailsToSquare ?? false,
                                          from: document, event: event,
                                          localSelection: allowsAlbumMembership ? .init(selection: captured, sourceAlbumID: sourceAlbumID, namespace: repository.namespace) : nil,
-                                         promisesFile: clicked.photo.hasDisplayableStillImage || count > 1,
+                                         promisesFile: count == 1 ? clicked.photo.hasDisplayableStillImage : (loaded.count < count || !stills.isEmpty),
                                          text: dragText(for: selected))
     }
 

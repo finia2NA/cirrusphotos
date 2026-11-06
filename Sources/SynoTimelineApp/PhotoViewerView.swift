@@ -131,7 +131,7 @@ struct PhotoViewerView: View {
                                       let filename = item.filename, !filename.isEmpty else { return false }
                                 let name = URL(fileURLWithPath: filename).lastPathComponent
                                 let payload = PhotoDragPayload(repository: viewer.repository, source: .item(item, collection: viewer.collection),
-                                                               count: 1, filename: name)
+                                                               count: 1, delivery: .files([PromisedFile(itemID: item.id, filename: name)]))
                                 let preview = state.thumbnailData.flatMap { NSImage(data: $0) } ?? viewer.source.image ?? viewer.image
                                 return PhotoFileDragSource.begin(session: library.session, payload: payload, previews: [preview].compactMap { $0 },
                                                                  cropsToSquare: cropsThumbnailsToSquare,

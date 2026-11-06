@@ -63,8 +63,9 @@ final class AppSessionTests: XCTestCase {
         XCTAssertFalse(session.hasActiveTransfers)
 
         let promise = expectation(description: "late file promise fails")
-        let payload = PhotoDragPayload(repository: repository, source: source, count: 1, filename: "a.dng")
-        session.downloads.fulfillPromise(payload, destination: root.appendingPathComponent("late.dng")) { error in
+        let file = PromisedFile(itemID: photo.id, filename: "a.dng")
+        let batch = PhotoPromiseBatch(payload: PhotoDragPayload(repository: repository, source: source, count: 1, delivery: .files([file])))
+        session.downloads.fulfillPromise(batch, file: file, destination: root.appendingPathComponent("late.dng")) { error in
             XCTAssertTrue(error is CancellationError)
             promise.fulfill()
         }
@@ -80,10 +81,12 @@ final class AppSessionTests: XCTestCase {
                                                      budget: 100_000_000, cacheRoot: root.appendingPathComponent("cache"),
                                                      transport: BlockingDownloadTransport())
         let photo = try JSONDecoder().decode(PhotoItem.self, from: Data("{\"id\":1,\"filename\":\"a.dng\",\"time\":1,\"type\":\"photo\"}".utf8))
+        let file = PromisedFile(itemID: photo.id, filename: "a.dng")
         let payload = PhotoDragPayload(repository: repository, source: .item(photo, collection: .library(.personal)),
-                                       count: 1, filename: "a.dng")
+                                       count: 1, delivery: .files([file]))
         var session: AppSession? = AppSession(preferences: AppPreferences(), repository: repository)
-        let delegate = PhotoPromiseDelegate(payload: payload, downloads: session!.downloads)
+        let delegate = PhotoPromiseDelegate(batch: PhotoPromiseBatch(payload: payload), file: file, name: "a.dng",
+                                            downloads: session!.downloads)
         session?.end()
         session = nil
         let provider = NSFilePromiseProvider(fileType: "public.data", delegate: delegate)

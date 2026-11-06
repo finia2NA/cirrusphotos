@@ -187,7 +187,7 @@ struct AlbumDragGesture: ViewModifier {
                     .joined(separator: "-").trimmingCharacters(in: .whitespacesAndNewlines)
                 let filename = safe.isEmpty || safe == "." || safe == ".." ? "Album" : safe
                 let payload = PhotoDragPayload(repository: repository, source: .album(collection.albumID ?? 0), count: 1,
-                                               filename: filename, delivery: .folder)
+                                               delivery: .folder(name: filename))
                 return PhotoFileDragSource.begin(session: session, payload: payload, previews: [preview].compactMap { $0 },
                                                  cropsToSquare: true, from: view, event: event, albumCollection: collection, promisesFile: collection.albumID != nil)
             })

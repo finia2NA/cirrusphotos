@@ -65,7 +65,7 @@ struct FilmstripDivider: NSViewRepresentable {
         var onChange: ((CGFloat) -> Void)?
         private var startY: CGFloat = 0
         private var startHeight: CGFloat = 0
-        override var isFlipped: Bool { true }
+        override nonisolated var isFlipped: Bool { true }
         override func resetCursorRects() { addCursorRect(bounds, cursor: .resizeUpDown) }
         override func draw(_ dirtyRect: NSRect) {
             NSColor.separatorColor.setFill()

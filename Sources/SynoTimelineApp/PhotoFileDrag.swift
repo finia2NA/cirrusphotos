@@ -5,17 +5,39 @@ import SynologyAPI
 import UniformTypeIdentifiers
 
 struct PhotoDragPayload: Sendable {
-    /// A file promise delivers exactly one item: a single original, or a folder of unzipped originals.
-    enum Delivery: Sendable { case file, folder }
+    /// Photos with known names are promised one file each, even when they arrive in one ZIP.
+    /// A selection whose names are not all known, or an album, is promised as one folder.
+    enum Delivery: Sendable {
+        case files([PromisedFile])
+        case folder(name: String)
+    }
 
     let repository: CachedPhotosRepository
     let source: PhotoDownloadSource
     let count: Int
-    let filename: String
-    var delivery: Delivery = .file
+    let delivery: Delivery
 
-    var fileType: UTType {
-        delivery == .folder ? .folder : (UTType(filenameExtension: URL(fileURLWithPath: filename).pathExtension) ?? .data)
+    /// The promised file types and names, in drag order.
+    var promises: [(type: UTType, name: String, file: PromisedFile?)] {
+        switch delivery {
+        case .files(let files):
+            return files.map { (UTType(filenameExtension: URL(fileURLWithPath: $0.filename).pathExtension) ?? .data, $0.filename, $0) }
+        case .folder(let name):
+            return [(.folder, name, nil)]
+        }
+    }
+
+    /// Files per item when every name is known and distinct within the drop; otherwise nil.
+    static func files(for items: [PhotoItem]) -> [PromisedFile]? {
+        var seen = Set<String>()
+        var files: [PromisedFile] = []
+        for item in items {
+            guard let filename = item.filename, !filename.isEmpty else { return nil }
+            let name = URL(fileURLWithPath: filename).lastPathComponent
+            guard seen.insert(name.lowercased()).inserted else { return nil }
+            files.append(PromisedFile(itemID: item.id, filename: name))
+        }
+        return files.isEmpty ? nil : files
     }
 }
 
@@ -28,15 +50,19 @@ private final class PromiseCompletion: @unchecked Sendable {
 /// manager weakly, so a promise from a released session fails, and an ended one refuses it.
 @MainActor
 final class PhotoPromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
-    let payload: PhotoDragPayload
+    let batch: PhotoPromiseBatch
+    let file: PromisedFile?
+    let name: String
     private weak var downloads: PhotoDownloadManager?
-    init(payload: PhotoDragPayload, downloads: PhotoDownloadManager) {
-        self.payload = payload
+    init(batch: PhotoPromiseBatch, file: PromisedFile?, name: String, downloads: PhotoDownloadManager) {
+        self.batch = batch
+        self.file = file
+        self.name = name
         self.downloads = downloads
     }
 
     func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, fileNameForType fileType: String) -> String {
-        payload.filename
+        name
     }
 
     nonisolated func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, writePromiseTo url: URL,
@@ -44,7 +70,7 @@ final class PhotoPromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
         let completion = PromiseCompletion(completionHandler)
         Task { @MainActor in
             guard let downloads else { completion.callback(CancellationError()); return }
-            downloads.fulfillPromise(payload, destination: url) { error in
+            downloads.fulfillPromise(batch, file: file, destination: url) { error in
                 completion.callback(error)
             }
         }
@@ -64,14 +90,20 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
                       from view: NSView, event: NSEvent, albumCollection: PhotoCollectionDescriptor? = nil,
                       localSelection: SelectionDragRegistry.Entry? = nil, promisesFile: Bool = true,
                       text: String? = nil, onEnd: (() -> Void)? = nil) -> Bool {
-        guard !session.isEnded, payload.count > 0, !payload.filename.isEmpty else { return false }
+        let promises = payload.promises
+        guard !session.isEnded, payload.count > 0, !promises.isEmpty, !promises.contains(where: { $0.name.isEmpty }) else { return false }
         let drags = session.drags
         let source = PhotoFileDragSource()
         source.drags = drags
         source.onEnd = onEnd
-        let delegate = PhotoPromiseDelegate(payload: payload, downloads: session.downloads)
-        let provider = LocalHandlePromiseProvider(fileType: payload.fileType.identifier, delegate: delegate)
-        provider.userInfo = delegate
+        let batch = PhotoPromiseBatch(payload: payload)
+        let providers = promises.map { promise in
+            let delegate = PhotoPromiseDelegate(batch: batch, file: promise.file, name: promise.name, downloads: session.downloads)
+            let provider = LocalHandlePromiseProvider(fileType: promise.type.identifier, delegate: delegate)
+            provider.userInfo = delegate
+            return provider
+        }
+        let provider = providers[0]
         provider.text = text
         let writer: NSPasteboardWriting
         if let albumCollection {
@@ -85,14 +117,20 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
             provider.localType = SelectionDragRegistry.type; provider.nonce = nonce
             writer = promisesFile ? provider : LocalHandleWriter(type: SelectionDragRegistry.type, nonce: nonce, text: text)
         } else { writer = provider }
-        let item = NSDraggingItem(pasteboardWriter: writer)
+        // The other promises ride along as invisible items, so the composed preview stays one image.
+        let writers: [NSPasteboardWriting] = promisesFile ? [writer] + providers.dropFirst().map { $0 as NSPasteboardWriting } : [writer]
         let image = dragPreview(images: Array(previews.prefix(20)), count: payload.count,
                                 cropsToSquare: cropsToSquare)
         let point = view.convert(event.locationInWindow, from: nil)
-        item.setDraggingFrame(NSRect(x: point.x - 30, y: point.y - 30,
-                                     width: image.size.width, height: image.size.height), contents: image)
+        let frame = NSRect(x: point.x - 30, y: point.y - 30, width: image.size.width, height: image.size.height)
+        let items = writers.enumerated().map { index, writer in
+            let item = NSDraggingItem(pasteboardWriter: writer)
+            item.setDraggingFrame(frame, contents: index == 0 ? image : nil)
+            return item
+        }
         drags.retain(source, id: source.id)
-        let dragSession = view.beginDraggingSession(with: [item], event: event, source: source)
+        let dragSession = view.beginDraggingSession(with: items, event: event, source: source)
+        dragSession.draggingFormation = .none
         dragSession.animatesToStartingPositionsOnCancelOrFail = true
         return true
     }

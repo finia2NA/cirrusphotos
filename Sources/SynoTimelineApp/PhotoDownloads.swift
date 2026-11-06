@@ -239,82 +239,143 @@ final class PhotoDownloadManager {
         return documents.appendingPathComponent("SynoTimeline Edits", isDirectory: true)
     }
 
-    /// Finder can ask for a promised file after the drag, so an ended session fails it here.
-    func fulfillPromise(_ payload: PhotoDragPayload, destination: URL, completion: @escaping (Error?) -> Void) {
+    /// Downloads the originals of `items`: one item reuses its cached original or, for a Live
+    /// Photo, its still; several items arrive as one ZIP.
+    nonisolated static func fetchOriginals(_ items: [PhotoItem], repository: CachedPhotosRepository,
+                                           collection: PhotoCollectionDescriptor,
+                                           progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
+        if items.count == 1 {
+            if let cached = try await repository.cachedOriginalForDownload(items[0], includeLivePhoto: true, collection: collection) {
+                return cached
+            }
+            if items[0].mediaKind == .livePhoto {
+                guard let still = try await repository.livePhotoStillForEditing(items[0], collection: collection, progress: progress) else {
+                    throw DownloadFailure.message("The Live Photo still is unavailable.")
+                }
+                return still
+            }
+        }
+        return try await repository.downloadPhotos(itemIDs: items.map(\.id), kind: .original, collection: collection, progress: progress)
+    }
+
+    /// Answers one promise of a drag. Finder can ask after the drag ended, so an ended session
+    /// fails it here. A placeholder with a progress pie appears at `destination` at once; the
+    /// batch's first request starts the shared download and later ones wait for it or take their
+    /// file from the finished staging folder.
+    func fulfillPromise(_ batch: PhotoPromiseBatch, file: PromisedFile?, destination: URL,
+                        completion: @escaping (Error?) -> Void) {
         guard !isEnded else { completion(CancellationError()); return }
+        let placeholder = PromisePlaceholder(destination: destination, isDirectory: file == nil) { [weak self, weak batch] in
+            Task { @MainActor in
+                if let id = batch?.jobID { self?.cancel(id) }
+            }
+        }
+        let request = PhotoPromiseBatch.Request(file: file, placeholder: placeholder, completion: completion)
+        switch batch.state {
+        case .ready(let staging, let folder, let files):
+            Task { _ = await Self.deliver(request, staging: staging, folder: folder, files: files) }
+        case .failed(let error):
+            placeholder.discard()
+            completion(error)
+        case .running:
+            placeholder.update(fraction: batch.fraction)
+            batch.requests.append(request)
+        case .idle:
+            batch.requests.append(request)
+            startPromiseBatch(batch)
+        }
+    }
+
+    private func startPromiseBatch(_ batch: PhotoPromiseBatch) {
+        let payload = batch.payload
         let id = UUID()
+        batch.state = .running
+        batch.jobID = id
         let handle = activity.begin(.filePromise(name: payload.source.initialName), id: id,
                                     cancel: { [weak self] in self?.cancel(id) })
         handle.status("Preparing…")
         tasks[id] = Task { [weak self] in
-            guard let self else { completion(CancellationError()); return }
             do {
                 let mediaCollection = await payload.repository.mediaCollection(for: payload.source.collection)
-                let items = try await payload.source.resolve(repository: payload.repository)
+                var items = try await payload.source.resolve(repository: payload.repository)
+                if case .files(let promised) = payload.delivery {
+                    let ids = Set(promised.map(\.itemID))
+                    items = items.filter { ids.contains($0.id) }
+                    guard !items.isEmpty else { throw DownloadFailure.message("The promised photos could not be verified.") }
+                }
                 handle.rename(.filePromise(name: Self.jobName(items)))
                 handle.status("Downloading…")
-                let progress: @Sendable (TransferProgress) -> Void = { value in
-                    Task { @MainActor in handle.progress(fraction: value.fractionCompleted) }
-                }
-                let response: PhotoDownloadResponse
-                if payload.delivery == .file, items.count == 1,
-                   let cached = try await payload.repository.cachedOriginalForDownload(items[0], includeLivePhoto: true, collection: mediaCollection) {
-                    response = cached
-                } else if payload.delivery == .file, items.count == 1, items[0].mediaKind == .livePhoto {
-                    guard let still = try await payload.repository.livePhotoStillForEditing(items[0], collection: mediaCollection, progress: progress) else {
-                        throw DownloadFailure.message("The Live Photo still is unavailable.")
+                let response = try await Self.fetchOriginals(items, repository: payload.repository, collection: mediaCollection) { value in
+                    Task { @MainActor in
+                        handle.progress(fraction: value.fractionCompleted)
+                        if let fraction = value.fractionCompleted { batch.report(fraction) }
                     }
-                    response = still
-                } else {
-                    response = try await payload.repository.downloadPhotos(itemIDs: items.map(\.id), kind: .original, collection: mediaCollection, progress: progress)
                 }
                 defer { try? FileManager.default.removeItem(at: response.temporaryURL.deletingLastPathComponent()) }
                 try Task.checkCancellation()
-                handle.status(payload.delivery == .folder ? "Unzipping…" : "Saving…")
-                let delivery = payload.delivery
-                let writeTask = Task.detached(priority: .utility) {
-                    switch delivery {
-                    case .file: try Self.writePromise(response.temporaryURL, destination: destination)
-                    case .folder: try Self.writeFolderPromise(response.temporaryURL, filename: response.filename, destination: destination)
+                handle.status(items.count > 1 ? "Unzipping…" : "Saving…")
+                let near = batch.requests.first?.placeholder.url ?? FileManager.default.temporaryDirectory
+                let promised: [PromisedFile]
+                if case .files(let files) = payload.delivery { promised = files } else { promised = [] }
+                let extractTask = Task.detached(priority: .utility) { () throws -> (PromiseStaging, URL, [Int64: URL]) in
+                    let root = try FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask,
+                                                           appropriateFor: near, create: true)
+                    let staging = PromiseStaging(root: root)
+                    let folder = root.appendingPathComponent("payload", isDirectory: true)
+                    try Self.populateFolder(folder, from: response.temporaryURL, filename: response.filename)
+                    return (staging, folder, promised.isEmpty ? [:] : try Self.locate(promised, in: folder))
+                }
+                let (staging, folder, files) = try await withTaskCancellationHandler {
+                    try await extractTask.value
+                } onCancel: { extractTask.cancel() }
+                try Task.checkCancellation()
+                batch.state = .ready(staging, folder: folder, files: files)
+                let pending = batch.requests
+                batch.requests = []
+                var firstError: (any Error)?
+                for request in pending {
+                    if let error = await Self.deliver(request, staging: staging, folder: folder, files: files), firstError == nil {
+                        firstError = error
                     }
                 }
-                try await withTaskCancellationHandler {
-                    try await writeTask.value
-                } onCancel: { writeTask.cancel() }
-                handle.status("Saved to \(destination.path)")
-                handle.succeed(savedURL: destination)
-                completion(nil)
+                if let firstError { throw firstError }
+                let saved = pending.map(\.placeholder.url)
+                handle.status(saved.count == 1 ? "Saved to \(saved[0].path)" : "Saved \(saved.count) files to \(saved[0].deletingLastPathComponent().path)")
+                handle.succeed(savedURL: saved.first)
             } catch {
+                if case .running = batch.state { batch.state = .failed(error) }
+                let pending = batch.requests
+                batch.requests = []
+                for request in pending {
+                    request.placeholder.discard()
+                    request.completion(error)
+                }
                 handle.fail(error, operation: "File promise")
-                completion(error)
             }
-            tasks[id] = nil
+            self?.tasks[id] = nil
         }
     }
 
-    nonisolated static func writePromise(_ source: URL, destination: URL) throws {
-        let fm = FileManager.default
-        let directory = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask,
-                                   appropriateFor: destination, create: true)
-        defer { try? fm.removeItem(at: directory) }
-        let staged = directory.appendingPathComponent("payload")
-        try Task.checkCancellation()
-        try fm.copyItem(at: source, to: staged)
-        try Task.checkCancellation()
-        try publish(staged, at: destination)
-    }
-
-    /// Delivers a download as a folder of files. A ZIP response is unzipped and a single-file
-    /// response is copied in. The finished folder appears at `destination` in one rename, so the
-    /// receiver never sees it half-populated.
-    nonisolated static func writeFolderPromise(_ source: URL, filename: String, destination: URL) throws {
-        let fm = FileManager.default
-        let directory = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask,
-                                   appropriateFor: destination, create: true)
-        defer { try? fm.removeItem(at: directory) }
-        let folder = directory.appendingPathComponent("payload", isDirectory: true)
-        try populateFolder(folder, from: source, filename: filename)
-        try publish(folder, at: destination)
+    /// Places one promised item and settles its promise. Returns the error it reported.
+    private static func deliver(_ request: PhotoPromiseBatch.Request, staging: PromiseStaging,
+                                            folder: URL, files: [Int64: URL]) async -> (any Error)? {
+        let placeholder = request.placeholder
+        let source: URL
+        if let file = request.file {
+            guard let located = files[file.itemID] else {
+                placeholder.discard()
+                let error = DownloadFailure.message("\(file.filename) was not in the download.")
+                request.completion(error)
+                return error
+            }
+            source = located
+        } else { source = folder }
+        let result = await Task.detached(priority: .utility) { () -> (any Error)? in
+            do { try withExtendedLifetime(staging) { try placeholder.install(copyOf: source) }; return nil }
+            catch { placeholder.discard(); return error }
+        }.value
+        request.completion(result)
+        return result
     }
 
     /// Fills a new folder with the contents of a ZIP download, or with a single-file response.
@@ -332,14 +393,6 @@ final class PhotoDownloadManager {
         try Task.checkCancellation()
         guard !(try fm.contentsOfDirectory(atPath: folder.path)).isEmpty else {
             throw DownloadFailure.message("The download contained no files.")
-        }
-    }
-
-    /// The file-promise receiver coordinates this write while waiting for our completion.
-    /// Coordinating again here would wait on the receiver itself.
-    private nonisolated static func publish(_ staged: URL, at destination: URL) throws {
-        if renamex_np(staged.path, destination.path, UInt32(RENAME_EXCL)) != 0 {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
     }
 
