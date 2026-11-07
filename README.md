@@ -40,7 +40,7 @@ The full feature list and its limits are in [docs/PROJECT.md](docs/PROJECT.md).
 
 ## Install
 
-1. Download the latest release from [GitHub Releases](https://github.com/finia2NA/syno/releases/latest), open it and drag Cirrus Photos to Applications.
+1. Download the latest release from [GitHub Releases](https://github.com/finia2NA/cirrusphotos/releases/latest), open it and drag Cirrus Photos to Applications.
 2. The app is signed but not notarized, so macOS blocks the first launch. Open it once, close the warning, then go to System Settings ▸ Privacy & Security and click **Open Anyway**. Alternatively, remove the quarantine flag in Terminal:
 
    ```sh
@@ -59,7 +59,7 @@ More detail is on the [install page](https://cirrusphotos.richardhanss.de/instal
 
 ## Reporting bugs
 
-Use **Help ▸ Report an Issue…** to open a prefilled [GitHub issue](https://github.com/finia2NA/syno/issues), and **Help ▸ Export Logs…** to save the app's log entries from the last 24 hours to a text file you can attach. Nothing is sent automatically. Check the file for anything private before posting it.
+Use **Help ▸ Report an Issue…** to open a prefilled [GitHub issue](https://github.com/finia2NA/cirrusphotos/issues), and **Help ▸ Export Logs…** to save the app's log entries from the last 24 hours to a text file you can attach. Nothing is sent automatically. Check the file for anything private before posting it.
 
 The same log is available from a terminal; the app logs under the subsystem `io.github.finia2na.cirrusphotos`:
 

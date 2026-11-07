@@ -16,7 +16,7 @@ import Testing
         let url = IssueReport.url(bundle: try bundle(), osVersion: "Version 27.0 (Build 1)", model: "Mac15,6")
         let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
         #expect(components.host == "github.com")
-        #expect(components.path == "/finia2NA/syno/issues/new")
+        #expect(components.path == "/finia2NA/cirrusphotos/issues/new")
         let items = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
         #expect(items["labels"] == "bug")
         let body = try #require(items["body"])

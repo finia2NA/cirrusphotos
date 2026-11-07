@@ -33,8 +33,8 @@ struct ThirdPartyNotice: Codable, Identifiable, Equatable {
 
 enum AboutLinks {
     static let website = URL(string: "https://cirrusphotos.richardhanss.de")!
-    static let source = URL(string: "https://github.com/finia2NA/syno")!
-    static let license = URL(string: "https://github.com/finia2NA/syno/blob/main/LICENSE")!
+    static let source = URL(string: "https://github.com/finia2NA/cirrusphotos")!
+    static let license = URL(string: "https://github.com/finia2NA/cirrusphotos/blob/main/LICENSE")!
 }
 
 struct AboutSettingsView: View {

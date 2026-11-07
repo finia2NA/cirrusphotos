@@ -3,7 +3,7 @@ import Foundation
 /// The GitHub "new issue" link with a prefilled bug template. Contains only app, macOS and Mac
 /// model details, never the NAS address, account or library content.
 enum IssueReport {
-    static let newIssue = "https://github.com/finia2NA/syno/issues/new"
+    static let newIssue = "https://github.com/finia2NA/cirrusphotos/issues/new"
 
     static func environment(bundle: Bundle = .main,
                             osVersion: String = ProcessInfo.processInfo.operatingSystemVersionString,

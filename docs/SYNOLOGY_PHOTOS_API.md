@@ -652,7 +652,7 @@ Recommended native cache layers:
 
 The disk cache should have an explicit size limit and LRU eviction. Avoid storing session tokens in cache filenames or metadata.
 
-The [cache design proposal](https://github.com/finia2NA/syno/issues/28#issuecomment-6478636441) refines these recommendations with cached-first startup, category priorities, semantic request keys, and bounded UI state. Its freshness policy supersedes a generic time-based expiration policy.
+The [cache design proposal](https://github.com/finia2NA/cirrusphotos/issues/28#issuecomment-6478636441) refines these recommendations with cached-first startup, category priorities, semantic request keys, and bounded UI state. Its freshness policy supersedes a generic time-based expiration policy.
 
 A subsequent read-only Cirrus probe confirmed both ETag and Last-Modified conditional requests return HTTP 304 with no body for an unchanged `sm` thumbnail. See the proposal for the probe's authentication details and limits. Edit-driven behavior is covered by the write probe above.
 
@@ -765,7 +765,7 @@ Synology Photos 1.9.1-10928 does not expose GPS editing. Its NAS-served `react_b
 
 The same disposable PNG was then downloaded, given EXIF GPS externally, and overwritten at its existing NAS path through File Station. Synology reindexed it with the same item ID and emitted that ID exactly once under `item.modify`, with no matching deletion. Authoritative lookup returned the written coordinates. The overwrite also changed the capture time and thumbnail cache key while retaining the thumbnail unit ID, so this proves combined GPS/time/thumbnail-revision coverage but does not isolate a GPS-only edit. One unrelated modification shared the interval, and the fence from the returned cursor was empty.
 
-The cursor is opaque and must be stored verbatim; the response echoes the next cursor. `(0, 0)` returned error 700, but this does not distinguish a malformed pair from expiry/reset of a previously valid pair. Still unproven: isolated GPS-only changes/removals, repeated/conflicting changes, truncation or continuation for large intervals, retention beyond the observed two days, and whether `SYNO.FotoTeam` behaves identically for Shared Space. See the [transferred metadata engine plan](https://github.com/finia2NA/syno/issues/20#issuecomment-6478636002) for its design and acceptance context.
+The cursor is opaque and must be stored verbatim; the response echoes the next cursor. `(0, 0)` returned error 700, but this does not distinguish a malformed pair from expiry/reset of a previously valid pair. Still unproven: isolated GPS-only changes/removals, repeated/conflicting changes, truncation or continuation for large intervals, retention beyond the observed two days, and whether `SYNO.FotoTeam` behaves identically for Shared Space. See the [transferred metadata engine plan](https://github.com/finia2NA/cirrusphotos/issues/20#issuecomment-6478636002) for its design and acceptance context.
 
 ### Filesystem runner observations (2026-10-25)
 
@@ -1022,7 +1022,7 @@ The local-only web-app capture `downloads.har` shows a separate form-encoded POS
 
 ## Photo locations and map data
 
-Read-only probes against `cirrus` on 2026-10-06 established the location data path used by the map implementation ([completed Map plan](https://github.com/finia2NA/syno/issues/46)). The Synology mobile map has no desktop web equivalent, so these shapes were discovered directly rather than from a HAR.
+Read-only probes against `cirrus` on 2026-10-06 established the location data path used by the map implementation ([completed Map plan](https://github.com/finia2NA/cirrusphotos/issues/46)). The Synology mobile map has no desktop web equivalent, so these shapes were discovered directly rather than from a HAR.
 
 ### Item GPS
 

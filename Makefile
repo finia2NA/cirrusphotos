@@ -45,7 +45,7 @@ switch-user:
 DEPLOY_HOST ?= ionos
 DEPLOY_PATH ?= /var/www/cirrus-photos
 SITE_URL ?= https://cirrusphotos.richardhanss.de
-GITHUB_REPO ?= finia2NA/syno
+GITHUB_REPO ?= finia2NA/cirrusphotos
 release_env = DEPLOY_HOST='$(DEPLOY_HOST)' DEPLOY_PATH='$(DEPLOY_PATH)' SITE_URL='$(SITE_URL)' \
 	GITHUB_REPO='$(GITHUB_REPO)' ALLOW_DIRTY='$(ALLOW_DIRTY)' DRY_RUN='$(DRY_RUN)'
 
