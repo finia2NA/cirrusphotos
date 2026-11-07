@@ -434,56 +434,39 @@ struct LibraryCommands: Commands {
 }
 
 /// Filmstrip, histogram, highlight peaking and focus-edge overlays in their own glass pill,
-/// separate from the viewer's action buttons.
+/// separate from the viewer's action buttons. State is shown by the symbol, never by colour.
 struct ViewerOverlayControls: View {
     var model: LibraryModel
 
     var body: some View {
         HStack(spacing: 0) {
-            Button { model.showsFilmstrip.toggle() } label: {
-                Label(model.showsFilmstrip ? "Hide Filmstrip" : "Show Filmstrip",
-                      systemImage: model.showsFilmstrip ? "film.fill" : "film")
-                    .labelStyle(.iconOnly)
-                        .frame(width: 34, height: ToolbarMetrics.controlHeight)
-                        .contentShape(Rectangle())
-                    .foregroundStyle(model.showsFilmstrip ? Color.accentColor : Color.primary)
-            }
-            .help(model.showsFilmstrip ? "Hide Filmstrip" : "Show Filmstrip")
-            .accessibilityLabel(model.showsFilmstrip ? "Hide Filmstrip" : "Show Filmstrip")
-            Button { model.showsHistogram.toggle() } label: {
-                Label(model.showsHistogram ? "Hide Histogram" : "Show Histogram",
-                      systemImage: "chart.bar.xaxis")
-                    .labelStyle(.iconOnly)
-                        .frame(width: 34, height: ToolbarMetrics.controlHeight)
-                        .contentShape(Rectangle())
-                    .foregroundStyle(model.showsHistogram ? Color.accentColor : Color.primary)
-            }
-            .help(model.showsHistogram ? "Hide Histogram" : "Show Histogram")
-            .accessibilityLabel(model.showsHistogram ? "Hide Histogram" : "Show Histogram")
-            Button { model.showsHighlightPeaking.toggle() } label: {
-                Label(model.showsHighlightPeaking ? "Hide Highlight Peaking" : "Show Highlight Peaking",
-                      systemImage: "circle.lefthalf.striped.horizontal")
-                    .labelStyle(.iconOnly)
-                        .frame(width: 34, height: ToolbarMetrics.controlHeight)
-                        .contentShape(Rectangle())
-                    .foregroundStyle(model.showsHighlightPeaking ? Color.accentColor : Color.primary)
-            }
-            .help(model.showsHighlightPeaking ? "Hide Highlight Peaking" : "Show Highlight Peaking")
-            .accessibilityLabel(model.showsHighlightPeaking ? "Hide Highlight Peaking" : "Show Highlight Peaking")
-            Button { model.showsFocusEdges.toggle() } label: {
-                Label(model.showsFocusEdges ? "Hide Focus Edges" : "Show Focus Edges",
-                      systemImage: "scope")
-                    .labelStyle(.iconOnly)
-                        .frame(width: 34, height: ToolbarMetrics.controlHeight)
-                        .contentShape(Rectangle())
-                    .foregroundStyle(model.showsFocusEdges ? Color.accentColor : Color.primary)
-            }
-            .help(model.showsFocusEdges ? "Hide Focus Edges" : "Show Focus Edges")
-            .accessibilityLabel(model.showsFocusEdges ? "Hide Focus Edges" : "Show Focus Edges")
+            overlayButton(isOn: model.showsFilmstrip, name: "Filmstrip",
+                          offSymbol: "film", onSymbol: "film.fill") { model.showsFilmstrip.toggle() }
+            overlayButton(isOn: model.showsHistogram, name: "Histogram",
+                          offSymbol: "chart.bar", onSymbol: "chart.bar.fill") { model.showsHistogram.toggle() }
+            overlayButton(isOn: model.showsHighlightPeaking, name: "Highlight Peaking",
+                          offSymbol: "circle.lefthalf.striped.horizontal",
+                          onSymbol: "circle.lefthalf.striped.horizontal.inverse") { model.showsHighlightPeaking.toggle() }
+            overlayButton(isOn: model.showsFocusEdges, name: "Focus Edges",
+                          offSymbol: "scope", onSymbol: "dot.scope") { model.showsFocusEdges.toggle() }
         }
         .buttonStyle(.plain)
+        .foregroundStyle(Color.primary)
         .padding(.horizontal, 6)
         .frame(height: ToolbarMetrics.controlHeight)
         .glassEffect(.regular, in: Capsule())
+    }
+
+    private func overlayButton(isOn: Bool, name: String, offSymbol: String, onSymbol: String,
+                               action: @escaping () -> Void) -> some View {
+        let title = (isOn ? "Hide " : "Show ") + name
+        return Button(action: action) {
+            Label(title, systemImage: isOn ? onSymbol : offSymbol)
+                .labelStyle(.iconOnly)
+                .frame(width: 34, height: ToolbarMetrics.controlHeight)
+                .contentShape(Rectangle())
+        }
+        .help(title)
+        .accessibilityLabel(title)
     }
 }
