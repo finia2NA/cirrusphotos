@@ -41,3 +41,6 @@ secrets/
 
 # Agent worktrees
 .claude/worktrees/
+
+# Editor state
+.vscode/
