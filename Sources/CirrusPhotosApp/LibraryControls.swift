@@ -280,7 +280,6 @@ struct LibraryCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {}
-        CommandGroup(replacing: .help) {}
         // Edit: the pasteboard actions reach text fields and the browser through the
         // responder chain; Select All and Delete act on photos while the browser is active.
         CommandGroup(replacing: .pasteboard) {

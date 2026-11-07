@@ -10,6 +10,11 @@ enum AppVersion {
         let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String
         return "Version \(version)\(build.map { " (\($0))" } ?? "")"
     }
+
+    /// "0.1 (1)", or "development build" when the bundle has no version keys.
+    static func versionAndBuild(bundle: Bundle = .main) -> String {
+        text(bundle: bundle).replacing("Version ", with: "")
+    }
 }
 
 /// One third-party component, loaded from the bundled `ThirdPartyNotices.json`.
@@ -29,7 +34,6 @@ struct ThirdPartyNotice: Codable, Identifiable, Equatable {
 enum AboutLinks {
     static let website = URL(string: "https://cirrusphotos.richardhanss.de")!
     static let source = URL(string: "https://github.com/finia2NA/syno")!
-    static let issues = URL(string: "https://github.com/finia2NA/syno/issues/new")!
     static let license = URL(string: "https://github.com/finia2NA/syno/blob/main/LICENSE")!
 }
 
@@ -59,7 +63,7 @@ struct AboutSettingsView: View {
             Section {
                 Link("Website", destination: AboutLinks.website)
                 Link("Source Code", destination: AboutLinks.source)
-                Link("Report an Issue", destination: AboutLinks.issues)
+                Link("Report an Issue", destination: IssueReport.url())
             }
             Section("License") {
                 LabeledContent("Licensed under the GNU General Public License v3.0") {

@@ -26,7 +26,7 @@ These hold across subsystems and are not obvious from any one file.
 6. **Writes end in a read.** Every NAS change is followed by an authoritative read of what it touched, even after failure or cancellation. An uncertain outcome is reported as `unconfirmed`. Creation is never retried automatically. Only one write runs per `MutationLane`; a second fails with `RepositoryError.busy`.
 7. **Capture-local time.** `PhotoItem.time` is a capture-local wall clock encoded as epoch-shaped seconds, not an instant. Grouping and formatting use GMT calendar components so 21:00 displays as 21:00 on any Mac. No timezone is inferred from location or device.
 8. **Pre-1.0 formats are disposable.** Incompatible preferences, navigation state and cache schemas are discarded and recreated; metadata formats are discarded without decoding. Media bytes keep their format.
-9. **Logs hold no secrets.** Diagnostics exclude filenames, cache keys, credentials, tokens, session IDs, cookies, authenticated URLs and response bodies. Sharing references are never persisted in album summaries.
+9. **Logs hold no secrets.** Diagnostics exclude filenames, cache keys, credentials, tokens, session IDs, cookies, authenticated URLs and response bodies. Sharing references are never persisted in album summaries. `LogExport` streams `log show` through `LogRedaction.scrub` line by line (fallback `OSLogStore`, this process only).
 
 ## Transport
 
