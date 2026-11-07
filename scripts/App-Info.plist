@@ -7,8 +7,7 @@
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleIconName</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1 (alpha)</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>NSHumanReadableCopyright</key><string>© 2026 Cirrus Photos contributors</string>
     <key>LSMinimumSystemVersion</key><string>27.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSLocalNetworkUsageDescription</key><string>Cirrus Photos connects to your Synology NAS on the local network.</string>
