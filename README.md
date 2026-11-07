@@ -59,13 +59,15 @@ More detail is on the [install page](https://cirrusphotos.richardhanss.de/instal
 
 ## Reporting bugs
 
-Please open an [issue on GitHub](https://github.com/finia2NA/syno/issues). Logs from just before the problem help. The app logs under the subsystem `de.richardhanss.cirrus-photos`; this prints the last 15 minutes:
+Use **Help ▸ Report an Issue…** to open a prefilled [GitHub issue](https://github.com/finia2NA/syno/issues), and **Help ▸ Export Logs…** to save the app's log entries from the last 24 hours to a text file you can attach. Nothing is sent automatically. Check the file for anything private before posting it.
+
+The same log is available from a terminal; the app logs under the subsystem `de.richardhanss.cirrus-photos`:
 
 ```sh
-log show --last 15m --info --debug --predicate 'subsystem == "de.richardhanss.cirrus-photos"'
+log show --last 24h --info --debug --predicate 'subsystem == "de.richardhanss.cirrus-photos"'
 ```
 
-If the app crashed, include the newest `~/Library/Logs/DiagnosticReports/CirrusPhotos-*.ips`. Check the log for anything private before posting it. In the app, **Copy Details** in the Activity panel copies a failed operation's details with credentials and the NAS address removed.
+If the app crashed, include the newest `~/Library/Logs/DiagnosticReports/CirrusPhotos-*.ips`. In the app, **Copy Details** in the Activity panel copies a failed operation's details with credentials and the NAS address removed.
 
 ## License
 

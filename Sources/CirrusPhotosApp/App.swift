@@ -6,6 +6,7 @@ struct CirrusPhotosApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var preferences: AppPreferences
     @State private var accounts: AccountController
+    @StateObject private var logExporter = LogExporter()
     #if CIRRUS_DISTRIBUTION
     private let updater: SoftwareUpdater
     #endif
@@ -41,6 +42,7 @@ struct CirrusPhotosApp: App {
                                 timelineSectionLoad: context.timelineSectionLoad)
             }
             AccountCommands(accounts: accounts)
+            HelpCommands(exporter: logExporter)
             #if CIRRUS_DISTRIBUTION
             SoftwareUpdateCommands(updater: updater)
             #endif
