@@ -1,6 +1,6 @@
 # Local secrets and captured traffic
-.env
-.env.real
+.env*
+!.env.example
 .switch-user.lock
 *.har
 .cache*/
@@ -35,4 +35,6 @@ playground.xcworkspace/
 # Private capture evidence: HARs, runner output, Android proxy captures.
 # Sanitized summaries live in docs/capturefindings/.
 docs/captures/
-.env.test
+
+# Release signing keys (Sparkle EdDSA private key)
+secrets/
