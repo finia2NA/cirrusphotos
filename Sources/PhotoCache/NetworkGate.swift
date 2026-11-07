@@ -21,7 +21,7 @@ actor NetworkGate {
     private var thumbnailActive = 0
     private var waiting: [Waiter] = []
 
-    init(metadata: Int = 2, thumbnails: Int = 6,
+    init(metadata: Int = 5, thumbnails: Int = 6,
          metadataQueue: Int = 64, thumbnailQueue: Int = 256) {
         metadataLimit = max(1, metadata)
         thumbnailLimit = max(1, thumbnails)

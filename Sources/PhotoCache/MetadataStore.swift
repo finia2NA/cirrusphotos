@@ -995,8 +995,15 @@ extension DiskCache {
     /// Approximate stored bytes per row kind; eviction compares these against the budget.
     func metadataStorageCost(_ db: Database) throws -> Int64 {
         guard metadataInitialized else { return 0 }
+        return try Self.metadataStorageCost(in: db)
+    }
+
+    /// The metadata cost of any cache database, including one that is not open as a
+    /// `DiskCache`; tables that do not exist yet count as empty.
+    static func metadataStorageCost(in db: Database) throws -> Int64 {
         func total<Record: TableRecord>(_ record: Record.Type, _ cost: SQLExpression) throws -> Int64 {
-            try Int64.fetchOne(db, Record.select(sum(cost) ?? 0)) ?? 0
+            guard try db.tableExists(Record.databaseTableName) else { return 0 }
+            return try Int64.fetchOne(db, Record.select(sum(cost) ?? 0)) ?? 0
         }
         return try total(ItemDetailRecord.self, length(ItemDetailRecord.Columns.payload))
             + total(DayPageRecord.self, DayPageRecord.Columns.actualCount * 16 + 128)

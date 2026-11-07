@@ -25,7 +25,9 @@ if [[ ${free_gb:-0} -lt 25 ]]; then
 fi
 
 # Instruments such as SwiftUI need a debuggable target; only the profiling bundle gets this.
-codesign --force --deep --sign - --entitlements scripts/Profiling.entitlements \
+# The same identity as run.sh keeps Keychain access across builds.
+identity="${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)}"
+codesign --force --deep --sign "${identity:--}" --entitlements scripts/Profiling.entitlements \
     "$PWD/.build/Cirrus Photos.app" || exit 1
 
 echo "Template: $template (+ os_signpost), ${seconds}s. Output: $trace"

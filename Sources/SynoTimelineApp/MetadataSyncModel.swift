@@ -6,10 +6,12 @@ import PhotoCache
 import SynologyAPI
 
 /// Reads every metadata page of the persistent collections and every folder once per
-/// run, in the background. Pages already verified, including those proven unchanged by
-/// Diff reconciliation, finish without a request; the rest are fetched at prefetch
-/// priority so visible work always goes first. The collection on screen is loaded
-/// before the others and preempts the one in progress. Starts once Library and
+/// run, in the background. Discovery runs alongside loading: each target is queued as
+/// soon as its timeline is known, library targets first, so changed library pages load
+/// at once while albums and folders are still being found. Pages already verified,
+/// including those proven unchanged by Diff reconciliation, finish without a request;
+/// the rest are fetched at prefetch priority so visible work always goes first. The
+/// collection on screen is loaded before the others and preempts the one in progress. Starts once Library and
 /// Favorites timelines are verified and restarts when a captured timeline changes.
 /// Failed sections and collections are retried with backoff, and sooner when the
 /// network path comes back, until every target is verified.
@@ -23,6 +25,14 @@ final class MetadataSyncModel: ObservableObject {
         var currentTitle: String?
         /// Set while waiting before the next retry round.
         var nextRetry: Date?
+        var discovery = Discovery()
+    }
+
+    /// Collections found so far this pass, and how many of them have been checked.
+    struct Discovery: Equatable {
+        var known = 0
+        var checked = 0
+        var running = true
     }
 
     /// One sync target. `queued` targets wait for the ones before them.
@@ -52,6 +62,10 @@ final class MetadataSyncModel: ObservableObject {
     private var task: Task<Void, Never>?
     private var taskID: UUID?
     private var loaders: [TimelineSectionCacheLoader] = []
+    /// Discovered targets of the current pass waiting to load.
+    private var pending: [Target] = []
+    /// Wakes the loading loop when a target is queued or the shown collection changes.
+    private var pendingSignal: AsyncStream<Void>.Continuation?
     /// Library-discovered targets whose timeline revisions trigger a restart.
     private var baseTargets: [TimelineWarmingTarget] = []
     /// Collections fully verified this run; later passes skip them.
@@ -116,6 +130,7 @@ final class MetadataSyncModel: ObservableObject {
         guard next != focus else { return }
         focus = next
         focusChanges += 1
+        pendingSignal?.yield()
         // A finished run still loads a newly shown collection.
         if started, task == nil, let next, !verifiedCollections.contains(next) { startTask() }
     }
@@ -162,6 +177,7 @@ final class MetadataSyncModel: ObservableObject {
         let loaders = loaders
         Task { for loader in loaders { await loader.shutdown() } }
         self.loaders = []
+        pending = []
         endActivity()
         baseTargets = []
         verifiedCollections = []
@@ -199,46 +215,32 @@ final class MetadataSyncModel: ObservableObject {
         }
     }
 
-    /// One discovery and loading pass over the shown collection, the library targets and
-    /// then the folder tree of each space, discovered breadth-first as it goes. Pages
+    /// One pass: discovery queues each target as soon as its timeline is known, while the
+    /// loading loop reads the shown collection and the queued targets in order. Pages
     /// verified earlier this run finish from the cache without a request. Returns whether
     /// every target was discovered and fully verified.
     private func pass(includeSharedSpace: Bool) async -> Bool {
         guard let library, let repository = library.repository else { return true }
         progress.running = true
         progress.nextRetry = nil
-        progress.currentTitle = "Discovering collections"
+        progress.currentTitle = nil
+        progress.discovery = Discovery()
         beginActivity(library.activity)
         unavailableCollections = []
-        var complete = true
-        if await runFocusIfNeeded(repository) == .incomplete { complete = false }
+        pending = []
+        baseTargets = []
+        let (signals, signal) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+        pendingSignal = signal
+        defer { pendingSignal = nil }
+        async let discovered = discover(repository: repository, includeSharedSpace: includeSharedSpace, signal: signal)
 
-        let discovery = await library.discoverTimelineWarmingTargets(includeSharedSpace: includeSharedSpace)
-        guard !Task.isCancelled else { return false }
-        baseTargets = discovery.targets
-        if !discovery.failures.isEmpty { complete = false }
-        var pending = discovery.targets.map { Target(collection: $0.collection, snapshot: $0.snapshot, title: $0.title) }
-        for target in pending where collections[target.collection] == nil {
-            collections[target.collection] = CollectionProgress(total: target.snapshot.sections.count)
-        }
-        // A child carries its summary from the parent's listing when that listing was verified this run.
-        var folders: [(id: Int64, space: PhotoSpace, known: FolderSummary?)] =
-            [(0, .personal, nil)] + (includeSharedSpace ? [(0, .shared, nil)] : [])
+        var complete = true
+        var wakeups = signals.makeAsyncIterator()
         while !Task.isCancelled {
             if await runFocusIfNeeded(repository) == .incomplete { complete = false }
-            if pending.isEmpty {
-                guard !folders.isEmpty else { break }
-                let next = folders.removeFirst()
-                guard let (directory, verified) = await folderDirectory(repository, id: next.id, space: next.space, known: next.known)
-                else { complete = false; continue }
-                folders += directory.children.map { ($0.id, next.space, verified ? $0 : nil) }
-                let collection = PhotoCollectionDescriptor.folder(directory.folder.id, space: next.space)
-                guard !verifiedCollections.contains(collection) else { continue }
-                guard let snapshot = await verifiedSnapshot(repository, collection: collection) else { complete = false; continue }
-                guard !snapshot.sections.isEmpty else { verifiedCollections.insert(collection); continue }
-                let title = next.space == .shared ? "Shared folder \(directory.folder.name)" : "Folder \(directory.folder.name)"
-                pending.append(Target(collection: collection, snapshot: snapshot, title: title))
-                collections[collection] = collections[collection] ?? CollectionProgress(total: snapshot.sections.count)
+            guard !pending.isEmpty else {
+                // Ends once discovery has finished and every queued target was taken.
+                if await wakeups.next(isolation: #isolation) == nil, pending.isEmpty { break }
                 continue
             }
             let target = pending.removeFirst()
@@ -250,13 +252,117 @@ final class MetadataSyncModel: ObservableObject {
             case .cancelled: return false
             }
         }
-        return complete && !Task.isCancelled
+        let discoveryComplete = await discovered
+        return complete && discoveryComplete && !Task.isCancelled
+    }
+
+    /// Finds the library targets, owned albums and each space's folder tree, queueing every
+    /// target as soon as its timeline is known. Returns whether every collection was resolved.
+    private func discover(repository: CachedPhotosRepository, includeSharedSpace: Bool,
+                          signal: AsyncStream<Void>.Continuation) async -> Bool {
+        defer {
+            signal.finish()
+            if !Task.isCancelled {
+                progress.discovery.running = false
+                publishProgress(force: true)
+            }
+        }
+        guard let library else { return false }
+        let discovery = await library.discoverTimelineWarmingTargets(includeSharedSpace: includeSharedSpace) { event in
+            switch event {
+            case .listed(let count):
+                progress.discovery.known += count
+            case .resolved(let target):
+                progress.discovery.checked += 1
+                if let target {
+                    baseTargets.append(target)
+                    enqueue(Target(collection: target.collection, snapshot: target.snapshot, title: target.title), signal: signal)
+                }
+            }
+            publishProgress()
+        }
+        guard !Task.isCancelled else { return false }
+        let foldersComplete = await discoverFolders(repository, includeSharedSpace: includeSharedSpace, signal: signal)
+        return discovery.failures.isEmpty && foldersComplete && !Task.isCancelled
+    }
+
+    private func enqueue(_ target: Target, signal: AsyncStream<Void>.Continuation) {
+        if collections[target.collection] == nil {
+            collections[target.collection] = CollectionProgress(total: target.snapshot.sections.count)
+        }
+        pending.append(target)
+        signal.yield()
+    }
+
+    /// One folder read during discovery: its listing and, unless verified earlier this run, its timeline.
+    private struct FolderVisit: Sendable {
+        enum Timeline: Sendable { case skipped, failed, loaded(TimelineSnapshot) }
+        let space: PhotoSpace
+        var directory: FolderDirectory?
+        var directoryVerified = false
+        var timeline = Timeline.skipped
+    }
+
+    /// Walks the folder tree of each space breadth-first, reading several folders at once,
+    /// and queues the non-empty folders not yet verified this run. A child carries its
+    /// summary from the parent's listing when that listing was verified this run. Returns
+    /// whether every folder was read.
+    private func discoverFolders(_ repository: CachedPhotosRepository, includeSharedSpace: Bool,
+                                 signal: AsyncStream<Void>.Continuation) async -> Bool {
+        var complete = true
+        var queue: [(id: Int64, space: PhotoSpace, known: FolderSummary?)] =
+            [(0, .personal, nil)] + (includeSharedSpace ? [(0, .shared, nil)] : [])
+        progress.discovery.known += queue.count
+        await withTaskGroup(of: FolderVisit.self) { group in
+            var running = 0
+            while !Task.isCancelled {
+                while running < LibraryModel.warmingDiscoveryConcurrency, !queue.isEmpty {
+                    let next = queue.removeFirst()
+                    let verified = verifiedCollections
+                    group.addTask {
+                        await Self.visitFolder(repository, id: next.id, space: next.space, known: next.known, skipping: verified)
+                    }
+                    running += 1
+                }
+                guard let visit = await group.next() else { break }
+                running -= 1
+                progress.discovery.checked += 1
+                defer { publishProgress() }
+                guard let directory = visit.directory else { complete = false; continue }
+                queue += directory.children.map { ($0.id, visit.space, visit.directoryVerified ? $0 : nil) }
+                progress.discovery.known += directory.children.count
+                let collection = PhotoCollectionDescriptor.folder(directory.folder.id, space: visit.space)
+                switch visit.timeline {
+                case .skipped: continue
+                case .failed: complete = false
+                case .loaded(let snapshot):
+                    guard !snapshot.sections.isEmpty else { verifiedCollections.insert(collection); continue }
+                    let title = visit.space == .shared ? "Shared folder \(directory.folder.name)" : "Folder \(directory.folder.name)"
+                    enqueue(Target(collection: collection, snapshot: snapshot, title: title), signal: signal)
+                }
+            }
+            group.cancelAll()
+        }
+        return complete
+    }
+
+    nonisolated private static func visitFolder(_ repository: CachedPhotosRepository, id: Int64, space: PhotoSpace,
+                                                known: FolderSummary?,
+                                                skipping verified: Set<PhotoCollectionDescriptor>) async -> FolderVisit {
+        var visit = FolderVisit(space: space)
+        guard let (directory, directoryVerified) = await folderDirectory(repository, id: id, space: space, known: known) else { return visit }
+        visit.directory = directory
+        visit.directoryVerified = directoryVerified
+        let collection = PhotoCollectionDescriptor.folder(directory.folder.id, space: space)
+        guard !verified.contains(collection) else { return visit }
+        visit.timeline = await verifiedSnapshot(repository, collection: collection).map { .loaded($0) } ?? .failed
+        return visit
     }
 
     /// Loads the shown collection first when it still needs work.
     private func runFocusIfNeeded(_ repository: CachedPhotosRepository) async -> Outcome? {
         guard let focus, !verifiedCollections.contains(focus), !unavailableCollections.contains(focus) else { return nil }
-        guard let snapshot = await verifiedSnapshot(repository, collection: focus) else {
+        guard let snapshot = await Self.verifiedSnapshot(repository, collection: focus) else {
             unavailableCollections.insert(focus)
             return .incomplete
         }
@@ -283,7 +389,8 @@ final class MetadataSyncModel: ObservableObject {
             last = value
             collections[target.collection] = CollectionProgress(total: value.total, verified: value.verified,
                                                                 failed: value.failed, state: .running)
-            publish(title: target.title)
+            progress.currentTitle = target.title
+            publishProgress()
             if value.state == .running { sawRunning = true }
             if sawRunning ? value.state != .running : value.state == .finished { break }
             if let focus, focus != target.collection, !verifiedCollections.contains(focus), !unavailableCollections.contains(focus) {
@@ -294,7 +401,7 @@ final class MetadataSyncModel: ObservableObject {
         }
         guard !Task.isCancelled else { return .cancelled }
         collections[target.collection]?.state = .done
-        publish(title: target.title)
+        publishProgress()
         if let last, last.verified == last.total {
             verifiedCollections.insert(target.collection)
             return .verified
@@ -302,7 +409,7 @@ final class MetadataSyncModel: ObservableObject {
         return .incomplete
     }
 
-    private func verifiedSnapshot(_ repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor) async -> TimelineSnapshot? {
+    nonisolated private static func verifiedSnapshot(_ repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor) async -> TimelineSnapshot? {
         for await event in await repository.timeline(collection: collection) {
             if Task.isCancelled { return nil }
             if case .value(let snapshot, true) = event { return snapshot }
@@ -310,8 +417,8 @@ final class MetadataSyncModel: ObservableObject {
         return nil
     }
 
-    private func folderDirectory(_ repository: CachedPhotosRepository, id: Int64, space: PhotoSpace,
-                                 known: FolderSummary?) async -> (FolderDirectory, verified: Bool)? {
+    nonisolated private static func folderDirectory(_ repository: CachedPhotosRepository, id: Int64, space: PhotoSpace,
+                                                    known: FolderSummary?) async -> (FolderDirectory, verified: Bool)? {
         var latest: (FolderDirectory, verified: Bool)?
         for await event in await repository.folderDirectory(id: id, space: space, known: known) {
             if Task.isCancelled { return nil }
@@ -320,31 +427,46 @@ final class MetadataSyncModel: ObservableObject {
         return latest
     }
 
-    private func publish(title: String) {
+    private func publishProgress(force: Bool = false) {
+        // A stopped pass must not overwrite the reset progress.
+        guard !Task.isCancelled else { return }
         let values = collections.values
-        progress = Progress(total: values.reduce(0) { $0 + $1.total },
-                            verified: values.reduce(0) { $0 + $1.verified },
-                            failed: values.reduce(0) { $0 + $1.failed },
-                            running: true, currentTitle: title)
-        updateActivityStatus()
+        progress.total = values.reduce(0) { $0 + $1.total }
+        progress.verified = values.reduce(0) { $0 + $1.verified }
+        progress.failed = values.reduce(0) { $0 + $1.failed }
+        progress.running = true
+        updateActivityStatus(force: force)
     }
 
     private func beginActivity(_ center: ActivityCenter) {
         guard activityHandle == nil else { return }
         activityHandle = center.begin(.metadataSync)
         lastActivityStatus = nil
-        updateActivityStatus()
+        updateActivityStatus(force: true)
     }
 
     /// At most once a second, so per-page progress does not re-render the Activity panel and toolbar.
-    private func updateActivityStatus() {
+    /// One bar follows discovery, the other the sections loaded of those found so far.
+    private func updateActivityStatus(force: Bool = false) {
         guard let activityHandle else { return }
         let now = ContinuousClock.now
-        if let lastActivityStatus, now - lastActivityStatus < Self.activityStatusInterval { return }
+        if !force, let lastActivityStatus, now - lastActivityStatus < Self.activityStatusInterval { return }
         lastActivityStatus = now
-        let title = progress.currentTitle ?? "Discovering collections"
-        activityHandle.status(progress.total > 0 ? "\(title) · \(progress.verified) of \(progress.total) sections" : title)
-        activityHandle.progress(fraction: progress.total > 0 ? Double(progress.verified) / Double(progress.total) : nil)
+        let discovery = progress.discovery
+        let discoveryStage: ActivityStage
+        if discovery.running {
+            discoveryStage = ActivityStage(
+                title: discovery.known > 0 ? "Discovering collections · \(discovery.checked) of \(discovery.known)" : "Discovering collections",
+                fraction: discovery.known > 0 ? Double(discovery.checked) / Double(discovery.known) : nil)
+        } else {
+            discoveryStage = ActivityStage(title: "Discovered \(discovery.known) collection\(discovery.known == 1 ? "" : "s")", fraction: 1)
+        }
+        let fraction = progress.total > 0 ? Double(progress.verified) / Double(progress.total) : nil
+        let sections = progress.total > 0 ? "\(progress.verified) of \(progress.total) sections" : "Waiting for collections"
+        let loadStage = ActivityStage(title: [progress.currentTitle, sections].compactMap { $0 }.joined(separator: " · "),
+                                      fraction: fraction)
+        activityHandle.stages([discoveryStage, loadStage])
+        activityHandle.progress(fraction: fraction)
     }
 
     private func endActivity() {

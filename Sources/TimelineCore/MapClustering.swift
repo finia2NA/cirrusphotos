@@ -111,8 +111,9 @@ public struct MapClusterGroup: Sendable, Equatable {
 ///
 /// The radius starts at the finest useful value (viewport span / 512, raised to
 /// `minimumCellSpan` when supplied) and doubles until the cluster count fits
-/// `maxAnnotations`. Longitude wrap (an antimeridian-spanning region) is not handled;
-/// the library does not currently require it.
+/// `maxAnnotations`. A region spanning the antimeridian (e.g. 165...185) is handled by
+/// shifting candidate longitudes by +-360 into the region's continuous range before
+/// clustering; resulting coordinates are normalized back to -180...180.
 public enum MapClusterBuilder {
     /// Limit expensive MapKit annotations while keeping dense areas accessible as clusters.
     public static let defaultMaxAnnotations = 64
@@ -133,10 +134,18 @@ public enum MapClusterBuilder {
         var candidates: [MapPhotoRecord] = []
         for (index, record) in records.enumerated() {
             if index.isMultiple(of: 256), Task.isCancelled { return [] }
-            if record.coordinate.isValid &&
-                record.coordinate.latitude >= minLatitude && record.coordinate.latitude <= maxLatitude &&
-                record.coordinate.longitude >= minLongitude && record.coordinate.longitude <= maxLongitude {
-                candidates.append(record)
+            guard record.coordinate.isValid,
+                  record.coordinate.latitude >= minLatitude,
+                  record.coordinate.latitude <= maxLatitude else { continue }
+            let longitude = record.coordinate.longitude
+            for shift in [0.0, 360.0, -360.0] {
+                let shifted = longitude + shift
+                guard shifted >= minLongitude, shifted <= maxLongitude else { continue }
+                candidates.append(shift == 0 ? record : MapPhotoRecord(
+                    id: record.id, time: record.time,
+                    coordinate: PhotoCoordinate(latitude: record.coordinate.latitude,
+                                                longitude: shifted)))
+                break
             }
         }
         guard !candidates.isEmpty else { return [] }
@@ -160,7 +169,7 @@ public enum MapClusterBuilder {
             let groups = cluster(ordered: ordered, minLatitude: minLatitude,
                                  minLongitude: minLongitude,
                                  latitudeCell: latitudeCell, longitudeCell: longitudeCell)
-            if groups.count <= cap { return groups }
+            if groups.count <= cap { return groups.map(normalized) }
             // Candidates span at most 1.2x the visible region because of the
             // margin. A 2x radius therefore collapses everything to one group,
             // preserving the annotation cap even for maxAnnotations == 1.
@@ -171,6 +180,25 @@ public enum MapClusterBuilder {
             latitudeCell = min(latitudeCell * 2, region.latitudeDelta * 2)
             longitudeCell = min(longitudeCell * 2, region.longitudeDelta * 2)
         }
+    }
+
+    /// Maps a longitude from the region's continuous range back into -180...180.
+    private static func normalizedLongitude(_ longitude: Double) -> Double {
+        if longitude > 180 { return longitude - 360 }
+        if longitude < -180 { return longitude + 360 }
+        return longitude
+    }
+
+    private static func normalized(_ group: MapClusterGroup) -> MapClusterGroup {
+        func fix(_ coordinate: PhotoCoordinate) -> PhotoCoordinate {
+            PhotoCoordinate(latitude: coordinate.latitude,
+                            longitude: normalizedLongitude(coordinate.longitude))
+        }
+        let representative = MapPhotoRecord(id: group.representative.id,
+                                            time: group.representative.time,
+                                            coordinate: fix(group.representative.coordinate))
+        return MapClusterGroup(coordinate: fix(group.coordinate), count: group.count,
+                               representative: representative, memberIDs: group.memberIDs)
     }
 
     private struct CellKey: Hashable {

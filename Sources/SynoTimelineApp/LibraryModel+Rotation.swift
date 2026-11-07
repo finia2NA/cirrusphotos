@@ -6,7 +6,7 @@ import SynologyAPI
 extension LibraryModel {
     var canRotate: Bool {
         if let activeViewer { return capabilities(for: activeViewer.collection).allowsSpaceItemActions && activeViewer.canRotate }
-        return browserCommandsActive && capabilities(for: browserCommandSnapshot.collection).allowsSpaceItemActions && !browserCommandSnapshot.selectedOrdinals.isEmpty &&
+        return browserCommandsActive && capabilities(for: browserCommandSnapshot.collection).allowsSpaceItemActions && browserHasSelection &&
             timelineVerified(for: browserCommandSnapshot.collection) && !rotationBusy
     }
 

@@ -46,7 +46,7 @@ struct SettingsView: View {
             ViewingSettingsView()
         case .storage:
             AccountScoped(accounts: accounts) { context in
-                StorageSettingsView().environment(context.model)
+                StorageSettingsView(accounts: accounts).environment(context.model)
             }
         case .account:
             AccountSettingsView(accounts: accounts)
@@ -116,7 +116,7 @@ private struct ViewingSettingsView: View {
             } header: {
                 Text("Thumbnails")
             } footer: {
-                Text("Used by the grid and by downloads for offline use.")
+                Text("Larger thumbnails are sharper but load slower and use more space.")
             }
             Section {
                 Toggle("Load large previews", isOn: $preferences.loadsLargeViewerPreviews)
@@ -127,10 +127,11 @@ private struct ViewingSettingsView: View {
                 Picker("Default video quality", selection: $preferences.videoQuality) {
                     ForEach(VideoQualityPreference.allCases, id: \.self) { Text($0.displayName).tag($0) }
                 }
+                Toggle("Show filmstrip and overlay buttons in toolbar", isOn: $preferences.showsViewerToolbarTools)
             } header: {
                 Text("Viewer")
             } footer: {
-                Text("Converted video starts faster and uses less bandwidth. Original may be slower or unsupported by the Mac.")
+                Text("Lower qualities start faster and use less data. Original may not play on this Mac.")
             }
             Section("Inspection overlays") {
                 LabeledContent("Highlight peaking") {
@@ -153,6 +154,7 @@ private struct ViewingSettingsView: View {
 }
 
 private struct StorageSettingsView: View {
+    let accounts: AccountController
     @Environment(LibraryModel.self) private var library
     @EnvironmentObject private var preferences: AppPreferences
     @Environment(\.openWindow) private var openWindow
@@ -177,28 +179,29 @@ private struct StorageSettingsView: View {
             } footer: {
                 Text("Counts cached photos, videos and metadata. The folder in Finder can be a few percent larger.")
             }
+            CacheUsageView(accounts: accounts, refreshKey: library.cacheUsage)
             Section("Offline use") {
                 LabeledContent {
                     Button("Download…") { openWindow(id: "thumbnail-download") }
                 } label: {
-                    caption("Download thumbnails", "Choose dates and download their thumbnails ahead of browsing.")
+                    caption("Download thumbnails", "Photos from chosen dates show instantly and stay visible offline.")
                 }
             }
             Section {
                 LabeledContent {
                     Button("Revalidate") { Task { await library.revalidateAllMetadata() } }
                 } label: {
-                    caption("Revalidate metadata", "Keep cached metadata but read every timeline from the NAS again.")
+                    caption("Revalidate metadata", "Brings an out-of-date library view in line with the NAS.")
                 }
                 LabeledContent {
                     Button("Clear") { Task { await library.clearMetadataCache() } }
                 } label: {
-                    caption("Clear metadata", "Remove timelines, albums and the map index. Thumbnails and photos stay.")
+                    caption("Clear metadata", "Frees space used by library details. Thumbnails and photos stay.")
                 }
                 LabeledContent {
                     Button("Clear…", role: .destructive) { confirmsClear = true }
                 } label: {
-                    caption("Clear all cached data", "Remove everything this account has cached on this Mac.")
+                    caption("Clear all cached data", "Frees all space this account uses on this Mac.")
                 }
             } header: {
                 HStack {
@@ -231,6 +234,7 @@ private struct StorageSettingsView: View {
 private struct AccountSettingsView: View {
     let accounts: AccountController
     @Environment(\.openWindow) private var openWindow
+    @State private var signingOut: StoredAccount?
 
     var body: some View {
         Form {
@@ -252,31 +256,38 @@ private struct AccountSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             } else {
-                Section("Accounts on this Mac") {
+                Section {
                     ForEach(accounts.accounts) { account in
                         LabeledContent(account.displayName) {
-                            if accounts.context?.account?.id == account.id {
-                                Text("Open").foregroundStyle(.secondary)
-                            } else {
-                                Button("Switch") { Task { await accounts.switchTo(account) } }
+                            HStack {
+                                if accounts.context?.account?.id == account.id {
+                                    Text("Open").foregroundStyle(.secondary)
+                                } else {
+                                    Button("Switch") { Task { await accounts.switchTo(account) } }
+                                }
+                                Button("Sign Out…", role: .destructive) { signingOut = account }
                             }
                         }
                     }
-                }
-                Section {
-                    HStack {
-                        Button("Add Account…") { openWindow(id: AddAccountWindow.id) }
-                            .disabled(accounts.context == nil)
-                        Spacer()
-                        Button("Sign Out") { Task { await accounts.signOut() } }
-                            .disabled(accounts.context == nil)
-                    }
+                    Button("Add Account…") { openWindow(id: AddAccountWindow.id) }
+                        .disabled(accounts.context == nil)
+                } header: {
+                    Text("Accounts on this Mac")
                 } footer: {
-                    Text("Signing out removes the saved password and trusted-device token. Cached photos stay until the cache is cleared.")
+                    Text("Signing out also deletes the account’s cached photos on this Mac.")
                 }
             }
         }
         .formStyle(.grouped)
         .scrollDisabled(true)
+        .confirmationDialog("Sign out of \(signingOut?.displayName ?? "this account")?",
+                            isPresented: Binding(get: { signingOut != nil }, set: { if !$0 { signingOut = nil } }),
+                            presenting: signingOut) { account in
+            Button("Sign Out and Delete Cache", role: .destructive) {
+                Task { await accounts.signOut(account) }
+            }
+        } message: { _ in
+            Text("Its saved password and cached photos are removed from this Mac.")
+        }
     }
 }

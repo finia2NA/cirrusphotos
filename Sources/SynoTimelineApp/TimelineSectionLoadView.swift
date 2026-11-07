@@ -15,7 +15,7 @@ struct TimelineSectionLoadView: View {
                 Toggle("Include Shared Space", isOn: $includesSharedSpace)
                 Toggle("Skip sections already cached", isOn: $useCachedPages)
             } footer: {
-                Text("Reads every timeline section of the library, favorites and albums, so filters and search cover everything.")
+                Text("Filters and search then cover the whole library, favorites and albums.")
             }
             .disabled(running)
 

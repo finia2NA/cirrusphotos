@@ -68,9 +68,12 @@ struct KeychainSecrets: AccountSecrets {
 /// The list is in user defaults; passwords and trusted-device tokens are in `AccountSecrets`.
 @MainActor
 final class AccountStore {
-    private enum Item {
-        static let password = "password"
-        static let deviceToken = "device-token"
+    /// Password and device token share one Keychain item, so opening an account reads
+    /// the Keychain once and macOS asks for access at most once.
+    private static let signInItem = "sign-in"
+    private struct SignInSecret: Codable {
+        let password: String
+        let deviceToken: String?
     }
     static let accountsKey = "accounts.v1"
     static let currentKey = "accounts.current.v1"
@@ -102,12 +105,9 @@ final class AccountStore {
 
     /// Adds or replaces an account and its secrets. A nil token removes an older one.
     func save(_ account: StoredAccount, password: String, deviceToken: String?) throws {
-        try secrets.write(password, account: account.id, item: Item.password)
-        if let deviceToken {
-            try secrets.write(deviceToken, account: account.id, item: Item.deviceToken)
-        } else {
-            secrets.delete(account: account.id, item: Item.deviceToken)
-        }
+        let secret = SignInSecret(password: password, deviceToken: deviceToken)
+        let encoded = String(decoding: try JSONEncoder().encode(secret), as: UTF8.self)
+        try secrets.write(encoded, account: account.id, item: Self.signInItem)
         accounts.removeAll { $0.id == account.id }
         accounts.append(account)
         persist()
@@ -151,8 +151,7 @@ final class AccountStore {
     }
 
     func remove(_ account: StoredAccount) {
-        secrets.delete(account: account.id, item: Item.password)
-        secrets.delete(account: account.id, item: Item.deviceToken)
+        secrets.delete(account: account.id, item: Self.signInItem)
         accounts.removeAll { $0.id == account.id }
         if defaults.string(forKey: Self.currentKey) == account.id { setCurrent(nil) }
         persist()
@@ -160,11 +159,11 @@ final class AccountStore {
 
     /// Credentials for opening the account's repository, or nil when its password is gone.
     func credentials(for account: StoredAccount) -> SynologyCredentials? {
-        guard let password = secrets.read(account: account.id, item: Item.password) else { return nil }
-        let token = secrets.read(account: account.id, item: Item.deviceToken)
+        guard let stored = secrets.read(account: account.id, item: Self.signInItem),
+              let secret = try? JSONDecoder().decode(SignInSecret.self, from: Data(stored.utf8)) else { return nil }
         return SynologyCredentials(
-            username: account.username, password: password,
-            secondFactor: token.map { .deviceToken($0) } ?? .none,
+            username: account.username, password: secret.password,
+            secondFactor: secret.deviceToken.map { .deviceToken($0) } ?? .none,
             serverURL: account.serverURL,
             serverTrust: account.pinnedCertificate.map { .pinned(sha256: $0) } ?? .system)
     }

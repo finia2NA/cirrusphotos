@@ -50,8 +50,8 @@ enum ActivityWording {
             return pick(stage, name, "Exported \(name)", "\(name) failed")
         case .upload(let destination):
             let target = destination.map { " to \($0)" } ?? ""
-            return pick(stage, "Uploading \(photos)\(target)", "Uploaded \(photos)\(target)",
-                        "Uploading failed for \(quantity(n, total, "file", "files"))")
+            let files = quantity(n, total, "file", "files")
+            return pick(stage, "Uploading \(files)\(target)", "Uploaded \(files)\(target)", "Uploading failed for \(files)")
         case .renameAlbum(let from, let to):
             return pick(stage, "Renaming album \(from)", "Renamed album \(from) to \(to)", "Renaming album \(from) failed")
         case .renamePerson(let name):
@@ -63,6 +63,9 @@ enum ActivityWording {
             return pick(stage, "Refreshing from the NAS", "Refreshed from the NAS", "Refresh failed")
         case .metadataSync:
             return pick(stage, "Syncing library metadata", "Synced library metadata", "Metadata sync failed")
+        case .thumbnailDownload:
+            return pick(stage, "Downloading thumbnails for offline use", "Downloaded thumbnails for offline use",
+                        "Downloading thumbnails failed")
         case .notice(let title):
             return title
         case .unverified(let action):

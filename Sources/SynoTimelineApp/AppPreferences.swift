@@ -21,6 +21,7 @@ final class AppPreferences: ObservableObject {
         static let viewerFocusEdgeTolerance = "viewerFocusEdgeTolerance"
         static let viewerHistogramShowsColor = "viewerHistogramShowsColor"
         static let warmingIncludesSharedSpace = "warmingIncludesSharedSpace"
+        static let showsViewerToolbarTools = "showsViewerToolbarTools"
     }
 
     static let itemsPerRowRange = 3...10
@@ -41,6 +42,7 @@ final class AppPreferences: ObservableObject {
     }
     @Published var cropsThumbnailsToSquare: Bool { didSet { defaults.set(cropsThumbnailsToSquare, forKey: Key.cropsThumbnailsToSquare) } }
     @Published var alwaysShowsTimeline: Bool { didSet { defaults.set(alwaysShowsTimeline, forKey: Key.alwaysShowsTimeline) } }
+    @Published var showsViewerToolbarTools: Bool { didSet { defaults.set(showsViewerToolbarTools, forKey: Key.showsViewerToolbarTools) } }
     /// The cache budget as a fraction of the slider range; the stored value is bytes.
     @Published var budgetFraction: Double { didSet { defaults.set(Int(budgetBytes), forKey: Key.cacheBudget) } }
 
@@ -56,6 +58,7 @@ final class AppPreferences: ObservableObject {
         itemsPerRow = (defaults.object(forKey: Key.itemsPerRow) as? NSNumber)?.intValue.clamped(to: Self.itemsPerRowRange) ?? 6
         cropsThumbnailsToSquare = defaults.bool(forKey: Key.cropsThumbnailsToSquare)
         alwaysShowsTimeline = defaults.bool(forKey: Key.alwaysShowsTimeline)
+        showsViewerToolbarTools = defaults.bool(forKey: Key.showsViewerToolbarTools)
         budgetFraction = CacheBudget.fraction(for: Int64(defaults.object(forKey: Key.cacheBudget) as? Int ?? Int(CacheBudget.bytes(at: 0.5))))
     }
 

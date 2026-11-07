@@ -42,7 +42,7 @@ extension LibraryModel {
             return capabilities(for: activeViewer.collection).allowsSpaceItemActions && activeViewer.canAnnotate && !annotationBusy
         }
         return browserCommandsActive && capabilities(for: browserCommandSnapshot.collection).allowsSpaceItemActions &&
-            !browserCommandSnapshot.selectedOrdinals.isEmpty && timelineVerified(for: browserCommandSnapshot.collection) &&
+            browserHasSelection && timelineVerified(for: browserCommandSnapshot.collection) &&
             !annotationBusy
     }
 

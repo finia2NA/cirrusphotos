@@ -57,6 +57,9 @@ final class LibraryModel {
     private(set) var canNavigateBack = false
     private(set) var canOpenSelectedPhoto = false
     private(set) var browserCommandsActive = false
+    /// Observed mirror of a non-empty `browserCommandSnapshot` selection, so toolbar
+    /// controls that read the (unobserved) snapshot re-render when the selection empties.
+    private(set) var browserHasSelection = false
     /// Whether the browser selection-favorite action may begin (selection non-empty, no confirmation pending).
     private(set) var canToggleBrowserFavorite = false
     /// True when every item of a small browser selection is a favorite; fills the toolbar heart.
@@ -248,57 +251,78 @@ final class LibraryModel {
         startCollectionFetchIfNeeded(collection, quiet: quiet)
     }
 
+    /// Album and folder timelines read at once during warming discovery.
+    static let warmingDiscoveryConcurrency = 5
+
+    enum TimelineWarmingDiscoveryEvent {
+        /// More collections are known to need resolving.
+        case listed(Int)
+        /// One collection was resolved; nil when its timeline could not be loaded.
+        case resolved(TimelineWarmingTarget?)
+    }
+
     /// Resolves every persistent collection that participates in explicit metadata
-    /// warming. Album discovery and unopened album timeline scans begin only after
-    /// the user presses Start in the warming window.
-    func discoverTimelineWarmingTargets(includeSharedSpace: Bool = false) async -> TimelineWarmingTargetDiscovery {
+    /// warming: the library targets, then the owned albums a few at a time. `report`
+    /// receives each target as soon as its timeline is verified.
+    func discoverTimelineWarmingTargets(includeSharedSpace: Bool = false,
+                                        report: (TimelineWarmingDiscoveryEvent) -> Void = { _ in }) async -> TimelineWarmingTargetDiscovery {
         guard repository != nil else {
             return .init(targets: [], failures: ["The photo repository is unavailable."])
         }
+        var targets: [TimelineWarmingTarget] = []
+        var failures: [String] = []
+        func resolve(_ collection: PhotoCollectionDescriptor) {
+            guard !Task.isCancelled, let title = warmingTitle(for: collection) else { return }
+            if timelineVerified(for: collection), let snapshot = snapshot(for: collection) {
+                let target = TimelineWarmingTarget(collection: collection, snapshot: snapshot,
+                                                   revision: snapshotRevision(for: collection), title: title)
+                targets.append(target)
+                report(.resolved(target))
+            } else {
+                failures.append("\(title): \(error(for: collection) ?? "timeline could not be loaded")")
+                report(.resolved(nil))
+            }
+        }
 
         let baseCollections: [PhotoCollectionDescriptor] = [.library(.personal), .favorites(.personal)] + (includeSharedSpace ? [.library(.shared), .favorites(.shared)] : [])
+        report(.listed(baseCollections.count))
         for collection in baseCollections {
             startCollectionFetchIfNeeded(collection)
         }
         for collection in baseCollections {
             await collectionFetchTasks[collection]?.value
+            resolve(collection)
         }
 
         ensureAlbumsLoaded()
         await albumsTask?.value
-
-        let albumCollections = ownedAlbums.compactMap(\.collection)
-        for collection in albumCollections {
-            guard !Task.isCancelled else { break }
-            ensureCollectionLoaded(collection, quiet: true)
-            await collectionFetchTasks[collection]?.value
-        }
-
-        let persistentCollections = baseCollections + albumCollections
-        var targets: [TimelineWarmingTarget] = []
-        var failures: [String] = []
-        for collection in persistentCollections {
-            guard !Task.isCancelled else { break }
-            let title: String
-            switch collection {
-            case .library(.personal): title = "Personal Library"
-            case .library(.shared): title = "Shared Library"
-            case .favorites(.personal): title = "Favorites"
-            case .favorites(.shared): title = "Shared Favorites"
-            case .album(let id): title = albumName(for: collection) ?? "Album \(id)"
-            case .folder, .person, .subject, .tag, .recentlyAdded, .incomingAlbum, .mapFilter, .libraryFilter: continue
-            }
-            if timelineVerified(for: collection), let snapshot = snapshot(for: collection) {
-                targets.append(.init(collection: collection, snapshot: snapshot,
-                                     revision: snapshotRevision(for: collection), title: title))
-            } else {
-                failures.append("\(title): \(error(for: collection) ?? "timeline could not be loaded")")
-            }
-        }
         if !ownedAlbumsVerified {
             failures.append("Albums: \(albumListError ?? "album list could not be loaded")")
         }
+        let albumCollections = ownedAlbums.compactMap(\.collection)
+        report(.listed(albumCollections.count))
+        await withTaskGroup(of: PhotoCollectionDescriptor.self) { group in
+            for (offset, collection) in albumCollections.enumerated() {
+                if offset >= Self.warmingDiscoveryConcurrency, let finished = await group.next() { resolve(finished) }
+                guard !Task.isCancelled else { break }
+                ensureCollectionLoaded(collection, quiet: true)
+                let task = collectionFetchTasks[collection]
+                group.addTask { await task?.value; return collection }
+            }
+            for await finished in group { resolve(finished) }
+        }
         return .init(targets: targets, failures: failures)
+    }
+
+    private func warmingTitle(for collection: PhotoCollectionDescriptor) -> String? {
+        switch collection {
+        case .library(.personal): "Personal Library"
+        case .library(.shared): "Shared Library"
+        case .favorites(.personal): "Favorites"
+        case .favorites(.shared): "Shared Favorites"
+        case .album(let id): albumName(for: collection) ?? "Album \(id)"
+        case .folder, .person, .subject, .tag, .recentlyAdded, .incomingAlbum, .mapFilter, .libraryFilter: nil
+        }
     }
 
     // MARK: - Session Collections
@@ -400,6 +424,8 @@ final class LibraryModel {
         if canOpenSelectedPhoto != canOpen { canOpenSelectedPhoto = canOpen }
         browserCommandHandler = active ? handler : nil
         browserCommandSnapshot = active ? snapshot : .inactive
+        let hasSelection = active && !snapshot.selectedOrdinals.isEmpty
+        if browserHasSelection != hasSelection { browserHasSelection = hasSelection }
         if active { lastActiveBrowserSnapshot = snapshot }
         updateBrowserFavoriteAvailability()
         refreshBrowserSelectionFavorite()
@@ -442,7 +468,7 @@ final class LibraryModel {
     func updateBrowserFavoriteAvailability() {
         let available = browserCommandsActive && capabilities(for: browserCommandSnapshot.collection).allowsSpaceItemActions &&
             browserCommandSnapshot.canToggleFavorite &&
-            !browserCommandSnapshot.selectedOrdinals.isEmpty &&
+            browserHasSelection &&
             pendingFavoriteConfirmation == nil &&
             timelineVerified(for: browserCommandSnapshot.collection)
         if canToggleBrowserFavorite != available { canToggleBrowserFavorite = available }

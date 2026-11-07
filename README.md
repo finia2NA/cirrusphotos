@@ -8,7 +8,7 @@ Run from the repository root:
 bash scripts/run.sh
 ```
 
-This builds and opens a local `.app` inside the ignored `.build` directory. Pass `--build-only` to build, assemble, and sign the bundle without opening it. Alternatively, run directly from the terminal:
+This builds and opens a local `.app` inside the ignored `.build` directory. Pass `--build-only` to build, assemble, and sign the bundle without opening it. The bundle is signed with `CODESIGN_IDENTITY` or the first Apple Development identity, falling back to ad-hoc; a stable identity keeps the app's Keychain access across rebuilds. Alternatively, run directly from the terminal:
 
 ```sh
 swift run SynoTimeline

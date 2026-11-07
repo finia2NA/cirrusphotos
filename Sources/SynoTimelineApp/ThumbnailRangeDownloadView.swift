@@ -15,8 +15,10 @@ struct ThumbnailPreloadTargets {
     let targets: [(collection: PhotoCollectionDescriptor, snapshot: TimelineSnapshot)]
     let verified: Bool
     let combined: TimelineSnapshot?
+    let includesSharedSpace: Bool
 
     init(library: LibraryModel, includesSharedSpace: Bool) {
+        self.includesSharedSpace = includesSharedSpace
         let collections: [PhotoCollectionDescriptor] = [.library(.personal)] + (includesSharedSpace ? [.library(.shared)] : [])
         targets = collections.compactMap { collection in library.snapshot(for: collection).map { (collection, $0) } }
         verified = library.timelineVerified(for: .library(.personal)) &&
@@ -30,57 +32,6 @@ struct ThumbnailPreloadTargets {
         else { return 0 }
         return range.estimatedThumbnailCount(in: combined)
     }
-}
-
-/// One account's thumbnail preload. It outlives the Download Thumbnails window, so a
-/// run started there or after sign-in keeps going until it finishes or is cancelled.
-@MainActor
-final class ThumbnailPreloadModel: ObservableObject {
-    @Published private(set) var summary: ThumbnailBatchSummary?
-    @Published private(set) var outcome: String?
-    @Published private(set) var size: ThumbnailSize?
-    @Published private(set) var isRunning = false
-    private var task: Task<Void, Never>?
-
-    func start(library: LibraryModel, targets: ThumbnailPreloadTargets, selection: ThumbnailDaySelection, size: ThumbnailSize) {
-        guard task == nil, targets.verified, let repository = library.repository else { return }
-        let jobs = targets.targets.compactMap { target -> (PhotoCollectionDescriptor, TimelineSnapshot, ThumbnailDateRange)? in
-            guard let range = ThumbnailWarmingPlan.range(in: target.snapshot, from: selection.earliest,
-                                                         through: selection.latest) else { return nil }
-            return (target.collection, target.snapshot, range)
-        }
-        let total = jobs.reduce(0) { $0 + $1.2.estimatedThumbnailCount(in: $1.1) }
-        guard total > 0 else { return }
-        self.size = size
-        summary = ThumbnailBatchSummary(estimated: total)
-        outcome = nil
-        isRunning = true
-        task = Task { [weak self] in
-            let downloader = ThumbnailRangeDownloader(repository: repository, workerCount: 2)
-            var final = ThumbnailBatchSummary(estimated: total)
-            for (collection, snapshot, range) in jobs {
-                guard !Task.isCancelled else { break }
-                let completed = final
-                let next = await downloader.download(snapshot: snapshot, range: range, size: size, collection: collection) { update in
-                    await MainActor.run { self?.summary = completed.adding(update, estimated: total) }
-                }
-                final = completed.adding(next, estimated: total)
-                if next.interrupted { break }
-            }
-            guard let self else { return }
-            if Task.isCancelled {
-                outcome = "Cancelled"
-            } else {
-                summary = final
-                outcome = final.interrupted ? "Interrupted: the library changed" : "Done"
-            }
-            task = nil
-            isRunning = false
-            await library.refreshUsage()
-        }
-    }
-
-    func cancel() { task?.cancel() }
 }
 
 /// The two-handle day range used by the Download Thumbnails window and by the preload
@@ -216,7 +167,7 @@ struct ThumbnailRangeDownloadView: View {
             HStack {
                 Spacer()
                 if preload.isRunning {
-                    Button("Stop") { preload.cancel() }
+                    Button("Stop…") { preload.requestCancel() }
                 }
                 Button("Close") { dismiss() }
                 Button("Start") {

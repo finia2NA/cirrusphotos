@@ -214,4 +214,34 @@ final class MapClusteringTests: XCTestCase {
         XCTAssertEqual(object["latitude"], 35.5)
         XCTAssertEqual(object["longitude"], 139.25)
     }
+
+    func testRegionSpanningAntimeridianIncludesBothSides() {
+        let spanning = MapRegion(center: PhotoCoordinate(latitude: 0, longitude: 175),
+                                 latitudeDelta: 10, longitudeDelta: 20)
+        let records = [
+            record(1, lat: 0, lon: 170, time: 300),
+            record(2, lat: 0, lon: -178, time: 200),
+            record(3, lat: 0, lon: 0, time: 100),
+        ]
+        let groups = MapClusterBuilder.groups(records: records, in: spanning)
+        XCTAssertEqual(Set(groups.map(\.representative.id)), [1, 2])
+        let west = groups.first { $0.representative.id == 2 }
+        XCTAssertEqual(west?.coordinate.longitude ?? 0, -178, accuracy: 1e-9)
+    }
+
+    func testClusterStraddlingAntimeridianIsOneGroupWithNormalizedCoordinate() {
+        let spanning = MapRegion(center: PhotoCoordinate(latitude: 0, longitude: 180),
+                                 latitudeDelta: 10, longitudeDelta: 20)
+        let records = [
+            record(1, lat: 0, lon: 179.99, time: 200),
+            record(2, lat: 0, lon: -179.99, time: 100),
+        ]
+        let groups = MapClusterBuilder.groups(
+            records: records, in: spanning,
+            minimumCellSpan: MapCellSpan(latitude: 1, longitude: 1))
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups.first?.memberIDs, [1, 2])
+        XCTAssertEqual(groups.first?.coordinate.longitude ?? 0, 179.99, accuracy: 1e-9)
+        XCTAssertTrue(groups.first?.coordinate.isValid ?? false)
+    }
 }

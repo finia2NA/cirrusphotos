@@ -44,6 +44,7 @@ public actor CachedPhotosRepository {
             root = CacheLocation.defaultRoot().appendingPathComponent(namespace, isDirectory: true)
         }
         store = try DiskCache(root: root, budget: budget)
+        if let server { CacheInventory.writeLabel(root: root, server: server, username: credentials.username) }
     }
 
     public func setBudget(_ bytes: Int64) async throws {

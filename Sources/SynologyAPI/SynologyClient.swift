@@ -54,8 +54,9 @@ public actor SynologyClient: PhotosTransport {
             throw SynologyAPIError.unsupported("This filename cannot be uploaded.")
         }
         let values = try url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .contentTypeKey])
-        guard values.isRegularFile == true, values.contentType?.conforms(to: .image) == true else {
-            throw SynologyAPIError.unsupported("Only local image files can be uploaded.")
+        guard values.isRegularFile == true,
+              let type = values.contentType, type.conforms(to: .image) || type.conforms(to: .movie) else {
+            throw SynologyAPIError.unsupported("Only local photo and video files can be uploaded.")
         }
         let api: String
         let method: String

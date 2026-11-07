@@ -24,9 +24,34 @@ final class PhotoUploadTests: XCTestCase {
             XCTAssertEqual(folder.id, 13)
         }
     }
+
+    func testVideoUploadsAndOtherFilesAreRejected() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [UploadFixtureProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let client = SynologyClient(baseURL: URL(string: "https://example.test")!, session: session)
+        try await client.login(credentials: .init(username: "fixture", password: "fixture"))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let video = directory.appendingPathComponent("IMG_0001.MOV")
+        try Data([1, 2, 3, 4]).write(to: video)
+        UploadFixtureProtocol.expectedContentType = "video/quicktime"
+        defer { UploadFixtureProtocol.expectedContentType = nil }
+        let uploaded = try await client.uploadPhoto(at: video, destination: .timeline(.shared), progress: { _ in })
+        XCTAssertEqual(uploaded.id, 11)
+        let text = directory.appendingPathComponent("notes.txt")
+        try Data("notes".utf8).write(to: text)
+        do {
+            _ = try await client.uploadPhoto(at: text, destination: .timeline(.personal), progress: { _ in })
+            XCTFail("a text file must not upload")
+        } catch SynologyAPIError.unsupported {}
+    }
 }
 
 private final class UploadFixtureProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var expectedContentType: String?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func stopLoading() {}
@@ -52,6 +77,9 @@ private final class UploadFixtureProtocol: URLProtocol, @unchecked Sendable {
             }
             let text = String(decoding: body, as: UTF8.self)
             XCTAssertTrue(text.contains("name=\"file\""))
+            if let expected = Self.expectedContentType {
+                XCTAssertTrue(text.contains("Content-Type: \(expected)\r\n"))
+            }
             XCTAssertTrue(text.contains("name=\"duplicate\"\r\n\r\n\"ignore\""))
             if query.first(where: { $0.name == "method" })?.value == "upload_to_folder" {
                 XCTAssertTrue(text.contains("name=\"method\"\r\n\r\nupload_to_folder"))

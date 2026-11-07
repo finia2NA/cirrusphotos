@@ -14,7 +14,10 @@ struct AccountRootView: View {
                 SetupView(accounts: accounts, context: context, step: step)
                     .frame(minWidth: 560, minHeight: 560)
                     .id(context.id)
-                    .task(id: context.id) { await context.model.load() }
+                    .task(id: context.id) {
+                        await context.model.load()
+                        context.thumbnailPreload.resumeIfRequested(library: context.model)
+                    }
             } else if let context = accounts.context {
                 AppShellView(navigation: context.navigation, albumPresentation: context.albumPresentation)
                     .environment(context.model)
@@ -26,7 +29,10 @@ struct AccountRootView: View {
                     .environment(\.metadataSyncModel, context.metadataSync)
                     .frame(minWidth: 560, minHeight: 420)
                     .id(context.id)
-                    .task(id: context.id) { await context.model.load() }
+                    .task(id: context.id) {
+                        await context.model.load()
+                        context.thumbnailPreload.resumeIfRequested(library: context.model)
+                    }
             } else if accounts.phase == .switching || (accounts.usesEnvironmentFile && accounts.context == nil) {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -241,7 +247,7 @@ private struct CodeEntrySheet: View {
                 if let message = model.errorMessage {
                     Text(message).font(.callout).foregroundStyle(.red)
                 }
-                Text("This Mac will be trusted, so the code is not needed again.")
+                Text("This Mac won’t ask for a code again.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)
@@ -273,7 +279,7 @@ struct CertificateTrustSheet: View {
                       subtitle: "macOS could not verify this server’s certificate.",
                       width: 460) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("The certificate may be self-signed or issued for a different name. Connect only if this SHA-256 fingerprint matches the certificate in DSM (Control Panel ▸ Security ▸ Certificate).")
+                Text("Connect only if this fingerprint matches the certificate in DSM (Control Panel ▸ Security ▸ Certificate).")
                     .fixedSize(horizontal: false, vertical: true)
                 Text(SignInModel.formatted(fingerprint: fingerprint))
                     .font(.system(.caption, design: .monospaced))
@@ -281,7 +287,7 @@ struct CertificateTrustSheet: View {
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-                Text("Cirrus Photos will then accept only this certificate for this server, and ask again if it changes.")
+                Text("You will be asked again if the certificate changes.")
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -334,12 +340,12 @@ private struct SetupPreferencesPage: View {
 
     var body: some View {
         OnboardingPage(title: "Set Up Cirrus Photos",
-                       subtitle: "Both can be changed later in Settings.") {
+                       subtitle: "You can change both later in Settings.") {
             Form {
                 Section {
                     ThumbnailQualityPicker(size: $preferences.thumbnailSize)
                 } footer: {
-                    Text("Larger thumbnails look sharper in the grid but take longer to load and use more space.")
+                    Text("Larger thumbnails are sharper but load slower and use more space.")
                 }
                 Section {
                     LabeledContent("Cache size") {
@@ -352,7 +358,7 @@ private struct SetupPreferencesPage: View {
                         }
                     }
                 } footer: {
-                    Text("Photos, videos and library details you have seen are kept on this Mac up to this size, so they open instantly and stay available offline. The oldest are removed first.")
+                    Text("Viewed photos and videos stay available offline, up to this size.")
                 }
             }
             .formStyle(.grouped)
@@ -365,55 +371,47 @@ private struct SetupPreferencesPage: View {
     }
 }
 
-/// Step 3: explains downloading ahead, then offers it.
+/// Step 3: explains downloading thumbnails ahead, then offers it. Library details
+/// sync in the background on their own, so they are not offered here.
 private struct SetupDownloadPage: View {
     let context: AccountContext
     let done: () -> Void
     @EnvironmentObject private var preferences: AppPreferences
     @AppStorage(AppPreferences.Key.warmingIncludesSharedSpace) private var includesSharedSpace = true
-    @State private var includesMetadata = true
-    @State private var includesThumbnails = true
     @State private var selection: ThumbnailDaySelection?
 
     var body: some View {
         let targets = ThumbnailPreloadTargets(library: context.model, includesSharedSpace: includesSharedSpace)
-        OnboardingPage(title: "Download for Offline Use?",
-                       subtitle: "Photos load from the NAS as you browse. Downloading ahead makes browsing faster on a slow connection and keeps your library available away from home. It runs in the background; you can start using the library right away.") {
-            if !targets.verified {
-                SheetPlaceholder(state: .loading("Reading your library…"), minHeight: 200)
-            } else {
-                Form {
-                    Section {
-                        Toggle("Timeline and album details", isOn: $includesMetadata)
-                        Toggle("Thumbnails", isOn: $includesThumbnails)
-                        Toggle("Include Shared Space", isOn: $includesSharedSpace)
-                    } footer: {
-                        Text("Details make search, filters and albums work offline. Thumbnails use the \(qualityName) quality chosen before.")
-                    }
-                    if includesThumbnails {
+        OnboardingPage(title: "Download Thumbnails?",
+                       subtitle: "Photos from the chosen dates show instantly and stay visible offline.") {
+            VStack(spacing: 10) {
+                if !targets.verified {
+                    SheetPlaceholder(state: .loading("Reading your library…"), minHeight: 200)
+                } else {
+                    Form {
+                        Section {
+                            Toggle("Include Shared Space", isOn: $includesSharedSpace)
+                        }
                         Section {
                             ThumbnailRangeSelector(snapshot: targets.combined, selection: $selection)
                         } header: {
-                            Text("Thumbnail dates")
+                            Text("Dates")
                         } footer: {
-                            Text("Up to \(targets.estimate(selection).formatted()) thumbnails · cache size \(ByteCountFormatter.string(fromByteCount: CacheBudget.bytes(at: preferences.budgetFraction), countStyle: .file))")
+                            Text("Up to \(targets.estimate(selection).formatted()) thumbnails at \(qualityName) quality · cache size \(ByteCountFormatter.string(fromByteCount: CacheBudget.bytes(at: preferences.budgetFraction), countStyle: .file))")
                                 .monospacedDigit()
                         }
                     }
+                    .formStyle(.grouped)
+                    .scrollDisabled(true)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
-                .formStyle(.grouped)
-                .scrollDisabled(true)
-                .fixedSize(horizontal: false, vertical: true)
             }
-        } leading: {
-            Text("Also in Settings ▸ Storage.")
-                .font(.callout).foregroundStyle(.secondary)
         } trailing: {
             Button("Skip", action: done)
                 .keyboardShortcut(.cancelAction)
             Button("Download") { start(targets) }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!targets.verified || (!includesMetadata && !includesThumbnails))
+                .disabled(!targets.verified || targets.estimate(selection) == 0)
         }
         .task(id: includesSharedSpace) {
             if includesSharedSpace { context.model.ensureCollectionLoaded(.library(.shared)) }
@@ -425,14 +423,7 @@ private struct SetupDownloadPage: View {
     }
 
     private func start(_ targets: ThumbnailPreloadTargets) {
-        if includesMetadata {
-            // The library window configures this when shown; it is not shown yet.
-            context.timelineSectionLoad.configure(library: context.model, filter: context.libraryFilter)
-            if context.timelineSectionLoad.prepare() {
-                context.timelineSectionLoad.start(useCachedPages: true, includeSharedSpace: includesSharedSpace)
-            }
-        }
-        if includesThumbnails, let selection {
+        if let selection {
             context.thumbnailPreload.start(library: context.model, targets: targets, selection: selection,
                                            size: preferences.thumbnailSize)
         }
@@ -445,6 +436,7 @@ private struct SetupDownloadPage: View {
 struct AccountCommands: Commands {
     let accounts: AccountController
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some Commands {
         CommandMenu("Account") {
@@ -465,8 +457,10 @@ struct AccountCommands: Commands {
                     Button("Add Account…") { openWindow(id: AddAccountWindow.id) }
                         .disabled(accounts.context == nil)
                 }
-                Button("Sign Out") { Task { await accounts.signOut() } }
-                    .disabled(accounts.context == nil)
+                Button("Manage Accounts…") {
+                    UserDefaults.standard.set("account", forKey: "settings.selectedTab")
+                    openSettings()
+                }
             }
         }
     }

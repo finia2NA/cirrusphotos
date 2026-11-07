@@ -169,4 +169,15 @@ final class SignInTests: XCTestCase {
         for index in 0..<15 { store.rememberServer(URL(string: "https://nas\(index).example.test")!) }
         XCTAssertEqual(defaults.stringArray(forKey: AccountStore.recentServersKey)?.count, AccountStore.recentServerLimit)
     }
+
+    func testSavedThumbnailDownloadSurvivesSuspension() {
+        let defaults = UserDefaults(suiteName: "SignInTests-\(UUID().uuidString)")!
+        let request = ThumbnailPreloadModel.Request(earliest: "2024-01-01", latest: "2024-02-01",
+                                                    includesSharedSpace: true, size: "m")
+        defaults.set(try? JSONEncoder().encode(request), forKey: ThumbnailPreloadModel.requestKey(namespace: "ns"))
+        let model = ThumbnailPreloadModel(defaults: defaults)
+        model.suspend()
+        XCTAssertEqual(model.savedRequest(namespace: "ns"), request)
+        XCTAssertNil(model.savedRequest(namespace: "other"))
+    }
 }

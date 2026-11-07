@@ -2,7 +2,7 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
-    /// Upload one local image. A failed request may have reached the NAS, so the
+    /// Upload one local photo or video. A failed request may have reached the NAS, so the
     /// same invalidation and refresh runs for both successful and uncertain writes.
     public func uploadPhoto(at url: URL, destination: PhotoUploadDestination,
                             progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoUploadResult {

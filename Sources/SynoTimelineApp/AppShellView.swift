@@ -811,23 +811,25 @@ struct AppShellView: View {
             .sharedBackgroundVisibility(.hidden)
         }
         if !inViewer && selectedDestination != .albums {
+            // One item so the space picker and the folder toggle share a single glass capsule.
             ToolbarItem(id: "space", placement: .navigation) {
-                Picker("Space", selection: $navigation.selectedSpace) {
-                    Text("Personal Space").tag(PhotoSpace.personal)
-                    Text("Shared Space").tag(PhotoSpace.shared)
+                HStack(spacing: 4) {
+                    Picker("Space", selection: $navigation.selectedSpace) {
+                        Text("Personal Space").tag(PhotoSpace.personal)
+                        Text("Shared Space").tag(PhotoSpace.shared)
+                    }
+                    .pickerStyle(.menu)
+                    .fixedSize()
+                    if selectedDestination == .personalLibrary {
+                        Button { showsFolders.toggle() } label: {
+                            Image(systemName: showsFolders ? "photo.on.rectangle" : "folder")
+                        }
+                        .help(showsFolders ? "Show Timeline" : "Browse Folders")
+                        .accessibilityLabel(showsFolders ? "Show Timeline" : "Browse Folders")
+                    }
                 }
-                .pickerStyle(.menu)
-                .fixedSize()
             }
-        }
-        if !inViewer && selectedDestination == .personalLibrary {
-            ToolbarItem(id: "folders", placement: .navigation) {
-                Button { showsFolders.toggle() } label: {
-                    Image(systemName: showsFolders ? "photo.on.rectangle" : "folder")
-                }
-                .help(showsFolders ? "Show Timeline" : "Browse Folders")
-                .accessibilityLabel(showsFolders ? "Show Timeline" : "Browse Folders")
-            }
+            ToolbarSpacer(.fixed, placement: .navigation)
         }
         if let viewer, !isVideo {
             ToolbarItem(id: "zoom", placement: .navigation) {
@@ -863,11 +865,13 @@ struct AppShellView: View {
 
         ToolbarSpacer(.flexible, placement: .primaryAction)
         if let viewer {
-            ToolbarItem(id: "overlays", placement: .primaryAction) {
-                ViewerOverlayControls(model: model)
+            if preferences.showsViewerToolbarTools {
+                ToolbarItem(id: "overlays", placement: .primaryAction) {
+                    ViewerOverlayControls(model: model)
+                }
+                .sharedBackgroundVisibility(.hidden)
+                ToolbarSpacer(.fixed, placement: .primaryAction)
             }
-            .sharedBackgroundVisibility(.hidden)
-            ToolbarSpacer(.fixed, placement: .primaryAction)
             if isVideo {
                 ToolbarItem(id: "mute", placement: .primaryAction) {
                     Button { preferences.videoMuted.toggle() } label: {

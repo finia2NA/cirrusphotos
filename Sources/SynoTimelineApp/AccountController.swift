@@ -40,7 +40,7 @@ final class AccountContext: Identifiable {
     func end() async {
         let repository = model.repository
         metadataSync.end()
-        thumbnailPreload.cancel()
+        thumbnailPreload.suspend()
         timelineSectionLoad.cancel()
         libraryFilter.clear()
         infoPanel.clearBrowserContext()
@@ -147,11 +147,21 @@ final class AccountController {
     }
 
     /// Closes the account and forgets its stored sign-in.
-    func signOut() async {
-        let account = context?.account
-        await close()
-        if let account { store.remove(account) }
+    /// Signs out of a stored account: forgets its password and trusted device and deletes
+    /// its cache. An open account is closed first, then another saved account opens, or
+    /// the sign-in window when none is left.
+    func signOut(_ account: StoredAccount) async {
+        let wasOpen = context?.account?.id == account.id
+        if wasOpen { await close() }
+        store.remove(account)
+        UserDefaults.standard.removeObject(forKey: ThumbnailPreloadModel.requestKey(namespace: Self.namespace(of: account)))
+        try? CacheInventory.remove(namespace: Self.namespace(of: account))
         notice = nil
+        if wasOpen, let next = store.accounts.first { openStored(next) }
+    }
+
+    static func namespace(of account: StoredAccount) -> String {
+        CacheKey.namespace(server: account.serverURL, account: account.username)
     }
 
     private func openStored(_ account: StoredAccount) {

@@ -5,7 +5,7 @@ import SynologyAPI
 /// Album creation, membership, rename and deletion started from the browser, menus and drags.
 extension LibraryModel {
     var canManageAlbumSelection: Bool {
-        browserCommandsActive && capabilities(for: browserCommandSnapshot.collection).allowsAlbumMembership && !browserCommandSnapshot.selectedOrdinals.isEmpty &&
+        browserCommandsActive && capabilities(for: browserCommandSnapshot.collection).allowsAlbumMembership && browserHasSelection &&
         browserCommandSnapshot.timeline != nil && browserCommandSnapshot.authority != nil &&
         albumOperation == nil && !canCloseViewer
     }

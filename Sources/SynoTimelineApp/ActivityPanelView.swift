@@ -191,7 +191,17 @@ private struct ActivityEntryRow: View {
                 Spacer(minLength: 6)
                 controls
             }
-            if !entry.phase.isSettled && (entry.kind.isTransfer || entry.kind == .metadataSync) {
+            if !entry.phase.isSettled && !entry.stages.isEmpty {
+                ForEach(Array(entry.stages.enumerated()), id: \.offset) { _, stage in
+                    VStack(alignment: .leading, spacing: 2) {
+                        ProgressView(value: stage.fraction).controlSize(.small)
+                        Text(stage.title)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            } else if !entry.phase.isSettled && (entry.kind.isTransfer || entry.kind == .metadataSync || entry.kind == .thumbnailDownload) {
                 ProgressView(value: entry.fraction).controlSize(.small)
             }
             if let detail = entry.detail {

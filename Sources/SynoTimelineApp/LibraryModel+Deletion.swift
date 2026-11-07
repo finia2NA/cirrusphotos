@@ -6,7 +6,7 @@ import SynologyAPI
 extension LibraryModel {
     var canDeleteSelection: Bool {
         browserCommandsActive && capabilities(for: browserCommandSnapshot.collection).allowsSpaceItemActions &&
-        !browserCommandSnapshot.selectedOrdinals.isEmpty && browserCommandSnapshot.timeline != nil &&
+        browserHasSelection && browserCommandSnapshot.timeline != nil &&
         browserCommandSnapshot.authority != nil && itemDeletion == nil && albumOperation == nil && !canCloseViewer
     }
 

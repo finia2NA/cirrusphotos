@@ -24,6 +24,8 @@ enum ActivityKind: Equatable, Sendable {
     case refresh
     /// The background metadata sync. Shown only while it runs; never added to History.
     case metadataSync
+    /// Thumbnails downloaded ahead for offline use. Never added to History.
+    case thumbnailDownload
     /// Information without an outcome, such as a lost connection.
     case notice(title: String)
 
@@ -47,7 +49,7 @@ enum ActivityKind: Equatable, Sendable {
     /// Refresh and notices are not changes; History lists changes and transfers only.
     var recordsHistory: Bool {
         switch self {
-        case .refresh, .metadataSync, .notice: false
+        case .refresh, .metadataSync, .thumbnailDownload, .notice: false
         default: true
         }
     }
@@ -168,6 +170,13 @@ struct ActivityFailure: Sendable {
 /// for example while another upload runs; the items then stay in the failed entry.
 typealias ActivityRetry = @MainActor ([ActivityItem]) -> Bool
 
+/// One labelled progress bar of an activity with several stages.
+struct ActivityStage: Equatable, Sendable {
+    var title: String
+    /// Nil shows an indeterminate bar.
+    var fraction: Double?
+}
+
 struct ActivityEntry: Identifiable {
     let id: UUID
     var kind: ActivityKind
@@ -179,6 +188,8 @@ struct ActivityEntry: Identifiable {
     /// Byte progress of a transfer.
     var fraction: Double?
     var status: String?
+    /// When set, shown instead of the single progress bar.
+    var stages: [ActivityStage] = []
     var failure: ActivityFailure?
     var failedItems: [ActivityItem] = []
     var savedURL: URL?
@@ -219,6 +230,7 @@ final class ActivityHandle {
     func progress(completed: Int) { center?.update(id) { $0.completedCount = min(max(completed, 0), $0.totalCount) } }
     func progress(fraction: Double?) { center?.update(id) { $0.fraction = fraction } }
     func status(_ text: String?) { center?.update(id) { $0.status = text } }
+    func stages(_ stages: [ActivityStage]) { center?.update(id) { if $0.stages != stages { $0.stages = stages } } }
     /// Replaces the kind, for example once a download's name is known.
     func rename(_ kind: ActivityKind) { center?.update(id) { $0.kind = kind } }
     /// Sets the items once they are resolved.

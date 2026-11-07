@@ -34,7 +34,11 @@ if [[ -f .env ]]; then
     fi
 fi
 sed "s/__NAS_HOST__/$nas_host/" scripts/App-Info.plist > "$app_bundle/Contents/Info.plist"
-codesign --force --deep --sign - "$app_bundle"
+# A stable signing identity keeps the app's Keychain access ("Always Allow") across
+# rebuilds; an ad-hoc signature changes with every build, so macOS asks again.
+# CODESIGN_IDENTITY overrides; otherwise the first Apple Development identity is used.
+identity="${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)}"
+codesign --force --deep --sign "${identity:--}" "$app_bundle"
 # Refresh Launch Services' cached icon when the existing bundle is rebuilt.
 touch "$app_bundle"
 
