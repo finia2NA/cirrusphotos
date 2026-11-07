@@ -49,6 +49,13 @@ struct AboutSettingsView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 4)
             }
+            #if CIRRUS_DISTRIBUTION
+            SoftwareUpdateSection()
+            #else
+            Section("Updates") {
+                Text("Updates are disabled in development builds.").foregroundStyle(.secondary)
+            }
+            #endif
             Section {
                 Link("Website", destination: AboutLinks.website)
                 Link("Source Code", destination: AboutLinks.source)

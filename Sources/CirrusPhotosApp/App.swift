@@ -6,8 +6,15 @@ struct CirrusPhotosApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var preferences: AppPreferences
     @State private var accounts: AccountController
+    #if CIRRUS_DISTRIBUTION
+    private let updater: SoftwareUpdater
+    #endif
 
     init() {
+        #if CIRRUS_DISTRIBUTION
+        // Started before the first window, as Sparkle expects.
+        updater = SoftwareUpdater()
+        #endif
         let preferences = AppPreferences()
         _preferences = StateObject(wrappedValue: preferences)
         let accounts = AccountController(preferences: preferences)
@@ -34,9 +41,16 @@ struct CirrusPhotosApp: App {
                                 timelineSectionLoad: context.timelineSectionLoad)
             }
             AccountCommands(accounts: accounts)
+            #if CIRRUS_DISTRIBUTION
+            SoftwareUpdateCommands(updater: updater)
+            #endif
         }
         Settings {
+            #if CIRRUS_DISTRIBUTION
+            SettingsView(accounts: accounts).environmentObject(preferences).environmentObject(updater)
+            #else
             SettingsView(accounts: accounts).environmentObject(preferences)
+            #endif
         }
         Window("Add Account", id: AddAccountWindow.id) {
             AddAccountWindow(accounts: accounts)

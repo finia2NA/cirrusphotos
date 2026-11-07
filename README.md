@@ -93,6 +93,26 @@ bash scripts/run.sh --distribution
 
 This builds the public release bundle at `.build/distribution/Cirrus Photos.app` and does not open it. It is optimized, ignores `.env`, stores its cache in `~/Library/Application Support/de.richardhanss.cirrus-photos/` and has no App Transport Security exception. Development builds keep their cache in the ignored `.cache/` directory of the checkout.
 
+## Releasing
+
+Releases are DMGs on GitHub Releases; installed apps find them through Sparkle's appcast at `website/appcast.xml`, served from the website. Development builds never update themselves.
+
+One-time setup:
+
+- The EdDSA private key that signs updates is `secrets/sparkle_ed25519_private.key` in the main checkout (gitignored; also in the login Keychain under the Sparkle account `cirrus-photos`). Back it up: without it, installed apps reject every future update. Its public key is in `scripts/sparkle.env`.
+- An Apple Development signing identity (or `CODESIGN_IDENTITY`), the GitHub CLI signed in (`gh auth login`) and SSH access to the web server (`ssh ionos`).
+
+For each release, bump `BUILD_NUMBER` in `scripts/version.env` (and `MARKETING_VERSION` when the version changes), add a `## <version>` section to `CHANGELOG.md` and commit. Then:
+
+```sh
+make dmg            # tests, distribution build, checks, DMG and appcast item in .build/releases/; publishes nothing
+make publish        # make dmg, then tags v<version>, creates the GitHub pre-release, adds the item to
+                    # website/appcast.xml, commits it and runs make deploy-site
+make deploy-site    # rsync website/ to the server
+```
+
+`make dmg ALLOW_DIRTY=1` allows an unclean tree for testing; `DRY_RUN=1` makes `publish` and `deploy-site` print what they would do. `publish` works from the current branch, pushes the tag (GitHub needs it for the release) and asks you to push the appcast commit. `DEPLOY_HOST`, `DEPLOY_PATH`, `SITE_URL` and `GITHUB_REPO` are Makefile variables you can override.
+
 ## Signing in during development
 
 Without a `.env` file the app shows its own sign-in window, like the released app. For development you can instead create an ignored `.env` in the repository root; it takes precedence in development builds. Copy [.env.example](.env.example) and fill in `NAS_URL`, `USER` and `PW`, plus `OTP` (the TOTP secret) if the account uses two-factor authentication. Never commit `.env`.
