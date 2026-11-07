@@ -10,7 +10,7 @@ if ! [[ $seconds =~ ^[1-9][0-9]*$ ]]; then
     echo "Usage: $0 SECONDS [TEMPLATE] (SECONDS must be a positive integer)" >&2
     exit 2
 fi
-app="$PWD/.build/Cirrus Photos.app/Contents/MacOS/SynoTimeline"
+app="$PWD/.build/Cirrus Photos.app/Contents/MacOS/CirrusPhotos"
 mkdir -p .build/profiles
 trace=".build/profiles/$(date +%Y%m%d-%H%M%S)-${template// /-}.trace"
 log="$(mktemp -t cirrus-profile)"

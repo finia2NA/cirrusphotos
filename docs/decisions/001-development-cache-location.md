@@ -18,7 +18,7 @@ Store the cache under the repository's Git-ignored `.cache/` directory:
 
 The cache locator finds the nearest ancestor containing `Package.swift`. It checks the process working directory first, then walks upward from the application bundle. This keeps `swift run` and `scripts/run.sh` on the same path even though LaunchServices does not guarantee the working directory of a launched `.app`.
 
-The earlier `~/Library/Caches/CirrusTimeline` location is no longer migrated. Each checkout starts with its own cache. Incompatible SQLite index versions are discarded and recreated from NAS data.
+This applies to development builds. Distribution builds (`scripts/run.sh --distribution`) use `~/Library/Application Support/de.richardhanss.cirrus-photos/` instead, because they run without a checkout. Each checkout starts with its own cache. Incompatible SQLite index versions are discarded and recreated from NAS data.
 
 `.cache/` is ignored by Git.
 
@@ -32,7 +32,7 @@ The data remains a cache: it is derived from Cirrus and is not a backup or sourc
 
 - Each checkout has its own cache. Moving or deleting the repository leaves or removes that cache with it.
 - A large cache consumes space inside the checkout's volume.
-- The repository must remain writable. This layout is unsuitable for an app installed read-only in `/Applications` or distributed independently of its source checkout.
+- The repository must remain writable. This layout is unsuitable for an app installed in `/Applications` or distributed without its source checkout, which is why distribution builds use Application Support.
 - Settings remain in `UserDefaults`; only cached payloads and their index live under `.cache/`.
 
 ## Returning to `~/Library/Caches`

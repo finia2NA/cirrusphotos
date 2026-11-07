@@ -46,8 +46,12 @@ public struct SynologyCredentials: Sendable {
 
 public enum CredentialStore {
     /// The `.env` file beside the project or app build, if one exists. Its presence selects
-    /// development credentials over the accounts signed in from the app.
+    /// development credentials over the accounts signed in from the app. Distribution builds
+    /// never look for one, so they always use the app's own sign-in.
     public static func environmentFile() -> URL? {
+        #if CIRRUS_DISTRIBUTION
+        return nil
+        #else
         let fileManager = FileManager.default
         let workingDirectory = URL(fileURLWithPath: fileManager.currentDirectoryPath)
         let bundleParent = Bundle.main.bundleURL.deletingLastPathComponent()
@@ -58,6 +62,7 @@ public enum CredentialStore {
         ]
 
         return candidates.first(where: { fileManager.fileExists(atPath: $0.path) })
+        #endif
     }
 
     public static func load() throws -> SynologyCredentials {

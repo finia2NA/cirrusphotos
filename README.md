@@ -8,10 +8,10 @@ Run from the repository root:
 bash scripts/run.sh
 ```
 
-This builds and opens a local `.app` inside the ignored `.build` directory. Pass `--build-only` to build, assemble, and sign the bundle without opening it. The bundle is signed with `CODESIGN_IDENTITY` or the first Apple Development identity, falling back to ad-hoc; a stable identity keeps the app's Keychain access across rebuilds. Alternatively, run directly from the terminal:
+This builds and opens a local `.app` inside the ignored `.build` directory. Pass `--build-only` to build, assemble, and sign the bundle without opening it. The bundle is signed with `CODESIGN_IDENTITY` or the first Apple Development identity, falling back to ad-hoc; a stable identity keeps the app's Keychain access across rebuilds. `--distribution` builds the public release bundle in `.build/distribution/` without opening it: optimized, it ignores `.env`, stores its cache in `~/Library/Application Support/de.richardhanss.cirrus-photos/`, and has no App Transport Security exception. Alternatively, run directly from the terminal:
 
 ```sh
-swift run SynoTimeline
+swift run CirrusPhotos
 ```
 
 To build the app bundle, open macOS Console, and run the app in the foreground, use:
@@ -20,9 +20,9 @@ To build the app bundle, open macOS Console, and run the app in the foreground, 
 make debug
 ```
 
-In Console, use `s:local.cirrus.syno-timeline` as a subsystem search and save it for reuse. For video playback, the useful categories are `viewer.video`, `repository.video`, and `transport.video`: they show AVPlayer state, cache/range assembly, and NAS request status and timing respectively. The logs include item/unit IDs, effective quality, byte ranges, HTTP status, and sanitized error domain/code, but exclude filenames, cache keys, credentials, session data, authenticated URLs, and response bodies. Press Control-C in the terminal to stop the app. `make start` builds and opens the app normally without opening Console.
+In Console, use `s:de.richardhanss.cirrus-photos` as a subsystem search and save it for reuse. For video playback, the useful categories are `viewer.video`, `repository.video`, and `transport.video`: they show AVPlayer state, cache/range assembly, and NAS request status and timing respectively. The logs include item/unit IDs, effective quality, byte ranges, HTTP status, and sanitized error domain/code, but exclude filenames, cache keys, credentials, session data, authenticated URLs, and response bodies. Press Control-C in the terminal to stop the app. `make start` builds and opens the app normally without opening Console.
 
-These commands build in debug mode. Use `make release` (or `scripts/run.sh --release`) to build and open an optimized bundle when judging performance. `make profile` builds that bundle, launches it under Instruments' Time Profiler for 40 seconds with a countdown, shows progress while the trace is written to `.build/profiles/`, and opens it; override with `PROFILE_SECONDS=…` or `PROFILE_TEMPLATE="Animation Hitches"`. One Control-C stops early and still saves. Animation Hitches traces are very large (about 20 GB for 60 seconds), so keep those recordings short. Browser signposts (subsystem `local.cirrus.syno-timeline`, category `performance.browser`) mark layout passes, row view creation, thumbnail cache reads and decodes; they appear in Instruments' os_signpost / Points of Interest lanes.
+These commands build in debug mode. Use `make release` (or `scripts/run.sh --release`) to build and open an optimized bundle when judging performance. `make profile` builds that bundle, launches it under Instruments' Time Profiler for 40 seconds with a countdown, shows progress while the trace is written to `.build/profiles/`, and opens it; override with `PROFILE_SECONDS=…` or `PROFILE_TEMPLATE="Animation Hitches"`. One Control-C stops early and still saves. Animation Hitches traces are very large (about 20 GB for 60 seconds), so keep those recordings short. Browser signposts (subsystem `de.richardhanss.cirrus-photos`, category `performance.browser`) mark layout passes, row view creation, thumbnail cache reads and decodes; they appear in Instruments' os_signpost / Points of Interest lanes.
 
 To remove build artifacts so the next `make` or `make debug` performs a clean build, use:
 
@@ -44,6 +44,6 @@ Move near the right edge to reveal the compact timeline. Click or drag to jump t
 
 Use **Library → Download Thumbnails…** after the timeline is current to choose an inclusive date range with two slider handles. The window shows an upper-bound thumbnail count and downloads the rendition selected in Settings. Browsing can continue while the batch runs; Cancel or closing its window stops it. Normal cache-budget eviction still applies, so this is cache warming, not pinned offline storage.
 
-Open Settings from the app menu or with Command-, to select the small, medium, or large cached thumbnail rendition; set the total cache limit from 200 MB to 100 GB; view current stored payload usage; or clear the cache. The app stores its persistent cache under `.cache/` in this repository; that directory is ignored by Git. Offline data remains visible until Cirrus validates it. Entries are scoped to the server and account.
+Open Settings from the app menu or with Command-, to select the small, medium, or large cached thumbnail rendition; set the total cache limit from 200 MB to 100 GB; view current stored payload usage; or clear the cache. Development builds store the persistent cache under `.cache/` in this repository; that directory is ignored by Git. Offline data remains visible until Cirrus validates it. Entries are scoped to the server and account.
 
 See [product behavior and scope](docs/PROJECT.md), [architecture](docs/ARCHITECTURE.md), [cache follow-up work](https://github.com/finia2NA/syno/issues/28), [cache-location decision](docs/decisions/001-development-cache-location.md), and [API research](docs/SYNOLOGY_PHOTOS_API.md).

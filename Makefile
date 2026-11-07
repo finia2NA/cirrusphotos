@@ -5,7 +5,8 @@ SHELL := /bin/zsh
 start:
 	./scripts/run.sh
 
-# Optimized build; use it when judging performance.
+# Optimized development build; use it when judging performance. The public build is
+# scripts/run.sh --distribution.
 release:
 	./scripts/run.sh --release
 
@@ -21,13 +22,13 @@ debug:
 	./scripts/run.sh --build-only
 	pgrep -x Console >/dev/null || open -na Console
 	@echo "Console search filter for this app's logs:"
-	@echo "  subsystem:local.cirrus.syno-timeline"
+	@echo "  subsystem:de.richardhanss.cirrus-photos"
 	@echo "Narrow to one category by appending, e.g. category:navigation.folders (also: unexpected, failures)."
-	./.build/Cirrus\ Photos.app/Contents/MacOS/SynoTimeline
+	./.build/Cirrus\ Photos.app/Contents/MacOS/CirrusPhotos
 
 clean:
 	swift package clean
-	rm -rf -- ".build/Cirrus Photos.app"
+	rm -rf -- ".build/Cirrus Photos.app" .build/distribution
 
 cloc:
 	@python3 scripts/cloc_report.py
