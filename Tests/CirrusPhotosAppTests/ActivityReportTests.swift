@@ -29,7 +29,7 @@ final class ActivityReportTests: XCTestCase {
     }
 
     func testScrubRemovesSessionAndCredentialValues() {
-        XCTAssertEqual(ActivityReport.scrub("GET /webapi/entry.cgi?api=x&_sid=abc123&SynoToken=tok passwd=hunter2 done"),
+        XCTAssertEqual(LogRedaction.scrub("GET /webapi/entry.cgi?api=x&_sid=abc123&SynoToken=tok passwd=hunter2 done"),
                        "GET /webapi/entry.cgi?api=x&_sid=<removed>&SynoToken=<removed> passwd=<removed> done")
     }
 

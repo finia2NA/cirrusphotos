@@ -549,7 +549,7 @@ final class PhotoViewerPresentation: ObservableObject {
             } catch {
                 guard !Task.isCancelled, self?.state?.selection == selection else { return }
                 SynologyDiagnostics.decoding.error(
-                    "Full-size decode failed item_id=\(selection.itemID ?? -1, privacy: .public) generation=\(selection.generation, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                    "Full-size decode failed item_id=\(selection.itemID ?? -1, privacy: .public) generation=\(selection.generation, privacy: .public) error=\(error.logSummary, privacy: .public)"
                 )
                 self?.decodeFailure = reportedFailure(error, operation: "Image decoding")
                 self?.isDecodingFullImage = false

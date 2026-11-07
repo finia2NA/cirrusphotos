@@ -162,11 +162,11 @@ extension CachedPhotosRepository {
                     case .api(let code) where [102, 103, 104, 105].contains(code):
                         try await disableMetadataSource(space, reason: "feed rejected with API error \(code)", admission: admission, epoch: epoch, id: id)
                     case .api(700), .invalidResponse, .responseTooLarge:
-                        try await recoverMetadataSource(space, reason: "feed read failed: \(api)", admission: admission, epoch: epoch, id: id)
+                        try await recoverMetadataSource(space, reason: "feed read failed: \(api.logSummary)", admission: admission, epoch: epoch, id: id)
                     default: throw error
                     }
                 } else if error is DecodingError || error is CollectionCatalogError {
-                    try await recoverMetadataSource(space, reason: "feed could not be applied: \(error)", admission: admission, epoch: epoch, id: id)
+                    try await recoverMetadataSource(space, reason: "feed could not be applied: \(error.logSummary)", admission: admission, epoch: epoch, id: id)
                 } else { throw error }
             }
         }
@@ -250,7 +250,7 @@ extension CachedPhotosRepository {
             try requireMetadataEngineAdmission(space, epoch: epoch, id: id)
             // A rejected interval has already lost its authority. Failure to obtain
             // a fresh boundary must not preserve its old complete-inventory proof.
-            try await disableMetadataSource(space, reason: "no fresh cursor after rejecting the interval: \(error)", admission: admission, epoch: epoch, id: id)
+            try await disableMetadataSource(space, reason: "no fresh cursor after rejecting the interval: \(error.logSummary)", admission: admission, epoch: epoch, id: id)
             return
         }
         try requireMetadataEngineAdmission(space, epoch: epoch, id: id)
@@ -312,7 +312,7 @@ extension CachedPhotosRepository {
                 }
                 throw CollectionCatalogError.exceedsLimit
             } catch {
-                SynologyDiagnostics.diff.notice("personal Map scan ended without commit after \(scanned, privacy: .public) of \(total, privacy: .public) items: \(String(describing: error), privacy: .public)")
+                SynologyDiagnostics.diff.notice("personal Map scan ended without commit after \(scanned, privacy: .public) of \(total, privacy: .public) items: \(error.logSummary, privacy: .public)")
                 try? await store.discardMetadataInventoryStage(id)
                 throw error
             }

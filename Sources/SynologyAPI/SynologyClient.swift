@@ -793,7 +793,7 @@ public actor SynologyClient: PhotosTransport {
                                          ["item_id": Self.idArray(itemIDs)])
         } catch {
             SynologyDiagnostics.rotationTransport.error(
-                "set_regenerating transport failed item_count=\(itemIDs.count, privacy: .public) first_item_id=\(itemIDs.first ?? -1, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                "set_regenerating transport failed item_count=\(itemIDs.count, privacy: .public) first_item_id=\(itemIDs.first ?? -1, privacy: .public) error=\(error.logSummary, privacy: .public)"
             )
             throw error
         }
@@ -820,7 +820,7 @@ public actor SynologyClient: PhotosTransport {
                                          ["unit_id": Self.idArray(unitIDs)])
         } catch {
             SynologyDiagnostics.rotationTransport.error(
-                "restore_from_regenerating transport failed unit_count=\(unitIDs.count, privacy: .public) first_unit_id=\(unitIDs.first ?? -1, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                "restore_from_regenerating transport failed unit_count=\(unitIDs.count, privacy: .public) first_unit_id=\(unitIDs.first ?? -1, privacy: .public) error=\(error.logSummary, privacy: .public)"
             )
             throw error
         }
@@ -870,7 +870,7 @@ public actor SynologyClient: PhotosTransport {
         }
         catch {
             SynologyDiagnostics.rotationTransport.error(
-                "Converted thumbnail upload transport failed unit_id=\(unitID, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                "Converted thumbnail upload transport failed unit_id=\(unitID, privacy: .public) error=\(error.logSummary, privacy: .public)"
             )
             throw SynologyAPIError.transport(error.localizedDescription)
         }
@@ -1058,7 +1058,7 @@ public actor SynologyClient: PhotosTransport {
         }
         catch {
             SynologyDiagnostics.transport.error(
-                "Original transport failed unit_id=\(resource.unitID, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                "Original transport failed unit_id=\(resource.unitID, privacy: .public) error=\(error.logSummary, privacy: .public)"
             )
             throw SynologyAPIError.transport(error.localizedDescription)
         }

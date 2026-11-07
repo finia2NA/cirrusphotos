@@ -31,7 +31,7 @@ extension CachedPhotosRepository {
                 } catch {
                     cached = nil
                     SynologyDiagnostics.originals.error(
-                        "Original cache read failed unit_id=\(resource.unitID, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                        "Original cache read failed unit_id=\(resource.unitID, privacy: .public) error=\(error.logSummary, privacy: .public)"
                     )
                 }
                 SynologyDiagnostics.originals.info(
@@ -69,7 +69,7 @@ extension CachedPhotosRepository {
                     if !Task.isCancelled && !(error is CancellationError) &&
                         !(error is NetworkGateError && priority == .prefetch) {
                         SynologyDiagnostics.originals.error(
-                            "Original request failed unit_id=\(resource.unitID, privacy: .public) priority=\(String(describing: priority), privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                            "Original request failed unit_id=\(resource.unitID, privacy: .public) priority=\(String(describing: priority), privacy: .public) error=\(error.logSummary, privacy: .public)"
                         )
                         continuation.yield(.failure(RepositoryError.record(error, operation: "Original image")))
                     } else if error is CancellationError || Task.isCancelled {
@@ -173,7 +173,7 @@ extension CachedPhotosRepository {
                         try await store.markValidated(key, run: runID, expectedGeneration: generation)
                     } catch {
                         SynologyDiagnostics.originals.error(
-                            "Original validation could not be persisted unit_id=\(resource.unitID, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                            "Original validation could not be persisted unit_id=\(resource.unitID, privacy: .public) error=\(error.logSummary, privacy: .public)"
                         )
                     }
                     result = FullImageResolution(data: prior.data)
@@ -188,7 +188,7 @@ extension CachedPhotosRepository {
                                             expectedGeneration: generation)
                     } catch {
                         SynologyDiagnostics.originals.error(
-                            "Original download could not be cached unit_id=\(resource.unitID, privacy: .public) bytes=\(data.count, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                            "Original download could not be cached unit_id=\(resource.unitID, privacy: .public) bytes=\(data.count, privacy: .public) error=\(error.logSummary, privacy: .public)"
                         )
                     }
                     result = FullImageResolution(data: data)
@@ -197,7 +197,7 @@ extension CachedPhotosRepository {
                 return result
             } catch {
                 SynologyDiagnostics.originals.info(
-                    "Original job ended with error unit_id=\(resource.unitID, privacy: .public) cancelled=\(Task.isCancelled, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                    "Original job ended with error unit_id=\(resource.unitID, privacy: .public) cancelled=\(Task.isCancelled, privacy: .public) error=\(error.logSummary, privacy: .public)"
                 )
                 await fullImageGate.release(id)
                 throw error
