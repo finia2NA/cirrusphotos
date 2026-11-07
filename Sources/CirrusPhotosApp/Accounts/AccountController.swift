@@ -160,6 +160,14 @@ final class AccountController {
         if wasOpen, let next = store.accounts.first { openStored(next) }
     }
 
+    /// Leaves setup for the sign-in form: forgets the just-added sign-in and its empty cache.
+    func backToSignIn() async {
+        guard let account = context?.account else { return }
+        await close()
+        store.remove(account)
+        try? CacheInventory.remove(namespace: Self.namespace(of: account))
+    }
+
     static func namespace(of account: StoredAccount) -> String {
         CacheKey.namespace(server: account.serverURL, account: account.username)
     }

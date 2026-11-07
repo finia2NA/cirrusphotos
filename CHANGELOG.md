@@ -2,6 +2,12 @@
 
 Each version's section is its release notes on GitHub and in the in-app updater.
 
+## 0.1.1
+
+- Setup pages have Back buttons.
+- The thumbnail setting is labeled "Thumbnail quality".
+- The sign-in progress spinner sits next to the Sign In button.
+
 ## 0.1
 
 First public alpha.

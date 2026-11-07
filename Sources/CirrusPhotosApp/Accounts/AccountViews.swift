@@ -135,9 +135,8 @@ struct SignInView: View {
                 }
                 if addingAccount == nil && !accounts.accounts.isEmpty { savedAccounts }
             }
-        } leading: {
-            if model.isWorking && model.step == .credentials { ProgressView().controlSize(.small) }
         } trailing: {
+            if model.isWorking && model.step == .credentials { ProgressView().controlSize(.small) }
             if let addingAccount {
                 Button("Cancel", action: addingAccount)
                     .keyboardShortcut(.cancelAction)
@@ -326,15 +325,18 @@ private struct SetupView: View {
     var body: some View {
         switch step {
         case .preferences:
-            SetupPreferencesPage { accounts.setupStep = .download }
+            SetupPreferencesPage(back: { Task { await accounts.backToSignIn() } },
+                                 next: { accounts.setupStep = .download })
         case .download:
-            SetupDownloadPage(context: context) { accounts.setupStep = nil }
+            SetupDownloadPage(context: context, back: { accounts.setupStep = .preferences },
+                              done: { accounts.setupStep = nil })
         }
     }
 }
 
 /// Step 2: how thumbnails look and how much this Mac may keep.
 private struct SetupPreferencesPage: View {
+    let back: () -> Void
     let next: () -> Void
     @EnvironmentObject private var preferences: AppPreferences
 
@@ -364,6 +366,8 @@ private struct SetupPreferencesPage: View {
             .formStyle(.grouped)
             .scrollDisabled(true)
             .fixedSize(horizontal: false, vertical: true)
+        } leading: {
+            Button("Back", action: back)
         } trailing: {
             Button("Next", action: next)
                 .keyboardShortcut(.defaultAction)
@@ -375,6 +379,7 @@ private struct SetupPreferencesPage: View {
 /// sync in the background on their own, so they are not offered here.
 private struct SetupDownloadPage: View {
     let context: AccountContext
+    let back: () -> Void
     let done: () -> Void
     @EnvironmentObject private var preferences: AppPreferences
     @AppStorage(AppPreferences.Key.warmingIncludesSharedSpace) private var includesSharedSpace = true
@@ -406,6 +411,8 @@ private struct SetupDownloadPage: View {
                     .fixedSize(horizontal: false, vertical: true)
                 }
             }
+        } leading: {
+            Button("Back", action: back)
         } trailing: {
             Button("Skip", action: done)
                 .keyboardShortcut(.cancelAction)

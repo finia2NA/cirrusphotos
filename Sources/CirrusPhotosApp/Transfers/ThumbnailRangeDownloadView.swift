@@ -106,7 +106,7 @@ struct ThumbnailQualityPicker: View {
     @Binding var size: ThumbnailSize
 
     var body: some View {
-        Picker("Quality", selection: $size) {
+        Picker("Thumbnail quality", selection: $size) {
             Text("Small").tag(ThumbnailSize.sm)
             Text("Medium").tag(ThumbnailSize.m)
             Text("Large").tag(ThumbnailSize.xl)
