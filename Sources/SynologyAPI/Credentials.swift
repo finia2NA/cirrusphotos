@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 
 /// How a login proves the second factor, if the account has one.
-public enum SecondFactor: Sendable, Equatable {
+public enum SecondFactor: Sendable, Equatable, CustomStringConvertible, CustomDebugStringConvertible {
     case none
     /// A base32 TOTP secret or otpauth URL from `.env`; a code is generated per login.
     case totpSecret(String)
@@ -10,6 +10,18 @@ public enum SecondFactor: Sendable, Equatable {
     case code(String)
     /// The DSM trusted-device token (`did`) from an earlier login with a code.
     case deviceToken(String)
+
+    /// Names the kind only, so a secret or token cannot reach a log through string interpolation.
+    public var description: String {
+        switch self {
+        case .none: "none"
+        case .totpSecret: "totpSecret(<redacted>)"
+        case .code: "code(<redacted>)"
+        case .deviceToken: "deviceToken(<redacted>)"
+        }
+    }
+
+    public var debugDescription: String { description }
 }
 
 /// Which server certificates a client accepts.
@@ -21,7 +33,7 @@ public enum ServerTrust: Sendable, Equatable {
     case pinned(sha256: String)
 }
 
-public struct SynologyCredentials: Sendable {
+public struct SynologyCredentials: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     public let username: String
     public let password: String
     public let secondFactor: SecondFactor
@@ -42,6 +54,10 @@ public struct SynologyCredentials: Sendable {
             self.secondFactor = secondFactor
         }
     }
+
+    /// Omits the username, password and second factor so credentials cannot reach a log.
+    public var description: String { "SynologyCredentials(<redacted>)" }
+    public var debugDescription: String { description }
 }
 
 public enum CredentialStore {

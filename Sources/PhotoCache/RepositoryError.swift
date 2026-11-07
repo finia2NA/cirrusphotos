@@ -3,7 +3,7 @@ import SynologyAPI
 
 /// A failure the repository reports to the app. The case says what kind of
 /// problem it is, so callers choose copy and retry behavior without parsing text.
-public enum RepositoryError: LocalizedError, Sendable, Equatable {
+public enum RepositoryError: LocalizedError, LogSummaryProviding, Sendable, Equatable {
     /// The NAS request failed: offline, signed out, rejected or malformed.
     case server(SynologyAPIError)
     /// Another change of the same kind is still running.
@@ -48,6 +48,12 @@ public enum RepositoryError: LocalizedError, Sendable, Equatable {
         }
     }
 
+    /// The kind plus, for server failures, the API error's case and code; never server text.
+    public var safeLogSummary: String {
+        if case .server(let error) = self { return "RepositoryError.server(\(error.logSummary))" }
+        return "RepositoryError.\(kindName): \(LogRedaction.scrub(localizedDescription))"
+    }
+
     /// The case name, for diagnostics and activity details.
     public var kindName: String {
         switch self {
@@ -70,9 +76,9 @@ public enum RepositoryError: LocalizedError, Sendable, Equatable {
         let message = normalized.localizedDescription
         if normalized.isUnexpected {
             if case .server = normalized {
-                SynologyDiagnostics.unexpected.error("\(operation, privacy: .public) failed kind=\(kind, privacy: .public) message=\(message, privacy: .private)")
+                SynologyDiagnostics.unexpected.error("\(operation, privacy: .public) failed kind=\(kind, privacy: .public) detail=\(normalized.logSummary, privacy: .public) message=\(message, privacy: .private)")
             } else {
-                SynologyDiagnostics.unexpected.error("\(operation, privacy: .public) failed kind=\(kind, privacy: .public) message=\(message, privacy: .public)")
+                SynologyDiagnostics.unexpected.error("\(operation, privacy: .public) failed kind=\(kind, privacy: .public) message=\(LogRedaction.scrub(message), privacy: .public)")
             }
         } else {
             SynologyDiagnostics.failures.info("\(operation, privacy: .public) failed kind=\(kind, privacy: .public) message=\(message, privacy: .private)")

@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import PhotoCache
+import SynologyAPI
 
 /// Plain-text failure details for the clipboard, for the user or for debugging. Never includes
 /// the NAS address, session or credentials.
@@ -32,14 +33,7 @@ enum ActivityReport {
             lines.append("Items (\(items.count)): \(listed.joined(separator: ", "))\(more)")
             lines += items.compactMap { item in item.message.map { "Item \(item.name): \($0)" } }
         }
-        return lines.map(scrub).joined(separator: "\n")
-    }
-
-    /// Removes session, token and credential values a message might carry.
-    static func scrub(_ line: String) -> String {
-        line.replacing(/(?i)(_sid|synotoken|passwd|password|otp_code|account)=[^&\s"]*/) { match in
-            "\(match.output.1)=<removed>"
-        }
+        return lines.map(LogRedaction.scrub).joined(separator: "\n")
     }
 
     @MainActor

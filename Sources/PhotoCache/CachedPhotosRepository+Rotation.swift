@@ -140,7 +140,7 @@ extension CachedPhotosRepository {
             do { try await connect() }
             catch {
                 SynologyDiagnostics.rotations.error(
-                    "Thumbnail rotation could not connect items=\(reporter.total, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                    "Thumbnail rotation could not connect items=\(reporter.total, privacy: .public) error=\(error.logSummary, privacy: .public)"
                 )
                 throw ThumbnailRotationStartFailure(message: "Could not start: \(error.localizedDescription)", underlying: error)
             }
@@ -449,7 +449,7 @@ extension CachedPhotosRepository {
             )
         } else {
             SynologyDiagnostics.rotations.error(
-                "Thumbnail rotation failed stage=\(stage, privacy: .public) item_id=\(itemID ?? -1, privacy: .public) unit_id=\(unitID ?? -1, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                "Thumbnail rotation failed stage=\(stage, privacy: .public) item_id=\(itemID ?? -1, privacy: .public) unit_id=\(unitID ?? -1, privacy: .public) error=\(error.logSummary, privacy: .public)"
             )
         }
     }
