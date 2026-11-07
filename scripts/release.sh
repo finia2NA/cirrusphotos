@@ -233,6 +233,7 @@ cmd_publish() {
     cmd_deploy_site
 
     echo
+    [[ -n $DRY_RUN ]] && echo "[dry run] Nothing was published. A real run ends with:"
     echo "Published $tag. The tag is on GitHub; push the appcast commit too:"
     echo "  git push origin HEAD"
 }
