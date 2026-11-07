@@ -1,6 +1,6 @@
 SHELL := /bin/zsh
 .DEFAULT_GOAL := start
-.PHONY: start release profile debug clean cloc switch-user
+.PHONY: start release profile debug clean cloc switch-user dmg publish deploy-site print-site-url
 
 start:
 	./scripts/run.sh
@@ -37,3 +37,27 @@ cloc:
 # none removes .env so the app signs in itself, with a fresh cache deleted on leaving none.
 switch-user:
 	@python3 scripts/switch_user.py '$(TARGET)'
+
+# Releases (scripts/release.sh). Overridable for forks, e.g. make deploy-site DEPLOY_HOST=myhost.
+# make dmg builds and signs the DMG and its appcast item locally; ALLOW_DIRTY=1 permits an
+# unclean tree for testing. make publish tags, creates the GitHub release, adds the item to
+# website/appcast.xml, commits it and deploys the site; DRY_RUN=1 prints those steps instead.
+DEPLOY_HOST ?= ionos
+DEPLOY_PATH ?= /var/www/cirrus-photos
+SITE_URL ?= https://cirrusphotos.richardhanss.de
+GITHUB_REPO ?= finia2NA/syno
+release_env = DEPLOY_HOST='$(DEPLOY_HOST)' DEPLOY_PATH='$(DEPLOY_PATH)' SITE_URL='$(SITE_URL)' \
+	GITHUB_REPO='$(GITHUB_REPO)' ALLOW_DIRTY='$(ALLOW_DIRTY)' DRY_RUN='$(DRY_RUN)'
+
+dmg:
+	@$(release_env) ./scripts/release.sh dmg
+
+publish:
+	@$(release_env) ./scripts/release.sh publish
+
+deploy-site:
+	@$(release_env) ./scripts/release.sh deploy-site
+
+# Lets scripts/run.sh read the feed URL's default from this file.
+print-site-url:
+	@echo '$(SITE_URL)'
