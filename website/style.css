@@ -91,3 +91,54 @@ footer.site {
 footer.site p { margin: 0 0 0.5rem; }
 footer.site a { color: var(--muted); }
 footer.site a:hover { color: var(--fg); }
+a.shot { display: block; cursor: zoom-in; }
+html:has(dialog.lightbox[open]) { overflow: hidden; }
+dialog.lightbox {
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 3.5rem 4.5rem;
+  border: 0;
+  background: rgba(12, 12, 14, 0.97);
+  color: #ececee;
+}
+dialog.lightbox[open] { display: flex; align-items: center; justify-content: center; }
+dialog.lightbox::backdrop { background: transparent; }
+.lightbox figure { margin: 0; display: flex; flex-direction: column; align-items: center; max-width: 100%; }
+.lightbox img {
+  width: auto;
+  max-width: 100%;
+  max-height: calc(100dvh - 9rem);
+  touch-action: pan-y;
+  user-select: none;
+  transition: opacity 0.15s;
+}
+.lightbox img.loading { opacity: 0; }
+.lightbox figcaption { margin-top: 0.75rem; color: #9a9aa0; text-align: center; }
+.lightbox button {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  cursor: pointer;
+}
+.lightbox button:hover { background: rgba(255, 255, 255, 0.18); }
+.lightbox button:focus-visible { outline: 2px solid #6ea8ff; outline-offset: 2px; }
+.lightbox .close { top: 1rem; right: 1rem; }
+.lightbox .prev, .lightbox .next { top: 50%; transform: translateY(-50%); }
+.lightbox .prev { left: 1rem; }
+.lightbox .next { right: 1rem; }
+@media (max-width: 40rem) {
+  dialog.lightbox { padding: 3.5rem 0.5rem 5rem; }
+  .lightbox .prev, .lightbox .next { top: auto; bottom: 1rem; transform: none; }
+  .lightbox .prev { left: calc(50% - 3.5rem); }
+  .lightbox .next { right: calc(50% - 3.5rem); }
+}
