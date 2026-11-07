@@ -53,10 +53,24 @@
     else if (event.key === "ArrowRight") show(index + 1);
   });
 
+  // Pinching zooms with the browser's own page zoom. While zoomed in, every gesture pans the
+  // page; at normal zoom a one-finger horizontal swipe steps through the screenshots.
+  const zoomed = () => (window.visualViewport?.scale ?? 1) > 1.01;
+  window.visualViewport?.addEventListener("resize", () => {
+    image.style.touchAction = zoomed() ? "auto" : "";
+  });
+  const pointers = new Set();
   let startX = null;
-  image.addEventListener("pointerdown", (event) => { startX = event.clientX; });
+  image.addEventListener("pointerdown", (event) => {
+    pointers.add(event.pointerId);
+    startX = pointers.size === 1 && !zoomed() ? event.clientX : null;
+  });
+  for (const type of ["pointercancel", "pointerleave"]) {
+    image.addEventListener(type, (event) => { pointers.delete(event.pointerId); startX = null; });
+  }
   image.addEventListener("pointerup", (event) => {
-    if (startX === null) return;
+    pointers.delete(event.pointerId);
+    if (startX === null || zoomed()) return;
     const distance = event.clientX - startX;
     startX = null;
     if (Math.abs(distance) > 40) show(index + (distance < 0 ? 1 : -1));

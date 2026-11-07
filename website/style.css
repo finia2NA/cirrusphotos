@@ -111,7 +111,7 @@ dialog.lightbox::backdrop { background: transparent; }
   width: auto;
   max-width: 100%;
   max-height: calc(100dvh - 9rem);
-  touch-action: pan-y;
+  touch-action: pan-y pinch-zoom;
   user-select: none;
   transition: opacity 0.15s;
 }
