@@ -141,30 +141,38 @@ public struct LibraryIndex: Sendable {
                         ordinal: ordinal, dayID: dayID, dayOffset: offset)
     }
 
-    public func visualPosition(for ordinal: Int, columns: Int) -> VisualPosition? {
+    public func visualPosition(for ordinal: Int, columns: Int, groupsByDay: Bool) -> VisualPosition? {
         guard let day = dayIndex(for: ordinal) else { return nil }
         let columnCount = max(1, columns)
+        if !groupsByDay { return VisualPosition(row: ordinal / columnCount, column: ordinal % columnCount) }
         let row = rowStarts(for: columnCount)[day]
         let offset = ordinal - dayStarts[day]
         return VisualPosition(row: row + offset / columnCount, column: offset % columnCount)
     }
 
     public func destination(from ordinal: Int, direction: LibrarySelectionDirection,
-                            columns: Int) -> Int? {
-        guard ordinal >= 0, ordinal < totalCount, let position = visualPosition(for: ordinal, columns: columns) else { return nil }
+                            columns: Int, groupsByDay: Bool) -> Int? {
+        guard ordinal >= 0, ordinal < totalCount,
+              let position = visualPosition(for: ordinal, columns: columns, groupsByDay: groupsByDay) else { return nil }
         switch direction {
         case .left: return ordinal > 0 ? ordinal - 1 : nil
         case .right: return ordinal + 1 < totalCount ? ordinal + 1 : nil
         case .up, .down:
             let targetRow = position.row + (direction == .up ? -1 : 1)
             guard targetRow >= 0 else { return nil }
-            return self.ordinal(atVisualRow: targetRow, column: position.column, columns: columns)
+            return self.ordinal(atVisualRow: targetRow, column: position.column, columns: columns,
+                                groupsByDay: groupsByDay)
         }
     }
 
-    public func ordinal(atVisualRow target: Int, column: Int, columns: Int) -> Int? {
+    public func ordinal(atVisualRow target: Int, column: Int, columns: Int, groupsByDay: Bool) -> Int? {
         guard target >= 0 else { return nil }
         let columnCount = max(1, columns)
+        if !groupsByDay {
+            let first = target * columnCount
+            guard first < totalCount else { return nil }
+            return first + min(max(0, column), min(columnCount, totalCount - first) - 1)
+        }
         let starts = rowStarts(for: columnCount)
         guard let day = Self.prefixIndex(containing: target, starts: starts), day < dayIDs.count else { return nil }
         let localRow = target - starts[day]

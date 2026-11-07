@@ -187,4 +187,94 @@ final class LibraryViewportGeometryTests: XCTestCase {
         XCTAssertEqual(index.location(forOrdinal: ordinal)?.sectionIndex, 8_765)
         XCTAssertEqual(index.ordinal(sectionIndex: 8_765, pageOffset: 43), ordinal)
     }
+
+    // MARK: Continuous layout (day grouping off)
+
+    /// Days of 2, 2 and 5 items in three sections, newest first: ordinals 0–1, 2–3, 4–8.
+    private func threeDayIndex() -> LibraryIndex {
+        LibraryIndex(snapshot: TimelineSnapshot(sections: [
+            section(day: 3, limit: 2, count: 2), section(day: 2, limit: 2, count: 2), section(day: 1, limit: 5, count: 5)
+        ]))
+    }
+    private func threeDayPages() throws -> [Int: LibraryPage] {
+        [0: LibraryPage(sectionIndex: 0, items: [try item(1), try item(2)], verified: true),
+         1: LibraryPage(sectionIndex: 1, items: [try item(3), try item(4)], verified: true),
+         2: LibraryPage(sectionIndex: 2, items: try (5...9).map { try item(Int64($0)) }, verified: true)]
+    }
+
+    func testContinuousLayoutPacksDaysWithoutHeadings() throws {
+        let geometry = LibraryViewportGeometry(index: threeDayIndex(), width: 600, itemsPerRow: 3, groupsByDay: false)
+        let stride = geometry.slotSide + 8
+        XCTAssertEqual(geometry.headingHeight, 0)
+        XCTAssertEqual(geometry.totalHeight, 3 * stride, accuracy: 0.001)
+        XCTAssertFalse(geometry.slices.contains(where: \.heading))
+        let second = try XCTUnwrap(geometry.slotFrame(for: 2)), third = try XCTUnwrap(geometry.slotFrame(for: 3))
+        XCTAssertEqual(second.minY, 0, accuracy: 0.001)
+        XCTAssertEqual(second.minX, 2 * stride, accuracy: 0.001)
+        XCTAssertEqual(third.minX, 0, accuracy: 0.001)
+        XCTAssertEqual(third.minY, stride, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(geometry.y(forDay: "2024-04-02")), 0, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(geometry.y(forDay: "2024-04-01")), stride, accuracy: 0.001)
+        for i in 1..<geometry.slices.count {
+            XCTAssertEqual(geometry.slices[i - 1].y + geometry.slices[i - 1].height, geometry.slices[i].y, accuracy: 0.001)
+        }
+    }
+
+    func testContinuousRowsSpanDaysAndHitTest() throws {
+        var geometry = LibraryViewportGeometry(index: threeDayIndex(), width: 600, itemsPerRow: 3, groupsByDay: false)
+        let stride = geometry.slotSide + 8
+        XCTAssertEqual(geometry.sectionIndices(y: 0, height: geometry.slotSide), [0, 1])
+        XCTAssertEqual(geometry.sectionIndices(y: stride, height: geometry.slotSide), [1, 2])
+        XCTAssertEqual(geometry.firstOrdinal(inVerticalRange: stride...(stride + 10)), 3)
+        geometry.reconcile(pages: try threeDayPages())
+        let rows = geometry.slices.indices.flatMap { geometry.rows(in: $0) }
+        XCTAssertEqual(rows.map(\.firstOrdinal), [0, 3, 6])
+        XCTAssertEqual(rows[0].itemIDs, [1, 2, 3])
+        XCTAssertEqual(rows[1].itemIDs, [4, 5, 6])
+        for ordinal in 0..<9 {
+            let frame = try XCTUnwrap(geometry.slotFrame(for: ordinal))
+            let fitted = try XCTUnwrap(geometry.frame(forItem: Int64(ordinal + 1)))
+            XCTAssertEqual(fitted.minX, frame.minX, accuracy: 0.001)
+            XCTAssertEqual(fitted.minY, frame.minY, accuracy: 0.001)
+            XCTAssertEqual(geometry.ordinal(at: CGPoint(x: frame.midX, y: frame.midY)), ordinal)
+        }
+    }
+
+    func testSwitchingGroupingPreservesAnchor() throws {
+        let pages = try threeDayPages()
+        var geometry = LibraryViewportGeometry(index: threeDayIndex(), width: 600, itemsPerRow: 3)
+        geometry.reconcile(pages: pages)
+        XCTAssertEqual(geometry.headingHeight, 38)
+        let anchor = try XCTUnwrap(geometry.anchor(at: try XCTUnwrap(geometry.frame(forItem: 8)).minY + 5))
+        XCTAssertTrue(geometry.setLayout(width: 600, itemsPerRow: 3, groupsByDay: false, pages: pages))
+        XCTAssertFalse(geometry.setLayout(width: 600, itemsPerRow: 3, groupsByDay: false, pages: pages))
+        XCTAssertEqual(try XCTUnwrap(geometry.y(for: anchor)), try XCTUnwrap(geometry.slotFrame(for: 7)).minY + 5,
+                       accuracy: 0.001)
+        XCTAssertTrue(geometry.setLayout(width: 600, itemsPerRow: 3, groupsByDay: true, pages: pages))
+        XCTAssertTrue(geometry.slices[0].heading)
+        XCTAssertEqual(try XCTUnwrap(geometry.y(for: anchor)), try XCTUnwrap(geometry.slotFrame(for: 7)).minY + 5,
+                       accuracy: 0.001)
+    }
+
+    func testContinuousLayoutHonorsContentOrigin() throws {
+        var geometry = LibraryViewportGeometry(index: threeDayIndex(), width: 600, itemsPerRow: 3,
+                                               groupsByDay: false, contentOrigin: 180)
+        geometry.reconcile(pages: try threeDayPages())
+        XCTAssertEqual(try XCTUnwrap(geometry.frame(forItem: 1)).minY, 180, accuracy: 0.001)
+        XCTAssertNil(geometry.anchor(at: 100))
+        XCTAssertNil(geometry.firstOrdinal(inVerticalRange: 0...179))
+        XCTAssertEqual(geometry.firstOrdinal(inVerticalRange: 180...200), 0)
+    }
+
+    func testStatusFrameStartsAtSliceFirstSlot() throws {
+        let continuous = LibraryViewportGeometry(index: threeDayIndex(), width: 600, itemsPerRow: 3, groupsByDay: false)
+        let status = continuous.statusFrame(forSlice: 1)
+        let slot = try XCTUnwrap(continuous.slotFrame(for: 2))
+        XCTAssertEqual(status.minX, slot.minX, accuracy: 0.001)
+        XCTAssertEqual(status.minY, slot.minY, accuracy: 0.001)
+        XCTAssertEqual(status.maxX, 600, accuracy: 0.001)
+        let grouped = LibraryViewportGeometry(index: threeDayIndex(), width: 600, itemsPerRow: 3)
+        XCTAssertEqual(grouped.statusFrame(forSlice: 1).minY, grouped.slices[1].y + 38, accuracy: 0.001)
+        XCTAssertEqual(grouped.statusFrame(forSlice: 1).minX, 0)
+    }
 }

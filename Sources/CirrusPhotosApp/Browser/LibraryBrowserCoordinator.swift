@@ -180,6 +180,7 @@ extension LibraryBrowserScrollView {
                 geometry = LibraryViewportGeometry(index: newIndex, width: width,
                                                    itemsPerRow: input.itemsPerRow,
                                                    cropsThumbnailsToSquare: input.cropsThumbnailsToSquare,
+                                                   groupsByDay: input.groupsByDay,
                                                    contentOrigin: headerHeight)
                 snapPresentation(input.cropsThumbnailsToSquare)
                 if preserveFilter, let oldMembership = filterMembership, let newMembership = input.filterMembership {
@@ -221,16 +222,18 @@ extension LibraryBrowserScrollView {
                     let widthChanged = abs(current.width - width) > 0.5
                     let columnsChanged = current.itemsPerRow != input.itemsPerRow
                     let presentationChanged = current.cropsThumbnailsToSquare != input.cropsThumbnailsToSquare
-                    if widthChanged || columnsChanged || presentationChanged || abs(current.contentOrigin - headerHeight) > 0.5 {
+                    let groupingChanged = current.groupsByDay != input.groupsByDay
+                    if widthChanged || columnsChanged || presentationChanged || groupingChanged || abs(current.contentOrigin - headerHeight) > 0.5 {
                         let preserved = visiblePhotoAnchor(current, in: scroll)
                         geometry?.setLayout(width: width, itemsPerRow: input.itemsPerRow,
                                             cropsThumbnailsToSquare: input.cropsThumbnailsToSquare,
+                                            groupsByDay: input.groupsByDay,
                                             contentOrigin: headerHeight, pages: pages)
                         selection.endExtension()
                         cancelPointerInteraction()
                         pendingOpen = nil
-                        if widthChanged || columnsChanged {
-                            // Window resizing and items-per-row changes stay instant; the
+                        if widthChanged || columnsChanged || groupingChanged {
+                            // Window resizing, items-per-row and day-grouping changes stay instant; the
                             // presentation snaps and rows rebuild with final geometry.
                             viewRevision += 1
                             snapPresentation(input.cropsThumbnailsToSquare)
@@ -546,6 +549,7 @@ extension LibraryBrowserScrollView {
                     let preserved = visiblePhotoAnchor(current, in: scroll)
                     geometry?.setLayout(width: width, itemsPerRow: current.itemsPerRow,
                                         cropsThumbnailsToSquare: current.cropsThumbnailsToSquare,
+                                        groupsByDay: current.groupsByDay,
                                         contentOrigin: header.map { Double($0.height(width)) } ?? 0, pages: pages)
                     selection.endExtension()
                     cancelPointerInteraction()
@@ -593,7 +597,7 @@ extension LibraryBrowserScrollView {
                                slot: CGRect(x: 0, y: slice.y, width: geometry.width, height: 32),
                                wanted: &wantedLabels, document: document)
                 }
-                let statusSlot = CGRect(x: 0, y: slice.y + (slice.heading ? 38 : 0), width: geometry.width, height: 28)
+                let statusSlot = geometry.statusFrame(forSlice: position)
                 let statusKey = "\(slice.source.dayID):\(slice.source.dayRange.lowerBound)"
                 if let page = pages[section] {
                     if page.slots.count <= slice.source.pageRange.lowerBound {
@@ -607,8 +611,7 @@ extension LibraryBrowserScrollView {
                     // Rare: a failed section keeps its SwiftUI message and Retry button.
                     let message = errors[section] ?? ""
                     addHost("p:\(slice.source.dayID):\(slice.source.dayRange.lowerBound)",
-                            frame: CGRect(x: 0, y: slice.y + (slice.heading ? 38 : 0),
-                                          width: geometry.width, height: 28),
+                            frame: statusSlot,
                             content: AnyView(HStack {
                                 HostedPlaceholder(message: message)
                                 if errors[section] != nil { Button("Retry", action: onRetry ?? {}) }
@@ -809,7 +812,7 @@ extension LibraryBrowserScrollView {
         func visiblePhotoAnchor(_ geometry: LibraryViewportGeometry, in scroll: NSScrollView)
             -> (anchor: LibraryViewportGeometry.Anchor, distance: Double)? {
             let top = visibleTop(in: scroll)
-            let position = max(top, geometry.contentOrigin + 38)
+            let position = max(top, geometry.contentOrigin + geometry.headingHeight)
             guard position < top + visibleHeight(in: scroll), let anchor = geometry.anchor(at: position) else { return nil }
             return (anchor, position - top)
         }

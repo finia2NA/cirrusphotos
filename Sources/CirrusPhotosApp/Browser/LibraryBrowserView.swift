@@ -309,6 +309,7 @@ struct LibraryBrowserView: View {
                                              thumbnailSize: preferences.thumbnailSize,
                                              itemsPerRow: preferences.itemsPerRow,
                                              cropsThumbnailsToSquare: preferences.cropsThumbnailsToSquare,
+                                             groupsByDay: preferences.groupsByDay,
                                              selectionState: library.selectionState(for: collection),
                                              restorationAnchor: restorationAnchor,
                                              bridge: bridge,
@@ -439,6 +440,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let thumbnailSize: ThumbnailSize
     let itemsPerRow: Int
     let cropsThumbnailsToSquare: Bool
+    let groupsByDay: Bool
     let selectionState: BrowserSelectionState
     let restorationAnchor: PhotoTimelineRestorationAnchor?
     let bridge: LibraryBrowserBridge

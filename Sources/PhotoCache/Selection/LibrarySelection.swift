@@ -96,7 +96,7 @@ public struct LibrarySelection: Equatable, Sendable {
 
     @discardableResult
     public mutating func move(_ direction: LibrarySelectionDirection, extending: Bool,
-                              in index: LibraryIndex, columns: Int,
+                              in index: LibraryIndex, columns: Int, groupsByDay: Bool,
                               firstVisible: Int?) -> Int? {
         if indexes.isEmpty {
             guard let start = firstVisible ?? (index.totalCount > 0 ? 0 : nil) else { return nil }
@@ -113,7 +113,7 @@ public struct LibrarySelection: Equatable, Sendable {
             let border = (direction == .left || direction == .up) ? indexes.first : indexes.last
             guard let border else { return nil }
             let destination = index.destination(from: border, direction: direction,
-                                                columns: columns) ?? border
+                                                columns: columns, groupsByDay: groupsByDay) ?? border
             indexes = IndexSet(integer: destination)
             return destination
         }
@@ -124,7 +124,7 @@ public struct LibrarySelection: Equatable, Sendable {
         }
         guard let border = extensionBorder, let cursor = extensionCursor,
               let destination = index.destination(from: cursor, direction: direction,
-                                                   columns: columns) else { return extensionCursor }
+                                                   columns: columns, groupsByDay: groupsByDay) else { return extensionCursor }
         extensionCursor = destination
         var result = extensionBaseline ?? indexes
         result.insert(integersIn: min(border, destination)...max(border, destination))

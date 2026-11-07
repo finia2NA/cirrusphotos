@@ -15,7 +15,8 @@ extension LibraryBrowserScrollView.Coordinator {
             let visible = geometry.firstOrdinal(inVerticalRange:
                 visibleTop(in: scroll)...(visibleTop(in: scroll) + visibleHeight(in: scroll)))
             if let cursor = selection.move(direction, extending: extending, in: index,
-                                           columns: geometry.itemsPerRow, firstVisible: visible) {
+                                           columns: geometry.itemsPerRow, groupsByDay: geometry.groupsByDay,
+                                           firstVisible: visible) {
                 scrollIntent.selectionNavigation()
                 revealSelectionCursor(cursor)
                 publishSelection()

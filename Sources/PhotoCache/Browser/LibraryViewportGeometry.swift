@@ -27,7 +27,7 @@ public struct LibraryViewportGeometry {
     }
     public struct Slice {
         public let source: LibraryIndex.Slice
-        public let heading: Bool
+        public internal(set) var heading: Bool
         public let count: Int
         public var y: Double = 0
         public var height: Double = 0
@@ -53,6 +53,9 @@ public struct LibraryViewportGeometry {
     /// When true, each loaded item's materialized interaction/image frame is the full
     /// square slot rather than an aspect-fitted rectangle inside it.
     public private(set) var cropsThumbnailsToSquare: Bool
+    /// When false, days flow into one continuous grid without headings or day breaks:
+    /// an ordinal's row is `ordinal / itemsPerRow` across the whole collection.
+    public private(set) var groupsByDay: Bool
     /// Changes whenever materialized rows or item frames are rebuilt, so callers can
     /// cache values derived from rows without comparing their contents.
     public private(set) var rowsRevision = UUID()
@@ -73,16 +76,18 @@ public struct LibraryViewportGeometry {
     private var dayLayouts: [DayLayout] = []
     private var itemFrames: [Int64: CGRect] = [:]
     private var itemSlotFrames: [Int64: CGRect] = [:]
-    private let headingHeight = 38.0
+    private let dayHeadingHeight = 38.0
     private let gap = FixedPhotoGrid.gap
 
     public init(index: LibraryIndex, width: Double, itemsPerRow: Int = 6,
-                cropsThumbnailsToSquare: Bool = false, contentOrigin: Double = 0) {
+                cropsThumbnailsToSquare: Bool = false, groupsByDay: Bool = true,
+                contentOrigin: Double = 0) {
         self.index = index
         self.contentOrigin = max(0, contentOrigin)
         self.width = max(1, width)
         self.itemsPerRow = FixedPhotoGrid.columns(itemsPerRow)
         self.cropsThumbnailsToSquare = cropsThumbnailsToSquare
+        self.groupsByDay = groupsByDay
         buildSlices()
         recalculate()
     }
@@ -91,18 +96,30 @@ public struct LibraryViewportGeometry {
         FixedPhotoGrid.slotWidth(availableWidth: width, columns: itemsPerRow, gap: gap)
     }
 
+    /// Height reserved above each day's first row for its date heading.
+    public var headingHeight: Double { groupsByDay ? dayHeadingHeight : 0 }
+
+    private var rowStride: Double { slotSide + gap }
+    private var continuousRowCount: Int { (index.totalCount + itemsPerRow - 1) / itemsPerRow }
+
+    private func continuousRowY(_ row: Int) -> Double { contentOrigin + Double(row) * rowStride }
+
     @discardableResult
     public mutating func setLayout(width newWidth: Double, itemsPerRow newCount: Int,
                                    cropsThumbnailsToSquare newCrops: Bool? = nil,
+                                   groupsByDay newGroups: Bool? = nil,
                                    contentOrigin newOrigin: Double? = nil,
                                    pages: [Int: LibraryPage]) -> Bool {
         guard newWidth.isFinite, newWidth > 0 else { return false }
         let count = FixedPhotoGrid.columns(newCount)
         let crops = newCrops ?? cropsThumbnailsToSquare
+        let groups = newGroups ?? groupsByDay
         let origin = max(0, newOrigin ?? contentOrigin)
-        guard abs(width - newWidth) > 0.5 || itemsPerRow != count || crops != cropsThumbnailsToSquare || abs(contentOrigin - origin) > 0.5
+        guard abs(width - newWidth) > 0.5 || itemsPerRow != count || crops != cropsThumbnailsToSquare ||
+                groups != groupsByDay || abs(contentOrigin - origin) > 0.5
         else { return false }
-        width = newWidth; itemsPerRow = count; cropsThumbnailsToSquare = crops; contentOrigin = origin; self.pages = pages
+        width = newWidth; itemsPerRow = count; cropsThumbnailsToSquare = crops; groupsByDay = groups
+        contentOrigin = origin; self.pages = pages
         recalculate()
         return true
     }
@@ -186,13 +203,32 @@ public struct LibraryViewportGeometry {
     }
 
     public func slotFrame(for ordinal: Int) -> CGRect? {
+        if !groupsByDay {
+            guard ordinal >= 0, ordinal < index.totalCount else { return nil }
+            return FixedPhotoGrid.slotFrame(column: ordinal % itemsPerRow, rowY: continuousRowY(ordinal / itemsPerRow),
+                                            availableWidth: width, columns: itemsPerRow, gap: gap)
+        }
         guard let location = index.location(forOrdinal: ordinal), let dayY = dayOrigins[location.dayID] else { return nil }
         return FixedPhotoGrid.slotFrame(column: location.dayOffset % itemsPerRow,
             rowY: dayY + headingHeight + Double(location.dayOffset / itemsPerRow) * (slotSide + gap),
             availableWidth: width, columns: itemsPerRow, gap: gap)
     }
 
+    /// Where a slice's loading, empty or error line goes: below its heading, or in the
+    /// continuous grid from the slice's first slot so it does not cover the preceding day.
+    public func statusFrame(forSlice position: Int) -> CGRect {
+        let slice = slices[position]
+        if !groupsByDay, let start = index.dayStart(slice.source.dayID),
+           let slot = slotFrame(for: start + slice.source.dayRange.lowerBound) {
+            return CGRect(x: slot.minX, y: slot.minY, width: max(0, width - slot.minX), height: 28)
+        }
+        return CGRect(x: 0, y: slice.y + (slice.heading ? headingHeight : 0), width: width, height: 28)
+    }
+
     public func firstOrdinal(inVerticalRange range: ClosedRange<Double>) -> Int? {
+        if !groupsByDay {
+            return continuousRows(lower: range.lowerBound, upper: range.upperBound).map { $0.lowerBound * itemsPerRow }
+        }
         guard !dayLayouts.isEmpty else { return nil }
         var day = firstDay(overlapping: range.lowerBound)
         while day < dayLayouts.count, dayLayouts[day].origin <= range.upperBound {
@@ -233,6 +269,14 @@ public struct LibraryViewportGeometry {
     public func sectionIndices(y: Double, height: Double) -> [Int] {
         let lower = y, upper = y + max(0, height)
         var result: [Int] = []
+        if !groupsByDay {
+            guard let rows = continuousRows(lower: lower, upper: upper) else { return result }
+            for ordinal in (rows.lowerBound * itemsPerRow)..<min(index.totalCount, rows.upperBound * itemsPerRow) {
+                if let section = index.location(forOrdinal: ordinal)?.sectionIndex,
+                   result.last != section, !result.contains(section) { result.append(section) }
+            }
+            return result
+        }
         guard !dayLayouts.isEmpty else { return result }
         var day = firstDay(overlapping: lower)
         while day < dayLayouts.count, dayLayouts[day].origin <= upper {
@@ -258,7 +302,7 @@ public struct LibraryViewportGeometry {
                 let position = slices.count
                 if dayToFirstSlice[day] == nil { dayToFirstSlice[day] = position }
                 sectionToSlices[source.sectionIndex, default: []].append(position)
-                slices.append(Slice(source: source, heading: position == dayToFirstSlice[day], count: source.pageRange.count))
+                slices.append(Slice(source: source, heading: false, count: source.pageRange.count))
             }
         }
     }
@@ -266,6 +310,13 @@ public struct LibraryViewportGeometry {
     private mutating func recalculate() {
         materializedRows.removeAll(); itemFrames.removeAll(); itemSlotFrames.removeAll()
         dayOrigins.removeAll(); dayLayouts.removeAll(keepingCapacity: true)
+        for position in slices.indices {
+            slices[position].heading = groupsByDay && dayToFirstSlice[slices[position].source.dayID] == position
+        }
+        if !groupsByDay {
+            recalculateContinuous()
+            return
+        }
         var y = contentOrigin
         for dayID in index.dayIDs {
             dayOrigins[dayID] = y
@@ -289,6 +340,37 @@ public struct LibraryViewportGeometry {
         }
         totalHeight = y
         materializeRows()
+    }
+
+    /// Continuous layout: each slice owns the rows that start inside it, so slices stay
+    /// contiguous and ordered; a short day sharing a row with its predecessor has height 0.
+    private mutating func recalculateContinuous() {
+        let columns = itemsPerRow
+        for dayID in index.dayIDs {
+            guard let start = index.dayStart(dayID) else { continue }
+            let count = index.dayCount(dayID)
+            let origin = continuousRowY(start / columns)
+            dayOrigins[dayID] = origin
+            let height = count == 0 ? 0 : Double((start + count - 1) / columns - start / columns + 1) * rowStride
+            dayLayouts.append(DayLayout(id: dayID, origin: origin, height: height, startOrdinal: start, count: count))
+            for source in index.slices(forDay: dayID) {
+                guard let position = slicePosition(source: source) else { continue }
+                let lower = start + source.dayRange.lowerBound, upper = start + source.dayRange.upperBound
+                let firstRowStart = (lower + columns - 1) / columns
+                let lastRow = upper > lower ? (upper - 1) / columns : firstRowStart - 1
+                slices[position].y = continuousRowY(firstRowStart)
+                slices[position].height = Double(max(0, lastRow - firstRowStart + 1)) * rowStride
+            }
+        }
+        totalHeight = continuousRowY(continuousRowCount)
+        materializeRows()
+    }
+
+    private func continuousRows(lower: Double, upper: Double) -> Range<Int>? {
+        guard continuousRowCount > 0 else { return nil }
+        let first = max(0, Int(ceil((lower - contentOrigin - slotSide) / rowStride)))
+        let last = min(continuousRowCount - 1, Int(floor((upper - contentOrigin) / rowStride)))
+        return first <= last ? first..<(last + 1) : nil
     }
 
     private func firstDay(overlapping y: Double) -> Int {
@@ -322,15 +404,19 @@ public struct LibraryViewportGeometry {
                       let location = index.location(forOrdinal: ordinal), let dayStart = index.dayStart(location.dayID) else { continue }
                 loaded[ordinal] = RowItem(photo: photo, verified: slot.verified, sectionIndex: section,
                                           pageOffset: offset, ordinal: ordinal)
-                starts.insert(dayStart + (location.dayOffset / itemsPerRow) * itemsPerRow)
+                starts.insert(groupsByDay ? dayStart + (location.dayOffset / itemsPerRow) * itemsPerRow
+                                          : (ordinal / itemsPerRow) * itemsPerRow)
             }
         }
         for start in starts.sorted() {
             guard let location = index.location(forOrdinal: start), let dayY = dayOrigins[location.dayID] else { continue }
-            let count = min(itemsPerRow, index.dayCount(location.dayID) - location.dayOffset), side = slotSide
+            let count = groupsByDay ? min(itemsPerRow, index.dayCount(location.dayID) - location.dayOffset)
+                                    : min(itemsPerRow, index.totalCount - start)
             let layout = FixedPhotoGrid.row(itemCount: count, availableWidth: width,
                                            columns: itemsPerRow)
-            let absoluteY = dayY + headingHeight + Double(location.dayOffset / itemsPerRow) * (side + gap)
+            let absoluteY = groupsByDay
+                ? dayY + headingHeight + Double(location.dayOffset / itemsPerRow) * rowStride
+                : continuousRowY(start / itemsPerRow)
             let slots = (0..<count).map { loaded[start + $0] }
             guard let owner = slicePosition(containing: location) else { continue }
             materializedRows[owner, default: []].append(Row(y: absoluteY - slices[owner].y,

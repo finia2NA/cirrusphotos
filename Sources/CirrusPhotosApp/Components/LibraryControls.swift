@@ -82,6 +82,23 @@ struct BrowserThumbnailShapeControl: View {
     }
 }
 
+/// Switches the shared browser between day-headed rows and one continuous grid.
+/// The View menu's "Group by Day" command is the equivalent.
+struct BrowserDayGroupingControl: View {
+    @ObservedObject var preferences: AppPreferences
+
+    var body: some View {
+        Button {
+            preferences.groupsByDay.toggle()
+        } label: {
+            Label(preferences.groupsByDay ? "Don't Group by Day" : "Group by Day",
+                  systemImage: preferences.groupsByDay ? "calendar" : "square.grid.3x3")
+        }
+        .accessibilityLabel(preferences.groupsByDay ? "Don't Group by Day" : "Group by Day")
+        .help(preferences.groupsByDay ? "Group by Day (on)" : "Group by Day (off)")
+    }
+}
+
 struct BrowserFavoriteControl: View {
     var model: LibraryModel
     let collection: PhotoCollectionDescriptor
@@ -342,6 +359,7 @@ struct LibraryCommands: Commands {
                 .keyboardShortcut("-", modifiers: .command)
                 .disabled(preferences.itemsPerRow >= 10)
             Toggle("Crop Thumbnails to Square", isOn: $preferences.cropsThumbnailsToSquare)
+            Toggle("Group by Day", isOn: $preferences.groupsByDay)
             Toggle("Always Show Timeline", isOn: $preferences.alwaysShowsTimeline)
             Divider()
             Toggle("Show Filmstrip", isOn: $model.showsFilmstrip)

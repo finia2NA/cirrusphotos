@@ -14,6 +14,7 @@ final class AppPreferences: ObservableObject {
         static let videoQuality = "videoQuality"
         static let itemsPerRow = "itemsPerRow"
         static let cropsThumbnailsToSquare = "cropsThumbnailsToSquare"
+        static let groupsByDay = "groupsByDay"
         static let alwaysShowsTimeline = "alwaysShowsTimeline"
         static let cacheBudget = "cacheBudget"
         static let photoDownloadDirectory = "photoDownloadDirectory"
@@ -41,6 +42,7 @@ final class AppPreferences: ObservableObject {
         }
     }
     @Published var cropsThumbnailsToSquare: Bool { didSet { defaults.set(cropsThumbnailsToSquare, forKey: Key.cropsThumbnailsToSquare) } }
+    @Published var groupsByDay: Bool { didSet { defaults.set(groupsByDay, forKey: Key.groupsByDay) } }
     @Published var alwaysShowsTimeline: Bool { didSet { defaults.set(alwaysShowsTimeline, forKey: Key.alwaysShowsTimeline) } }
     @Published var showsViewerToolbarTools: Bool { didSet { defaults.set(showsViewerToolbarTools, forKey: Key.showsViewerToolbarTools) } }
     /// The cache budget as a fraction of the slider range; the stored value is bytes.
@@ -57,6 +59,7 @@ final class AppPreferences: ObservableObject {
         videoQuality = defaults.string(forKey: Key.videoQuality).flatMap(VideoQualityPreference.init(rawValue:)) ?? .automatic
         itemsPerRow = (defaults.object(forKey: Key.itemsPerRow) as? NSNumber)?.intValue.clamped(to: Self.itemsPerRowRange) ?? 6
         cropsThumbnailsToSquare = defaults.bool(forKey: Key.cropsThumbnailsToSquare)
+        groupsByDay = defaults.object(forKey: Key.groupsByDay) as? Bool ?? true
         alwaysShowsTimeline = defaults.bool(forKey: Key.alwaysShowsTimeline)
         showsViewerToolbarTools = defaults.bool(forKey: Key.showsViewerToolbarTools)
         budgetFraction = CacheBudget.fraction(for: Int64(defaults.object(forKey: Key.cacheBudget) as? Int ?? Int(CacheBudget.bytes(at: 0.5))))

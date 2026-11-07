@@ -846,6 +846,10 @@ struct AppShellView: View {
                 BrowserThumbnailShapeControl(preferences: preferences)
                     .frame(height: ToolbarMetrics.controlHeight)
             }
+            ToolbarItem(id: "dayGrouping", placement: .navigation) {
+                BrowserDayGroupingControl(preferences: preferences)
+                    .frame(height: ToolbarMetrics.controlHeight)
+            }
         }
     }
 
