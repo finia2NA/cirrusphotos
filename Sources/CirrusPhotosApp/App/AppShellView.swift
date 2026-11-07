@@ -353,11 +353,6 @@ struct AppShellView: View {
                         .ignoresSafeArea(.container, edges: .top)
                 }
 
-                if dragOverviewNonce != nil {
-                    AlbumsOverviewView(onOpenAlbum: { _ in }, presentation: albumPresentation, contentTopInset: topInset)
-                        .ignoresSafeArea(.container, edges: .top)
-                }
-
                 if let viewer {
                     PhotoViewerView(viewer: viewer,
                                     pinnedAlbumIDs: albumPresentation.pinnedIDs,
@@ -374,6 +369,11 @@ struct AppShellView: View {
                                     onSelectionChanged: followViewer,
                                     onClose: closeViewer,
                                     onInteractiveDismiss: closeViewer)
+                        .ignoresSafeArea(.container, edges: .top)
+                }
+
+                if dragOverviewNonce != nil {
+                    AlbumsOverviewView(onOpenAlbum: { _ in }, presentation: albumPresentation, contentTopInset: topInset)
                         .ignoresSafeArea(.container, edges: .top)
                 }
 

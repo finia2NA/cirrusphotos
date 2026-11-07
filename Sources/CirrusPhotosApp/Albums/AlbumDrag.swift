@@ -147,7 +147,15 @@ struct AlbumMembershipTarget: NSViewRepresentable {
             if collection.albumID != nil, !uploads.isEnded, !uploads.active, !PhotoUploadManager.fileURLs(sender).isEmpty { return true }
             return model.session.drags.selections.lookup(value(sender), namespace: namespace) != nil
         }
-        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { active = valid(sender); return active ? .copy : [] }
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+            active = valid(sender)
+            // Only the first pasteboard item carries the handle; report the whole selection to AppKit's count.
+            if active, let namespace = model?.repository?.namespace,
+               let entry = model?.session.drags.selections.lookup(value(sender), namespace: namespace) {
+                sender.numberOfValidItemsForDrop = entry.selection.selectedOrdinals.count
+            }
+            return active ? .copy : []
+        }
         override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
         override func draggingExited(_ sender: NSDraggingInfo?) { active = false }
         override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { valid(sender) }

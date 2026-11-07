@@ -109,16 +109,8 @@ struct PhotoViewerView: View {
                                         library.editViewerItem(item, repository: repository, collection: viewer.collection, application: application)
                                     }
                                 }
-                                if library.capabilities(for: viewer.collection).allowsAlbumMembership, let timeline = library.snapshot(for: viewer.collection),
-                                   LibraryIndex(snapshot: timeline).fingerprint == viewer.index.fingerprint,
-                                   let authority = library.selectionAuthority(for: viewer.collection) {
-                                    let ordinal = state.desiredLocation.ordinal
-                                    let captured = BrowserCommandSnapshot(owner: UUID(), active: true, canOpen: false,
-                                        canToggleFavorite: false, collection: viewer.collection,
-                                        indexFingerprint: viewer.index.fingerprint, selectionGeneration: nil,
-                                        selectedOrdinals: IndexSet(integer: ordinal), knownItemIDsByOrdinal: [ordinal: item.id],
-                                        timeline: timeline, authority: authority,
-                                        sourceAlbumID: library.capabilities(for: viewer.collection).sourceAlbumID)
+                                if let captured = library.viewerAlbumSnapshot(collection: viewer.collection, fingerprint: viewer.index.fingerprint,
+                                                                              ordinal: state.desiredLocation.ordinal, itemID: item.id) {
                                     library.addAlbumMembershipMenu(to: menu, captured: captured, pinnedIDs: pinnedAlbumIDs)
                                 }
                                 if library.capabilities(for: viewer.collection).allowsSpaceItemActions, viewer.canAnnotate {
@@ -133,9 +125,14 @@ struct PhotoViewerView: View {
                                 let payload = PhotoDragPayload(repository: viewer.repository, source: .item(item, collection: viewer.collection),
                                                                count: 1, delivery: .files([PromisedFile(itemID: item.id, filename: name)]))
                                 let preview = state.thumbnailData.flatMap { NSImage(data: $0) } ?? viewer.source.image ?? viewer.image
+                                let local = library.viewerAlbumSnapshot(collection: viewer.collection, fingerprint: viewer.index.fingerprint,
+                                                                        ordinal: state.desiredLocation.ordinal, itemID: item.id)
+                                    .flatMap { captured in captured.captureSelection(timeline: captured.timeline).map {
+                                        SelectionDragRegistry.Entry(selection: $0, sourceAlbumID: captured.sourceAlbumID, namespace: viewer.repository.namespace)
+                                    } }
                                 return PhotoFileDragSource.begin(session: library.session, payload: payload, previews: [preview].compactMap { $0 },
                                                                  cropsToSquare: cropsThumbnailsToSquare,
-                                                                 from: view, event: event,
+                                                                 from: view, event: event, localSelection: local,
                                                                  text: SelectionText.csv(for: [item]))
                               }) { viewer.zoom = Double($0) }
                 .accessibilityLabel(viewer.filename)

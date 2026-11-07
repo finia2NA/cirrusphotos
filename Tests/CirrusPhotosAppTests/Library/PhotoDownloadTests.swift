@@ -608,9 +608,17 @@ final class PhotoDownloadDestinationTests: XCTestCase {
 
     @MainActor
     func testDragPreviewStaysBoundedForLargeSelection() {
-        let preview = PhotoFileDragSource.dragPreview(images: Array(repeating: NSImage(size: NSSize(width: 1, height: 1)), count: 100), count: 100_000, cropsToSquare: false)
+        let preview = PhotoFileDragSource.dragPreview(images: Array(repeating: NSImage(size: NSSize(width: 1, height: 1)), count: 100), badge: 100_000, cropsToSquare: false)
         XCTAssertLessThanOrEqual(preview.size.width, 100)
         XCTAssertLessThanOrEqual(preview.size.height, 100)
+    }
+
+    @MainActor
+    func testDragPreviewOmitsBadgeWhenSystemDrawsCount() {
+        let images = [NSImage(size: NSSize(width: 60, height: 60))]
+        let plain = PhotoFileDragSource.dragPreview(images: images, badge: 0, cropsToSquare: true)
+        let badged = PhotoFileDragSource.dragPreview(images: images, badge: 5, cropsToSquare: true)
+        XCTAssertLessThan(plain.size.height, badged.size.height)
     }
 
     @MainActor

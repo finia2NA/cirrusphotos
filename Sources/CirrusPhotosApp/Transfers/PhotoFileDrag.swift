@@ -119,7 +119,8 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
         } else { writer = provider }
         // The other promises ride along as invisible items, so the composed preview stays one image.
         let writers: [NSPasteboardWriting] = promisesFile ? [writer] + providers.dropFirst().map { $0 as NSPasteboardWriting } : [writer]
-        let image = dragPreview(images: Array(previews.prefix(20)), count: payload.count,
+        // With several pasteboard items AppKit draws its own count, so ours is omitted.
+        let image = dragPreview(images: Array(previews.prefix(20)), badge: writers.count > 1 ? 0 : payload.count,
                                 cropsToSquare: cropsToSquare)
         let point = view.convert(event.locationInWindow, from: nil)
         let frame = NSRect(x: point.x - 30, y: point.y - 30, width: image.size.width, height: image.size.height)
@@ -161,7 +162,7 @@ final class PhotoFileDragSource: NSObject, NSDraggingSource {
         return NSSize(width: source.width * scale, height: source.height * scale)
     }
 
-    static func dragPreview(images: [NSImage], count: Int, cropsToSquare: Bool) -> NSImage {
+    static func dragPreview(images: [NSImage], badge count: Int, cropsToSquare: Bool) -> NSImage {
         let fallback = NSImage(systemSymbolName: "photo", accessibilityDescription: nil)
         let chosen = images.isEmpty ? [fallback].compactMap { $0 } : Array(images.prefix(20))
         let sizes = chosen.map { thumbnailSize(for: $0.size, cropsToSquare: cropsToSquare) }

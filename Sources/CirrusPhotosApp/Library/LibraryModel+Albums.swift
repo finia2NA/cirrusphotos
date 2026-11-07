@@ -94,6 +94,18 @@ extension LibraryModel {
         isKnownNormalAlbum(id, in: albums)
     }
 
+    /// One-item selection of the viewer photo for album menus and drags; nil when the collection
+    /// cannot contribute or the viewer's index no longer matches the collection's timeline.
+    func viewerAlbumSnapshot(collection: PhotoCollectionDescriptor, fingerprint: String, ordinal: Int, itemID: Int64) -> BrowserCommandSnapshot? {
+        guard capabilities(for: collection).allowsAlbumMembership, let timeline = snapshot(for: collection),
+              LibraryIndex(snapshot: timeline).fingerprint == fingerprint,
+              let authority = selectionAuthority(for: collection) else { return nil }
+        return BrowserCommandSnapshot(owner: UUID(), active: true, canOpen: false,
+            canToggleFavorite: false, collection: collection, indexFingerprint: fingerprint, selectionGeneration: nil,
+            selectedOrdinals: IndexSet(integer: ordinal), knownItemIDsByOrdinal: [ordinal: itemID],
+            timeline: timeline, authority: authority, sourceAlbumID: capabilities(for: collection).sourceAlbumID)
+    }
+
     func beginAlbumOperation(_ kind: AlbumOperation.Kind, captured: BrowserCommandSnapshot) {
         guard capabilities(for: captured.collection).allowsAlbumMembership, albumOperation == nil, let timeline = captured.timeline,
               let fingerprint = captured.indexFingerprint, let authority = captured.authority,
