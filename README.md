@@ -40,11 +40,11 @@ The full feature list and its limits are in [docs/PROJECT.md](docs/PROJECT.md).
 
 ## Install
 
-1. Download the latest release from [GitHub Releases](https://github.com/finia2NA/cirrusphotos/releases/latest), open it and drag Cirrus Photos to Applications.
-2. The app is signed but not notarized, so macOS blocks the first launch. Open it once, close the warning, then go to System Settings ▸ Privacy & Security and click **Open Anyway**. Alternatively, remove the quarantine flag in Terminal:
+1. Download the latest release from [GitHub Releases](https://github.com/finia2NA/cirrusphotos/releases/latest).
+2. The DMG is signed but not notarized, so macOS blocks it when you open it. Close the warning, go to System Settings ▸ Privacy & Security and click **Open Anyway**. Then open the DMG and drag Cirrus Photos to Applications. If macOS blocks the first launch of the app as well, allow it the same way. Alternatively, remove the quarantine flag in Terminal before opening the DMG:
 
    ```sh
-   xattr -dr com.apple.quarantine "/Applications/Cirrus Photos.app"
+   xattr -d com.apple.quarantine ~/Downloads/Cirrus-Photos-*.dmg
    ```
 
 3. On first launch, enter your server address, username and password (and the six-digit code if your account uses two-factor authentication). A bare host name means `https://host:5001`; plain HTTP is not accepted.

@@ -27,20 +27,22 @@
 </header>
 <main>
 <h1>Install</h1>
-<p class="lead">Cirrus Photos is signed but not notarized, because there is no paid Apple Developer account behind it. macOS therefore blocks the first launch until you allow it once.</p>
+<p class="lead">Cirrus Photos is signed but not notarized, because there is no paid Apple Developer account behind it. macOS therefore blocks the downloaded disk image until you allow it.</p>
 
 <h2>Steps</h2>
 <ol>
-<li>Download the latest release from the <a href="https://github.com/finia2NA/cirrusphotos/releases/latest">releases page</a> and open it.</li>
-<li>Drag <strong>Cirrus Photos</strong> to the Applications folder.</li>
-<li>Open it from Applications. macOS says the app could not be verified. Close that message.</li>
+<li>Download the latest release from the <a href="https://github.com/finia2NA/cirrusphotos/releases/latest">releases page</a> and open the DMG. macOS says it could not be verified. Click <strong>Done</strong>.</li>
 <li>Open <strong>System Settings</strong>, go to <strong>Privacy &amp; Security</strong> and scroll to the Security section.</li>
-<li>Click <strong>Open Anyway</strong> next to the message about Cirrus Photos, then confirm and authenticate.</li>
+<li>Click <strong>Open Anyway</strong> next to the message about the DMG, then confirm and authenticate.</li>
+<li>Open the DMG again and drag <strong>Cirrus Photos</strong> to the Applications folder.</li>
+<li>Open Cirrus Photos from Applications. If macOS blocks it too, allow it the same way.</li>
 </ol>
 <p>This is needed only once. Control-click and Open no longer gets past the block on current macOS.</p>
 
 <h2>Terminal alternative</h2>
-<p>Remove the quarantine flag instead of using System Settings:</p>
+<p>Remove the quarantine flag from the downloaded DMG before opening it, instead of using System Settings:</p>
+<pre><code>xattr -d com.apple.quarantine ~/Downloads/Cirrus-Photos-*.dmg</code></pre>
+<p>If the app is already in Applications and still blocked:</p>
 <pre><code>xattr -dr com.apple.quarantine "/Applications/Cirrus Photos.app"</code></pre>
 
 <h2>Sign in</h2>
