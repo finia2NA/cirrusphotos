@@ -2,6 +2,13 @@
 
 Each version's section is its release notes on GitHub and in the in-app updater.
 
+## 0.1.2
+
+- Dragging several photos shows a single count badge.
+- A photo open in the viewer can be dragged onto an album.
+- View ▸ Group by Day, also a toolbar button, shows photos in one continuous grid without day headings.
+- Viewer tool buttons show on and off with filled symbols instead of a blue tint.
+
 ## 0.1.1
 
 - Setup pages have Back buttons.
