@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Cirrus Photos</title>
+    <link>https://cirrusphotos.richardhanss.de/</link>
+    <description>Cirrus Photos updates</description>
+    <language>en</language>
+    <item>
+      <title>Version 0.1</title>
+      <pubDate>Sat, 07 Nov 2026 20:17:51 +0000</pubDate>
+      <sparkle:version>1</sparkle:version>
+      <sparkle:shortVersionString>0.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<p>First public alpha.
+</p>
+<ul>
+<li>Browse Personal Space and Shared Space as a day-grouped timeline, with a photo and video viewer.</li>
+<li>Browse Favorites, Recently Added, People, Subjects, Tags, folders, albums and a map.</li>
+<li>Filter cached photos by filename, camera, tags, rating and other criteria, also offline.</li>
+<li>Create and share albums; favorite, rate, tag, rotate, delete, download and upload photos.</li>
+<li>Thumbnails, metadata and originals are cached on disk with a size limit you set.</li>
+<li>Updates arrive through the built-in updater.</li>
+</ul>
+]]></description>
+      <enclosure url="https://github.com/finia2NA/cirrusphotos/releases/download/v0.1/Cirrus-Photos-0.1.dmg"
+                 type="application/octet-stream" sparkle:edSignature="qInWGugv5nvfMcwd1SXmzq9IEC7CPGo+6m0noar3j/yExwKlAyZSMscIzyOftsr5HVv3+nVoY6zQyRf+JU3oBw==" length="10828222" />
+    </item>
+  </channel>
+</rss>
