@@ -5,20 +5,20 @@
       "request": "launch",
       "args": [],
       "cwd": "${workspaceFolder:syno}",
-      "name": "Debug SynoTimeline",
-      "target": "SynoTimeline",
+      "name": "Debug CirrusPhotos",
+      "target": "CirrusPhotos",
       "configuration": "debug",
-      "preLaunchTask": "swift: Build Debug SynoTimeline"
+      "preLaunchTask": "swift: Build Debug CirrusPhotos"
     },
     {
       "type": "swift",
       "request": "launch",
       "args": [],
       "cwd": "${workspaceFolder:syno}",
-      "name": "Release SynoTimeline",
-      "target": "SynoTimeline",
+      "name": "Release CirrusPhotos",
+      "target": "CirrusPhotos",
       "configuration": "release",
-      "preLaunchTask": "swift: Build Release SynoTimeline"
+      "preLaunchTask": "swift: Build Release CirrusPhotos"
     }
   ]
 }

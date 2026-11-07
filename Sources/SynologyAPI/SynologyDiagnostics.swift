@@ -3,7 +3,7 @@ import OSLog
 /// Unified logging shared by the app's layers. Keep the subsystem stable so a
 /// single Console predicate can include every category.
 public enum SynologyDiagnostics {
-    public static let subsystem = "local.cirrus.syno-timeline"
+    public static let subsystem = AppIdentity.bundleIdentifier
 
     /// Intervals for browser scrolling and thumbnail work, shown in Instruments'
     /// os_signpost / Points of Interest lanes (`make profile`).
@@ -18,13 +18,13 @@ public enum SynologyDiagnostics {
     public static let decoding = Logger(subsystem: subsystem, category: "viewer.decoding")
     public static let rotations = Logger(subsystem: subsystem, category: "repository.rotations")
     public static let rotationTransport = Logger(subsystem: subsystem, category: "transport.rotations")
-    /// Folder navigation timings. Console: `s:local.cirrus.syno-timeline c:navigation.folders`.
+    /// Folder navigation timings. Console: `s:de.richardhanss.cirrus-photos c:navigation.folders`.
     public static let folders = Logger(subsystem: subsystem, category: "navigation.folders")
     /// Diff reconciliation outcomes and full inventory scans with their cause.
-    /// Console: `s:local.cirrus.syno-timeline c:repository.diff`.
+    /// Console: `s:de.richardhanss.cirrus-photos c:repository.diff`.
     public static let diff = Logger(subsystem: subsystem, category: "repository.diff")
     /// Failures that indicate a bug, a malformed response or an unconfirmed write.
-    /// Console: `s:local.cirrus.syno-timeline c:unexpected`.
+    /// Console: `s:de.richardhanss.cirrus-photos c:unexpected`.
     public static let unexpected = Logger(subsystem: subsystem, category: "unexpected")
     /// Expected failures such as offline reads, busy operations and stale selections.
     public static let failures = Logger(subsystem: subsystem, category: "failures")

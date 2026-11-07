@@ -76,7 +76,7 @@ public actor SynologyClient: PhotosTransport {
             method = "upload_to_folder"
             target = [("target_folder_id", String(id))]
         }
-        let boundary = "SynoTimeline-\(UUID().uuidString)"
+        let boundary = "CirrusPhotos-\(UUID().uuidString)"
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         guard FileManager.default.createFile(atPath: temporary.path, contents: nil) else { throw SynologyAPIError.invalidResponse }
         defer { try? FileManager.default.removeItem(at: temporary) }
@@ -842,7 +842,7 @@ public actor SynologyClient: PhotosTransport {
         SynologyDiagnostics.rotationTransport.info(
             "Preparing converted thumbnail upload unit_id=\(unitID, privacy: .public) sm_bytes=\(files.sm.count, privacy: .public) m_bytes=\(files.m.count, privacy: .public) xl_bytes=\(files.xl.count, privacy: .public) api_version=3"
         )
-        let boundary = "SynoTimeline-\(UUID().uuidString)"
+        let boundary = "CirrusPhotos-\(UUID().uuidString)"
         let body = Self.convertedThumbnailMultipartBody(
             boundary: boundary, unitID: unitID, files: files, space: space
         )

@@ -13,11 +13,11 @@ for argument in "$@"; do
     esac
 done
 
-swift build -c "$configuration" --product SynoTimeline
+swift build -c "$configuration" --product CirrusPhotos
 bin_dir="$(swift build -c "$configuration" --show-bin-path)"
 app_bundle="$PWD/.build/Cirrus Photos.app"
 mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Resources"
-cp "$bin_dir/SynoTimeline" "$app_bundle/Contents/MacOS/"
+cp "$bin_dir/CirrusPhotos" "$app_bundle/Contents/MacOS/"
 xcrun actool --compile "$app_bundle/Contents/Resources" \
     --platform macosx --minimum-deployment-target 27.0 \
     --app-icon AppIcon --output-partial-info-plist "$PWD/.build/AppIcon-Info.plist" \

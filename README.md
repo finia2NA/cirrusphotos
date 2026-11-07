@@ -11,7 +11,7 @@ bash scripts/run.sh
 This builds and opens a local `.app` inside the ignored `.build` directory. Pass `--build-only` to build, assemble, and sign the bundle without opening it. Alternatively, run directly from the terminal:
 
 ```sh
-swift run SynoTimeline
+swift run CirrusPhotos
 ```
 
 To build the app bundle, open macOS Console, and run the app in the foreground, use:
@@ -20,9 +20,9 @@ To build the app bundle, open macOS Console, and run the app in the foreground, 
 make debug
 ```
 
-In Console, use `s:local.cirrus.syno-timeline` as a subsystem search and save it for reuse. For video playback, the useful categories are `viewer.video`, `repository.video`, and `transport.video`: they show AVPlayer state, cache/range assembly, and NAS request status and timing respectively. The logs include item/unit IDs, effective quality, byte ranges, HTTP status, and sanitized error domain/code, but exclude filenames, cache keys, credentials, session data, authenticated URLs, and response bodies. Press Control-C in the terminal to stop the app. `make start` builds and opens the app normally without opening Console.
+In Console, use `s:de.richardhanss.cirrus-photos` as a subsystem search and save it for reuse. For video playback, the useful categories are `viewer.video`, `repository.video`, and `transport.video`: they show AVPlayer state, cache/range assembly, and NAS request status and timing respectively. The logs include item/unit IDs, effective quality, byte ranges, HTTP status, and sanitized error domain/code, but exclude filenames, cache keys, credentials, session data, authenticated URLs, and response bodies. Press Control-C in the terminal to stop the app. `make start` builds and opens the app normally without opening Console.
 
-These commands build in debug mode. Use `make release` (or `scripts/run.sh --release`) to build and open an optimized bundle when judging performance. `make profile` builds that bundle, launches it under Instruments' Time Profiler for 40 seconds with a countdown, shows progress while the trace is written to `.build/profiles/`, and opens it; override with `PROFILE_SECONDS=…` or `PROFILE_TEMPLATE="Animation Hitches"`. One Control-C stops early and still saves. Animation Hitches traces are very large (about 20 GB for 60 seconds), so keep those recordings short. Browser signposts (subsystem `local.cirrus.syno-timeline`, category `performance.browser`) mark layout passes, row view creation, thumbnail cache reads and decodes; they appear in Instruments' os_signpost / Points of Interest lanes.
+These commands build in debug mode. Use `make release` (or `scripts/run.sh --release`) to build and open an optimized bundle when judging performance. `make profile` builds that bundle, launches it under Instruments' Time Profiler for 40 seconds with a countdown, shows progress while the trace is written to `.build/profiles/`, and opens it; override with `PROFILE_SECONDS=…` or `PROFILE_TEMPLATE="Animation Hitches"`. One Control-C stops early and still saves. Animation Hitches traces are very large (about 20 GB for 60 seconds), so keep those recordings short. Browser signposts (subsystem `de.richardhanss.cirrus-photos`, category `performance.browser`) mark layout passes, row view creation, thumbnail cache reads and decodes; they appear in Instruments' os_signpost / Points of Interest lanes.
 
 To remove build artifacts so the next `make` or `make debug` performs a clean build, use:
 

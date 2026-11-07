@@ -105,7 +105,7 @@ def main(arguments: list[str]) -> int:
         except BlockingIOError:
             print("Another user switch is in progress.", file=sys.stderr)
             return 1
-        running = subprocess.run(["pgrep", "-x", "SynoTimeline"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        running = subprocess.run(["pgrep", "-x", "CirrusPhotos"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if running.returncode == 0:
             print("Quit Cirrus Photos before switching accounts.", file=sys.stderr)
             return 1
