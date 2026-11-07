@@ -38,3 +38,6 @@ docs/captures/
 
 # Release signing keys (Sparkle EdDSA private key)
 secrets/
+
+# Agent worktrees
+.claude/worktrees/
