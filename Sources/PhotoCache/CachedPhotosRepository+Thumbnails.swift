@@ -35,12 +35,20 @@ extension CachedPhotosRepository {
                 }
                 let identity = CacheKey.thumbnailIdentity(scope: scope.contentScope, namespace: namespace, descriptor: descriptor, size: size, collection: scope)
                 let key = identity.key
-                let cached: CacheEntry?
+                var cached: CacheEntry?
                 switch cachedLookup {
                 case .read: cached = try? await store.getThumbnail(identity)
                 case .known(let entry): cached = entry
                 }
                 guard !Task.isCancelled else { continuation.finish(); return }
+                // A shared transfer can store its bytes and lose its last subscriber between
+                // that lookup and registration, so re-read before starting another download.
+                // A job writes the cache before it deregisters, and nothing awaits between this
+                // read and `registerImage`, so only a transfer started after this check can repeat.
+                if cached == nil, allowNetwork, imageWork.thumbnailJobs[key] == nil {
+                    cached = try? await store.getThumbnail(identity)
+                    guard !Task.isCancelled else { continuation.finish(); return }
+                }
                 if cached?.kind == .previewThumbnail, cachePurpose == .library {
                     try? await store.promotePreviewThumbnail(key)
                 }
