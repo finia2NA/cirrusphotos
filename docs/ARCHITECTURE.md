@@ -12,7 +12,7 @@ This document is the source of truth for current technical structure, subsystem 
 | `CirrusPhotosApp` | The SwiftUI/AppKit executable (`CirrusPhotos`, built as the Cirrus Photos app bundle). |
 | `TransportTestSupport` | Test-only `TestPhotosTransport` with a failing default for every request a test does not implement. |
 
-Dependencies point downward in that order. Each open account has one `CachedPhotosRepository`, and the UI reaches the NAS only through it. SwiftUI hosts the shell, an AppKit viewport virtualizes the browser, AppKit/Core Animation draws the viewer canvas and AVFoundation plays repository-backed video ranges.
+Large targets group files by subsystem (`PhotoCache/Metadata`, `CirrusPhotosApp/Viewer`); `CachedPhotosRepository` extensions sit with their subsystem and test folders mirror them. Dependencies point downward in that order. Each open account has one `CachedPhotosRepository`, and the UI reaches the NAS only through it. SwiftUI hosts the shell, an AppKit viewport virtualizes the browser, AppKit/Core Animation draws the viewer canvas and AVFoundation plays repository-backed video ranges.
 
 ## Invariants
 

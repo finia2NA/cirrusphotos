@@ -21,9 +21,11 @@ import Testing
     }
 
     @Test func bundledNoticesDecode() throws {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Resources/ThirdPartyNotices.json")
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        while !FileManager.default.fileExists(atPath: root.appendingPathComponent("Package.swift").path) {
+            root = root.deletingLastPathComponent()
+        }
+        let url = root.appendingPathComponent("Resources/ThirdPartyNotices.json")
         let notices = ThirdPartyNotice.load(from: url)
         let grdb = try #require(notices.first { $0.name == "GRDB.swift" })
         #expect(grdb.license == "MIT")

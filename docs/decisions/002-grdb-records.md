@@ -8,7 +8,7 @@ Accepted on 2026-11-03.
 
 The cache index uses [GRDB.swift](https://github.com/groue/GRDB.swift) instead of the SQLite C API.
 
-- `Sources/PhotoCache/CacheSchema.swift` declares every table: one Codable record type per table, and the table definitions built from the same column keys. It is the single place to read or change the storage schema.
+- `Sources/PhotoCache/Storage/CacheSchema.swift` declares every table: one Codable record type per table, and the table definitions built from the same column keys. It is the single place to read or change the storage schema.
 - Storage code reads and writes through records and GRDB's query interface (`filter`, `order`, `fetchOne`, `insert`, `upsert`, `updateAll`, `deleteAll`). Hand-written SQL is limited to pragmas, the `metadata_format` marker and table introspection used to discard a superseded format.
 - Nested values (photo items, catalogs, cursors, album lists) are stored as JSON text by GRDB's Codable support.
 - `DiskCache` owns one `DatabaseQueue` and keeps its storage methods synchronous, so a transaction never suspends inside the actor.
