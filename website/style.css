@@ -69,22 +69,15 @@ li { margin-bottom: 0.4rem; }
 }
 .button:hover { opacity: 0.9; }
 figure { margin: 0 0 1.5rem; }
-figure .shot {
-  aspect-ratio: 16 / 10;
-  width: 100%;
-  background: var(--box);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  overflow: hidden;
-}
 figure img {
   display: block;
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  height: auto;
   color: var(--muted);
   font-size: 0.9rem;
 }
+.shots { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1.5rem; }
+@media (max-width: 40rem) { .shots { grid-template-columns: 1fr; } }
 figcaption { margin-top: 0.4rem; font-size: 0.9rem; color: var(--muted); }
 code, pre { font: 0.9rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
 code { background: var(--code-bg); padding: 0.1rem 0.3rem; border-radius: 4px; overflow-wrap: anywhere; }

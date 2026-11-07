@@ -14,6 +14,10 @@ Cirrus Photos is a native Mac app for browsing your Synology Photos library on y
   <img src="website/assets/screenshot-viewer.png" alt="The photo viewer" width="49%">
   <img src="website/assets/screenshot-map.png" alt="The map of geotagged photos" width="49%">
 </p>
+<p>
+  <img src="website/assets/screenshot-sharing.png" alt="Album sharing" width="49%">
+  <img src="website/assets/screenshot-subjects.png" alt="Subjects" width="49%">
+</p>
 
 <sub>Photos in the screenshots are from Wikimedia Commons; see [photo credits](website/assets/CREDITS.md).</sub>
 

@@ -1,11 +1,15 @@
 # Screenshots
 
-Still needed; none of the three exists yet. Take them from the `phototest` account, never from a personal library, and save them as PNG in this directory. That account's Personal Space holds freely licensed Wikimedia Commons photos with camera and location data, sorted into region folders, with two albums and a few favorites; `CREDITS.md` lists every photo.
+Taken from the disposable `phototest` account, not a personal library. Its Personal Space holds freely licensed Wikimedia Commons photos with camera and location data; `CREDITS.md` lists every photo.
 
-All three: light mode, macOS window about 1600 x 1000 px (16:10; the site crops to that ratio), sidebar visible, no personal names, places or filenames.
+| File | Shows |
+| --- | --- |
+| `screenshot-timeline.png` | Library timeline grouped by day, with the filter panel open |
+| `screenshot-viewer.png` | Viewer with the Info panel and histogram |
+| `screenshot-map.png` | Map of geotagged photos with counted clusters |
+| `screenshot-sharing.png` | Album sharing dialog (the share-link host is blacked out) |
+| `screenshot-subjects.png` | Subjects collection |
 
-1. `screenshot-timeline.png`: Library in Personal Space, day-grouped grid at about 6 per row, date navigator revealed at the right edge, several days visible, nothing selected.
-2. `screenshot-viewer.png`: viewer open on a landscape photo, filmstrip visible, Info panel (Cmd+I) open showing camera and exposure details.
-3. `screenshot-map.png`: Map destination zoomed to a region with several thumbnail pins and at least two counted clusters.
+Each PNG is cropped to the macOS window with no margin and no shadow. Pixels outside the rounded window corners are transparent. Content is not scaled, and sizes are about 1436 x 1029 px, so the site shows them at 2x. Colors were quantized with `pngquant` at a quality floor of 80 to 95.
 
 `icon.png` (512 px) and `favicon.png` (64 px) were rendered from `Resources/AppIcon.icon` with `xcrun actool` and `sips`.
