@@ -12,6 +12,7 @@ SITE_URL="${SITE_URL%/}"
 
 source scripts/version.env
 source scripts/sparkle.env
+source scripts/signing.sh
 version="$MARKETING_VERSION"
 tag="v$version"
 # Not .build/release, which is SwiftPM's release products link.
@@ -107,8 +108,11 @@ cmd_dmg() {
     codesign --verify --deep --strict "$app"
     local signature_info binary="$app/Contents/MacOS/CirrusPhotos"
     signature_info="$(codesign -dvv "$app" 2>&1)"
-    grep -q '^Authority=' <<<"$signature_info" ||
-        fail "the bundle is signed ad hoc; updates need a stable identity (CODESIGN_IDENTITY)"
+    local identity
+    identity="$(signing_identity)"
+    [[ -n $identity ]] || fail "no trusted \"$SIGNING_NAME\" signing certificate (scripts/make-signing-cert.sh)"
+    grep -qx "Authority=$identity" <<<"$signature_info" ||
+        fail "the bundle is not signed by \"$identity\"; updates need the same identity as every release"
     local plist="$app/Contents/Info.plist"
     check_key() {
         local actual
@@ -133,8 +137,6 @@ cmd_dmg() {
     ln -s /Applications "$stage/Applications"
     hdiutil create -quiet -volname "Cirrus Photos" -srcfolder "$stage" -format UDZO -ov "$dmg"
     rm -rf "$stage"
-    local identity
-    identity="${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)}"
     codesign --force --sign "$identity" "$dmg"
     codesign --verify --strict "$dmg"
 

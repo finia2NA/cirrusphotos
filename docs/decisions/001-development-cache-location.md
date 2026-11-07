@@ -18,7 +18,7 @@ Store the cache under the repository's Git-ignored `.cache/` directory:
 
 The cache locator finds the nearest ancestor containing `Package.swift`. It checks the process working directory first, then walks upward from the application bundle. This keeps `swift run` and `scripts/run.sh` on the same path even though LaunchServices does not guarantee the working directory of a launched `.app`.
 
-This applies to development builds. Distribution builds (`scripts/run.sh --distribution`) use `~/Library/Application Support/de.richardhanss.cirrus-photos/` instead, because they run without a checkout. Each checkout starts with its own cache. Incompatible SQLite index versions are discarded and recreated from NAS data.
+This applies to development builds. Distribution builds (`scripts/run.sh --distribution`) use `~/Library/Application Support/io.github.finia2na.cirrusphotos/` instead, because they run without a checkout. Each checkout starts with its own cache. Incompatible SQLite index versions are discarded and recreated from NAS data.
 
 `.cache/` is ignored by Git.
 

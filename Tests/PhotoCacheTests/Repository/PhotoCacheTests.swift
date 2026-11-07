@@ -33,7 +33,7 @@ final class PhotoCacheTests: XCTestCase {
         let root = CacheLocation.applicationSupportRoot(fileManager: .default)
         let applicationSupport = try FileManager.default.url(
             for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
-        XCTAssertEqual(root.lastPathComponent, "de.richardhanss.cirrus-photos")
+        XCTAssertEqual(root.lastPathComponent, "io.github.finia2na.cirrusphotos")
         XCTAssertEqual(root.deletingLastPathComponent().standardizedFileURL, applicationSupport.standardizedFileURL)
     }
 

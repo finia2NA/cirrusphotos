@@ -1,7 +1,7 @@
 import PhotoCache
 
 /// Logs a failure the app shows to the user and returns its message. Unexpected
-/// failures appear in Console under `s:de.richardhanss.cirrus-photos c:unexpected`.
+/// failures appear in Console under `s:io.github.finia2na.cirrusphotos c:unexpected`.
 func reportedFailure(_ error: any Error, operation: String) -> String {
     RepositoryError.record(error, operation: operation).localizedDescription
 }

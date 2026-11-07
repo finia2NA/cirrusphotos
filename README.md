@@ -61,10 +61,10 @@ More detail is on the [install page](https://cirrusphotos.richardhanss.de/instal
 
 Use **Help ▸ Report an Issue…** to open a prefilled [GitHub issue](https://github.com/finia2NA/syno/issues), and **Help ▸ Export Logs…** to save the app's log entries from the last 24 hours to a text file you can attach. Nothing is sent automatically. Check the file for anything private before posting it.
 
-The same log is available from a terminal; the app logs under the subsystem `de.richardhanss.cirrus-photos`:
+The same log is available from a terminal; the app logs under the subsystem `io.github.finia2na.cirrusphotos`:
 
 ```sh
-log show --last 24h --info --debug --predicate 'subsystem == "de.richardhanss.cirrus-photos"'
+log show --last 24h --info --debug --predicate 'subsystem == "io.github.finia2na.cirrusphotos"'
 ```
 
 If the app crashed, include the newest `~/Library/Logs/DiagnosticReports/CirrusPhotos-*.ips`. In the app, **Copy Details** in the Activity panel copies a failed operation's details with credentials and the NAS address removed.
@@ -91,7 +91,7 @@ swift run CirrusPhotos     # run the executable directly from the terminal
 make clean                 # remove build artifacts for a clean build
 ```
 
-The bundle is created in the ignored `.build` directory. It is signed with `CODESIGN_IDENTITY` or the first Apple Development identity, falling back to ad-hoc; a stable identity keeps the app's Keychain access across rebuilds.
+The bundle is created in the ignored `.build` directory. It is signed with the self-signed "Cirrus Photos" certificate (or `CODESIGN_IDENTITY`); run `scripts/make-signing-cert.sh` once to create it, or to restore it from its backup on another Mac. Without it, development builds are signed ad hoc and macOS asks for Keychain access after every rebuild; distribution builds refuse to build.
 
 ### Distribution build
 
@@ -99,7 +99,7 @@ The bundle is created in the ignored `.build` directory. It is signed with `CODE
 bash scripts/run.sh --distribution
 ```
 
-This builds the public release bundle at `.build/distribution/Cirrus Photos.app` and does not open it. It is optimized, ignores `.env`, stores its cache in `~/Library/Application Support/de.richardhanss.cirrus-photos/` and has no App Transport Security exception. Development builds keep their cache in the ignored `.cache/` directory of the checkout.
+This builds the public release bundle at `.build/distribution/Cirrus Photos.app` and does not open it. It is optimized, ignores `.env`, stores its cache in `~/Library/Application Support/io.github.finia2na.cirrusphotos/` and has no App Transport Security exception. Development builds keep their cache in the ignored `.cache/` directory of the checkout.
 
 ## Releasing
 
@@ -108,7 +108,8 @@ Releases are DMGs on GitHub Releases; installed apps find them through Sparkle's
 One-time setup:
 
 - The EdDSA private key that signs updates is `secrets/sparkle_ed25519_private.key` in the main checkout (gitignored; also in the login Keychain under the Sparkle account `cirrus-photos`). Back it up: without it, installed apps reject every future update. Its public key is in `scripts/sparkle.env`.
-- An Apple Development signing identity (or `CODESIGN_IDENTITY`), the GitHub CLI signed in (`gh auth login`) and SSH access to the web server (`ssh ionos`).
+- The "Cirrus Photos" code-signing certificate from `scripts/make-signing-cert.sh`, backed up as `secrets/cirrus-photos-signing.p12` (gitignored). Back it up with its password: Sparkle installs only updates signed by the same certificate as the installed app.
+- The GitHub CLI signed in (`gh auth login`) and SSH access to the web server (`ssh ionos`).
 
 For each release, bump `BUILD_NUMBER` in `scripts/version.env` (and `MARKETING_VERSION` when the version changes), add a `## <version>` section to `CHANGELOG.md` and commit. Then:
 
@@ -139,7 +140,7 @@ make debug      # build, open Console, and run the app in the foreground (Contro
 make profile    # optimized build, recorded under Instruments for 40 seconds
 ```
 
-In Console, filter by `subsystem:de.richardhanss.cirrus-photos`. For video playback the useful categories are `viewer.video`, `repository.video` and `transport.video` (AVPlayer state, cache and range assembly, and NAS request status and timing). Logs exclude filenames, cache keys, credentials, session data, authenticated URLs and response bodies.
+In Console, filter by `subsystem:io.github.finia2na.cirrusphotos`. For video playback the useful categories are `viewer.video`, `repository.video` and `transport.video` (AVPlayer state, cache and range assembly, and NAS request status and timing). Logs exclude filenames, cache keys, credentials, session data, authenticated URLs and response bodies.
 
 `make profile` writes the trace to `.build/profiles/` and opens it. Control-C stops it early and still saves. Options:
 

@@ -7,7 +7,7 @@ import SynologyAPI
 /// and belong to one session.
 @MainActor
 final class AlbumDragRegistry {
-    static let type = NSPasteboard.PasteboardType("de.richardhanss.cirrus-photos.local-album")
+    static let type = NSPasteboard.PasteboardType("io.github.finia2na.cirrusphotos.local-album")
     private var entries: [UUID: (collection: PhotoCollectionDescriptor, namespace: String)] = [:]
     func register(collection: PhotoCollectionDescriptor, namespace: String) -> UUID {
         let nonce = UUID()
@@ -31,7 +31,7 @@ final class AlbumDragRegistry {
 /// Local selection handles are consumed once on acceptance; they never contain pasteboard data.
 @MainActor
 final class SelectionDragRegistry {
-    static let type = NSPasteboard.PasteboardType("de.richardhanss.cirrus-photos.local-selection")
+    static let type = NSPasteboard.PasteboardType("io.github.finia2na.cirrusphotos.local-selection")
     struct Entry {
         let selection: PhotoSelectionSnapshot
         let sourceAlbumID: Int64?

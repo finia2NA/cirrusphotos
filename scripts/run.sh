@@ -75,11 +75,19 @@ if [[ $distribution == true ]]; then
 fi
 cp Resources/ThirdPartyNotices.json "$app_bundle/Contents/Resources/"
 plutil -lint -s "$info_plist"
-# A stable signing identity keeps the app's Keychain access ("Always Allow") across
-# rebuilds; an ad-hoc signature changes with every build, so macOS asks again.
-# CODESIGN_IDENTITY overrides; otherwise the first Apple Development identity is used.
+# The stable "Cirrus Photos" identity keeps Keychain access ("Always Allow") across rebuilds and
+# lets Sparkle accept updates. Development builds fall back to an ad-hoc signature, which changes
+# with every build, so macOS asks for Keychain access again; distribution builds require it.
 # No entitlements: only scripts/profile.sh adds get-task-allow, and only to the development bundle.
-identity="${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)}"
+source scripts/signing.sh
+identity="$(signing_identity)"
+if [[ -z $identity ]]; then
+    if [[ $distribution == true ]]; then
+        echo "No trusted \"$SIGNING_NAME\" signing certificate; run scripts/make-signing-cert.sh." >&2
+        exit 1
+    fi
+    echo "Warning: no \"$SIGNING_NAME\" signing certificate (scripts/make-signing-cert.sh); signing ad hoc." >&2
+fi
 # Nested code is signed inside-out before the app, as Sparkle documents for apps signed
 # outside Xcode (no --deep): XPC services, Autoupdate, Updater.app, then the framework.
 sign=(codesign --force --sign "${identity:--}")

@@ -296,7 +296,7 @@ final class NavigatingPlayerView: AVPlayerView {
 }
 
 final class VideoAssetLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked Sendable {
-    let queue = DispatchQueue(label: "de.richardhanss.cirrus-photos.video-loader")
+    let queue = DispatchQueue(label: "io.github.finia2na.cirrusphotos.video-loader")
     private let repository: CachedPhotosRepository
     private let resource: VideoPlaybackResource
     private let allowNetwork: Bool

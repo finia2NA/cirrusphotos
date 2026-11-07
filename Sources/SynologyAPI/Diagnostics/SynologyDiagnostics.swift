@@ -18,13 +18,13 @@ public enum SynologyDiagnostics {
     public static let decoding = Logger(subsystem: subsystem, category: "viewer.decoding")
     public static let rotations = Logger(subsystem: subsystem, category: "repository.rotations")
     public static let rotationTransport = Logger(subsystem: subsystem, category: "transport.rotations")
-    /// Folder navigation timings. Console: `s:de.richardhanss.cirrus-photos c:navigation.folders`.
+    /// Folder navigation timings. Console: `s:io.github.finia2na.cirrusphotos c:navigation.folders`.
     public static let folders = Logger(subsystem: subsystem, category: "navigation.folders")
     /// Diff reconciliation outcomes and full inventory scans with their cause.
-    /// Console: `s:de.richardhanss.cirrus-photos c:repository.diff`.
+    /// Console: `s:io.github.finia2na.cirrusphotos c:repository.diff`.
     public static let diff = Logger(subsystem: subsystem, category: "repository.diff")
     /// Failures that indicate a bug, a malformed response or an unconfirmed write.
-    /// Console: `s:de.richardhanss.cirrus-photos c:unexpected`.
+    /// Console: `s:io.github.finia2na.cirrusphotos c:unexpected`.
     public static let unexpected = Logger(subsystem: subsystem, category: "unexpected")
     /// Expected failures such as offline reads, busy operations and stale selections.
     public static let failures = Logger(subsystem: subsystem, category: "failures")

@@ -102,7 +102,7 @@ One toolbar item opens the Activity panel (also View ▸ Show Activity, ⌥⌘L)
 
 ## Cache, freshness and settings
 
-- Timelines, exact pages, albums, location records, thumbnails, previews, originals and previously fetched video ranges are delivered cached-first. The distributed app stores them in `~/Library/Application Support/de.richardhanss.cirrus-photos/`; development builds use the checkout's `.cache/`.
+- Timelines, exact pages, albums, location records, thumbnails, previews, originals and previously fetched video ranges are delivered cached-first. The distributed app stores them in `~/Library/Application Support/io.github.finia2na.cirrusphotos/`; development builds use the checkout's `.cache/`.
 - **Refresh** (Activity panel, Library ▸ Refresh from NAS, ⌘R) reads each space's change feed now and withdraws this run's validation of catalogs and album, folder and summary lists, so they are read again. Nothing is cleared: open views keep their content and merge changes in. With a failed sign-in or an unloaded library it restarts loading instead. Nothing is polled automatically.
 - **Revalidate metadata** (Settings ▸ Storage) keeps cached metadata visible but withdraws its verification and the change-feed position, so every timeline, section and detail is read again on demand and by the background sync. It is the escape hatch for changes the feeds missed.
 - A metadata-only reset removes timelines, pages, album metadata, locations and session filters while preserving compressed media; a full clear removes metadata and media.
