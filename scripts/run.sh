@@ -51,6 +51,11 @@ else
     fi
     sed "s/__NAS_HOST__/$nas_host/" scripts/App-Info.plist > "$info_plist"
 fi
+# The version comes only from scripts/version.env (the template has no version keys).
+source scripts/version.env
+plutil -insert CFBundleShortVersionString -string "$MARKETING_VERSION" "$info_plist"
+plutil -insert CFBundleVersion -string "$BUILD_NUMBER" "$info_plist"
+cp Resources/ThirdPartyNotices.json "$app_bundle/Contents/Resources/"
 plutil -lint -s "$info_plist"
 # A stable signing identity keeps the app's Keychain access ("Always Allow") across
 # rebuilds; an ad-hoc signature changes with every build, so macOS asks again.

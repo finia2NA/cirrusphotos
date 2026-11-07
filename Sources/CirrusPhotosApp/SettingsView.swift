@@ -3,14 +3,14 @@ import SwiftUI
 import SynologyAPI
 
 private enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, viewing, storage, account
+    case general, viewing, storage, account, about
 
     var id: Self { self }
     var title: String {
-        switch self { case .general: "General"; case .viewing: "Viewing"; case .storage: "Storage"; case .account: "Account" }
+        switch self { case .general: "General"; case .viewing: "Viewing"; case .storage: "Storage"; case .account: "Account"; case .about: "About" }
     }
     var symbol: String {
-        switch self { case .general: "gearshape"; case .viewing: "eye"; case .storage: "internaldrive"; case .account: "person.crop.circle" }
+        switch self { case .general: "gearshape"; case .viewing: "eye"; case .storage: "internaldrive"; case .account: "person.crop.circle"; case .about: "info.circle" }
     }
 }
 
@@ -50,6 +50,8 @@ struct SettingsView: View {
             }
         case .account:
             AccountSettingsView(accounts: accounts)
+        case .about:
+            AboutSettingsView().frame(height: 560)
         }
     }
 
