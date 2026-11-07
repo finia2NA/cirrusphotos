@@ -6,6 +6,23 @@
     <description>Cirrus Photos updates</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.2</title>
+      <pubDate>Sat, 07 Nov 2026 23:03:07 +0000</pubDate>
+      <sparkle:version>3</sparkle:version>
+      <sparkle:shortVersionString>0.1.2</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<ul>
+<li>Dragging several photos shows a single count badge.</li>
+<li>A photo open in the viewer can be dragged onto an album.</li>
+<li>View ▸ Group by Day, also a toolbar button, shows photos in one continuous grid without day headings.</li>
+<li>Viewer tool buttons show on and off with filled symbols instead of a blue tint.</li>
+</ul>
+]]></description>
+      <enclosure url="https://github.com/finia2NA/cirrusphotos/releases/download/v0.1.2/Cirrus-Photos-0.1.2.dmg"
+                 type="application/octet-stream" sparkle:edSignature="Rob+BeVhoErJ+aEWPaZg6rkg/jDIizKPKsm27zbfUxxJ0hW5EDdAv6V0I0AMcYDIee832KhrH/3JEYpz7ThVDg==" length="10837078" />
+    </item>
+    <item>
       <title>Version 0.1.1</title>
       <pubDate>Sat, 07 Nov 2026 21:22:08 +0000</pubDate>
       <sparkle:version>2</sparkle:version>
