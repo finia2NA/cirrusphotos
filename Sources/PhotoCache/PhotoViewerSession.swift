@@ -110,6 +110,8 @@ public actor PhotoViewerSession {
     public func setFilmstripEnabled(_ enabled: Bool) {
         guard filmstripEnabled != enabled, !closed else { return }
         filmstripEnabled = enabled
+        metadata.retainsFilmstrip = enabled
+        if !enabled { metadata.trimPages(around: desired) }
         scheduleThumbnailNeighbors()
         publish()
     }

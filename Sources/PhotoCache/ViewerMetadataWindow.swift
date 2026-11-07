@@ -32,6 +32,8 @@ struct ViewerMetadataWindow {
     let maximumPages: Int
     var pages: [Int: PageEntry] = [:]
     var pageJobs: [Int: PageJob] = [:]
+    /// When set, every section within the filmstrip's ±10 items is retained, however many that is.
+    var retainsFilmstrip = false
 
     init(index: LibraryIndex, maximumPages: Int) {
         self.maximumPages = max(1, min(3, maximumPages))
@@ -62,9 +64,10 @@ struct ViewerMetadataWindow {
     /// Prefer the current page, then nearby pages, while keeping the viewer bounded.
     func retainedSections(around location: PhotoViewerLocation) -> Set<Int> {
         var sections = [location.sectionIndex]
+        let limit = retainsFilmstrip ? 21 : maximumPages
         for offset in (1...10).flatMap({ [-$0, $0] }) {
             if let adjacent = self.location(for: location.ordinal + offset),
-               !sections.contains(adjacent.sectionIndex), sections.count < maximumPages {
+               !sections.contains(adjacent.sectionIndex), sections.count < limit {
                 sections.append(adjacent.sectionIndex)
             }
         }
