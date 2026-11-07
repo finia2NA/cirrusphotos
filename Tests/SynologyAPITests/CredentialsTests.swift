@@ -9,6 +9,14 @@ final class CredentialsTests: XCTestCase {
         XCTAssertEqual(values["OTP"], "ABC234")
     }
 
+    func testDistributionBuildsNeverFindAnEnvironmentFile() throws {
+        #if CIRRUS_DISTRIBUTION
+        XCTAssertNil(CredentialStore.environmentFile())
+        #else
+        throw XCTSkip("Only distribution builds compile the .env lookup out.")
+        #endif
+    }
+
     func testStandardTOTPVector() throws {
         XCTAssertEqual(try TOTP.generate(secret: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", date: Date(timeIntervalSince1970: 59)), "287082")
     }

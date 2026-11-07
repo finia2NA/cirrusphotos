@@ -11,6 +11,7 @@
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>27.0</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSLocalNetworkUsageDescription</key><string>Cirrus Photos connects to your Synology NAS on the local network.</string>
     <!-- Keeps info and debug messages of the app's subsystem on disk, so `log show` can
          reach the minutes before a crash. -->
     <key>OSLogPreferences</key><dict>
@@ -23,6 +24,7 @@
             </dict>
         </dict>
     </dict>
+    <!-- Development builds only: run.sh fills in the .env host; distribution builds remove it. -->
     <key>NSAppTransportSecurity</key><dict>
         <key>NSExceptionDomains</key><dict>
             <key>__NAS_HOST__</key><dict>

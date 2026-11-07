@@ -5,7 +5,8 @@ SHELL := /bin/zsh
 start:
 	./scripts/run.sh
 
-# Optimized build; use it when judging performance.
+# Optimized development build; use it when judging performance. The public build is
+# scripts/run.sh --distribution.
 release:
 	./scripts/run.sh --release
 
@@ -27,7 +28,7 @@ debug:
 
 clean:
 	swift package clean
-	rm -rf -- ".build/Cirrus Photos.app"
+	rm -rf -- ".build/Cirrus Photos.app" .build/distribution
 
 cloc:
 	@python3 scripts/cloc_report.py

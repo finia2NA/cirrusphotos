@@ -5,21 +5,36 @@ import SQLite3
 @testable import PhotoCache
 
 final class PhotoCacheTests: XCTestCase {
-    func testDefaultCacheRootUsesProjectDirectory() throws {
+    func testDevelopmentCacheRootUsesProjectDirectory() throws {
         let temporary = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SynoCacheLocationTest-\(UUID().uuidString)")
+            .appendingPathComponent("CirrusCacheLocationTest-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: temporary) }
         let project = temporary.appendingPathComponent("project", isDirectory: true)
-        let bundle = project.appendingPathComponent(".build/Cirrus Timeline.app", isDirectory: true)
+        let bundle = project.appendingPathComponent(".build/Cirrus Photos.app", isDirectory: true)
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
         try Data().write(to: project.appendingPathComponent("Package.swift"))
+        let unrelated = temporary.appendingPathComponent("unrelated", isDirectory: true)
 
-        let root = CacheLocation.defaultRoot(
-            currentDirectory: temporary.appendingPathComponent("unrelated", isDirectory: true),
-            bundleURL: bundle
-        )
+        let root = CacheLocation.developmentRoot(fileManager: .default, currentDirectory: unrelated, bundleURL: bundle)
         XCTAssertEqual(root.lastPathComponent, ".cache")
         XCTAssertEqual(root.deletingLastPathComponent().standardizedFileURL, project.standardizedFileURL)
+
+        // The default root follows the build mode: the checkout for development builds,
+        // Application Support for distribution builds.
+        let defaultRoot = CacheLocation.defaultRoot(currentDirectory: unrelated, bundleURL: bundle)
+        #if CIRRUS_DISTRIBUTION
+        XCTAssertEqual(defaultRoot, CacheLocation.applicationSupportRoot(fileManager: .default))
+        #else
+        XCTAssertEqual(defaultRoot, root)
+        #endif
+    }
+
+    func testDistributionCacheRootUsesApplicationSupport() throws {
+        let root = CacheLocation.applicationSupportRoot(fileManager: .default)
+        let applicationSupport = try FileManager.default.url(
+            for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+        XCTAssertEqual(root.lastPathComponent, "de.richardhanss.cirrus-photos")
+        XCTAssertEqual(root.deletingLastPathComponent().standardizedFileURL, applicationSupport.standardizedFileURL)
     }
 
     func testIncompatibleCacheSchemaDiscardsIndexedAndImageData() async throws {

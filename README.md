@@ -8,7 +8,7 @@ Run from the repository root:
 bash scripts/run.sh
 ```
 
-This builds and opens a local `.app` inside the ignored `.build` directory. Pass `--build-only` to build, assemble, and sign the bundle without opening it. Alternatively, run directly from the terminal:
+This builds and opens a local `.app` inside the ignored `.build` directory. Pass `--build-only` to build, assemble, and sign the bundle without opening it. `--distribution` builds the public release bundle in `.build/distribution/` without opening it: optimized, it ignores `.env`, stores its cache in `~/Library/Application Support/de.richardhanss.cirrus-photos/`, and has no App Transport Security exception. Alternatively, run directly from the terminal:
 
 ```sh
 swift run CirrusPhotos
@@ -44,6 +44,6 @@ Move near the right edge to reveal the compact timeline. Click or drag to jump t
 
 Use **Library → Download Thumbnails…** after the timeline is current to choose an inclusive date range with two slider handles. The window shows an upper-bound thumbnail count and downloads the rendition selected in Settings. Browsing can continue while the batch runs; Cancel or closing its window stops it. Normal cache-budget eviction still applies, so this is cache warming, not pinned offline storage.
 
-Open Settings from the app menu or with Command-, to select the small, medium, or large cached thumbnail rendition; set the total cache limit from 200 MB to 100 GB; view current stored payload usage; or clear the cache. The app stores its persistent cache under `.cache/` in this repository; that directory is ignored by Git. Offline data remains visible until Cirrus validates it. Entries are scoped to the server and account.
+Open Settings from the app menu or with Command-, to select the small, medium, or large cached thumbnail rendition; set the total cache limit from 200 MB to 100 GB; view current stored payload usage; or clear the cache. Development builds store the persistent cache under `.cache/` in this repository; that directory is ignored by Git. Offline data remains visible until Cirrus validates it. Entries are scoped to the server and account.
 
 See [product behavior and scope](docs/PROJECT.md), [architecture](docs/ARCHITECTURE.md), [cache follow-up work](https://github.com/finia2NA/syno/issues/28), [cache-location decision](docs/decisions/001-development-cache-location.md), and [API research](docs/SYNOLOGY_PHOTOS_API.md).
