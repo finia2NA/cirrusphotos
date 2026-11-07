@@ -6,6 +6,22 @@
     <description>Cirrus Photos updates</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.1</title>
+      <pubDate>Sat, 07 Nov 2026 21:22:08 +0000</pubDate>
+      <sparkle:version>2</sparkle:version>
+      <sparkle:shortVersionString>0.1.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<ul>
+<li>Setup pages have Back buttons.</li>
+<li>The thumbnail setting is labeled "Thumbnail quality".</li>
+<li>The sign-in progress spinner sits next to the Sign In button.</li>
+</ul>
+]]></description>
+      <enclosure url="https://github.com/finia2NA/cirrusphotos/releases/download/v0.1.1/Cirrus-Photos-0.1.1.dmg"
+                 type="application/octet-stream" sparkle:edSignature="BVL3EEPr9ZkUKaaXREXC0GMjbipRPycx6A2VuVM3LiR8rKXG12E9H2fdgDWWUjXRCGlduwMu0etGGHr94pT4AA==" length="10831756" />
+    </item>
+    <item>
       <title>Version 0.1</title>
       <pubDate>Sat, 07 Nov 2026 20:17:51 +0000</pubDate>
       <sparkle:version>1</sparkle:version>
