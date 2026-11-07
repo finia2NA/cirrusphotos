@@ -15,6 +15,8 @@ Cirrus Photos is a native Mac app for browsing your Synology Photos library on y
   <img src="website/assets/screenshot-map.png" alt="The map of geotagged photos" width="49%">
 </p>
 
+<sub>Photos in the screenshots are from Wikimedia Commons; see [photo credits](website/assets/CREDITS.md).</sub>
+
 ## What it does
 
 - Browse Personal Space and Shared Space as a day-grouped timeline, with a date navigator, selection, and a viewer with zoom, filmstrip, histogram and video playback.

@@ -1,6 +1,6 @@
 # Screenshots
 
-Take these from a test account, never from a personal library. Save them as PNG in this directory.
+Still needed; none of the three exists yet. Take them from the `phototest` account, never from a personal library, and save them as PNG in this directory. That account's Personal Space holds freely licensed Wikimedia Commons photos with camera and location data, sorted into region folders, with two albums and a few favorites; `CREDITS.md` lists every photo.
 
 All three: light mode, macOS window about 1600 x 1000 px (16:10; the site crops to that ratio), sidebar visible, no personal names, places or filenames.
 
