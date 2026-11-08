@@ -2,6 +2,14 @@
 
 Each version's section is its release notes on GitHub and in the in-app updater.
 
+## 0.1.3
+
+- Settings shows storage as one bar against a cache maximum shared by all accounts; the least recently opened accounts are trimmed when it is exceeded.
+- Thumbnail downloads pause near the cache maximum, and a larger size can be chosen.
+- Clearing the cache in Settings removes only images.
+- Focus rings appear only after pressing Tab.
+- The thumbnail quality and cache size setup page is skipped once it has been completed.
+
 ## 0.1.2
 
 - Dragging several photos shows a single count badge.
