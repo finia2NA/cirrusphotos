@@ -42,9 +42,13 @@ xcrun actool --compile "$app_bundle/Contents/Resources" \
     --app-icon AppIcon --output-partial-info-plist "$build_dir/AppIcon-Info.plist" \
     Resources/AppIcon.icon >/dev/null
 info_plist="$app_bundle/Contents/Info.plist"
+# Development builds have their own bundle ID (AppIdentity), so their preferences, Keychain
+# items and logs stay apart from an installed distribution build.
+bundle_id=io.github.finia2na.cirrusphotos
+[[ $distribution == true ]] || bundle_id="$bundle_id.dev"
 if [[ $distribution == true ]]; then
     # Distribution builds sign in over HTTPS from their own window and need no ATS exception.
-    cp scripts/App-Info.plist "$info_plist"
+    sed "s/__BUNDLE_ID__/$bundle_id/g" scripts/App-Info.plist > "$info_plist"
     plutil -remove NSAppTransportSecurity "$info_plist"
 else
     # The .env NAS host gets an ATS exception (read only for that key; nothing is printed).
@@ -58,7 +62,7 @@ else
             exit 1
         fi
     fi
-    sed "s/__NAS_HOST__/$nas_host/" scripts/App-Info.plist > "$info_plist"
+    sed -e "s/__NAS_HOST__/$nas_host/" -e "s/__BUNDLE_ID__/$bundle_id/g" scripts/App-Info.plist > "$info_plist"
 fi
 # The version comes only from scripts/version.env (the template has no version keys).
 source scripts/version.env
