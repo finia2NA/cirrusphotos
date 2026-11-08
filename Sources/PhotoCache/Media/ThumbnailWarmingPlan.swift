@@ -36,6 +36,7 @@ extension ThumbnailBatchSummary {
         result.unavailable = unavailable + other.unavailable
         result.errors = errors + other.errors
         result.interrupted = interrupted || other.interrupted
+        result.budgetReached = budgetReached || other.budgetReached
         result.downloadedThumbnails = downloadedThumbnails + other.downloadedThumbnails
         result.downloadedBytes = downloadedBytes + other.downloadedBytes
         result.elapsedSeconds = elapsedSeconds + other.elapsedSeconds

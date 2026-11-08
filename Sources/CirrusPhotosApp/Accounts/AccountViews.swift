@@ -40,10 +40,33 @@ struct AccountRootView: View {
                     .frame(minWidth: 560, minHeight: 560)
             }
         }
+        .modifier(CacheFullSheetPresenter(preload: accounts.context?.thumbnailPreload))
         .sheet(item: Binding(get: { accounts.certificatePrompt }, set: { accounts.certificatePrompt = $0 })) { prompt in
             CertificateTrustSheet(host: prompt.host, fingerprint: prompt.fingerprint,
                                   cancel: { accounts.certificatePrompt = nil },
                                   trust: { Task { await accounts.trustPresentedCertificate() } })
+        }
+    }
+}
+
+/// Shows the cache-full sheet over the setup pages or the library when the open account's
+/// thumbnail download pauses.
+private struct CacheFullSheetPresenter: ViewModifier {
+    let preload: ThumbnailPreloadModel?
+
+    func body(content: Content) -> some View {
+        if let preload {
+            content.modifier(Presenting(preload: preload))
+        } else {
+            content
+        }
+    }
+
+    private struct Presenting: ViewModifier {
+        @ObservedObject var preload: ThumbnailPreloadModel
+
+        func body(content: Content) -> some View {
+            content.sheet(isPresented: $preload.showsCacheFullSheet) { CacheFullSheet(preload: preload) }
         }
     }
 }
@@ -357,15 +380,7 @@ private struct SetupPreferencesPage: View {
                     Text("Larger thumbnails are sharper but load slower and use more space.")
                 }
                 Section {
-                    LabeledContent("Cache size") {
-                        HStack {
-                            Slider(value: $preferences.budgetFraction, in: 0...1)
-                            Text(ByteCountFormatter.string(fromByteCount: CacheBudget.bytes(at: preferences.budgetFraction),
-                                                           countStyle: .file))
-                                .monospacedDigit()
-                                .frame(width: 72, alignment: .trailing)
-                        }
-                    }
+                    CacheSizeSlider(label: "Cache size")
                 } footer: {
                     Text("Viewed photos and videos stay available offline, up to this size.")
                 }

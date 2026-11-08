@@ -61,6 +61,11 @@ public actor CachedPhotosRepository {
 
     public func usage() async throws -> Int64 { try await store.usage() }
 
+    /// Whether a bulk thumbnail download should pause because the cache is nearly full.
+    public func thumbnailDownloadShouldPause() async -> Bool {
+        (try? await store.downloadShouldPause()) ?? false
+    }
+
     func cancelIdleLogin() {
         guard !metadata.hasDemand && !imageWork.hasDemand else { return }
         authenticationState.cancelIfUnconnected()

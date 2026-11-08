@@ -169,13 +169,7 @@ private struct StorageSettingsView: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent("Maximum size") {
-                    HStack {
-                        Slider(value: $preferences.budgetFraction, in: 0...1)
-                        Text(bytes(CacheBudget.bytes(at: preferences.budgetFraction)))
-                            .monospacedDigit().frame(width: 80, alignment: .trailing)
-                    }
-                }
+                CacheSizeSlider()
                 if preferences.budgetBytes < totalUsage {
                     Text("Removes about \(bytes(totalUsage - preferences.budgetBytes)) of cached data.")
                         .font(.caption).foregroundStyle(.orange)

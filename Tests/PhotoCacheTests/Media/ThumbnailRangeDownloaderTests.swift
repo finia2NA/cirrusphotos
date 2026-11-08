@@ -88,6 +88,22 @@ final class ThumbnailRangeDownloaderTests: XCTestCase {
                                    cacheRoot: root, transport: transport)
     }
 
+    func testFullCachePausesBeforeDownloading() async throws {
+        let root = temporaryTestRoot("SynoRangePause")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = RangeTransport()
+        await transport.configure(pages: [0: [try item(1), try item(2)]])
+        let repository = try CachedPhotosRepository(credentials: credentials, baseURL: server, budget: 1_000_000,
+                                                    cacheRoot: root, transport: transport)
+        let downloader = ThumbnailRangeDownloader(repository: repository)
+        let summary = await downloader.download(snapshot: snapshot(), range: ThumbnailDateRange(0, 1), size: .m,
+                                                collection: .library(.personal)) { _ in }
+        XCTAssertTrue(summary.budgetReached)
+        XCTAssertEqual(summary.processed, 0)
+        let calls = await transport.thumbnailCalls
+        XCTAssertEqual(calls, 0)
+    }
+
     func testInclusiveRangeCountAndSplitMixedDaySelection() async throws {
         let root = temporaryTestRoot("SynoRangeTest")
         defer { try? FileManager.default.removeItem(at: root) }
