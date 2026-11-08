@@ -6,6 +6,24 @@
     <description>Cirrus Photos updates</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.3</title>
+      <pubDate>Sun, 08 Nov 2026 01:47:43 +0000</pubDate>
+      <sparkle:version>4</sparkle:version>
+      <sparkle:shortVersionString>0.1.3</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<ul>
+<li>Settings shows storage as one bar against a cache maximum shared by all accounts; the least recently opened accounts are trimmed when it is exceeded.</li>
+<li>Thumbnail downloads pause near the cache maximum, and a larger size can be chosen.</li>
+<li>Clearing the cache in Settings removes only images.</li>
+<li>Focus rings appear only after pressing Tab.</li>
+<li>The thumbnail quality and cache size setup page is skipped once it has been completed.</li>
+</ul>
+]]></description>
+      <enclosure url="https://github.com/finia2NA/cirrusphotos/releases/download/v0.1.3/Cirrus-Photos-0.1.3.dmg"
+                 type="application/octet-stream" sparkle:edSignature="di1veu5X9i2ELXpN5FwdxxZXubbccY23eqpj92fU/CP/+DNm+OftOpnAzkccO4Uq/dh578hFMCW1uA6GLGNEDg==" length="10942001" />
+    </item>
+    <item>
       <title>Version 0.1.2</title>
       <pubDate>Sat, 07 Nov 2026 23:03:07 +0000</pubDate>
       <sparkle:version>3</sparkle:version>
