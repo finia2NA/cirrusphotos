@@ -291,6 +291,7 @@ struct AppShellView: View {
                            activity: model.activity) {
                 peopleEditRevision &+= 1
             }
+            .focusRingsOnlyForKeyboardNavigation()
         }
         .sheet(item: Bindable(model).albumOperation) { operation in
             AlbumOperationView(model: model, operation: operation)
@@ -302,7 +303,7 @@ struct AppShellView: View {
             get: { model.thumbnailRotationProgress != nil },
             set: { if !$0 { model.dismissThumbnailRotation() } }
         )) {
-            ThumbnailRotationProgressView(model: model)
+            ThumbnailRotationProgressView(model: model).focusRingsOnlyForKeyboardNavigation()
         }
     }
 

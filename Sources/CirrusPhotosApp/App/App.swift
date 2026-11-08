@@ -57,6 +57,7 @@ struct CirrusPhotosApp: App {
         }
         Window("Add Account", id: AddAccountWindow.id) {
             AddAccountWindow(accounts: accounts)
+                .focusRingsOnlyForKeyboardNavigation()
                 .environmentObject(preferences)
         }
         .commandsRemoved()
@@ -68,6 +69,7 @@ struct CirrusPhotosApp: App {
                     .environmentObject(context.thumbnailPreload)
             }
             .environmentObject(preferences)
+            .focusRingsOnlyForKeyboardNavigation()
         }
         .commandsRemoved()
         .windowResizability(.contentSize)
@@ -75,6 +77,7 @@ struct CirrusPhotosApp: App {
             AccountScoped(accounts: accounts) { context in
                 TimelineSectionLoadView().environmentObject(context.timelineSectionLoad)
             }
+            .focusRingsOnlyForKeyboardNavigation()
         }
         .commandsRemoved()
         .windowResizability(.contentSize)
@@ -85,6 +88,7 @@ struct CirrusPhotosApp: App {
                     .environmentObject(context.infoPanel)
             }
             .environmentObject(preferences)
+            .focusRingsOnlyForKeyboardNavigation()
         }
         .commandsRemoved()
         .windowResizability(.contentSize)

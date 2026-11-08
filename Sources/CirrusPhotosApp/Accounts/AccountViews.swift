@@ -276,7 +276,7 @@ struct CertificateTrustSheet: View {
     var body: some View {
         SheetScaffold(title: "Connect to \(host)?",
                       subtitle: "macOS could not verify this server’s certificate.",
-                      width: 460) {
+                      width: 460, confirmsDecision: true) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Connect only if this fingerprint matches the certificate in DSM (Control Panel ▸ Security ▸ Certificate).")
                     .fixedSize(horizontal: false, vertical: true)

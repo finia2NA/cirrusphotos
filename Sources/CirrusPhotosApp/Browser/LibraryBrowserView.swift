@@ -398,6 +398,7 @@ struct LibraryBrowserView: View {
         .sheet(isPresented: $showingSharing) {
             if let albumID = library.capabilities(for: collection).sourceAlbumID, let repository = library.repository {
                 AlbumSharingSheet(albumID: albumID, repository: repository, activity: library.activity)
+                    .focusRingsOnlyForKeyboardNavigation()
             }
         }
         .background(FileUploadTarget(upload: upload))

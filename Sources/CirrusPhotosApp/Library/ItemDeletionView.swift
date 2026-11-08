@@ -5,7 +5,7 @@ struct ItemDeletionView: View {
     let deletion: ItemDeletion
 
     var body: some View {
-        SheetScaffold(title: title) {
+        SheetScaffold(title: title, confirmsDecision: true) {
             if deletion.loading {
                 SheetPlaceholder(state: .loading("Preparing…"), minHeight: 80)
             } else {

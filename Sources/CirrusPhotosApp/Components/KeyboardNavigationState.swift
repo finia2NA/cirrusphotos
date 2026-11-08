@@ -24,6 +24,7 @@ final class KeyboardNavigationState {
 }
 
 private struct TracksKeyboardNavigation: ViewModifier {
+    let initiallyActive: Bool
     @State private var state = KeyboardNavigationState()
     @State private var window: NSWindow?
     @State private var monitor: Any?
@@ -31,12 +32,14 @@ private struct TracksKeyboardNavigation: ViewModifier {
     func body(content: Content) -> some View {
         content
             .environment(state)
+            .onAppear { if initiallyActive { state.isActive = true } }
             .background(WindowReader(window: $window))
             .onChange(of: window, initial: true) { _, window in
                 removeMonitor()
                 guard let window else { return }
                 monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown]) { event in
-                    if event.window === window {
+                    if let eventWindow = event.window,
+                       eventWindow === window || eventWindow.sheetParent === window || eventWindow.parent === window {
                         let type = event.type
                         let code = event.type == .keyDown ? event.keyCode : 0
                         MainActor.assumeIsolated { state.update(for: type, keyCode: code) }
@@ -81,13 +84,17 @@ private struct KeyboardFocusRing: ViewModifier {
 }
 
 extension View {
-    /// Installs keyboard-navigation tracking for this view's window and shares its state.
-    func tracksKeyboardNavigation() -> some View { modifier(TracksKeyboardNavigation()) }
+    /// Installs keyboard-navigation tracking for this view's window, its sheets and child
+    /// windows, and shares its state. `initiallyActive` starts with rings visible.
+    func tracksKeyboardNavigation(initiallyActive: Bool = false) -> some View {
+        modifier(TracksKeyboardNavigation(initiallyActive: initiallyActive))
+    }
 
     /// Hides every focus ring in this view's window until Tab is pressed, and again after
-    /// the next pointer click.
-    func focusRingsOnlyForKeyboardNavigation() -> some View {
-        keyboardFocusRing().tracksKeyboardNavigation()
+    /// the next pointer click. `initiallyShowsFocus` is for confirm/deny modals, whose
+    /// ring is visible on load.
+    func focusRingsOnlyForKeyboardNavigation(initiallyShowsFocus: Bool = false) -> some View {
+        keyboardFocusRing().tracksKeyboardNavigation(initiallyActive: initiallyShowsFocus)
     }
 
     /// Shows the focus ring only after Tab was pressed, until the next pointer click.

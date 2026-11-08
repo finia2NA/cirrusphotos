@@ -84,6 +84,7 @@ struct ActivityToolbarItem: View {
         .accessibilityValue(helpText(state))
         .popover(isPresented: $activity.isPresented, arrowEdge: .bottom) {
             ActivityPanelView(activity: activity).environment(library)
+                .focusRingsOnlyForKeyboardNavigation()
         }
         // Native full screen hides the toolbar that anchors the panel; failures then only mark
         // the icon.

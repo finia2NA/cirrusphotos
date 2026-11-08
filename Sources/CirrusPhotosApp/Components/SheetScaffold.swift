@@ -6,17 +6,20 @@ struct SheetScaffold<Content: View, Leading: View, Trailing: View>: View {
     let title: String
     var subtitle: String?
     var width: CGFloat = 440
+    /// Yes/no style sheets show the focus ring on load.
+    var confirmsDecision = false
     @ViewBuilder var content: Content
     @ViewBuilder var leading: Leading
     @ViewBuilder var trailing: Trailing
 
-    init(title: String, subtitle: String? = nil, width: CGFloat = 440,
+    init(title: String, subtitle: String? = nil, width: CGFloat = 440, confirmsDecision: Bool = false,
          @ViewBuilder content: () -> Content,
          @ViewBuilder leading: () -> Leading = { EmptyView() },
          @ViewBuilder trailing: () -> Trailing) {
         self.title = title
         self.subtitle = subtitle
         self.width = width
+        self.confirmsDecision = confirmsDecision
         self.content = content()
         self.leading = leading()
         self.trailing = trailing()
@@ -47,6 +50,7 @@ struct SheetScaffold<Content: View, Leading: View, Trailing: View>: View {
             .padding(.horizontal, 24).padding(.vertical, 16)
         }
         .frame(width: width)
+        .focusRingsOnlyForKeyboardNavigation(initiallyShowsFocus: confirmsDecision)
     }
 }
 

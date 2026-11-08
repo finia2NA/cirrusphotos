@@ -16,7 +16,8 @@ struct LibraryFilterToolbarControl: View {
         }
         .disabled(!filter.isReady)
         .popover(isPresented: $filter.isPresented) {
-            if let metadataSync { LibraryFilterView().environmentObject(filter).environmentObject(metadataSync) }
+            if let metadataSync { LibraryFilterView().environmentObject(filter).environmentObject(metadataSync)
+                    .focusRingsOnlyForKeyboardNavigation() }
         }
         .accessibilityLabel("Filter Photos")
         .accessibilityValue(filter.isActive ? "\(filter.activeCount) active filters" : "No active filters")

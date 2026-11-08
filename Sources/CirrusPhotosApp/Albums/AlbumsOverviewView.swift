@@ -116,7 +116,7 @@ private struct AlbumCardView: View {
                     .disabled(model.albumOperation != nil || album.type != "normal")
             }
         }
-        .sheet(isPresented: $rename) { AlbumRenameView(album: album) }
+        .sheet(isPresented: $rename) { AlbumRenameView(album: album).focusRingsOnlyForKeyboardNavigation() }
         .alert("Delete Album?", isPresented: $confirmDelete) {
             Button("Delete Album", role: .destructive) { model.deleteAlbum(album.id) }
             Button("Cancel", role: .cancel) {}
