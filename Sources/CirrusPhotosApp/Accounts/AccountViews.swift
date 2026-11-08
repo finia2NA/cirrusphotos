@@ -326,9 +326,16 @@ private struct SetupView: View {
         switch step {
         case .preferences:
             SetupPreferencesPage(back: { Task { await accounts.backToSignIn() } },
-                                 next: { accounts.setupStep = .download })
+                                 next: { accounts.finishPreferencesSetup() })
         case .download:
-            SetupDownloadPage(context: context, back: { accounts.setupStep = .preferences },
+            SetupDownloadPage(context: context,
+                              back: {
+                                  if accounts.skippedPreferencesSetup {
+                                      Task { await accounts.backToSignIn() }
+                                  } else {
+                                      accounts.setupStep = .preferences
+                                  }
+                              },
                               done: { accounts.setupStep = nil })
         }
     }

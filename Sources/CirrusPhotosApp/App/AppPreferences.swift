@@ -23,11 +23,19 @@ final class AppPreferences: ObservableObject {
         static let viewerHistogramShowsColor = "viewerHistogramShowsColor"
         static let warmingIncludesSharedSpace = "warmingIncludesSharedSpace"
         static let showsViewerToolbarTools = "showsViewerToolbarTools"
+        static let setupPreferencesConfirmed = "setupPreferencesConfirmed"
     }
 
     static let itemsPerRowRange = 3...10
 
     private let defaults: UserDefaults
+
+    /// Whether the sign-in setup's thumbnail and cache size page was completed on this Mac.
+    /// Later sign-ins skip it.
+    var hasConfirmedSetupPreferences: Bool {
+        get { defaults.bool(forKey: Key.setupPreferencesConfirmed) }
+        set { defaults.set(newValue, forKey: Key.setupPreferencesConfirmed) }
+    }
 
     @Published var thumbnailSize: ThumbnailSize { didSet { defaults.set(thumbnailSize.rawValue, forKey: Key.thumbnailSize) } }
     @Published var loadsLargeViewerPreviews: Bool { didSet { defaults.set(loadsLargeViewerPreviews, forKey: Key.loadsLargeViewerPreviews) } }

@@ -89,6 +89,8 @@ final class AccountController {
 
     /// The setup page shown after a new sign-in; nil once the library is shown.
     var setupStep: SetupStep?
+    /// The preferences page was skipped for this sign-in because it was completed before.
+    private(set) var skippedPreferencesSetup = false
     /// The open account's NAS presented a certificate macOS cannot verify.
     var certificatePrompt: CertificatePrompt?
     let usesEnvironmentFile: Bool
@@ -136,8 +138,15 @@ final class AccountController {
         }
         await close()
         reauthenticating = nil
-        setupStep = .preferences
+        skippedPreferencesSetup = preferences.hasConfirmedSetupPreferences
+        setupStep = skippedPreferencesSetup ? .download : .preferences
         openStored(signedIn.account)
+    }
+
+    /// Records the thumbnail and cache size choice and continues to the download page.
+    func finishPreferencesSetup() {
+        preferences.hasConfirmedSetupPreferences = true
+        setupStep = .download
     }
 
     func switchTo(_ account: StoredAccount) async {
@@ -200,6 +209,7 @@ final class AccountController {
     private func close() async {
         certificatePrompt = nil
         setupStep = nil
+        skippedPreferencesSetup = false
         statusTask?.cancel()
         statusTask = nil
         guard let context else { phase = .signedOut; return }
