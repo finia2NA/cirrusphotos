@@ -32,4 +32,16 @@ final class CacheInventoryTests: XCTestCase {
         try CacheInventory.remove(namespace: "..", root: root)
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.path))
     }
+
+    func testRemoveAllExceptKeepsOnlyListedNamespaces() throws {
+        let root = temporaryTestRoot("CacheInventoryPrune")
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["kept", "orphan", "other"] {
+            try FileManager.default.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
+        }
+        let removed = CacheInventory.removeAll(except: ["kept"], root: root)
+        XCTAssertEqual(Set(removed), ["orphan", "other"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("kept").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("orphan").path))
+    }
 }

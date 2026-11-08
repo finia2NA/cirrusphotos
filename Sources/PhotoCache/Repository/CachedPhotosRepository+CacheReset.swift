@@ -26,6 +26,12 @@ extension CachedPhotosRepository {
         try await supersedeMetadataState()
     }
 
+    /// Deletes thumbnails, large previews, full-size photos and video, and keeps metadata.
+    public func clearImageCache() async throws {
+        await cancelAllImageWork()
+        try await store.clearImages()
+    }
+
     public func clearCache() async throws {
         _ = try await resetCache(scope: .all)
     }

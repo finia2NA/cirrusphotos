@@ -133,4 +133,19 @@ public enum CacheInventory {
             try FileManager.default.removeItem(at: directory)
         }
     }
+
+    /// Deletes every cache directory whose namespace is not in `kept`, such as the cache
+    /// of an account that is no longer signed in. Returns the namespaces removed.
+    @discardableResult
+    public static func removeAll(except kept: Set<String>, root: URL = CacheLocation.defaultRoot()) -> [String] {
+        let manager = FileManager.default
+        guard let entries = try? manager.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey]) else { return [] }
+        var removed: [String] = []
+        for directory in entries where (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            let namespace = directory.lastPathComponent
+            guard !kept.contains(namespace), (try? remove(namespace: namespace, root: root)) != nil else { continue }
+            removed.append(namespace)
+        }
+        return removed
+    }
 }

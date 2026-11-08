@@ -92,10 +92,12 @@ struct BrowserDayGroupingControl: View {
             preferences.groupsByDay.toggle()
         } label: {
             Label(preferences.groupsByDay ? "Don't Group by Day" : "Group by Day",
-                  systemImage: preferences.groupsByDay ? "calendar" : "square.grid.3x3")
+                  systemImage: preferences.groupsByDay ? "square.grid.3x3" : "calendar")
+                .frame(width: 34, height: ToolbarMetrics.controlHeight)
+                .contentShape(Rectangle())
         }
         .accessibilityLabel(preferences.groupsByDay ? "Don't Group by Day" : "Group by Day")
-        .help(preferences.groupsByDay ? "Group by Day (on)" : "Group by Day (off)")
+        .help(preferences.groupsByDay ? "Don't Group by Day" : "Group by Day")
     }
 }
 
@@ -445,8 +447,8 @@ struct ViewerOverlayControls: View {
             overlayButton(isOn: model.showsHistogram, name: "Histogram",
                           offSymbol: "chart.bar", onSymbol: "chart.bar.fill") { model.showsHistogram.toggle() }
             overlayButton(isOn: model.showsHighlightPeaking, name: "Highlight Peaking",
-                          offSymbol: "circle.lefthalf.striped.horizontal",
-                          onSymbol: "circle.lefthalf.striped.horizontal.inverse") { model.showsHighlightPeaking.toggle() }
+                          offSymbol: "circle.lefthalf.striped.horizontal.inverse",
+                          onSymbol: "circle.lefthalf.striped.horizontal") { model.showsHighlightPeaking.toggle() }
             overlayButton(isOn: model.showsFocusEdges, name: "Focus Edges",
                           offSymbol: "scope", onSymbol: "dot.scope") { model.showsFocusEdges.toggle() }
         }

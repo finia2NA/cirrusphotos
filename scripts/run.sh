@@ -25,7 +25,10 @@ if [[ $distribution == true ]]; then
 fi
 "${build[@]}" --product CirrusPhotos
 bin_dir="$("${build[@]}" --show-bin-path)"
-app_bundle="$build_dir/Cirrus Photos.app"
+# The bundle's file name is the name the Dock shows; development builds differ from distribution.
+app_name="Cirrus Photos"
+[[ $distribution == true ]] || app_name="Synology Photos Dev"
+app_bundle="$build_dir/$app_name.app"
 mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Resources" "$app_bundle/Contents/Frameworks"
 cp "$bin_dir/CirrusPhotos" "$app_bundle/Contents/MacOS/"
 # The executable links Sparkle in every build mode and finds it through its

@@ -257,6 +257,23 @@ final class PhotoCacheTests: XCTestCase {
         XCTAssertEqual(usage, 0)
     }
 
+    func testClearImagesRemovesMediaAndRejectsLateWrite() async throws {
+        let root = temporaryTestRoot("SynoCacheClearImagesTest")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = try DiskCache(root: root, budget: 1_000_000)
+        let generation = await cache.currentGeneration()
+        try await cache.put("thumb", kind: .thumbnail, data: Data(count: 100), validatedRun: nil)
+        try await cache.put("full", kind: .fullImage, data: Data(count: 100), validatedRun: nil)
+        try await cache.clearImages()
+        let thumb = try await cache.get("thumb")
+        let full = try await cache.get("full")
+        XCTAssertNil(thumb)
+        XCTAssertNil(full)
+        try await cache.put("late", kind: .thumbnail, data: Data([1]), validatedRun: nil, expectedGeneration: generation)
+        let usage = try await cache.usage()
+        XCTAssertEqual(usage, 0)
+    }
+
     func testLiveSectionAndWarmCacheWhenEnabled() async throws {
         guard ProcessInfo.processInfo.environment["RUN_LIVE_SYNOLOGY_TEST"] == "1" else {
             throw XCTSkip("Set RUN_LIVE_SYNOLOGY_TEST=1 to test Cirrus.")

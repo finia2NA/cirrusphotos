@@ -94,15 +94,18 @@ final class AccountController {
     /// The open account's NAS presented a certificate macOS cannot verify.
     var certificatePrompt: CertificatePrompt?
     let usesEnvironmentFile: Bool
+    private let cacheRoot: URL?
     @ObservationIgnored private let makeRepository: @MainActor (SynologyCredentials, AppPreferences) throws -> CachedPhotosRepository
     @ObservationIgnored private var statusTask: Task<Void, Never>?
 
     init(preferences: AppPreferences, store: AccountStore = AccountStore(),
          environmentFile: URL? = CredentialStore.environmentFile(),
+         cacheRoot: URL? = CacheLocation.defaultRoot(),
          makeRepository: @escaping @MainActor (SynologyCredentials, AppPreferences) throws -> CachedPhotosRepository = AccountController.liveRepository) {
         self.preferences = preferences
         self.store = store
         self.usesEnvironmentFile = environmentFile != nil
+        self.cacheRoot = cacheRoot
         self.makeRepository = makeRepository
     }
 
@@ -123,9 +126,18 @@ final class AccountController {
                                            secondFactor: loaded.secondFactor, serverURL: loaded.serverURL,
                                            serverTrust: .pinned(sha256: pin))
             }
-        } else if let account = store.currentAccount {
-            openStored(account)
+        } else {
+            removeOrphanedCaches()
+            if let account = store.currentAccount { openStored(account) }
         }
+    }
+
+    /// Deletes caches of accounts that are no longer signed in. Skipped for the `.env`
+    /// account, which has no stored sign-in.
+    private func removeOrphanedCaches() {
+        guard let root = cacheRoot else { return }
+        let kept = Set(store.accounts.map(Self.namespace(of:)))
+        Task.detached(priority: .utility) { CacheInventory.removeAll(except: kept, root: root) }
     }
 
     /// Stores a verified sign-in and opens it, replacing any open account.

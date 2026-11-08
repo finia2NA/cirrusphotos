@@ -822,17 +822,17 @@ final class LibraryModel {
         }
     }
 
-    func clearCache() async {
+    func clearImageCache() async {
         guard let repository, !cacheResetInProgress else { return }
         cacheResetInProgress = true
         cacheResetError = nil
         defer { cacheResetInProgress = false }
         do {
-            try await repository.clearCache()
+            try await repository.clearImageCache()
             DecodedImages.shared.clear()
             await refreshUsage()
         } catch {
-            cacheResetError = reportedFailure(error, operation: "Cache clear")
+            cacheResetError = reportedFailure(error, operation: "Image cache clear")
         }
     }
 

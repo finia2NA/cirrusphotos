@@ -283,6 +283,22 @@ public actor DiskCache {
         }
     }
 
+    /// Removes every stored image and video file and keeps metadata. The generation
+    /// advances so in-flight writes from before the clear are rejected.
+    public func clearImages() throws {
+        downloadRoom = nil
+        generation += 1
+        estimatedUsage = nil
+        let imageKinds = [CacheKind.previewThumbnail, .fullImage, .thumbnail, .videoSegment].map(\.rawValue)
+        try database.write { db in
+            let rows = CacheEntryRecord.filter { imageKinds.contains($0.kind) }
+            for name in try String.fetchAll(db, rows.filter { $0.file != nil }.select(CacheEntryRecord.Columns.file)) {
+                try? FileManager.default.removeItem(at: images.appendingPathComponent(name))
+            }
+            try rows.deleteAll(db)
+        }
+    }
+
     /// Supersedes admitted metadata work without discarding cached rows.
     @discardableResult
     public func advanceMetadataGeneration() -> Int {
