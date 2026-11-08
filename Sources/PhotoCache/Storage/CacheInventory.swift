@@ -42,8 +42,23 @@ public struct CachedAccount: Sendable, Identifiable, Equatable {
     public let server: String?
     public let username: String?
     public let usage: CacheUsageBreakdown
+    /// When a repository last opened this cache, from its label file.
+    public let lastOpened: Date?
 
     public var id: String { namespace }
+
+    public init(namespace: String, server: String?, username: String?, usage: CacheUsageBreakdown, lastOpened: Date?) {
+        self.namespace = namespace
+        self.server = server
+        self.username = username
+        self.usage = usage
+        self.lastOpened = lastOpened
+    }
+
+    /// "user on host", or nil when the directory has no label.
+    public var displayName: String? {
+        username.map { user in server.map { "\(user) on \($0)" } ?? user }
+    }
 }
 
 /// The per-account directories under the cache root: what each holds, and removal.
@@ -56,6 +71,7 @@ public enum CacheInventory {
     }
 
     /// Names the account a cache directory belongs to; the directory name is a hash.
+    /// Written each time a repository opens, so its modification date is the last opening.
     static func writeLabel(root: URL, server: URL, username: String) {
         let label = Label(server: server.host ?? server.absoluteString, username: username)
         guard let data = try? JSONEncoder().encode(label) else { return }
@@ -70,10 +86,11 @@ public enum CacheInventory {
         return entries.compactMap { directory -> CachedAccount? in
             guard (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
                   let usage = usage(at: directory) else { return nil }
-            let label = (try? Data(contentsOf: directory.appendingPathComponent(labelFile)))
-                .flatMap { try? JSONDecoder().decode(Label.self, from: $0) }
+            let labelURL = directory.appendingPathComponent(labelFile)
+            let label = (try? Data(contentsOf: labelURL)).flatMap { try? JSONDecoder().decode(Label.self, from: $0) }
+            let lastOpened = try? labelURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
             return CachedAccount(namespace: directory.lastPathComponent, server: label?.server,
-                                 username: label?.username, usage: usage)
+                                 username: label?.username, usage: usage, lastOpened: lastOpened)
         }
         .sorted { $0.usage.total > $1.usage.total }
     }
@@ -98,6 +115,16 @@ public enum CacheInventory {
         }
     }
 
+    /// Shrinks a closed account's cache to `bytes`, evicting its least important data
+    /// first, or deletes it when nothing may remain. The account must not be open.
+    public static func trim(namespace: String, to bytes: Int64, root: URL = CacheLocation.defaultRoot()) async throws {
+        guard bytes > 0 else { return try remove(namespace: namespace, root: root) }
+        guard !namespace.isEmpty, !namespace.contains("/"), namespace != ".", namespace != ".." else { return }
+        let cache = try DiskCache(root: root.appendingPathComponent(namespace, isDirectory: true), budget: bytes)
+        try await cache.initializeMetadataStore()
+        try await cache.setBudget(bytes)
+    }
+
     /// Deletes one account's cache directory. The account's repository must be shut down.
     public static func remove(namespace: String, root: URL = CacheLocation.defaultRoot()) throws {
         guard !namespace.isEmpty, !namespace.contains("/"), namespace != ".", namespace != ".." else { return }
@@ -105,5 +132,20 @@ public enum CacheInventory {
         if FileManager.default.fileExists(atPath: directory.path) {
             try FileManager.default.removeItem(at: directory)
         }
+    }
+
+    /// Deletes every cache directory whose namespace is not in `kept`, such as the cache
+    /// of an account that is no longer signed in. Returns the namespaces removed.
+    @discardableResult
+    public static func removeAll(except kept: Set<String>, root: URL = CacheLocation.defaultRoot()) -> [String] {
+        let manager = FileManager.default
+        guard let entries = try? manager.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey]) else { return [] }
+        var removed: [String] = []
+        for directory in entries where (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            let namespace = directory.lastPathComponent
+            guard !kept.contains(namespace), (try? remove(namespace: namespace, root: root)) != nil else { continue }
+            removed.append(namespace)
+        }
+        return removed
     }
 }

@@ -89,18 +89,23 @@ final class AccountController {
 
     /// The setup page shown after a new sign-in; nil once the library is shown.
     var setupStep: SetupStep?
+    /// The preferences page was skipped for this sign-in because it was completed before.
+    private(set) var skippedPreferencesSetup = false
     /// The open account's NAS presented a certificate macOS cannot verify.
     var certificatePrompt: CertificatePrompt?
     let usesEnvironmentFile: Bool
+    private let cacheRoot: URL?
     @ObservationIgnored private let makeRepository: @MainActor (SynologyCredentials, AppPreferences) throws -> CachedPhotosRepository
     @ObservationIgnored private var statusTask: Task<Void, Never>?
 
     init(preferences: AppPreferences, store: AccountStore = AccountStore(),
          environmentFile: URL? = CredentialStore.environmentFile(),
+         cacheRoot: URL? = CacheLocation.defaultRoot(),
          makeRepository: @escaping @MainActor (SynologyCredentials, AppPreferences) throws -> CachedPhotosRepository = AccountController.liveRepository) {
         self.preferences = preferences
         self.store = store
         self.usesEnvironmentFile = environmentFile != nil
+        self.cacheRoot = cacheRoot
         self.makeRepository = makeRepository
     }
 
@@ -121,9 +126,18 @@ final class AccountController {
                                            secondFactor: loaded.secondFactor, serverURL: loaded.serverURL,
                                            serverTrust: .pinned(sha256: pin))
             }
-        } else if let account = store.currentAccount {
-            openStored(account)
+        } else {
+            removeOrphanedCaches()
+            if let account = store.currentAccount { openStored(account) }
         }
+    }
+
+    /// Deletes caches of accounts that are no longer signed in. Skipped for the `.env`
+    /// account, which has no stored sign-in.
+    private func removeOrphanedCaches() {
+        guard let root = cacheRoot else { return }
+        let kept = Set(store.accounts.map(Self.namespace(of:)))
+        Task.detached(priority: .utility) { CacheInventory.removeAll(except: kept, root: root) }
     }
 
     /// Stores a verified sign-in and opens it, replacing any open account.
@@ -136,8 +150,15 @@ final class AccountController {
         }
         await close()
         reauthenticating = nil
-        setupStep = .preferences
+        skippedPreferencesSetup = preferences.hasConfirmedSetupPreferences
+        setupStep = skippedPreferencesSetup ? .download : .preferences
         openStored(signedIn.account)
+    }
+
+    /// Records the thumbnail and cache size choice and continues to the download page.
+    func finishPreferencesSetup() {
+        preferences.hasConfirmedSetupPreferences = true
+        setupStep = .download
     }
 
     func switchTo(_ account: StoredAccount) async {
@@ -158,6 +179,7 @@ final class AccountController {
         try? CacheInventory.remove(namespace: Self.namespace(of: account))
         notice = nil
         if wasOpen, let next = store.accounts.first { openStored(next) }
+        else if let model = context?.model { await model.applySharedBudget() }
     }
 
     /// Leaves setup for the sign-in form: forgets the just-added sign-in and its empty cache.
@@ -200,6 +222,7 @@ final class AccountController {
     private func close() async {
         certificatePrompt = nil
         setupStep = nil
+        skippedPreferencesSetup = false
         statusTask?.cancel()
         statusTask = nil
         guard let context else { phase = .signedOut; return }

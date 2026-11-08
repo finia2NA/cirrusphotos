@@ -291,6 +291,7 @@ struct AppShellView: View {
                            activity: model.activity) {
                 peopleEditRevision &+= 1
             }
+            .focusRingsOnlyForKeyboardNavigation()
         }
         .sheet(item: Bindable(model).albumOperation) { operation in
             AlbumOperationView(model: model, operation: operation)
@@ -302,7 +303,7 @@ struct AppShellView: View {
             get: { model.thumbnailRotationProgress != nil },
             set: { if !$0 { model.dismissThumbnailRotation() } }
         )) {
-            ThumbnailRotationProgressView(model: model)
+            ThumbnailRotationProgressView(model: model).focusRingsOnlyForKeyboardNavigation()
         }
     }
 
@@ -811,23 +812,13 @@ struct AppShellView: View {
             .sharedBackgroundVisibility(.hidden)
         }
         if !inViewer && selectedDestination != .albums {
-            // One item so the space picker and the folder toggle share a single glass capsule.
             ToolbarItem(id: "space", placement: .navigation) {
-                HStack(spacing: 4) {
-                    Picker("Space", selection: $navigation.selectedSpace) {
-                        Text("Personal Space").tag(PhotoSpace.personal)
-                        Text("Shared Space").tag(PhotoSpace.shared)
-                    }
-                    .pickerStyle(.menu)
-                    .fixedSize()
-                    if selectedDestination == .personalLibrary {
-                        Button { showsFolders.toggle() } label: {
-                            Image(systemName: showsFolders ? "photo.on.rectangle" : "folder")
-                        }
-                        .help(showsFolders ? "Show Timeline" : "Browse Folders")
-                        .accessibilityLabel(showsFolders ? "Show Timeline" : "Browse Folders")
-                    }
+                Picker("Space", selection: $navigation.selectedSpace) {
+                    Text("Personal Space").tag(PhotoSpace.personal)
+                    Text("Shared Space").tag(PhotoSpace.shared)
                 }
+                .pickerStyle(.menu)
+                .fixedSize()
             }
             ToolbarSpacer(.fixed, placement: .navigation)
         }
@@ -835,6 +826,38 @@ struct AppShellView: View {
             ToolbarItem(id: "zoom", placement: .navigation) {
                 ViewerZoomControl(viewer: viewer)
             }
+        }
+        let showsFolderToggle = !inViewer && selectedDestination == .personalLibrary
+        let showsDayGrouping = collection != nil && selectedDestination != .albums
+        if showsFolderToggle || showsDayGrouping {
+            // One item so the folder toggle and day grouping share a single glass capsule.
+            ToolbarItem(id: "viewMode", placement: .navigation) {
+                HStack(spacing: 0) {
+                    if showsFolderToggle {
+                        let title = showsFolders ? "Show Timeline" : "Browse Folders"
+                        Button { showsFolders.toggle() } label: {
+                            Label(title, systemImage: showsFolders ? "photo.on.rectangle" : "folder")
+                                .frame(width: 34, height: ToolbarMetrics.controlHeight)
+                                .contentShape(Rectangle())
+                        }
+                        .help(title)
+                        .accessibilityLabel(title)
+                    }
+                    if showsDayGrouping {
+                        BrowserDayGroupingControl(preferences: preferences)
+                    }
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.primary)
+                // Plain buttons draw symbols at body size; toolbar buttons use a larger one.
+                .font(.system(size: 17))
+                .padding(.horizontal, 6)
+                .frame(height: ToolbarMetrics.controlHeight)
+                .glassEffect(.regular, in: Capsule())
+            }
+            .sharedBackgroundVisibility(.hidden)
+            ToolbarSpacer(.fixed, placement: .navigation)
         }
         if !inViewer && (collection != nil || showsCardGrid) {
             ToolbarItem(id: "size", placement: .navigation) {
@@ -844,10 +867,6 @@ struct AppShellView: View {
         if collection != nil {
             ToolbarItem(id: "shape", placement: .navigation) {
                 BrowserThumbnailShapeControl(preferences: preferences)
-                    .frame(height: ToolbarMetrics.controlHeight)
-            }
-            ToolbarItem(id: "dayGrouping", placement: .navigation) {
-                BrowserDayGroupingControl(preferences: preferences)
                     .frame(height: ToolbarMetrics.controlHeight)
             }
         }

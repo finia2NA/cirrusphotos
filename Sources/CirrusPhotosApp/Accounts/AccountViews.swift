@@ -40,10 +40,33 @@ struct AccountRootView: View {
                     .frame(minWidth: 560, minHeight: 560)
             }
         }
+        .modifier(CacheFullSheetPresenter(preload: accounts.context?.thumbnailPreload))
         .sheet(item: Binding(get: { accounts.certificatePrompt }, set: { accounts.certificatePrompt = $0 })) { prompt in
             CertificateTrustSheet(host: prompt.host, fingerprint: prompt.fingerprint,
                                   cancel: { accounts.certificatePrompt = nil },
                                   trust: { Task { await accounts.trustPresentedCertificate() } })
+        }
+    }
+}
+
+/// Shows the cache-full sheet over the setup pages or the library when the open account's
+/// thumbnail download pauses.
+private struct CacheFullSheetPresenter: ViewModifier {
+    let preload: ThumbnailPreloadModel?
+
+    func body(content: Content) -> some View {
+        if let preload {
+            content.modifier(Presenting(preload: preload))
+        } else {
+            content
+        }
+    }
+
+    private struct Presenting: ViewModifier {
+        @ObservedObject var preload: ThumbnailPreloadModel
+
+        func body(content: Content) -> some View {
+            content.sheet(isPresented: $preload.showsCacheFullSheet) { CacheFullSheet(preload: preload) }
         }
     }
 }
@@ -276,7 +299,7 @@ struct CertificateTrustSheet: View {
     var body: some View {
         SheetScaffold(title: "Connect to \(host)?",
                       subtitle: "macOS could not verify this server’s certificate.",
-                      width: 460) {
+                      width: 460, confirmsDecision: true) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Connect only if this fingerprint matches the certificate in DSM (Control Panel ▸ Security ▸ Certificate).")
                     .fixedSize(horizontal: false, vertical: true)
@@ -326,9 +349,16 @@ private struct SetupView: View {
         switch step {
         case .preferences:
             SetupPreferencesPage(back: { Task { await accounts.backToSignIn() } },
-                                 next: { accounts.setupStep = .download })
+                                 next: { accounts.finishPreferencesSetup() })
         case .download:
-            SetupDownloadPage(context: context, back: { accounts.setupStep = .preferences },
+            SetupDownloadPage(context: context,
+                              back: {
+                                  if accounts.skippedPreferencesSetup {
+                                      Task { await accounts.backToSignIn() }
+                                  } else {
+                                      accounts.setupStep = .preferences
+                                  }
+                              },
                               done: { accounts.setupStep = nil })
         }
     }
@@ -350,15 +380,7 @@ private struct SetupPreferencesPage: View {
                     Text("Larger thumbnails are sharper but load slower and use more space.")
                 }
                 Section {
-                    LabeledContent("Cache size") {
-                        HStack {
-                            Slider(value: $preferences.budgetFraction, in: 0...1)
-                            Text(ByteCountFormatter.string(fromByteCount: CacheBudget.bytes(at: preferences.budgetFraction),
-                                                           countStyle: .file))
-                                .monospacedDigit()
-                                .frame(width: 72, alignment: .trailing)
-                        }
-                    }
+                    CacheSizeSlider(label: "Cache size")
                 } footer: {
                     Text("Viewed photos and videos stay available offline, up to this size.")
                 }

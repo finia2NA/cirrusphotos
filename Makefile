@@ -22,13 +22,13 @@ debug:
 	./scripts/run.sh --build-only
 	pgrep -x Console >/dev/null || open -na Console
 	@echo "Console search filter for this app's logs:"
-	@echo "  subsystem:io.github.finia2na.cirrusphotos"
+	@echo "  subsystem:io.github.finia2na.cirrusphotos.dev"
 	@echo "Narrow to one category by appending, e.g. category:navigation.folders (also: unexpected, failures)."
-	./.build/Cirrus\ Photos.app/Contents/MacOS/CirrusPhotos
+	./.build/Synology\ Photos\ Dev.app/Contents/MacOS/CirrusPhotos
 
 clean:
 	swift package clean
-	rm -rf -- ".build/Cirrus Photos.app" .build/distribution
+	rm -rf -- ".build/Synology Photos Dev.app" ".build/Cirrus Photos.app" .build/distribution
 
 cloc:
 	@python3 scripts/cloc_report.py

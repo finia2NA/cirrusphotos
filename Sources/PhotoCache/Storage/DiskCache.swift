@@ -54,6 +54,17 @@ public actor DiskCache {
     /// They are flushed before eviction, so eviction order still follows read recency.
     private var pendingTouches: [String: Double] = [:]
     private var touchFlushScheduled = false
+    /// Room left for downloads before kept data (thumbnails at the configured size, metadata
+    /// and everything retained over them) nears the limit, measured at the last check.
+    /// Nil until the next check re-measures.
+    private var downloadRoom: Int64?
+    /// Kept bytes written since `downloadRoom` was measured; adjusted in memory per write.
+    private var keptBytesSinceDownloadCheck: Int64 = 0
+    /// A download pauses when kept data is this close to the limit, so the last batches and
+    /// metadata growth fit without evicting thumbnails it already stored.
+    private var downloadMargin: Int64 { min(32_000_000, budget / 20) }
+    /// Below this much room a download pauses instead of re-measuring after every batch.
+    private static let minimumDownloadRoom: Int64 = 4_000_000
 
     public init(root: URL, budget: Int64) throws {
         self.root = root
@@ -171,7 +182,7 @@ public actor DiskCache {
                     thumbnail identity: ThumbnailCacheIdentity? = nil) throws {
         if let expectedGeneration, expectedGeneration != generation { return }
         pendingTouches.removeValue(forKey: key)
-        let replacedCost = try database.write { db -> Int64 in
+        let (replacedCost, storedRank) = try database.write { db -> (Int64, Int) in
             let existing = try CacheEntryRecord.fetchOne(db, key: key)
             let storedKind: CacheKind = kind == .previewThumbnail && existing?.kind == CacheKind.thumbnail.rawValue ? .thumbnail : kind
             let filename = switch storedKind {
@@ -188,9 +199,12 @@ public actor DiskCache {
                                  thumbnailFamily: identity?.family, thumbnailSize: identity?.size.rawValue,
                                  rowRevision: (existing?.rowRevision ?? 0) + 1).upsert(db)
             if let identity { try reclassifyThumbnailFamily(identity.family, db) }
-            return existing?.cost ?? 0
+            return (existing?.cost ?? 0, CachePriorityPolicy.evictionRank(for: retention))
         }
         estimatedUsage? += Int64(data.count) - replacedCost
+        if storedRank >= CachePriorityPolicy.evictionRank(for: .configuredThumbnail) {
+            keptBytesSinceDownloadCheck += Int64(data.count) - replacedCost
+        }
         try trim()
     }
 
@@ -225,9 +239,38 @@ public actor DiskCache {
         try database.read { try CacheEntryRecord.fetchOne($0, key: key) }?.retentionClass.flatMap(CacheRetentionClass.init(rawValue:))
     }
 
-    public func setBudget(_ value: Int64) throws { budget = value; try trim(force: true) }
+    public func setBudget(_ value: Int64) throws {
+        budget = value
+        downloadRoom = nil
+        try trim(force: true)
+    }
+
+    /// Whether a bulk thumbnail download should pause because kept data is near the limit.
+    /// Between checks this compares bytes written against the last measured room in memory.
+    /// When that room is used up, it re-measures usage with a full scan, counting data that
+    /// eviction removes before configured thumbnails (video, previews, full images, other
+    /// thumbnail sizes) as free, so a drifting estimate cannot cause a pause.
+    public func downloadShouldPause() throws -> Bool {
+        if let room = downloadRoom, keptBytesSinceDownloadCheck < room { return false }
+        try trim(force: true)
+        let current = try estimatedUsage ?? usage()
+        let keptRank = CachePriorityPolicy.evictionRank(for: .configuredThumbnail)
+        let evictable = try database.read { db in
+            try Int64.fetchOne(db, CacheEntryRecord.filter { $0.retentionRank < keptRank }
+                .select(sum(CacheEntryRecord.Columns.cost) ?? 0)) ?? 0
+        }
+        let room = trimLimit - downloadMargin - (current - evictable)
+        keptBytesSinceDownloadCheck = 0
+        guard room >= Self.minimumDownloadRoom else {
+            downloadRoom = nil
+            return true
+        }
+        downloadRoom = room
+        return false
+    }
 
     public func clear() throws {
+        downloadRoom = nil
         generation += 1
         metadataGeneration += 1
         estimatedUsage = nil
@@ -237,6 +280,22 @@ public actor DiskCache {
             }
             try CacheEntryRecord.deleteAll(db)
             try clearNormalizedMetadata(db)
+        }
+    }
+
+    /// Removes every stored image and video file and keeps metadata. The generation
+    /// advances so in-flight writes from before the clear are rejected.
+    public func clearImages() throws {
+        downloadRoom = nil
+        generation += 1
+        estimatedUsage = nil
+        let imageKinds = [CacheKind.previewThumbnail, .fullImage, .thumbnail, .videoSegment].map(\.rawValue)
+        try database.write { db in
+            let rows = CacheEntryRecord.filter { imageKinds.contains($0.kind) }
+            for name in try String.fetchAll(db, rows.filter { $0.file != nil }.select(CacheEntryRecord.Columns.file)) {
+                try? FileManager.default.removeItem(at: images.appendingPathComponent(name))
+            }
+            try rows.deleteAll(db)
         }
     }
 
@@ -251,6 +310,7 @@ public actor DiskCache {
     /// is intentionally never rolled back, so pre-reset writers stay invalid even
     /// when the transaction fails.
     public func clearMetadata() throws -> Int {
+        downloadRoom = nil
         metadataGeneration += 1
         estimatedUsage = nil
         let imageKinds = [CacheKind.previewThumbnail, .fullImage, .thumbnail, .videoSegment].map(\.rawValue)
@@ -267,8 +327,8 @@ public actor DiskCache {
     /// absorbs metadata growth between scans. Budgets without a reserve always scan.
     func trim(metadataWrite: Bool = false, force: Bool = false) throws {
         try flushTouches()
-        let reserve = budget >= 200_000_000 ? min(64_000_000, budget / 10) : 0
-        let limit = budget - reserve
+        let reserve = budget - trimLimit
+        let limit = trimLimit
         if metadataWrite { metadataWritesSinceUsageCheck += 1 }
         if !force, reserve > 0, let estimate = estimatedUsage, estimate <= limit,
            metadataWritesSinceUsageCheck == 0 ||
@@ -294,6 +354,11 @@ public actor DiskCache {
             current -= candidate.cost
         }
         estimatedUsage = current
+    }
+
+    /// The budget minus a reserve for metadata growth between usage scans.
+    private var trimLimit: Int64 {
+        budget - (budget >= 200_000_000 ? min(64_000_000, budget / 10) : 0)
     }
 
     func remove(_ key: String, expectedGeneration: Int? = nil) throws {

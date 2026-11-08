@@ -76,7 +76,7 @@ private struct AlbumSidebarRow: View {
                     .disabled(model.albumOperation != nil || album.type != "normal")
             }
         }
-        .sheet(isPresented: $rename) { if let album { AlbumRenameView(album: album) } }
+        .sheet(isPresented: $rename) { if let album { AlbumRenameView(album: album).focusRingsOnlyForKeyboardNavigation() } }
         .alert("Delete Album?", isPresented: $confirmDelete) {
             Button("Delete Album", role: .destructive) { if let albumID = id.albumID { model.deleteAlbum(albumID) } }
             Button("Cancel", role: .cancel) {}

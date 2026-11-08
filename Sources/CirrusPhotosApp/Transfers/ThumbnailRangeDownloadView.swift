@@ -166,7 +166,7 @@ struct ThumbnailRangeDownloadView: View {
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Spacer()
-                if preload.isRunning {
+                if preload.isRunning || preload.pausedForSpace {
                     Button("Stop…") { preload.requestCancel() }
                 }
                 Button("Close") { dismiss() }
@@ -176,7 +176,7 @@ struct ThumbnailRangeDownloadView: View {
                     }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(preload.isRunning || estimate == 0 || library.repository == nil || !targets.verified)
+                .disabled(preload.isRunning || preload.pausedForSpace || estimate == 0 || library.repository == nil || !targets.verified)
             }
             .padding([.horizontal, .bottom], 20)
         }

@@ -20,6 +20,12 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 struct SettingsView: View {
     let accounts: AccountController
     @AppStorage("settings.selectedTab") private var tab: SettingsTab = .general
+    @State private var contentHeight: CGFloat = 400
+
+    /// The tallest the page may be: the screen's usable height minus the title bar, the tab header and a margin.
+    private static var maxContentHeight: CGFloat {
+        max(300, (NSScreen.main?.visibleFrame.height ?? 800) - 180)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,12 +36,18 @@ struct SettingsView: View {
             }
             .padding(.vertical, 8)
             Divider()
-            content
-                .scrollEdgeEffectHidden(true, for: .top)
+            ScrollView {
+                content
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+            }
+            .scrollEdgeEffectHidden(true, for: .top)
+            .frame(height: min(contentHeight, Self.maxContentHeight))
         }
         .frame(width: 560)
         .fixedSize(horizontal: false, vertical: true)
         .navigationTitle(tab.title)
+        .focusRingsOnlyForKeyboardNavigation()
     }
 
     @ViewBuilder private var content: some View {
@@ -120,6 +132,9 @@ private struct ViewingSettingsView: View {
             } footer: {
                 Text("Larger thumbnails are sharper but load slower and use more space.")
             }
+            Section("Timeline") {
+                Toggle("Always show timeline scrubber", isOn: $preferences.alwaysShowsTimeline)
+            }
             Section {
                 Toggle("Load large previews", isOn: $preferences.loadsLargeViewerPreviews)
                     .disabled(preferences.thumbnailSize == .xl)
@@ -161,18 +176,17 @@ private struct StorageSettingsView: View {
     @EnvironmentObject private var preferences: AppPreferences
     @Environment(\.openWindow) private var openWindow
     @State private var confirmsClear = false
+    @State private var totalUsage: Int64 = 0
 
     private func bytes(_ value: Int64) -> String { ByteCountFormatter.string(fromByteCount: value, countStyle: .file) }
 
     var body: some View {
         Form {
             Section {
-                LabeledContent("Maximum size") {
-                    HStack {
-                        Slider(value: $preferences.budgetFraction, in: 0...1)
-                        Text(bytes(CacheBudget.bytes(at: preferences.budgetFraction)))
-                            .monospacedDigit().frame(width: 80, alignment: .trailing)
-                    }
+                CacheSizeSlider()
+                if preferences.budgetBytes < totalUsage {
+                    Text("Removes about \(bytes(totalUsage - preferences.budgetBytes)) of cached data.")
+                        .font(.caption).foregroundStyle(.orange)
                 }
                 LabeledContent("In use", value: bytes(library.cacheUsage))
                     .monospacedDigit()
@@ -181,7 +195,7 @@ private struct StorageSettingsView: View {
             } footer: {
                 Text("Counts cached photos, videos and metadata. The folder in Finder can be a few percent larger.")
             }
-            CacheUsageView(accounts: accounts, refreshKey: library.cacheUsage)
+            CacheUsageView(accounts: accounts, refreshKey: "\(library.cacheUsage)/\(library.cacheInventoryRevision)", totalUsage: $totalUsage)
             Section("Offline use") {
                 LabeledContent {
                     Button("Download…") { openWindow(id: "thumbnail-download") }
@@ -203,7 +217,7 @@ private struct StorageSettingsView: View {
                 LabeledContent {
                     Button("Clear…", role: .destructive) { confirmsClear = true }
                 } label: {
-                    caption("Clear all cached data", "Frees all space this account uses on this Mac.")
+                    caption("Clear thumbnails and images", "Frees space used by thumbnails, previews, photos and videos. Library details stay.")
                 }
             } header: {
                 HStack {
@@ -218,10 +232,10 @@ private struct StorageSettingsView: View {
         .formStyle(.grouped)
         .scrollDisabled(true)
         .task { await library.refreshUsage() }
-        .confirmationDialog("Clear all cached data?", isPresented: $confirmsClear) {
-            Button("Clear", role: .destructive) { Task { await library.clearCache() } }
+        .confirmationDialog("Clear thumbnails and images?", isPresented: $confirmsClear) {
+            Button("Clear", role: .destructive) { Task { await library.clearImageCache() } }
         } message: {
-            Text("Photos and metadata are downloaded again as you browse.")
+            Text("Thumbnails and photos are downloaded again as you browse.")
         }
     }
 

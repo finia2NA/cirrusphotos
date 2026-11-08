@@ -48,6 +48,8 @@ public struct ThumbnailBatchSummary: Sendable, Equatable {
     public var unavailable = 0
     public var errors = 0
     public var interrupted = false
+    /// The cache was nearly full, so the run stopped early; nothing was evicted to make room.
+    public var budgetReached = false
     public var downloadedThumbnails = 0
     public var downloadedBytes: Int64 = 0
     /// Wall-clock time of the run so far, including metadata reads and cache hits.
@@ -127,8 +129,12 @@ public struct ThumbnailRangeDownloader: Sendable {
         let sectionIndices = Set(selectedDays.flatMap { index.sectionIndices(forDay: $0) }).sorted()
         summary.elapsedSeconds = max(0, now() - startedAt)
         await progress(summary)
+        if await repository.thumbnailDownloadShouldPause() {
+            summary.budgetReached = true
+            return summary
+        }
 
-        for sectionIndex in sectionIndices {
+        sections: for sectionIndex in sectionIndices {
             if Task.isCancelled { break }
             guard await repository.metadataTokenIsCurrent(metadataToken) else {
                 summary.interrupted = true
@@ -218,6 +224,10 @@ public struct ThumbnailRangeDownloader: Sendable {
                 }
                 summary.elapsedSeconds = max(0, now() - startedAt)
                 await progress(summary)
+                if await repository.thumbnailDownloadShouldPause() {
+                    summary.budgetReached = true
+                    break sections
+                }
             }
         }
         summary.elapsedSeconds = max(0, now() - startedAt)

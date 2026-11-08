@@ -10,7 +10,7 @@ if ! [[ $seconds =~ ^[1-9][0-9]*$ ]]; then
     echo "Usage: $0 SECONDS [TEMPLATE] (SECONDS must be a positive integer)" >&2
     exit 2
 fi
-app="$PWD/.build/Cirrus Photos.app/Contents/MacOS/CirrusPhotos"
+app="$PWD/.build/Synology Photos Dev.app/Contents/MacOS/CirrusPhotos"
 mkdir -p .build/profiles
 trace=".build/profiles/$(date +%Y%m%d-%H%M%S)-${template// /-}.trace"
 log="$(mktemp -t cirrus-profile)"
@@ -30,7 +30,7 @@ fi
 source scripts/signing.sh
 identity="$(signing_identity)"
 codesign --force --sign "${identity:--}" --entitlements scripts/Profiling.entitlements \
-    "$PWD/.build/Cirrus Photos.app" || exit 1
+    "$PWD/.build/Synology Photos Dev.app" || exit 1
 
 echo "Template: $template (+ os_signpost), ${seconds}s. Output: $trace"
 # os_signpost records the app's performance.browser intervals alongside any template.

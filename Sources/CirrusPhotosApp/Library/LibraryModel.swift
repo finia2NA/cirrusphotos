@@ -111,6 +111,8 @@ final class LibraryModel {
         }
     }
     private(set) var cacheUsage: Int64 = 0
+    /// Advances when the shared maximum was applied, which can shrink other accounts' caches.
+    private(set) var cacheInventoryRevision = 0
     private(set) var albums: [AlbumSummary] = []
     private(set) var albumsVerified = false
     private(set) var albumListError: String?
@@ -142,6 +144,7 @@ final class LibraryModel {
     var preferences: AppPreferences { session.preferences }
     @ObservationIgnored var preferenceObservations: Set<AnyCancellable> = []
     @ObservationIgnored var thumbnailPolicyRevision: UInt64 = 0
+    @ObservationIgnored var sharedBudgetRevision: UInt64 = 0
 
     convenience init(repository: CachedPhotosRepository? = nil, preferences: AppPreferences = AppPreferences(),
                      activity: ActivityCenter = ActivityCenter()) {
@@ -163,10 +166,13 @@ final class LibraryModel {
                 try? await repository.setConfiguredThumbnailSize(size)
             }
         }.store(in: &preferenceObservations)
-        preferences.$budgetFraction.dropFirst().removeDuplicates().sink { [weak self] fraction in
-            guard let repository = self?.repository else { return }
-            Task { try? await repository.setBudget(CacheBudget.bytes(at: fraction)) }
-        }.store(in: &preferenceObservations)
+        // Slider drags settle before closed accounts are trimmed or the open cache evicts.
+        preferences.$budgetFraction.dropFirst().removeDuplicates()
+            .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                Task { await self.applySharedBudget() }
+            }.store(in: &preferenceObservations)
     }
 
 
@@ -568,6 +574,7 @@ final class LibraryModel {
             if self.repository !== repository { self.repository = repository }
             presentationNamespace = repository.namespace
             try await repository.setConfiguredThumbnailSize(preferences.thumbnailSize)
+            Task { [weak self] in await self?.applySharedBudget() }
             if albumSharingObservationTask == nil {
                 albumSharingObservationTask = Task { [weak self] in
                     for await _ in await repository.albumSharingChanges() {
@@ -780,6 +787,34 @@ final class LibraryModel {
         }
     }
 
+    /// Gives the open account what the other accounts leave of the shared maximum, trimming
+    /// the least recently opened accounts when they leave less than it already holds.
+    /// Runs when the account loads and when the maximum changes; the latest call wins.
+    func applySharedBudget() async {
+        guard let repository else { return }
+        sharedBudgetRevision &+= 1
+        let revision = sharedBudgetRevision
+        let budget = preferences.budgetBytes
+        guard let root = repository.sharedCacheRoot else {
+            try? await repository.setBudget(budget)
+            return
+        }
+        let namespace = repository.namespace
+        let plan = await Task.detached(priority: .utility) {
+            await SharedCacheBudget.apply(budget: budget, openNamespace: namespace, root: root)
+        }.value
+        for trim in plan.trims {
+            let name = trim.account.displayName ?? "another account"
+            activity.notice("Cache reduced",
+                            detail: "Cached data for \(name) was reduced to stay within the maximum size.",
+                            key: "cache-budget-\(trim.account.namespace)")
+        }
+        guard sharedBudgetRevision == revision, self.repository === repository else { return }
+        try? await repository.setBudget(plan.openAllowance)
+        await refreshUsage()
+        cacheInventoryRevision &+= 1
+    }
+
     func refreshUsage() async {
         if let repository {
             let usage = (try? await repository.usage()) ?? 0
@@ -787,17 +822,17 @@ final class LibraryModel {
         }
     }
 
-    func clearCache() async {
+    func clearImageCache() async {
         guard let repository, !cacheResetInProgress else { return }
         cacheResetInProgress = true
         cacheResetError = nil
         defer { cacheResetInProgress = false }
         do {
-            try await repository.clearCache()
+            try await repository.clearImageCache()
             DecodedImages.shared.clear()
             await refreshUsage()
         } catch {
-            cacheResetError = reportedFailure(error, operation: "Cache clear")
+            cacheResetError = reportedFailure(error, operation: "Image cache clear")
         }
     }
 

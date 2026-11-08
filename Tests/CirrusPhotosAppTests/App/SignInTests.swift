@@ -180,4 +180,29 @@ final class SignInTests: XCTestCase {
         XCTAssertEqual(model.savedRequest(namespace: "ns"), request)
         XCTAssertNil(model.savedRequest(namespace: "other"))
     }
+
+    func testPreferencesPageIsShownUntilConfirmedOnThisMac() async throws {
+        let defaults = UserDefaults(suiteName: "SignInTests-\(UUID().uuidString)")!
+        let controller = AccountController(
+            preferences: AppPreferences(defaults: defaults),
+            store: AccountStore(defaults: defaults, secrets: MemorySecrets()),
+            environmentFile: nil,
+            makeRepository: { _, _ in throw SynologyAPIError.configuration("unused") })
+        func signedIn(_ name: String) -> SignedInAccount {
+            SignedInAccount(account: StoredAccount(serverURL: URL(string: "https://nas.example:5001")!, username: name),
+                            password: "pw", deviceToken: nil)
+        }
+
+        await controller.completeSignIn(signedIn("first"))
+        XCTAssertEqual(controller.setupStep, .preferences)
+        XCTAssertFalse(controller.skippedPreferencesSetup)
+
+        controller.finishPreferencesSetup()
+        XCTAssertEqual(controller.setupStep, .download)
+        XCTAssertTrue(controller.preferences.hasConfirmedSetupPreferences)
+
+        await controller.completeSignIn(signedIn("second"))
+        XCTAssertEqual(controller.setupStep, .download)
+        XCTAssertTrue(controller.skippedPreferencesSetup)
+    }
 }
