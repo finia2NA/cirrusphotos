@@ -84,6 +84,12 @@ extension View {
     /// Installs keyboard-navigation tracking for this view's window and shares its state.
     func tracksKeyboardNavigation() -> some View { modifier(TracksKeyboardNavigation()) }
 
+    /// Hides every focus ring in this view's window until Tab is pressed, and again after
+    /// the next pointer click.
+    func focusRingsOnlyForKeyboardNavigation() -> some View {
+        keyboardFocusRing().tracksKeyboardNavigation()
+    }
+
     /// Shows the focus ring only after Tab was pressed, until the next pointer click.
     func keyboardFocusRing() -> some View { modifier(KeyboardFocusRing()) }
 }

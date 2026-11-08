@@ -27,6 +27,7 @@ struct CirrusPhotosApp: App {
     var body: some Scene {
         WindowGroup("Cirrus Photos") {
             AccountRootView(accounts: accounts)
+                .focusRingsOnlyForKeyboardNavigation()
                 .environmentObject(preferences)
                 .task {
                     ModelChangeSignposts.shared.observe(preferences, name: "AppPreferences")
