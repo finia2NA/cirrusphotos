@@ -36,6 +36,7 @@ struct SettingsView: View {
         .frame(width: 560)
         .fixedSize(horizontal: false, vertical: true)
         .navigationTitle(tab.title)
+        .tracksKeyboardNavigation()
     }
 
     @ViewBuilder private var content: some View {
@@ -71,6 +72,7 @@ struct SettingsView: View {
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+        .keyboardFocusRing()
         .accessibilityLabel(item.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
