@@ -8,8 +8,10 @@ import SwiftUI
 /// Reads every account's cache directory, including accounts that are not open.
 struct CacheUsageView: View {
     let accounts: AccountController
-    /// Changes when the open account's usage changes, so the chart is read again.
-    let refreshKey: Int64
+    /// Changes when any account's usage may have changed, so the chart is read again.
+    let refreshKey: String
+    /// Every account's use together.
+    @Binding var totalUsage: Int64
     @EnvironmentObject private var preferences: AppPreferences
     @AppStorage("settings.storage.showsCategories") private var showsCategories = true
     @State private var rows: [Row] = []
@@ -155,10 +157,11 @@ struct CacheUsageView: View {
         rows = cached.map { entry in
             let match = stored.first { AccountController.namespace(of: $0) == entry.namespace }
             let name = match?.displayName
-                ?? entry.username.map { user in entry.server.map { "\(user) on \($0)" } ?? user }
+                ?? entry.displayName
                 ?? "Unknown account"
             return Row(id: entry.namespace, name: name, usage: entry.usage)
         }
+        totalUsage = rows.reduce(0) { $0 + $1.usage.total }
     }
 
     /// Account colours when categories are hidden: the category palette in order, repeating.

@@ -162,6 +162,7 @@ private struct StorageSettingsView: View {
     @EnvironmentObject private var preferences: AppPreferences
     @Environment(\.openWindow) private var openWindow
     @State private var confirmsClear = false
+    @State private var totalUsage: Int64 = 0
 
     private func bytes(_ value: Int64) -> String { ByteCountFormatter.string(fromByteCount: value, countStyle: .file) }
 
@@ -175,6 +176,10 @@ private struct StorageSettingsView: View {
                             .monospacedDigit().frame(width: 80, alignment: .trailing)
                     }
                 }
+                if preferences.budgetBytes < totalUsage {
+                    Text("Removes about \(bytes(totalUsage - preferences.budgetBytes)) of cached data.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
                 LabeledContent("In use", value: bytes(library.cacheUsage))
                     .monospacedDigit()
             } header: {
@@ -182,7 +187,7 @@ private struct StorageSettingsView: View {
             } footer: {
                 Text("Counts cached photos, videos and metadata. The folder in Finder can be a few percent larger.")
             }
-            CacheUsageView(accounts: accounts, refreshKey: library.cacheUsage)
+            CacheUsageView(accounts: accounts, refreshKey: "\(library.cacheUsage)/\(library.cacheInventoryRevision)", totalUsage: $totalUsage)
             Section("Offline use") {
                 LabeledContent {
                     Button("Download…") { openWindow(id: "thumbnail-download") }

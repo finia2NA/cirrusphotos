@@ -11,6 +11,9 @@ public actor CachedPhotosRepository {
     let client: any PhotosTransport
     let credentials: SynologyCredentials
     public nonisolated let namespace: String
+    /// The directory holding every account's cache, when this repository uses the default
+    /// location; nil for an injected cache root, which takes no part in the shared maximum.
+    public nonisolated let sharedCacheRoot: URL?
     let runID = UUID().uuidString
     let gate = NetworkGate()
     let fullImageGate = FullImageGate()
@@ -40,8 +43,11 @@ public actor CachedPhotosRepository {
         let root: URL
         if let cacheRoot {
             root = cacheRoot
+            sharedCacheRoot = nil
         } else {
-            root = CacheLocation.defaultRoot().appendingPathComponent(namespace, isDirectory: true)
+            let shared = CacheLocation.defaultRoot()
+            root = shared.appendingPathComponent(namespace, isDirectory: true)
+            sharedCacheRoot = shared
         }
         store = try DiskCache(root: root, budget: budget)
         if let server { CacheInventory.writeLabel(root: root, server: server, username: credentials.username) }

@@ -167,6 +167,7 @@ final class AccountController {
         try? CacheInventory.remove(namespace: Self.namespace(of: account))
         notice = nil
         if wasOpen, let next = store.accounts.first { openStored(next) }
+        else if let model = context?.model { await model.applySharedBudget() }
     }
 
     /// Leaves setup for the sign-in form: forgets the just-added sign-in and its empty cache.
