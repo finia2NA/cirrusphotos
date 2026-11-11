@@ -5,7 +5,7 @@
 
 Cirrus Photos is a native Mac app for browsing your Synology Photos library on your own NAS. It is made for large libraries and keeps what it has already loaded on disk, so browsing stays quick on a slow connection and cached photos stay visible when the NAS is unreachable.
 
-**Status:** alpha, version 0.1. Expect rough edges, and expect saved caches and preferences to be discarded between versions until 1.0.
+**Status:** version 0.1. Expect and saved caches to be discarded between versions until 1.0.
 
 <p>
   <img src="website/assets/screenshot-timeline.png" alt="The photo timeline grouped by day" width="100%">
