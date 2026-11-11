@@ -40,7 +40,7 @@ docs/captures/
 secrets/
 
 # Agent worktrees
-.claude/worktrees/
+.claude/
 
 # Editor state
 .vscode/
