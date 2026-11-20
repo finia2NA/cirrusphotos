@@ -2,6 +2,10 @@
 
 Each version's section is its release notes on GitHub and in the in-app updater.
 
+## 0.1.4
+
+- Scrolling the photo grid and dragging the timeline scrubber are smoother.
+
 ## 0.1.3
 
 - Settings shows storage as one bar against a cache maximum shared by all accounts; the least recently opened accounts are trimmed when it is exceeded.
