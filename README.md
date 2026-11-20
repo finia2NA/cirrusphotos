@@ -57,6 +57,10 @@ More detail is on the [install page](https://cirrusphotos.richardhanss.de/instal
 - The app talks only to your NAS, and checks this project's website for updates.
 - There is no analytics or telemetry.
 
+## Album Downloader
+
+[AlbumDownloader/](AlbumDownloader/README.md) is a separate command-line tool for people you share an album with. It downloads the album's originals one at a time, from a public link or with a Synology account, and keeps going on a slow or unreliable connection. It runs on macOS 12 or later and doesn't need Cirrus Photos.
+
 ## Reporting bugs
 
 Use **Help ▸ Report an Issue…** to open a prefilled [GitHub issue](https://github.com/finia2NA/cirrusphotos/issues), and **Help ▸ Export Logs…** to save the app's log entries from the last 24 hours to a text file you can attach. Nothing is sent automatically. Check the file for anything private before posting it.

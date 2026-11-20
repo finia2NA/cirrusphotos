@@ -10,6 +10,7 @@
 - **Distribution:** signed, unnotarized DMGs on GitHub Releases (`make dmg`, `make publish`); only distribution builds update themselves, through Sparkle.
 - **Credentials:** without `.env`, the app signs in itself (server, user, password, six-digit code; Keychain, trusted-device token, switchable accounts). A `.env` (`NAS_URL`, `USER`, `PW`, optional TOTP `OTP`; see `.env.example`) wins in development builds (whose `.dev` bundle ID separates preferences and Keychain); distribution ignores it.
 - **Diagnostics:** Log subsystem: the bundle ID (`io.github.finia2na.cirrusphotos`; `.dev` suffix in development); info and debug persist (`OSLogPreferences`), so `log show --last 15m --info --debug --predicate 'subsystem == "<bundle ID>"'` shows a crash's lead-up. Crash reports: `~/Library/Logs/DiagnosticReports/CirrusPhotos-*.ips`.
+- **Album Downloader:** `AlbumDownloader/` is a standalone CLI (own Xcode project and Makefile, macOS 12+, shares no code with the app) that downloads a shared album (public link or signed-in recipient) one original at a time, with resume and outage handling; see its README.
 - **Test environment:** The disposable `phototest` account (`.env.test`) is for risky operations.
 - **Sources of truth:** The Synology Photos service on `cirrus`; Synology's DSM Login Web API documentation; observed/reverse-engineered Photos endpoints (`docs/SYNOLOGY_PHOTOS_API.md`).
 

@@ -35,7 +35,14 @@ Findings:
 
 ## Public link visitor
 
-Under `/mo/sharing/webapi/entry.cgi/<API>`: `Setting.Guest` `get`, `Core.Sharing.Login` `login` (sharing ID and password, returns `sharing_sid`), `Sharing.Passphrase` `get_permission` (view only, `user_id: -1`), `Album` v4 `get` and `Item` v7 `list` with `passphrase`, and `/synofoto/api/v2/p/Thumbnail/get` with `passphrase` and `_sharing_id`. Calls after login carry `x-syno-sharing` equal to the sharing reference. The capture does not show how `sharing_sid` is propagated (no cookie or header), so guest-session handling is unresolved. Items keep original IDs and ownership.
+Under `/mo/sharing/webapi/entry.cgi/<API>`: `Setting.Guest` `get`, `Core.Sharing.Login` `login` (sharing ID and password, returns `sharing_sid`), `Sharing.Passphrase` `get_permission` (view only, `user_id: -1`), `Album` v4 `get` and `Item` v7 `list` with `passphrase`, and `/synofoto/api/v2/p/Thumbnail/get` with `passphrase` and `_sharing_id`. Calls after login carry `x-syno-sharing` equal to the sharing reference. Items keep original IDs and ownership.
+
+Read-only probes on 2026-11-16 against a password-free `public-download` link and an account-only share:
+
+- The guest session is the `sharing_sid` cookie set by `Core.Sharing.Login` (the HAR export had dropped it). Without it, reads answer error 101.
+- `sharing_id` and `password` are JSON strings. A password-free public link accepts any password. An account-only share answers 1003 and an unknown reference 1000. Sending `x-syno-sharing` on the login call itself turns these answers into 101.
+- With the cookie and header, `get_permission` reports view and download (`user_id: -1`), and `Download` v2 (single original, `passphrase`, no `_sid`) serves photos and videos with `Range` support, as for signed-in recipients.
+- Password-protected public links were not probed.
 
 ## Signed-in recipient
 
@@ -47,4 +54,4 @@ Normal `/webapi/entry.cgi` session. `Album` v4 `get`, `Item` v7 `list`, `get_per
 
 ## Open points
 
-Recipient denial after revocation or expiry, re-enable behavior, password replacement, role changes other than those above, and guest session propagation were not captured. Handle uncertain outcomes conservatively and confirm writes by readback.
+Recipient denial after revocation or expiry, re-enable behavior, password replacement, role changes other than those above, and password-protected public links were not captured. Handle uncertain outcomes conservatively and confirm writes by readback.
