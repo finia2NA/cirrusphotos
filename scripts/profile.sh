@@ -1,6 +1,8 @@
 #!/bin/bash
-# Records an Instruments trace of the optimized app with a live countdown, then shows
-# processing progress until the trace is written. Usage: scripts/profile.sh SECONDS TEMPLATE
+# Launches the optimized app, waits until its window is up and any Keychain prompt is gone,
+# then attaches an Instruments recording with a live countdown and shows processing progress
+# until the trace is written. The app keeps running afterwards.
+# Usage: scripts/profile.sh SECONDS TEMPLATE
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -10,13 +12,18 @@ if ! [[ $seconds =~ ^[1-9][0-9]*$ ]]; then
     echo "Usage: $0 SECONDS [TEMPLATE] (SECONDS must be a positive integer)" >&2
     exit 2
 fi
-app="$PWD/.build/Synology Photos Dev.app/Contents/MacOS/CirrusPhotos"
+bundle="$PWD/.build/Synology Photos Dev.app"
+app="$bundle/Contents/MacOS/CirrusPhotos"
 mkdir -p .build/profiles
 trace=".build/profiles/$(date +%Y%m%d-%H%M%S)-${template// /-}.trace"
 log="$(mktemp -t cirrus-profile)"
 
 if pgrep -f 'xctrace record' >/dev/null; then
     echo "Another xctrace recording is still running or processing; wait for it to finish." >&2
+    exit 1
+fi
+if pgrep -f -- "$app" >/dev/null; then
+    echo "The development build of Cirrus Photos is running; quit it first." >&2
     exit 1
 fi
 free_gb=$(df -g . | awk 'NR == 2 { print $4 }')
@@ -30,12 +37,30 @@ fi
 source scripts/signing.sh
 identity="$(signing_identity)"
 codesign --force --sign "${identity:--}" --entitlements scripts/Profiling.entitlements \
-    "$PWD/.build/Synology Photos Dev.app" || exit 1
+    "$bundle" || exit 1
+
+open -n "$bundle" || exit 1
+pid=""
+for _ in {1..40}; do
+    pid=$(pgrep -nf -- "$app") && break
+    sleep 0.25
+done
+if [[ -z $pid ]]; then
+    echo "The app did not start." >&2
+    exit 1
+fi
+echo "Waiting for the app window (and any Keychain prompt) before recording..."
+xcrun swift scripts/wait_for_window.swift "$pid" 300
+case $? in
+    0) ;;
+    3) echo "The app quit before its window appeared." >&2; exit 1 ;;
+    *) echo "No window after 5 minutes; recording anyway." >&2 ;;
+esac
 
 echo "Template: $template (+ os_signpost), ${seconds}s. Output: $trace"
 # os_signpost records the app's performance.browser intervals alongside any template.
 xcrun xctrace record --template "$template" --instrument os_signpost --time-limit "${seconds}s" \
-    --output "$trace" --launch -- "$app" >"$log" 2>&1 &
+    --output "$trace" --attach "$pid" >"$log" 2>&1 &
 recorder=$!
 
 # One Control-C asks xctrace to stop early and still save the trace.
@@ -49,7 +74,7 @@ bar() { # bar FILLED WIDTH
     printf '%s' "$out"
 }
 
-phase=launching
+phase=attaching
 started=0
 processing_started=0
 spinner='|/-\'
@@ -57,7 +82,7 @@ tick=0
 while kill -0 "$recorder" 2>/dev/null; do
     now=$(date +%s)
     # xctrace prints these lines when the recording starts and when it ends.
-    if [[ $phase == launching ]] && grep -q 'Ctrl-C to stop the recording' "$log"; then
+    if [[ $phase == attaching ]] && grep -q 'Ctrl-C to stop the recording' "$log"; then
         phase=recording
         started=$now
     fi
@@ -66,15 +91,15 @@ while kill -0 "$recorder" 2>/dev/null; do
         processing_started=$now
     fi
     case $phase in
-        launching)
-            printf '\r\033[KLaunching app %s' "${spinner:tick%4:1}" ;;
+        attaching)
+            printf '\r\033[KAttaching to the app %s' "${spinner:tick%4:1}" ;;
         recording)
             elapsed=$((now - started))
             ((elapsed > seconds)) && elapsed=$seconds
             printf '\r\033[KRecording [%s] %3ds left' "$(bar $((elapsed * 30 / seconds)) 30)" "$((seconds - elapsed))" ;;
         processing)
             size=$(du -sh "$trace" 2>/dev/null | awk '{ print $1 }')
-            printf '\r\033[KProcessing trace %s %ds, %s written. Quit the app if it is still open.' \
+            printf '\r\033[KProcessing trace %s %ds, %s written.' \
                 "${spinner:tick%4:1}" "$((now - processing_started))" "${size:-0B}" ;;
     esac
     tick=$((tick + 1))
@@ -85,8 +110,8 @@ status=$?
 trap - INT
 printf '\r\033[K'
 
-# xctrace exits non-zero (for example 54) when it kills the launched app at the time
-# limit, even though the trace is complete; a saved trace is the success criterion.
+# xctrace can exit non-zero even though the trace is complete; a saved trace is the
+# success criterion.
 if [[ -d $trace ]] && grep -q 'Output file saved as' "$log"; then
     echo "Trace saved: $PWD/$trace ($(du -sh "$trace" | awk '{ print $1 }'))"
     rm -f "$log"

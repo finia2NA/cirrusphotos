@@ -10,8 +10,8 @@ start:
 release:
 	./scripts/run.sh --release
 
-# Launches the optimized build under Instruments with a countdown and saves the trace in
-# .build/profiles/. Example: make profile PROFILE_SECONDS=20 PROFILE_TEMPLATE="Animation Hitches"
+# Launches the optimized build, then records it under Instruments once its window is up
+# (after any Keychain prompt) and saves the trace in .build/profiles/. Example: make profile PROFILE_SECONDS=20 PROFILE_TEMPLATE="Animation Hitches"
 PROFILE_SECONDS ?= 40
 PROFILE_TEMPLATE ?= Time Profiler
 profile:

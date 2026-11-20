@@ -141,12 +141,12 @@ Use the disposable `phototest` account (`TARGET=test`) for anything risky such a
 
 ```sh
 make debug      # build, open Console, and run the app in the foreground (Control-C stops it)
-make profile    # optimized build, recorded under Instruments for 40 seconds
+make profile    # optimized build, recorded under Instruments for 40 seconds once its window is up
 ```
 
 In Console, filter development builds by `subsystem:io.github.finia2na.cirrusphotos.dev`. For video playback the useful categories are `viewer.video`, `repository.video` and `transport.video` (AVPlayer state, cache and range assembly, and NAS request status and timing). Logs exclude filenames, cache keys, credentials, session data, authenticated URLs and response bodies.
 
-`make profile` writes the trace to `.build/profiles/` and opens it. Control-C stops it early and still saves. Options:
+Quit the development build first: `make profile` launches it and starts recording once the window is up and any Keychain prompt is answered; the app keeps running afterwards. The trace goes to `.build/profiles/` and opens. Control-C stops it early and still saves. Options:
 
 ```sh
 make profile PROFILE_SECONDS=20 PROFILE_TEMPLATE="Animation Hitches"

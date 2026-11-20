@@ -1,4 +1,5 @@
 import Darwin
+import MachO
 import Combine
 import OSLog
 import SynologyAPI
@@ -22,17 +23,28 @@ final class ModelChangeSignposts {
         })
     }
 
+    /// The app binary's load address and `__TEXT` range, looked up once. Per-frame `dladdr`
+    /// searched the symbol table and cost milliseconds of main thread per event.
+    private static let appText: (base: UInt, text: Range<UInt>) = {
+        let base = UInt(bitPattern: #dsohandle)
+        var size: UInt = 0
+        guard let start = getsegmentdata(#dsohandle.assumingMemoryBound(to: mach_header_64.self), "__TEXT", &size)
+        else { return (base, base..<base) }
+        let text = UInt(bitPattern: start)
+        return (base, text..<text + size)
+    }()
+
     /// Offsets of the first app-binary frames on the stack (innermost first), resolvable
     /// with `atos -o <binary> -l 0x100000000 <0x100000000 + offset>` against the same build.
     /// The app's Swift symbols are not exported, so `callStackSymbols` cannot name them.
     private static func appFrames(limit: Int = 8) -> String {
+        let (base, text) = appText
         var frames: [String] = []
         for address in Thread.callStackReturnAddresses {
-            guard frames.count < limit, let pointer = UnsafeRawPointer(bitPattern: address.uintValue) else { break }
-            var info = Dl_info()
-            guard dladdr(pointer, &info) != 0, let base = info.dli_fbase, let file = info.dli_fname,
-                  String(cString: file).hasSuffix("/CirrusPhotos") else { continue }
-            frames.append("0x" + String(UInt(bitPattern: pointer - UnsafeRawPointer(base)), radix: 16))
+            let value = address.uintValue
+            guard text.contains(value) else { continue }
+            frames.append("0x" + String(value - base, radix: 16))
+            if frames.count == limit { break }
         }
         return frames.joined(separator: ",")
     }
