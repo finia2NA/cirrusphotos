@@ -100,9 +100,27 @@ final class DecodedImages: @unchecked Sendable {
     private let cache = NSCache<NSString, NSImage>()
     private let renditions = NSCache<NSString, Rendition>()
     private let gate = DecodeGate()
+    /// The main display's color space, looked up on first decode and again after display
+    /// changes. Images already in it reach the screen without a main-thread conversion.
+    private let displaySpace = OSAllocatedUnfairLock<CGColorSpace?>(uncheckedState: nil)
+
     private init() {
         cache.totalCostLimit = 128 * 1_000_000
         renditions.totalCostLimit = 384 * 1_000_000
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                               object: nil, queue: nil) { [displaySpace] _ in
+            displaySpace.withLockUnchecked { $0 = nil }
+        }
+    }
+
+    private func targetColorSpace() -> CGColorSpace {
+        displaySpace.withLockUnchecked { space in
+            if let space { return space }
+            let resolved = CGDisplayCopyColorSpace(CGMainDisplayID())
+            let usable = resolved.model == .rgb ? resolved : CGColorSpace(name: CGColorSpace.sRGB)!
+            space = usable
+            return usable
+        }
     }
 
     func clear() {
@@ -158,7 +176,7 @@ final class DecodedImages: @unchecked Sendable {
         defer { Task { await gate.release() } }
         guard !Task.isCancelled else { return nil }
         let state = signposter.beginInterval("Decode", id: signposter.makeSignpostID(), "\(data.count) bytes")
-        let box = Self.decodeImage(data, maxPixel: maxPixel)
+        let box = Self.decodeImage(data, maxPixel: maxPixel, colorSpace: targetColorSpace())
         signposter.endInterval("Decode", state)
         guard !Task.isCancelled else { return nil }
         return box
@@ -166,7 +184,7 @@ final class DecodedImages: @unchecked Sendable {
 
     /// Images that already fit and need no orientation transform are decoded directly,
     /// which is about twice as fast as ImageIO's thumbnail path for cached thumbnails.
-    private static func decodeImage(_ data: Data, maxPixel: Int) -> CGImageBox? {
+    private static func decodeImage(_ data: Data, maxPixel: Int, colorSpace: CGColorSpace) -> CGImageBox? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         if let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
            let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
@@ -176,7 +194,7 @@ final class DecodedImages: @unchecked Sendable {
            let image = CGImageSourceCreateImageAtIndex(source, 0, [
                kCGImageSourceShouldCacheImmediately: true
            ] as CFDictionary) {
-            return CGImageBox(image)
+            return CGImageBox(rendered(image, in: colorSpace))
         }
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -184,7 +202,27 @@ final class DecodedImages: @unchecked Sendable {
             kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceThumbnailMaxPixelSize: maxPixel
         ] as CFDictionary) else { return nil }
-        return CGImageBox(image)
+        return CGImageBox(rendered(image, in: colorSpace))
+    }
+
+    /// ImageIO can return JPEGs whose pixels are still undecoded (hardware-decoded on demand),
+    /// and Core Animation color-matches images to the display on the main thread when they
+    /// first reach the screen. Drawing into a native 32-bit bitmap in the display's color
+    /// space does both on the decode task instead. Falls back to the original image if no
+    /// context is available.
+    private static func rendered(_ image: CGImage, in colorSpace: CGColorSpace) -> CGImage {
+        let opaque: Bool = switch image.alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast: true
+        default: false
+        }
+        let alpha = opaque ? CGImageAlphaInfo.noneSkipFirst : .premultipliedFirst
+        guard let context = CGContext(data: nil, width: image.width, height: image.height,
+                                      bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace,
+                                      bitmapInfo: alpha.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return image }
+        context.interpolationQuality = .none
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return context.makeImage() ?? image
     }
 }
 
