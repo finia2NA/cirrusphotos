@@ -61,6 +61,7 @@ extension LibraryBrowserScrollView {
         weak var session: AppSession?
         var collection: PhotoCollectionDescriptor = .library(.personal)
         var onVisibleDay: ((String) -> Void)?
+        var dayJumps: BrowserDayJumps?
         var lastVisibleDay: String?
         var unavailableOffline = false
         var colorScheme: ColorScheme = .light
@@ -259,15 +260,16 @@ extension LibraryBrowserScrollView {
                 demandedPrefetch = []
                 viewRevision += 1
             }
-            if let request = input.jumpToDay, let index, let geometry,
-               let target = scrollIntent.jump(id: request.id, dayID: request.dayID,
-                                              index: index, geometry: geometry) {
-                cancelSupersededReveal()
-                pendingOpen = nil
-                cancelPointerInteraction()
-                scrollTo(target)
-            } else if insetsChanged, !rebuilding, let insetAnchor,
-                      let target = geometry?.y(for: insetAnchor) {
+            if dayJumps !== input.dayJumps {
+                dayJumps = input.dayJumps
+                dayJumps?.onRequest = { [weak self] in
+                    guard let self, self.applyDayJump() else { return }
+                    self.viewportChanged()
+                }
+            }
+            // A pending scrubber jump wins over keeping the anchor across an inset change.
+            if !applyDayJump(), insetsChanged, !rebuilding, let insetAnchor,
+               let target = geometry?.y(for: insetAnchor) {
                 scrollTo(target)
             }
             viewportChanged()
@@ -823,6 +825,18 @@ extension LibraryBrowserScrollView {
                                height: max(CGFloat(geometry.totalHeight) + (emptyContent == nil ? 0 : 240), scroll.contentSize.height))
             if document.frame != frame { document.frame = frame }
             document.overlay?.frame = document.bounds
+        }
+
+        /// Scrolls to the latest scrubber request once per request, when the timeline is laid out.
+        func applyDayJump() -> Bool {
+            guard let request = dayJumps?.latest, let index, let geometry,
+                  let target = scrollIntent.jump(id: request.id, dayID: request.dayID,
+                                                 index: index, geometry: geometry) else { return false }
+            cancelSupersededReveal()
+            pendingOpen = nil
+            cancelPointerInteraction()
+            scrollTo(target)
+            return true
         }
 
         func scrollTo(_ y: Double) {

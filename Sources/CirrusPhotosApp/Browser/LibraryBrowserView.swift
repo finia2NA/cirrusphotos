@@ -206,7 +206,8 @@ struct LibraryBrowserView: View {
     @State private var showingSharing = false
     /// Held, not observed: scrolling past days re-renders only the scrubber.
     @State private var daySelection = BrowserDaySelection()
-    @State private var jumpRequest: DayJumpRequest?
+    /// Held, not observed: dragging the scrubber scrolls without re-rendering the browser.
+    @State private var dayJumps = BrowserDayJumps()
     /// Identifies this browser's upload thumbnail polls, which stop when it goes away.
     @State private var uploadOwner = UUID()
 
@@ -313,7 +314,7 @@ struct LibraryBrowserView: View {
                                              selectionState: library.selectionState(for: collection),
                                              restorationAnchor: restorationAnchor,
                                              bridge: bridge,
-                                             jumpToDay: jumpRequest,
+                                             dayJumps: dayJumps,
                                              unavailableOffline: library.error(for: collection) != nil || library.authenticationFailed,
                                              colorScheme: colorScheme,
                                              reduceMotion: reduceMotion,
@@ -365,7 +366,7 @@ struct LibraryBrowserView: View {
                         if !snapshot.timeline.days.isEmpty {
                             BrowserTimelineNavigator(daySelection: daySelection, timeline: snapshot.timeline,
                                                      alwaysVisible: preferences.alwaysShowsTimeline) { day in
-                                jumpRequest = DayJumpRequest(dayID: day)
+                                dayJumps.request(day)
                             }
                                 .frame(width: 72)
                                 .padding(.top, contentTopInset + 16)
@@ -445,7 +446,7 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
     let selectionState: BrowserSelectionState
     let restorationAnchor: PhotoTimelineRestorationAnchor?
     let bridge: LibraryBrowserBridge
-    let jumpToDay: DayJumpRequest?
+    let dayJumps: BrowserDayJumps
     let unavailableOffline: Bool
     let colorScheme: ColorScheme
     let reduceMotion: Bool
@@ -530,6 +531,19 @@ struct LibraryBrowserScrollView: NSViewRepresentable {
 @MainActor
 final class BrowserDaySelection: ObservableObject {
     @Published var day: String?
+}
+
+/// Scrubber jumps, delivered straight to the browser's scroll coordinator. The latest
+/// request stays readable so a jump made before the timeline is laid out still applies.
+@MainActor
+final class BrowserDayJumps {
+    private(set) var latest: DayJumpRequest?
+    var onRequest: (() -> Void)?
+
+    func request(_ dayID: String) {
+        latest = DayJumpRequest(dayID: dayID)
+        onRequest?()
+    }
 }
 
 /// Observes the selected day so only the scrubber re-renders as the visible day changes.
