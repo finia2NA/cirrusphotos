@@ -94,7 +94,7 @@ extension LibraryBrowserScrollView.Coordinator {
             if let item = loadedItem(selected) { known[selected] = item.photo.id }
         }
         let snapshot = BrowserCommandSnapshot(owner: commandOwner, active: true, canOpen: false,
-            canToggleFavorite: false, collection: collection, indexFingerprint: index?.fingerprint,
+            canToggleFavorite: allowNetwork, collection: collection, indexFingerprint: index?.fingerprint,
             selectionGeneration: selectionState.generation, selectedOrdinals: selection.indexes,
             knownItemIDsByOrdinal: known, timeline: timelineSnapshot, authority: selectionAuthority, sourceAlbumID: sourceAlbumID)
         let menu = item.photo.hasDisplayableStillImage && allowsDownloads

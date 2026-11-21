@@ -328,7 +328,7 @@ struct LibraryBrowserView: View {
                                              onAnnotationMenu: { menu, selection in
                                                  if let target = library.browserAnnotationTarget(selection) {
                                                      library.addAnnotationMenus(to: menu, target: target,
-                                                         favorite: library.canFavoriteFromContextMenu(selection) ? { library.toggleContextMenuFavorite(selection) } : nil)
+                                                         favorite: library.contextMenuFavorite(selection))
                                                  }
                                              },
                                              onDownload: { selection, kind, choose in

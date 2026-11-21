@@ -148,10 +148,31 @@ extension LibraryModel {
 
     // MARK: Context menus
 
-    /// Adds Favorite or Unfavorite (when `favorite` is given), then Rating, Add Tag and Remove Tag submenus.
-    func addAnnotationMenus(to menu: NSMenu, target: AnnotationTarget, favorite: (() -> Void)? = nil) {
+    /// A context menu's favorite item: whether its photos are all favorites (nil while unknown),
+    /// how to find out, and the toggle it performs.
+    struct FavoriteMenuAction {
+        let favorited: Bool?
+        var resolve: (@MainActor () async -> Bool?)?
+        let toggle: @MainActor () -> Void
+    }
+
+    /// Adds Add to Favorites or Remove from Favorites (when `favorite` is given), then Rating, Add Tag and Remove Tag submenus.
+    func addAnnotationMenus(to menu: NSMenu, target: AnnotationTarget, favorite: FavoriteMenuAction? = nil) {
         if !menu.items.isEmpty { menu.addItem(.separator()) }
-        if let favorite { menu.addItem(PhotoDownloadMenuItem(title: "Favorite or Unfavorite") { favorite() }) }
+        if let favorite {
+            func title(_ favorited: Bool) -> String { favorited ? "Remove from Favorites" : "Add to Favorites" }
+            let item = PhotoDownloadMenuItem(title: title(favorite.favorited ?? false)) { favorite.toggle() }
+            menu.addItem(item)
+            if let resolve = favorite.resolve {
+                // Until the selection's state is known the item cannot say what it will do.
+                if favorite.favorited == nil { item.isEnabled = false }
+                Task {
+                    guard let favorited = await resolve() else { item.isEnabled = false; return }
+                    item.title = title(favorited)
+                    item.isEnabled = true
+                }
+            }
+        }
 
         let rating = NSMenuItem(title: "Rating", action: nil, keyEquivalent: "")
         let ratingMenu = NSMenu(title: "Rating")

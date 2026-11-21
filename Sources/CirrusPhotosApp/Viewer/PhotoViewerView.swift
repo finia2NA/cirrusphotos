@@ -115,7 +115,8 @@ struct PhotoViewerView: View {
                                 }
                                 if library.capabilities(for: viewer.collection).allowsSpaceItemActions, viewer.canAnnotate {
                                     library.addAnnotationMenus(to: menu, target: library.viewerAnnotationTarget(viewer),
-                                        favorite: library.canToggleViewerFavorite ? { library.toggleViewerFavorite() } : nil)
+                                        favorite: library.canToggleViewerFavorite
+                                            ? .init(favorited: viewer.state?.item?.isFavorite == true, toggle: { library.toggleViewerFavorite() }) : nil)
                                 }
                                 return menu.items.isEmpty ? nil : menu
                               }, startFileDrag: { view, event in

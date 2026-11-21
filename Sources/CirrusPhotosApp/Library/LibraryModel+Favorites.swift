@@ -25,6 +25,16 @@ extension LibraryModel {
             pendingFavoriteConfirmation == nil && timelineVerified(for: snapshot.collection)
     }
 
+    /// The favorite item of a browser context menu, titled after the captured selection's resolved state.
+    func contextMenuFavorite(_ snapshot: BrowserCommandSnapshot) -> FavoriteMenuAction? {
+        guard canFavoriteFromContextMenu(snapshot), let repository else { return nil }
+        return FavoriteMenuAction(favorited: nil, resolve: { [weak self] in
+            guard let self, let selection = snapshot.captureSelection(timeline: snapshots[snapshot.collection]),
+                  let action = await SelectionFavoriteResolver(repository: repository).resolve(selection) else { return nil }
+            return !action.targetFavorite
+        }, toggle: { [weak self] in self?.toggleContextMenuFavorite(snapshot) })
+    }
+
     /// Toggles the favorite state of a browser context menu's captured selection.
     func toggleContextMenuFavorite(_ snapshot: BrowserCommandSnapshot) {
         guard canFavoriteFromContextMenu(snapshot), let repository else { return }
