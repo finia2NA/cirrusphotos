@@ -6,6 +6,21 @@
     <description>Cirrus Photos updates</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.5</title>
+      <pubDate>Sat, 21 Nov 2026 03:58:45 +0000</pubDate>
+      <sparkle:version>6</sparkle:version>
+      <sparkle:shortVersionString>0.1.5</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<ul>
+<li>The library window opens on first launch even while the automatic update question is shown.</li>
+<li>With automatic update checks on, the app checks for updates at every launch.</li>
+</ul>
+]]></description>
+      <enclosure url="https://github.com/finia2NA/cirrusphotos/releases/download/v0.1.5/Cirrus-Photos-0.1.5.dmg"
+                 type="application/octet-stream" sparkle:edSignature="RdDOU8jmN9bsLXUgLt9PwL+GyjieaBaJxlA06EmYBlnJxZcWQy0pTyLZ2F4yo4DRERVIxqHxWP4RE87kcVpfAA==" length="10945105" />
+    </item>
+    <item>
       <title>Version 0.1.4</title>
       <pubDate>Sat, 21 Nov 2026 03:26:20 +0000</pubDate>
       <sparkle:version>5</sparkle:version>
