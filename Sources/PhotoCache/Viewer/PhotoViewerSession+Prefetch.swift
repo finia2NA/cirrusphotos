@@ -131,7 +131,7 @@ extension PhotoViewerSession {
 
     func expensiveThumbnailRequest(for descriptor: ThumbnailInfo) -> ViewerImageWork.ThumbnailRequest? {
         if thumbnailSize == .xl { return configuredThumbnailRequest() }
-        if loadsLargePreviews, thumbnailSize != .xl, descriptor.isReady(.xl) {
+        if loadsLargePreviews || largePreviewIsBest, thumbnailSize != .xl, descriptor.isReady(.xl) {
             return ViewerImageWork.ThumbnailRequest(tier: .largePreview, size: .xl, purpose: .viewerPreview)
         }
         return nil

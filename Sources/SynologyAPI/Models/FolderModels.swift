@@ -7,7 +7,12 @@ public struct FolderSummary: Codable, Hashable, Identifiable, Sendable {
     public let additional: Additional?
     public struct Additional: Codable, Hashable, Sendable {
         public let thumbnail: [ThumbnailInfo]?
+        /// The account's rights in the folder; Shared Space listings report it.
+        public let accessPermission: AlbumAccessPermission?
+        enum CodingKeys: String, CodingKey { case thumbnail; case accessPermission = "access_permission" }
     }
+    /// Whether the account may download originals from the folder; nil when the NAS did not say.
+    public var allowsDownload: Bool? { additional?.accessPermission?.download }
     public var displayName: String { name.split(separator: "/").last.map(String.init) ?? "/" }
     public var thumbnail: ThumbnailInfo? {
         guard let thumbnails = additional?.thumbnail else { return nil }

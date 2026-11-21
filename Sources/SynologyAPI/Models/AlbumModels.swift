@@ -25,7 +25,7 @@ public struct IncomingAlbum: Decodable, Sendable {
     }
 }
 
-public struct AlbumAccessPermission: Decodable, Sendable, Equatable {
+public struct AlbumAccessPermission: Codable, Hashable, Sendable {
     public let view: Bool
     public let download: Bool
     public let upload: Bool

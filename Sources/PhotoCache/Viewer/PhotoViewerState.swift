@@ -73,6 +73,16 @@ public enum PhotoViewerResourceStatus: Sendable, Equatable {
     case unsupported(String)
 }
 
+/// Why the large preview is the best image the viewer shows for an item.
+public enum FullImageLimit: Sendable, Equatable {
+    /// The account may only view the photo, so the NAS withholds its original.
+    case viewOnly
+    /// The NAS refused the original without the folder or album saying why.
+    case refused
+    /// Originals of albums shared with the account are not loaded, although downloading is allowed.
+    case sharedAlbum
+}
+
 public struct PhotoViewerState: Sendable {
     public var contentScope: PhotoContentScope = .space(.personal)
     public let selection: PhotoViewerSelection
@@ -98,4 +108,6 @@ public struct PhotoViewerState: Sendable {
     public let nextNeighbor: PhotoViewerNeighbor?
     public let thumbnailLookahead: [PhotoViewerNeighbor]
     public let filmstrip: [PhotoViewerFilmstripItem]
+    /// Set when the original is not shown and the large preview is the best image.
+    public var fullImageLimit: FullImageLimit? = nil
 }

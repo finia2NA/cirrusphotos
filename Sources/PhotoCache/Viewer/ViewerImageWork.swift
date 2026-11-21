@@ -42,6 +42,8 @@ struct ViewerImageWork {
     var fullImageData: Data?
     var thumbnailStatus: PhotoViewerResourceStatus = .idle
     var fullImageStatus: PhotoViewerResourceStatus = .idle
+    /// Why the current item shows the large preview instead of its original.
+    var fullImageLimit: FullImageLimit?
     var thumbnailJobs: [ThumbnailTier: ThumbnailJob] = [:]
     var thumbnailPrefetchJobs: [String: ThumbnailJob] = [:]
     var fullTask: Task<Void, Never>?
@@ -70,6 +72,7 @@ struct ViewerImageWork {
 
     mutating func restartCurrent(keeping resource: FullImageResource?) {
         cancelCurrent()
+        fullImageLimit = nil
         thumbnailFailures.removeAll()
         cancelFullJobsExcept(resource: resource)
     }

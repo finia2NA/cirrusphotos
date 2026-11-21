@@ -100,3 +100,16 @@ extension CachedPhotosRepository {
         return Array(thumbnails.prefix(limit))
     }
 }
+
+extension CachedPhotosRepository {
+    /// Whether the account may download originals of `item` shown in `collection`, from what the
+    /// NAS reported: the album's grant for an album shared with the account, or the cached
+    /// listing of the item's Shared Space folder. Nil when nothing says.
+    public func originalDownloadAllowed(for item: PhotoItem, in collection: PhotoCollectionDescriptor) async -> Bool? {
+        let source = mediaCollection(for: collection)
+        if source.incomingAlbumIdentity != nil { return incomingAccess[source]?.access.download }
+        guard source.contentScope == .space(.shared), let folderID = item.folderID,
+              let directory = try? await store.metadataFolderDirectory(metadataNamespace(for: .shared), id: folderID)?.0 else { return nil }
+        return directory.folder.allowsDownload
+    }
+}

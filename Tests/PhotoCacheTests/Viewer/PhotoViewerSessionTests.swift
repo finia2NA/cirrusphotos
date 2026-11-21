@@ -12,6 +12,8 @@ fileprivate actor ViewerTransport: TestPhotosTransport {
     var blockedThumbnails: Set<Int64> = []
     var releasedThumbnails: Set<Int64> = []
     var failedFullImages: Set<Int64> = []
+    /// Originals the NAS withholds with API error 117, as for a view-only folder.
+    var refusedFullImages: Set<Int64> = []
     var failImages = false
     private(set) var pageCalls: [Int] = []
     private(set) var pageCollections: [PhotoCollectionDescriptor] = []
@@ -29,12 +31,13 @@ fileprivate actor ViewerTransport: TestPhotosTransport {
 
     func configure(pages: [Int: [PhotoItem]], blockedPages: Set<Int> = [],
                    blockedFullImages: Set<Int64> = [], blockedThumbnails: Set<Int64> = [],
-                   failedFullImages: Set<Int64> = [], failImages: Bool = false) {
+                   failedFullImages: Set<Int64> = [], refusedFullImages: Set<Int64> = [], failImages: Bool = false) {
         self.pages = pages
         self.blockedPages = blockedPages
         self.blockedFullImages = blockedFullImages
         self.blockedThumbnails = blockedThumbnails
         self.failedFullImages = failedFullImages
+        self.refusedFullImages = refusedFullImages
         self.failImages = failImages
     }
 
@@ -104,6 +107,7 @@ fileprivate actor ViewerTransport: TestPhotosTransport {
         if failedFullImages.contains(resource.unitID) {
             throw TestFailure("Original failed")
         }
+        if refusedFullImages.contains(resource.unitID) { throw SynologyAPIError.api(117) }
         do {
             while blockedFullImages.contains(resource.unitID),
                   !releasedFullImages.contains(resource.unitID) {
@@ -124,10 +128,11 @@ class PhotoViewerSessionTestCase: XCTestCase {
 
     fileprivate func root() -> URL { temporaryTestRoot("SynoViewerTest") }
 
-    fileprivate func item(_ id: Int, type: String = "photo", revision: String? = nil) throws -> PhotoItem {
+    fileprivate func item(_ id: Int, type: String = "photo", revision: String? = nil, folder: Int? = nil) throws -> PhotoItem {
         let key = revision ?? "key-\(id)"
+        let folderField = folder.map { "\"folder_id\":\($0)," } ?? ""
         let json = """
-        {"id":\(id),"filename":"\(id).jpg","time":1711929600,"type":"\(type)","additional":{"thumbnail":{"unit_id":\(id),"cache_key":"\(key)","sm":"ready","m":"ready","xl":"ready"}}}
+        {"id":\(id),"filename":"\(id).jpg","time":1711929600,"type":"\(type)",\(folderField)"additional":{"thumbnail":{"unit_id":\(id),"cache_key":"\(key)","sm":"ready","m":"ready","xl":"ready"}}}
         """
         return try JSONDecoder().decode(PhotoItem.self, from: Data(json.utf8))
     }
@@ -469,6 +474,39 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         XCTAssertTrue(requests.contains { $0.0 == 8 && $0.1 == .sm })
         XCTAssertFalse(requests.contains { $0.1 == .xl })
         await offSession.close()
+    }
+
+    func testWithheldOriginalShowsLargePreviewAndIsNotRequestedAgainInItsFolder() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let first = try item(7, folder: 950), second = try item(8, folder: 950)
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: [first, second]], refusedFullImages: [7, 8])
+        let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 2,
+            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 2)])])
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.shared),
+            index: LibraryIndex(snapshot: snapshot),
+            seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0, item: first, page: [first, second], pageVerified: true),
+            thumbnailSize: .m, loadsLargePreviews: false, allowNetwork: true)
+        _ = await session.state()
+        let limited = await waitUntil {
+            let state = await session.state()
+            return state.fullImageLimit == .refused && state.thumbnailIsLargePreview
+        }
+        XCTAssertTrue(limited)
+        let firstState = await session.state()
+        if case .failure = firstState.fullImageStatus { XCTFail("A withheld original must not be reported as a failure") }
+        let thumbnailRequests = await transport.thumbnailRequests
+        XCTAssertTrue(thumbnailRequests.contains { $0.0 == 7 && $0.1 == .xl })
+        await session.navigateNext()
+        let next = await waitUntil {
+            let state = await session.state()
+            return state.item?.id == 8 && state.fullImageLimit == .refused && state.thumbnailIsLargePreview
+        }
+        XCTAssertTrue(next)
+        let fullImageCalls = await transport.fullImageCalls
+        XCTAssertFalse(fullImageCalls.contains(8))
+        XCTAssertEqual(fullImageCalls.filter { $0 == 7 }.count, 1)
+        await session.close()
     }
 
     func testFullImageFailureRetainsLargePreview() async throws {

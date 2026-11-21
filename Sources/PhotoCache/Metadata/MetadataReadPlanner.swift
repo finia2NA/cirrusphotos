@@ -48,6 +48,9 @@ public enum MetadataReadPlanner {
                             profile: ItemFieldProfile) throws -> [CollectionReadBatch] {
         let dayPositions = Dictionary(uniqueKeysWithValues: catalog.days.enumerated().map { ($0.element.day, $0.offset) })
         let counts = Dictionary(uniqueKeysWithValues: catalog.days.map { ($0.day, $0.count) })
+        // Items before each day in the catalog's newest-first order.
+        var preceding: [CaptureDay: Int] = [:], total = 0
+        for day in catalog.days { preceding[day.day] = total; total += day.count }
         var unique: [DayPageAddress: DayPageRead] = [:]
         for demand in demands {
             guard counts[demand.address.day] == demand.dayCount else { throw CollectionCatalogError.invalidCoverage }
@@ -81,10 +84,13 @@ public enum MetadataReadPlanner {
         }
         return try groups.map { pages in
             let first = pages.first!, last = pages.last!
+            let collectionOffset = first.address.collection.folderID != nil
+                ? preceding[first.address.day].map { $0 + first.address.offset } : nil
             return CollectionReadBatch(request: try CollectionPageRequest(
                 collection: first.address.collection, order: first.address.order,
                 newestDay: first.address.day, oldestDay: last.address.day,
-                offset: first.address.offset, limit: pages.reduce(0) { $0 + $1.count }
+                offset: first.address.offset, limit: pages.reduce(0) { $0 + $1.count },
+                collectionOffset: collectionOffset
             ), pages: pages, profile: profile)
         }
     }

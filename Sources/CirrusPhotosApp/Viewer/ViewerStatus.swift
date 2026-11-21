@@ -84,6 +84,8 @@ struct ViewerStatus: Equatable {
         var stalled = false
         var allowNetwork = true
         var video: Video?
+        /// Set when the original is not shown and the large preview is the best image.
+        var fullImageLimit: FullImageLimit?
     }
 
     static func make(_ inputs: Inputs) -> ViewerStatus {
@@ -97,6 +99,12 @@ struct ViewerStatus: Equatable {
         }
         if let failure = inputs.decodeFailure {
             return status("Full couldn't be decoded", failure)
+        }
+        if let limit = inputs.fullImageLimit {
+            if inputs.isLoadingLargePreview && shown != .thumbnail(.xl) {
+                return status("Loading", "loading the large preview")
+            }
+            return limited(limit, shown: shown)
         }
         // After a network load the bar stays full while decoding; a cached original decodes without it.
         let decoding = status("Decoding", "decoding full resolution", inputs.networkLoaded ? .determinate(1) : nil)
@@ -148,6 +156,26 @@ struct ViewerStatus: Equatable {
         case .unsupported(let message):
             return status(shown == nil ? "Unavailable" : nil, message)
         }
+    }
+
+    /// The large preview (or, without one, the shown preview) is all there is: the status names
+    /// that limit, and the hover says why.
+    private static func limited(_ limit: FullImageLimit, shown: ViewerImageTier?) -> ViewerStatus {
+        let showing = "Showing \(shown?.description ?? "the preview")"
+        let short: String, reason: String
+        switch limit {
+        case .viewOnly:
+            short = "Max permitted resolution"
+            reason = "your access only allows viewing, so the original isn't available. The owner can allow downloads to show full resolution"
+        case .refused:
+            short = "Max permitted resolution"
+            reason = "the NAS doesn't provide the original of this photo"
+        case .sharedAlbum:
+            short = "Max available resolution"
+            reason = "full resolution isn't available in albums shared with you"
+        }
+        return ViewerStatus(short: [shown?.name, short].compactMap { $0 }.joined(separator: " · "),
+                            help: "\(showing); \(reason).", isComplete: true)
     }
 
     private static func make(_ video: Video) -> ViewerStatus {

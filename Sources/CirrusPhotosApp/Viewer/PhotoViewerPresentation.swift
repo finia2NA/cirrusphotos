@@ -145,7 +145,7 @@ final class PhotoViewerPresentation: ObservableObject {
             allowNetwork: state.allowNetwork,
             video: state.videoResource.map {
                 ViewerStatus.Video(variant: $0.variant, preference: videoQuality, playback: videoPlayback)
-            }))
+            }, fullImageLimit: state.fullImageLimit))
     }
 
     var decodedThumbnailIdentities: Set<String> { Set(decodedThumbnails.keys) }

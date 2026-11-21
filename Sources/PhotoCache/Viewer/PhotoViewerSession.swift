@@ -38,6 +38,8 @@ public actor PhotoViewerSession {
     var filmstripEnabled = false
     var playlist = ViewerPlaylist()
     var playlistRevision: UInt64 = 0
+    /// Shared Space folders whose originals the NAS refused this session; their items show the large preview.
+    var refusedOriginalFolders: Set<Int64> = []
 
     var observers: [UUID: AsyncStream<PhotoViewerState>.Continuation] = [:]
 
@@ -278,7 +280,8 @@ public actor PhotoViewerSession {
                 }
                 return PhotoViewerFilmstripItem(ordinal: ordinal, neighbor: neighborState(at: ordinal),
                                                item: item.map(applyingFavorite))
-            } : []
+            } : [],
+            fullImageLimit: images.fullImageLimit
         )
     }
 

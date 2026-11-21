@@ -116,6 +116,24 @@ final class ViewerStatusTests: XCTestCase {
         XCTAssertTrue(failed.help.hasSuffix("Cannot Open"))
     }
 
+    func testWithheldOriginalNamesTheLimitAndExplainsIt() {
+        func limited(_ limit: FullImageLimit, shown: ViewerImageTier?, loadingPreview: Bool = false) -> ViewerStatus {
+            ViewerStatus.make(ViewerStatus.Inputs(displayed: shown, fullStatus: .unsupported("withheld"),
+                                                  isLoadingLargePreview: loadingPreview, fullImageLimit: limit))
+        }
+        let viewOnly = limited(.viewOnly, shown: .thumbnail(.xl))
+        XCTAssertEqual(viewOnly.short, "Large · Max permitted resolution")
+        XCTAssertTrue(viewOnly.help.hasPrefix("Showing the large preview; your access only allows viewing"))
+        XCTAssertTrue(viewOnly.isComplete)
+        XCTAssertNil(viewOnly.progress)
+        XCTAssertEqual(limited(.refused, shown: .thumbnail(.xl)).help,
+                       "Showing the large preview; the NAS doesn't provide the original of this photo.")
+        XCTAssertEqual(limited(.sharedAlbum, shown: .thumbnail(.xl)).short, "Large · Max available resolution")
+        XCTAssertEqual(limited(.viewOnly, shown: .thumbnail(.m), loadingPreview: true).short, "Medium · Loading")
+        // Without a large preview on the NAS, the shown preview is the limit.
+        XCTAssertEqual(limited(.viewOnly, shown: .thumbnail(.m)).short, "Medium · Max permitted resolution")
+    }
+
     func testVideoIsCompleteOncePlayingOrPaused() {
         XCTAssertFalse(video(.converted(.high), playing: .buffering).isComplete)
         XCTAssertTrue(video(.converted(.high), playing: .playing).isComplete)

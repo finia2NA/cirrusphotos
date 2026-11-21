@@ -8,10 +8,49 @@ extension PhotoViewerSession {
         startAssetsForCurrentMetadata()
     }
 
+    /// Whether originals are not shown in this viewer, so the large preview is loaded as the best image.
+    var largePreviewIsBest: Bool {
+        if case .incomingAlbum = mediaContentScope { return true }
+        return images.fullImageLimit != nil || !refusedOriginalFolders.isEmpty
+    }
+
+    /// The limit known before any request: albums shared with the account, and items of a
+    /// Shared Space folder that already refused an original this session.
+    private func knownFullImageLimit(for item: PhotoItem) -> FullImageLimit? {
+        if case .incomingAlbum = mediaContentScope, !item.isVideo { return .sharedAlbum }
+        if mediaContentScope == .space(.shared), !item.isVideo, let folder = item.folderID,
+           refusedOriginalFolders.contains(folder) { return .refused }
+        return nil
+    }
+
+    /// Refines `refused` and `sharedAlbum` to `viewOnly` when the folder or album reports
+    /// that the account may not download.
+    func refineFullImageLimit(for item: PhotoItem) {
+        guard let limit = images.fullImageLimit, limit != .viewOnly else { return }
+        let expectedGeneration = generation
+        let repository = repository
+        let scope = mediaScope ?? collection
+        Task { [weak self] in
+            guard await repository.originalDownloadAllowed(for: item, in: scope) == false else { return }
+            await self?.applyViewOnlyLimit(generation: expectedGeneration, itemID: item.id)
+        }
+    }
+
+    func applyViewOnlyLimit(generation expectedGeneration: UInt64, itemID: Int64) {
+        guard !closed, generation == expectedGeneration, currentItem?.id == itemID,
+              images.fullImageLimit != nil, images.fullImageLimit != .viewOnly else { return }
+        images.fullImageLimit = .viewOnly
+        publish()
+    }
+
     func startAssetsForCurrentMetadata() {
         guard !closed, let item = currentItem else { return }
         let network = allowNetwork && metadataVerified
         let descriptor = item.additional?.thumbnail
+        if images.fullImageLimit == nil, let limit = knownFullImageLimit(for: item) {
+            images.fullImageLimit = limit
+            refineFullImageLimit(for: item)
+        }
         SynologyDiagnostics.viewer.info(
             "Starting assets item_id=\(item.id, privacy: .public) allow_network=\(self.allowNetwork, privacy: .public) metadata_verified=\(self.metadataVerified, privacy: .public) network=\(network, privacy: .public) generation=\(self.generation, privacy: .public) has_full_data=\(self.images.fullImageData != nil, privacy: .public) has_thumbnail_data=\(self.images.thumbnailData != nil, privacy: .public)"
         )
@@ -40,6 +79,9 @@ extension PhotoViewerSession {
         } else if item.isVideo && !supportsSpaceMedia {
             resource = nil
             images.fullImageStatus = .unsupported("Video playback is unavailable in this album.")
+        } else if images.fullImageLimit != nil {
+            resource = nil
+            images.fullImageStatus = .unsupported("The NAS does not provide the original of this photo.")
         } else if item.isVideo {
             images.fullImageStatus = .idle
             resource = nil
@@ -244,6 +286,7 @@ extension PhotoViewerSession {
     }
 
     func startFullImage(resource: FullImageResource, allowNetwork: Bool) {
+        guard images.fullImageLimit == nil else { return }
         SynologyDiagnostics.viewer.info(
             "Starting full-size subscription item_id=\(self.currentItem?.id ?? -1, privacy: .public) unit_id=\(resource.unitID, privacy: .public) network_allowed=\(allowNetwork, privacy: .public)"
         )
@@ -335,6 +378,15 @@ extension PhotoViewerSession {
             )
             if images.fullImageData != nil {
                 images.fullImageStatus = .ready(verified: false, validationFailure: message.localizedDescription)
+            } else if case .server(.api(117)) = message, let item = currentItem {
+                // The NAS withholds this original (a view-only folder); show the large preview instead.
+                images.fullImageLimit = .refused
+                images.fullImageStatus = .unsupported(message.localizedDescription)
+                if mediaContentScope == .space(.shared), let folder = item.folderID { refusedOriginalFolders.insert(folder) }
+                if let descriptor = item.additional?.thumbnail, let request = expensiveThumbnailRequest(for: descriptor) {
+                    startThumbnail(descriptor: descriptor, itemID: item.id, request: request, allowNetwork: allowNetwork)
+                }
+                refineFullImageLimit(for: item)
             } else {
                 images.fullImageStatus = .failure(message.localizedDescription)
                 scheduleFullImageRetry()

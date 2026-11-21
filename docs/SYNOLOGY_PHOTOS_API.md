@@ -312,9 +312,12 @@ Shared Space access is either Full Access or Custom (Viewer, Downloader, Uploade
 
 - `SYNO.FotoTeam.Browse.Folder` `get id=0`, `list` and `list_parents` work. The root lists only the granted folders, and `Browse.Item list/count` work with `folder_id`.
 - Without `folder_id`, `Browse.Item list/count` fail with 120 ("id_folder required for non management user").
+- With `folder_id`, `start_time`/`end_time` are ignored: a one-day request returned all 225 items of the folder (44 from that day). `offset`/`limit` with `sort_by=takentime desc` are honored, so the client reads folder pages by their position in the whole folder, which also works for full-access accounts.
 - `Browse.Timeline get/get_init_timeline`, `Browse.Person`, `Browse.Concept` and `Browse.Geocoding` fail with 801. `Browse.GeneralTag list` works.
 - `Browse.Diff get_version` works but `Browse.Diff list` fails with 801.
-- `favorite_only` timeline and item lists succeed but returned nothing. The account had no favorites, so whether favorites are visible this way is unverified.
+- Favorites work: `Browse.Timeline get` with `favorite_only=true` succeeds although the plain timeline is refused, and `Browse.Item list/count` with `favorite_only=true` need no `folder_id`. After `set_favorite` on one photo in a granted folder, all three listed it (2026-11-21; the favorite was removed afterwards).
+- Viewer on a top-level folder does not show its subfolders: each subfolder is granted separately in the same dialog.
+- With the Viewer role, `SYNO.FotoTeam.Download download` of an original answers HTTP 200 with `{"error":{"code":117}}`, while `Thumbnail get` serves every size (`xl`: 1920 × 1280 for a 6000 × 4000 photo). The web app's photo view, zoomed in too, only loads `size="xl"` from `/synofoto/api/v2/t/Thumbnail/get` and never the original.
 - The web app shows "You do not have permission to use Timeline View in Shared Space and will now be switched to Folder View" and opens folder view.
 
 ## Timeline bootstrap
@@ -990,6 +993,7 @@ Detailed request shapes, evidence and open points are in the [album-sharing capt
 - Public-link visitors use `/mo/sharing/webapi` with `Core.Sharing.Login` (the guest session is its `sharing_sid` cookie), passphrase-scoped reads carrying `x-syno-sharing`, and passphrase-scoped `Download` v2. Signed-in recipients use the normal `/webapi` endpoint with passphrase-scoped `Album` get and `Item` list; both keep the owner's album and item IDs. `Sharing.Passphrase.get_permission` reports effective view, download, manage, own and upload capability.
 - Incoming albums are listed with `Sharing.Misc` `list_shared_with_me_album` (v2). An album identity is the owner ID plus the album ID; the sharing reference is what selects other-owned content (a get by album ID alone returns nothing).
 - A Provider (role `upload`) adds a personal photo with `NormalAlbum` `add_item` carrying the sharing reference and item IDs. Recipient downloads use `Download` v2 with the passphrase; the single-original form is verified, compressed and multi-item forms are not.
+- A view-only recipient (2026-11-21, `phototest`, `access_permission.download=false`, web-app HAR): the web viewer loads only `size="xl"` from `/synofoto/api/v2/{p|t}/Thumbnail/get` with the passphrase, never an original. Thumbnails of Shared Space photos in the album (`owner_user_id` 0) load through either `/p/` or `/t/`. Live Photo motion plays for the same recipient: `Browse.Unit get` (`id_item`, passphrase) finds the motion unit, then `SYNO.Foto.Streaming` v2 `streaming` (`type="unit"`, `quality="high"`, passphrase) serves ranged `video/mp4`.
 
 ## Collection indexes, folders and Recently Added
 

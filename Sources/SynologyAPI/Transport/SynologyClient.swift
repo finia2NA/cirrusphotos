@@ -436,7 +436,7 @@ public actor SynologyClient: PhotosTransport {
 
     public func folder(id: Int64, space: PhotoSpace) async throws -> FolderSummary {
         struct Result: Decodable { let folder: FolderSummary }
-        let data: Result = try await call(Self.api("Browse.Folder", space), version: 2, method: "get", ["id": String(id), "additional": "[]"])
+        let data: Result = try await call(Self.api("Browse.Folder", space), version: 2, method: "get", ["id": String(id), "additional": "[\"access_permission\"]"])
         guard data.folder.id > 0, id == 0 || data.folder.id == id else { throw SynologyAPIError.invalidResponse }
         return data.folder
     }
@@ -448,7 +448,8 @@ public actor SynologyClient: PhotosTransport {
         for page in 0..<2048 {
             let data: Result = try await call(Self.api("Browse.Folder", space), version: 2, method: "list", [
                 "id": String(parentID), "offset": String(page * 200), "limit": "200",
-                "sort_by": "\"filename\"", "sort_direction": "\"asc\"", "additional": "[\"thumbnail\"]"])
+                "sort_by": "\"filename\"", "sort_direction": "\"asc\"",
+                "additional": space == .shared ? "[\"thumbnail\",\"access_permission\"]" : "[\"thumbnail\"]"])
             let rows = data.list
             guard rows.count <= 200 else { throw SynologyAPIError.invalidResponse }
             for row in rows { guard row.id > 0, row.id != parentID, row.parent == parentID, seen.insert(row.id).inserted else { throw SynologyAPIError.invalidResponse } }
@@ -467,7 +468,14 @@ public actor SynologyClient: PhotosTransport {
                           "additional": Self.additionalParameter(for: fields.additional)]
         if request.collection.favoriteOnly { parameters["favorite_only"] = "true" }
         if let albumID = request.collection.albumID { parameters["album_id"] = String(albumID) }
-        if let folderID = request.collection.folderID { parameters["folder_id"] = String(folderID) }
+        if let folderID = request.collection.folderID {
+            parameters["folder_id"] = String(folderID)
+            // Folder-only accounts get the whole folder despite a day range; read by position instead.
+            if let collectionOffset = request.collectionOffset {
+                parameters["offset"] = String(collectionOffset)
+                parameters.removeValue(forKey: "start_time"); parameters.removeValue(forKey: "end_time")
+            }
+        }
         if let personID = request.collection.personID { parameters["person_id"] = String(personID) }
         if let subjectID = request.collection.subjectID { parameters["concept_id"] = String(subjectID) }
         if let tagID = request.collection.tagID { parameters["general_tag_id"] = String(tagID) }

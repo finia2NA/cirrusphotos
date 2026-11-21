@@ -4,13 +4,13 @@ import SynologyAPI
 @testable import PhotoCache
 
 final class MetadataReadPlannerTests: XCTestCase {
-    private func fixtures(_ counts: [Int]) throws -> (CollectionDayCatalog, [DayPageRead]) {
+    private func fixtures(_ counts: [Int], collection: PhotoCollectionDescriptor = .library(.personal)) throws -> (CollectionDayCatalog, [DayPageRead]) {
         let base = try CaptureDay(year: 2024, month: 6, day: 30)
         let entries = try counts.enumerated().map { try CollectionDayCount(day: CaptureDay(time: base.startTime - Int64($0.offset) * 86_400), count: $0.element) }
         let catalog = try CollectionDayCatalog(days: entries, completeness: .complete)
         let demands = try entries.flatMap { entry in
             try stride(from: 0, to: entry.count, by: 250).map { offset in
-                try DayPageRead(address: DayPageAddress(collection: .library(.personal), day: entry.day, offset: offset), dayCount: entry.count, membershipGeneration: 1)
+                try DayPageRead(address: DayPageAddress(collection: collection, day: entry.day, offset: offset), dayCount: entry.count, membershipGeneration: 1)
             }
         }
         return (catalog, demands)
@@ -32,6 +32,17 @@ final class MetadataReadPlannerTests: XCTestCase {
         XCTAssertEqual(batches[0].request.offset, 1000)
         XCTAssertEqual(batches[0].request.limit, 501)
         XCTAssertEqual(batches[1].request.offset, 0)
+    }
+    func testFolderBatchesCarryTheirPositionInTheWholeFolder() throws {
+        let (catalog, demands) = try fixtures([1200, 30, 7], collection: .folder(950, space: .shared))
+        let batches = try MetadataReadPlanner.plan(demands: demands, catalog: catalog, profile: .fullPage)
+        XCTAssertEqual(batches.map { $0.request.collectionOffset }, [0, 1000, 1200])
+        XCTAssertEqual(batches.map { $0.request.offset }, [0, 1000, 0])
+        XCTAssertEqual(batches.map { $0.request.limit }, [1000, 200, 37])
+        let later = try MetadataReadPlanner.plan(demands: [demands[6]], catalog: catalog, profile: .fullPage)
+        XCTAssertEqual(later.map { $0.request.collectionOffset }, [1230])
+        let (library, libraryDemands) = try fixtures([20, 5])
+        XCTAssertNil(try MetadataReadPlanner.plan(demands: libraryDemands, catalog: library, profile: .fullPage)[0].request.collectionOffset)
     }
     func testItemAndDayCaps() throws {
         let (catalog, demands) = try fixtures([1501])
