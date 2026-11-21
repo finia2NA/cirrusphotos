@@ -6,6 +6,21 @@
     <description>Cirrus Photos updates</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.7</title>
+      <pubDate>Sat, 21 Nov 2026 06:47:30 +0000</pubDate>
+      <sparkle:version>9</sparkle:version>
+      <sparkle:shortVersionString>0.1.7</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<ul>
+<li>Photos in Shared Space folders load for accounts that are allowed only some Shared Space folders.</li>
+<li>When the original of a photo isn't available, such as in a folder or shared album you may only view, the viewer shows the large preview and says it's the highest resolution you're permitted, with the reason on hover.</li>
+</ul>
+]]></description>
+      <enclosure url="https://github.com/finia2NA/cirrusphotos/releases/download/v0.1.7/Cirrus-Photos-0.1.7.dmg"
+                 type="application/octet-stream" sparkle:edSignature="ZTLIHvaGl2qufOomDvEOXS6YngjyP3CJ7OuZIF/1xqVyUSBZA/tZOQ61Wc6e/txo8V9ljmO4vyOr7zNV9DQdDg==" length="10962732" />
+    </item>
+    <item>
       <title>Version 0.1.6a</title>
       <pubDate>Sat, 21 Nov 2026 05:39:35 +0000</pubDate>
       <sparkle:version>8</sparkle:version>
