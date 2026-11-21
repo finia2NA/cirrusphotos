@@ -4,7 +4,7 @@ This document is the source of truth for current product behavior and scope. See
 
 ## Purpose and constraints
 
-Cirrus Photos is a macOS 27+ SwiftUI client for browsing a very large Synology Photos library hosted on the NAS `cirrus`. Responsiveness with previously cached data matters more than minimizing request count. The application is an alpha: incompatible preferences and caches are discarded instead of migrated before 1.0.
+Cirrus Photos is a macOS 27+ SwiftUI client for browsing a very large Synology Photos library hosted on the NAS `cirrus`. Responsiveness with previously cached data matters more than minimizing request count. The application is a beta: incompatible preferences and caches are discarded instead of migrated before 1.0.
 
 The Synology Photos service is authoritative. The client does not poll for external changes during a session. Demanded resources are normally validated once per run (thumbnails excepted: a changed thumbnail always gets a new server cache key, so cached thumbnails are not revalidated), while cached content remains usable when the network is slow, unavailable, or validation fails. Pages that the run's change feeds show as unchanged count as validated without being read again.
 
