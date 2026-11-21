@@ -13,7 +13,6 @@ struct CirrusPhotosApp: App {
 
     init() {
         #if CIRRUS_DISTRIBUTION
-        // Started before the first window, as Sparkle expects.
         updater = SoftwareUpdater()
         #endif
         let preferences = AppPreferences()
@@ -32,6 +31,9 @@ struct CirrusPhotosApp: App {
                 .task {
                     ModelChangeSignposts.shared.observe(preferences, name: "AppPreferences")
                     delegate.accounts = accounts
+                    #if CIRRUS_DISTRIBUTION
+                    updater.start()
+                    #endif
                 }
         }
         .windowToolbarStyle(.unified)
