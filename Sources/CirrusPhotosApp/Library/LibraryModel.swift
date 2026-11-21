@@ -41,6 +41,8 @@ final class LibraryModel {
     @ObservationIgnored private(set) var viewerSnapshotRevisions: [PhotoCollectionDescriptor: Int] = [:] { didSet { collectionStateChanged() } }
     @ObservationIgnored private(set) var timelineVerifications: [PhotoCollectionDescriptor: Bool] = [:] { didSet { collectionStateChanged() } }
     @ObservationIgnored private(set) var collectionErrors: [PhotoCollectionDescriptor: String] = [:] { didSet { collectionStateChanged(); noteConnectionState() } }
+    /// Libraries whose timeline the NAS refused with API error 801: Shared Space users with folder-only access.
+    @ObservationIgnored private var timelineDenials: Set<PhotoCollectionDescriptor> = [] { didSet { collectionStateChanged() } }
     private(set) var collectionStateRevision: UInt64 = 0
     @ObservationIgnored private var quietCollectionUpdates = false
     @ObservationIgnored private var pendingCollectionAnnouncement: Task<Void, Never>?
@@ -212,6 +214,11 @@ final class LibraryModel {
         _ = collectionStateRevision
         return collectionErrors[collection]
     }
+    /// Whether the NAS allows this account only the folder view of the collection's space.
+    func timelineDenied(for collection: PhotoCollectionDescriptor) -> Bool {
+        _ = collectionStateRevision
+        return timelineDenials.contains(collection)
+    }
 
     func albumName(for collection: PhotoCollectionDescriptor) -> String? {
         album(for: collection)?.name
@@ -368,6 +375,7 @@ final class LibraryModel {
         viewerSnapshotRevisions.removeValue(forKey: collection)
         timelineVerifications.removeValue(forKey: collection)
         collectionErrors.removeValue(forKey: collection)
+        timelineDenials.remove(collection)
         browserSelectionStates.removeValue(forKey: collection)
     }
 
@@ -689,10 +697,14 @@ final class LibraryModel {
             // App-wide warming streams many collections; unchanged values are not reassigned.
             if timelineVerifications[collection] != verified { timelineVerifications[collection] = verified }
             if verified, collectionErrors[collection] != nil { collectionErrors.removeValue(forKey: collection) }
+            if verified, timelineDenials.contains(collection) { timelineDenials.remove(collection) }
             updateBrowserFavoriteAvailability()
         case .failure(let message):
             let description = message.localizedDescription
             if collectionErrors[collection] != description { collectionErrors[collection] = description }
+            if collection == .library(.shared), case .server(.api(801)) = message, !timelineDenials.contains(collection) {
+                timelineDenials.insert(collection)
+            }
             updateBrowserFavoriteAvailability()
         }
     }

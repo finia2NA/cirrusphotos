@@ -159,7 +159,8 @@ extension CachedPhotosRepository {
                 try requireMetadataEngineAdmission(space, epoch: epoch, id: id)
                 if let api = error as? SynologyAPIError {
                     switch api {
-                    case .api(let code) where [102, 103, 104, 105].contains(code):
+                    // 801: Shared Space users with folder-only (Custom) access may read the feed's version but not its list.
+                    case .api(let code) where [102, 103, 104, 105, 801].contains(code):
                         try await disableMetadataSource(space, reason: "feed rejected with API error \(code)", admission: admission, epoch: epoch, id: id)
                     case .api(700), .invalidResponse, .responseTooLarge:
                         try await recoverMetadataSource(space, reason: "feed read failed: \(api.logSummary)", admission: admission, epoch: epoch, id: id)

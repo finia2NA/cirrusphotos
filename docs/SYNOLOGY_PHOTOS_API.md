@@ -306,6 +306,17 @@ enum PhotoSpace: Hashable, Sendable {
 }
 ```
 
+### Folder-only Shared Space access
+
+Shared Space access is either Full Access or Custom (Viewer, Downloader, Uploader or Manager per top-level folder, in Photos ▸ Settings ▸ Shared Space ▸ Set Access Permissions). Probed 2026-11-21 as `phototest` (not admin) with Custom Viewer on two top-level folders, and confirmed by a web-app HAR capture:
+
+- `SYNO.FotoTeam.Browse.Folder` `get id=0`, `list` and `list_parents` work. The root lists only the granted folders, and `Browse.Item list/count` work with `folder_id`.
+- Without `folder_id`, `Browse.Item list/count` fail with 120 ("id_folder required for non management user").
+- `Browse.Timeline get/get_init_timeline`, `Browse.Person`, `Browse.Concept` and `Browse.Geocoding` fail with 801. `Browse.GeneralTag list` works.
+- `Browse.Diff get_version` works but `Browse.Diff list` fails with 801.
+- `favorite_only` timeline and item lists succeed but returned nothing. The account had no favorites, so whether favorites are visible this way is unverified.
+- The web app shows "You do not have permission to use Timeline View in Shared Space and will now be switched to Folder View" and opens folder view.
+
 ## Timeline bootstrap
 
 ### Initial timeline

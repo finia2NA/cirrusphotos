@@ -148,9 +148,10 @@ extension LibraryModel {
 
     // MARK: Context menus
 
-    /// Adds Rating, Add Tag and Remove Tag submenus.
-    func addAnnotationMenus(to menu: NSMenu, target: AnnotationTarget) {
+    /// Adds Favorite or Unfavorite (when `favorite` is given), then Rating, Add Tag and Remove Tag submenus.
+    func addAnnotationMenus(to menu: NSMenu, target: AnnotationTarget, favorite: (() -> Void)? = nil) {
         if !menu.items.isEmpty { menu.addItem(.separator()) }
+        if let favorite { menu.addItem(PhotoDownloadMenuItem(title: "Favorite or Unfavorite") { favorite() }) }
 
         let rating = NSMenuItem(title: "Rating", action: nil, keyEquivalent: "")
         let ratingMenu = NSMenu(title: "Rating")

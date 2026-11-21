@@ -44,7 +44,7 @@ Request shapes, versions and what each was verified against are in the API refer
 
 `PhotoCollectionDescriptor` identifies a collection: Library, Favorites, Folder, Person, Subject and Tag carry their space; Album descriptors keep contextual authority and expose no inferred space; Map and filter descriptors carry their source space or scope and registration rejects a mismatch. `MetadataNamespace` requires an explicit scope; `CollectionKey` combines it with the descriptor. The normalized tables, page and thumbnail keys, original and video resources, mutation events and observer streams are all scoped, so Shared Space, Personal Space, each owned album and each incoming album have isolated metadata, media and mutation authority. Media transport rejects a scope it does not support before sending a personal request.
 
-Shared Space reconciles its own Diff feed and keeps its own inventories, favorite overrides, pending writes and refresh jobs. Personal mutation and invalidation broadcasts never touch shared pages. Space selection persists separately from the destination. Which Shared Space endpoints are captured and which are inferred is listed in the API reference.
+Shared Space reconciles its own Diff feed (a feed list rejected with 801, as for folder-only access, disables it for the run like 102–105) and keeps its own inventories, favorite overrides, pending writes and refresh jobs. Personal mutation and invalidation broadcasts never touch shared pages. Space selection persists separately from the destination. Which Shared Space endpoints are captured and which are inferred is listed in the API reference.
 
 ## Repository and metadata engine
 

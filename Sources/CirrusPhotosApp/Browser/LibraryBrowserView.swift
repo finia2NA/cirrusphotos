@@ -197,6 +197,8 @@ struct LibraryBrowserView: View {
     var uploadFolderName: String?
     var onOpenPhoto: (PhotoViewerOpenRequest) -> Void = { _ in }
     var onRestorationAnchorChanged: (PhotoTimelineRestorationAnchor) -> Void = { _ in }
+    /// Switches the library to folder view; offered when the NAS allows only folders.
+    var onBrowseFolders: (() -> Void)?
     @Environment(LibraryModel.self) private var library
     @EnvironmentObject private var preferences: AppPreferences
     @EnvironmentObject private var infoPanel: InfoPanelModel
@@ -325,7 +327,8 @@ struct LibraryBrowserView: View {
                                              },
                                              onAnnotationMenu: { menu, selection in
                                                  if let target = library.browserAnnotationTarget(selection) {
-                                                     library.addAnnotationMenus(to: menu, target: target)
+                                                     library.addAnnotationMenus(to: menu, target: target,
+                                                         favorite: library.canFavoriteFromContextMenu(selection) ? { library.toggleContextMenuFavorite(selection) } : nil)
                                                  }
                                              },
                                              onDownload: { selection, kind, choose in
@@ -381,6 +384,15 @@ struct LibraryBrowserView: View {
                 } else {
                     emptyState
                 }
+            } else if library.snapshot(for: collection) == nil, library.timelineDenied(for: collection), let onBrowseFolders {
+                ContentUnavailableView {
+                    Label("Timeline unavailable", systemImage: "folder")
+                } description: {
+                    Text("You do not have permission to use Timeline View in Shared Space. Browse its folders instead.")
+                } actions: {
+                    Button("Browse Folders", action: onBrowseFolders)
+                }
+                .detailPlaceholder(topInset: contentTopInset)
             } else if let error = library.error(for: collection), library.snapshot(for: collection) == nil {
                 ContentUnavailableView {
                     Label(isAlbum ? "Album unavailable" : "Library unavailable",

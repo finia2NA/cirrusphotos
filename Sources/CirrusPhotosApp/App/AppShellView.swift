@@ -334,7 +334,8 @@ struct AppShellView: View {
                                        onRestorationAnchorChanged: { anchor in
                                            guard !collection.isSessionDerived else { return }
                                            navigation.setTimelineAnchor(anchor, for: collection)
-                                       })
+                                       },
+                                       onBrowseFolders: selectedDestination == .personalLibrary ? { showsFolders = true } : nil)
                         .id(collection)
                         .allowsHitTesting(viewer == nil)
                         .ignoresSafeArea(.container, edges: .top)

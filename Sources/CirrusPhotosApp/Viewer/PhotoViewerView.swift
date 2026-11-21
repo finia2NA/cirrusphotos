@@ -114,7 +114,8 @@ struct PhotoViewerView: View {
                                     library.addAlbumMembershipMenu(to: menu, captured: captured, pinnedIDs: pinnedAlbumIDs)
                                 }
                                 if library.capabilities(for: viewer.collection).allowsSpaceItemActions, viewer.canAnnotate {
-                                    library.addAnnotationMenus(to: menu, target: library.viewerAnnotationTarget(viewer))
+                                    library.addAnnotationMenus(to: menu, target: library.viewerAnnotationTarget(viewer),
+                                        favorite: library.canToggleViewerFavorite ? { library.toggleViewerFavorite() } : nil)
                                 }
                                 return menu.items.isEmpty ? nil : menu
                               }, startFileDrag: { view, event in

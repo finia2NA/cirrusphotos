@@ -18,6 +18,19 @@ extension LibraryModel {
         enqueueFavorite(snapshot: snap, repository: repository)
     }
 
+    /// Whether a browser context menu's captured selection may be favorited now.
+    func canFavoriteFromContextMenu(_ snapshot: BrowserCommandSnapshot) -> Bool {
+        snapshot.active && !snapshot.selectedOrdinals.isEmpty && snapshot.canToggleFavorite &&
+            capabilities(for: snapshot.collection).allowsSpaceItemActions &&
+            pendingFavoriteConfirmation == nil && timelineVerified(for: snapshot.collection)
+    }
+
+    /// Toggles the favorite state of a browser context menu's captured selection.
+    func toggleContextMenuFavorite(_ snapshot: BrowserCommandSnapshot) {
+        guard canFavoriteFromContextMenu(snapshot), let repository else { return }
+        enqueueFavorite(snapshot: snapshot, repository: repository)
+    }
+
     /// Captures the selection now and queues its favorite change. Presses never wait for or
     /// drop each other: each is resolved and sent after the previous one, so a toggle sees the
     /// result of the one before it.
