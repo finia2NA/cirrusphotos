@@ -46,3 +46,5 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Caps a runaway run so it can't drain the subscription's usage limits.
           claude_args: --max-turns 25
+          # TEMPORARY: reveals why runs fail. Remove once debugged (public logs).
+          show_full_output: true
