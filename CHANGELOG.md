@@ -2,6 +2,11 @@
 
 Each version's section is its release notes on GitHub and in the in-app updater.
 
+## 0.1.5
+
+- The library window opens on first launch even while the automatic update question is shown.
+- With automatic update checks on, the app checks for updates at every launch.
+
 ## 0.1.4
 
 - Scrolling the photo grid and dragging the timeline scrubber are smoother.
