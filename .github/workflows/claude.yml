@@ -16,7 +16,7 @@ on:
 
 jobs:
   claude:
-    # Only the repository owner can trigger it.
+    # Only maintainers can trigger it (currently just finia2NA).
     if: |
       github.actor == 'finia2NA' && (
         (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
