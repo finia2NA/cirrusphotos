@@ -2,6 +2,12 @@
 
 Each version's section is its release notes on GitHub and in the in-app updater.
 
+## 0.1.6a
+
+- Shared Space folder view works for accounts that are allowed only some Shared Space folders.
+- For such accounts, the Shared Space library offers to browse folders instead of showing an error.
+- Add to Favorites or Remove from Favorites is available in the right-click menu of photos in the grid and viewer.
+
 ## 0.1.6
 
 - Shared Space folder view works for accounts that are allowed only some Shared Space folders.
