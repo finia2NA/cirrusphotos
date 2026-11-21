@@ -2,6 +2,11 @@
 
 Each version's section is its release notes on GitHub and in the in-app updater.
 
+## 0.1.7
+
+- Photos in Shared Space folders load for accounts that are allowed only some Shared Space folders.
+- When the original of a photo isn't available, such as in a folder or shared album you may only view, the viewer shows the large preview and says it's the highest resolution you're permitted, with the reason on hover.
+
 ## 0.1.6a
 
 - Shared Space folder view works for accounts that are allowed only some Shared Space folders.
