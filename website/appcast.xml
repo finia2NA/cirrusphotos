@@ -6,6 +6,22 @@
     <description>Cirrus Photos updates</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.6</title>
+      <pubDate>Sat, 21 Nov 2026 05:30:25 +0000</pubDate>
+      <sparkle:version>7</sparkle:version>
+      <sparkle:shortVersionString>0.1.6</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<ul>
+<li>Shared Space folder view works for accounts that are allowed only some Shared Space folders.</li>
+<li>For such accounts, the Shared Space library offers to browse folders instead of showing an error.</li>
+<li>Favorite or Unfavorite is available in the right-click menu of photos in the grid and viewer.</li>
+</ul>
+]]></description>
+      <enclosure url="https://github.com/finia2NA/cirrusphotos/releases/download/v0.1.6/Cirrus-Photos-0.1.6.dmg"
+                 type="application/octet-stream" sparkle:edSignature="B1qJG1oFgnTonM+dEICuOV0tVJPAIlXQmGLXaS6TyabJceJ72hFacVQ4DwgqU5eJmUDpx/VWDUrQqrgI3/8/CA==" length="10949068" />
+    </item>
+    <item>
       <title>Version 0.1.5</title>
       <pubDate>Sat, 21 Nov 2026 03:58:45 +0000</pubDate>
       <sparkle:version>6</sparkle:version>
