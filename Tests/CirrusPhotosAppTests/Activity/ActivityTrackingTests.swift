@@ -1,4 +1,5 @@
 import Foundation
+import PhotoCache
 import XCTest
 @testable import CirrusPhotosApp
 
@@ -31,6 +32,22 @@ final class ActivityTrackingTests: XCTestCase {
         XCTAssertTrue(finished)
         XCTAssertEqual(log.entries, ["A", "A done", "B"])
         XCTAssertEqual(activity.history.map(\.title), ["Deleted album B", "Deleted album A"])
+    }
+
+    func testUnreadableFolderDetailsAreRecordedOncePerFolder() throws {
+        let activity = ActivityCenter()
+        let model = LibraryModel(activity: activity)
+        let json = #"""
+        {"folder":{"id":1,"name":"/","parent":0},"children":[
+          {"id":2,"name":"/Trips","parent":1,"additional":{"thumbnail":[{"cache_key":"1_1"}]}},
+          {"id":3,"name":"/Home","parent":1,"additional":{"thumbnail":[]}}]}
+        """#
+        let directory = try JSONDecoder().decode(FolderDirectory.self, from: Data(json.utf8))
+        model.noteUnreadableFolderDetails(in: directory, space: .shared)
+        model.noteUnreadableFolderDetails(in: directory, space: .shared)
+        XCTAssertEqual(activity.history.map(\.title), ["Some details of folder Trips could not be read"])
+        XCTAssertEqual(activity.history.first?.failure?.underlying.last?.hasPrefix("additional.thumbnail[0]: missing key"), true)
+        XCTAssertTrue(activity.attention.isEmpty)
     }
 
     func testFailedWriteDoesNotBlockTheQueue() async throws {

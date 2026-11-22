@@ -497,6 +497,7 @@ struct AppShellView: View {
             case .value(let directory, let verified):
                 SynologyDiagnostics.folders.info("directory folder=\(id, privacy: .public) children=\(directory.children.count, privacy: .public) verified=\(verified, privacy: .public) elapsed=\(String(describing: ContinuousClock.now - started), privacy: .public)")
                 folderDirectory = directory
+                if verified { model.noteUnreadableFolderDetails(in: directory, space: selectedSpace) }
                 model.ensureCollectionLoaded(PhotoCollectionDescriptor.folder(directory.folder.id, space: selectedSpace))
             case .failure(let message):
                 SynologyDiagnostics.folders.error("directory folder=\(id, privacy: .public) error=\(message.logSummary, privacy: .public)")
@@ -512,19 +513,25 @@ struct AppShellView: View {
 
     @ViewBuilder private func folderDetail(topInset: CGFloat) -> some View {
         if let directory = folderDirectory, folderDirectoryRequest == (folderPath.last ?? 0), let collection = selectedCollection {
-            VStack(spacing: 0) {
-                if let folderError { Text(folderError).font(.caption).foregroundStyle(.secondary).padding(6) }
-                LibraryBrowserView(collection: collection,
-                    restorationAnchor: collection.isSessionDerived ? nil : navigation.timelineAnchor(for: collection),
-                    bridge: browserBridge, pinnedAlbumIDs: albumPresentation.pinnedIDs, contentTopInset: topInset,
-                    hidesEmptyCollectionState: !directory.children.isEmpty,
-                    customHeader: folderHeader(directory.children),
-                    uploadFolderName: directory.folder.displayName,
-                    onOpenPhoto: openPhoto,
-                    onRestorationAnchorChanged: { anchor in
-                        guard !collection.isSessionDerived else { return }
-                        navigation.setTimelineAnchor(anchor, for: collection)
-                    }).id(collection)
+            LibraryBrowserView(collection: collection,
+                restorationAnchor: collection.isSessionDerived ? nil : navigation.timelineAnchor(for: collection),
+                bridge: browserBridge, pinnedAlbumIDs: albumPresentation.pinnedIDs, contentTopInset: topInset,
+                hidesEmptyCollectionState: !directory.children.isEmpty,
+                customHeader: folderHeader(directory.children),
+                uploadFolderName: directory.folder.displayName,
+                onOpenPhoto: openPhoto,
+                onRestorationAnchorChanged: { anchor in
+                    guard !collection.isSessionDerived else { return }
+                    navigation.setTimelineAnchor(anchor, for: collection)
+                }).id(collection)
+            .overlay(alignment: .top) {
+                // Below the toolbar, which the browser scrolls under.
+                if let folderError {
+                    Text(folderError).font(.caption).foregroundStyle(.secondary)
+                        .padding(.horizontal, 10).padding(.vertical, 4)
+                        .background(.regularMaterial, in: Capsule())
+                        .padding(.top, topInset + 6)
+                }
             }
         } else if let folderError {
             ContentUnavailableView { Label("Folders unavailable", systemImage: "folder.badge.questionmark") } description: { Text(folderError).textSelection(.enabled) } actions: { Button("Try Again") { Task { await model.reload() } } }

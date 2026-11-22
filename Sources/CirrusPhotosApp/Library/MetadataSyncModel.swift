@@ -329,6 +329,7 @@ final class MetadataSyncModel: ObservableObject {
                 progress.discovery.checked += 1
                 defer { publishProgress() }
                 guard let directory = visit.directory else { complete = false; continue }
+                if visit.directoryVerified { library?.noteUnreadableFolderDetails(in: directory, space: visit.space) }
                 queue += directory.children.map { ($0.id, visit.space, visit.directoryVerified ? $0 : nil) }
                 progress.discovery.known += directory.children.count
                 let collection = PhotoCollectionDescriptor.folder(directory.folder.id, space: visit.space)

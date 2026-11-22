@@ -68,6 +68,8 @@ enum ActivityWording {
                         "Downloading thumbnails failed")
         case .notice(let title):
             return title
+        case .unreadableFolderDetails(let name):
+            return "Some details of folder \(name) could not be read"
         case .unverified(let action):
             return pick(stage, action, action, "\(action) failed")
         case .albumSharing(let name):

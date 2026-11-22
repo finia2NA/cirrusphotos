@@ -31,6 +31,8 @@ final class LibraryModel {
     @ObservationIgnored var itemDeletionTask: Task<Void, Never>?
     @ObservationIgnored var albumOperationTask: Task<Void, Never>?
     @ObservationIgnored var filterAuthorities: [PhotoCollectionDescriptor: [[Bool]]] = [:]
+    /// Folders already recorded in History this session for details that could not be read.
+    @ObservationIgnored var reportedUnreadableFolders: Set<PhotoCollectionDescriptor> = []
     @ObservationIgnored var filterMemberships: [PhotoCollectionDescriptor: [[Int64]]] = [:]
     // Per-collection timeline state. Untracked storage: every write bumps the tracked
     // `collectionStateRevision` through `collectionStateChanged()`, immediately, or coalesced

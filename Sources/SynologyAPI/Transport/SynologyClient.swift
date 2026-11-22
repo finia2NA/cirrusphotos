@@ -462,6 +462,9 @@ public actor SynologyClient: PhotosTransport {
                     SynologyDiagnostics.folders.error("list rejected parent=\(parentID, privacy: .public) row=\(row.id, privacy: .public) rowParent=\(row.parent, privacy: .public)")
                     throw SynologyAPIError.invalidResponse
                 }
+                for field in row.unreadableFields {
+                    SynologyDiagnostics.folders.error("list row unreadable parent=\(parentID, privacy: .public) row=\(row.id, privacy: .public) name=\(row.name, privacy: .public) \(field, privacy: .public)")
+                }
             }
             result.append(contentsOf: rows)
             if rows.count < 200 { return result }
@@ -1298,8 +1301,7 @@ public actor SynologyClient: PhotosTransport {
         catch { throw transportError(error) }
         guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else { throw SynologyAPIError.http(http.statusCode) }
-        do { return try decoder.decode(Response.self, from: data) }
-        catch { throw SynologyAPIError.invalidResponse }
+        return try Self.decodeResponse(Response.self, from: data, decoder: decoder, parameters: parameters)
     }
 
     private func postBounded<Response: Decodable>(
@@ -1347,8 +1349,18 @@ public actor SynologyClient: PhotosTransport {
         } catch {
             throw SynologyAPIError.transport(error.localizedDescription)
         }
+        return try Self.decodeResponse(Response.self, from: data, decoder: decoder, parameters: parameters)
+    }
+
+    /// Decodes a response body; a body that does not decode is logged with the API, method and
+    /// coding path (never values) and reported as `invalidResponse`.
+    private static func decodeResponse<Response: Decodable>(_ type: Response.Type, from data: Data, decoder: JSONDecoder,
+                                                            parameters: [String: String]) throws -> Response {
         do { return try decoder.decode(Response.self, from: data) }
-        catch { throw SynologyAPIError.invalidResponse }
+        catch {
+            SynologyDiagnostics.unexpected.error("response not decodable api=\(parameters["api"] ?? "?", privacy: .public) method=\(parameters["method"] ?? "?", privacy: .public) bytes=\(data.count, privacy: .public) \(error.decodingSummary, privacy: .public)")
+            throw SynologyAPIError.invalidResponse
+        }
     }
 
     /// The Foto or FotoTeam variant of a Synology Photos API.

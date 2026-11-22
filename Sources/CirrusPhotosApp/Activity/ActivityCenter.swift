@@ -18,6 +18,8 @@ enum ActivityKind: Equatable, Sendable {
     case upload(destination: String?)
     case renameAlbum(from: String, to: String), renamePerson(name: String)
     case mergePerson(source: String, target: String), albumSharing(name: String)
+    /// A folder listed with a cover or permission that could not be read and was left out.
+    case unreadableFolderDetails(name: String)
     /// A change that stopped before sending because its selection could not be verified.
     case unverified(action: String)
     /// A manual Refresh. Not a change, so it is never added to History.
@@ -157,6 +159,8 @@ struct ActivityFailure: Sendable {
             return ["URLError(\(error.code.rawValue))"]
         case is CancellationError:
             return ["CancellationError"]
+        case let error as UnreadableFolderDetails:
+            return ["UnreadableFolderDetails(folder: \(error.folderID))"] + error.fields
         default:
             let error = error as NSError
             let line = "\(String(reflecting: type(of: error as Any))) \(error.domain)(\(error.code))"
