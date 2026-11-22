@@ -12,7 +12,7 @@ public enum CacheUsageCategory: String, CaseIterable, Sendable, Identifiable {
         case .metadata: "Metadata"
         case .thumbnails: "Thumbnails"
         case .previews: "Large previews"
-        case .fullImages: "Full-size photos"
+        case .fullImages: "Original photos"
         case .video: "Video"
         }
     }

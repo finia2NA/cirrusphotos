@@ -81,7 +81,7 @@ extension PhotoViewerSession {
             images.fullImageStatus = .unsupported("This video has no converted version, which albums shared with you require for playback.")
         } else if !supportsSpaceMedia && mediaScope?.albumID == nil && !(item.isVideo && isIncoming) {
             resource = nil
-            images.fullImageStatus = .unsupported("Full-size media is unavailable for this shared album.")
+            images.fullImageStatus = .unsupported("Originals are unavailable for this shared album.")
         } else if item.isVideo && videoScope(for: item) == nil {
             // An owned-album member streams from its own space once that is verified.
             resource = nil
@@ -141,7 +141,7 @@ extension PhotoViewerSession {
             SynologyDiagnostics.viewer.error(
                 "Full-size image unavailable before request item_id=\(item.id, privacy: .public) type=\(item.type, privacy: .public) live_type=\(item.liveType ?? "nil", privacy: .public) has_additional=\(item.additional != nil, privacy: .public) has_thumbnail=\(item.additional?.thumbnail != nil, privacy: .public)"
             )
-            images.fullImageStatus = .unsupported("A full-size image is unavailable for this item.")
+            images.fullImageStatus = .unsupported("An original is unavailable for this item.")
             resource = nil
         }
         scheduleEnhancements(itemID: item.id, descriptor: descriptor,
@@ -470,7 +470,7 @@ extension PhotoViewerSession {
                 "Full-size stream finished item_id=\(self.currentItem?.id ?? -1, privacy: .public) has_data=\(self.images.fullImageData != nil, privacy: .public) status=\(String(describing: self.images.fullImageStatus), privacy: .public) task_allowed_network=\(self.images.fullTaskAllowsNetwork, privacy: .public) waiting_for_enhancements=\(waitingForEnhancements, privacy: .public) allow_network=\(self.allowNetwork, privacy: .public) metadata_verified=\(self.metadataVerified, privacy: .public)"
             )
             if images.fullImageData == nil, images.fullImageStatus == .loading, !waitingForEnhancements {
-                images.fullImageStatus = .failure("The full-size image is not cached.")
+                images.fullImageStatus = .failure("The original is not cached.")
                 publish()
             }
             images.fullAttempt = nil

@@ -5,7 +5,7 @@ import XCTest
 final class ViewerStatusModelTests: XCTestCase {
     private let loading = ViewerStatus(short: "Large · Loading 40%", help: "", progress: .determinate(0.4))
     private let waiting = ViewerStatus(short: "High · Loading", help: "", progress: .indeterminate)
-    private let full = ViewerStatus(short: "Full", help: "", isComplete: true)
+    private let full = ViewerStatus(short: "Original", help: "", isComplete: true)
 
     func testVisibleLoadEndsWithCompletionThenHides() async {
         let model = ViewerStatusModel()

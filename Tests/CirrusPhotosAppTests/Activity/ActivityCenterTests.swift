@@ -212,8 +212,8 @@ final class ActivityCenterTests: XCTestCase {
     func testNoticesReplaceByKeyAndStayOutOfHistory() {
         center.notice("Login failed", detail: "Offline. Showing cached content.", key: "connection")
         center.notice("Connected to the NAS again", key: "connection")
-        center.notice("Couldn't load full resolution of a.jpg", detail: "Timed out", key: "viewer:1")
-        XCTAssertEqual(center.notices.map(\.title), ["Couldn't load full resolution of a.jpg", "Connected to the NAS again"])
+        center.notice("Couldn't load the original of a.jpg", detail: "Timed out", key: "viewer:1")
+        XCTAssertEqual(center.notices.map(\.title), ["Couldn't load the original of a.jpg", "Connected to the NAS again"])
         XCTAssertEqual(center.notices.first?.detail, "Timed out")
         XCTAssertTrue(center.attention.isEmpty)
         XCTAssertTrue(center.transfers.isEmpty)

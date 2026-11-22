@@ -299,7 +299,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         }
         XCTAssertTrue(bothStarted)
         XCTAssertEqual(viewer.statusModel.status.short, "Loading")
-        XCTAssertEqual(viewer.statusModel.status.help, "Loading the large preview and full resolution")
+        XCTAssertEqual(viewer.statusModel.status.help, "Loading the large preview and the original")
         await transport.releaseConfiguredThumbnail()
         let configuredDisplayed = await waitUntil { viewer.image?.size.width == 6 }
         XCTAssertTrue(configuredDisplayed)
@@ -309,7 +309,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         let previewDisplayed = await waitUntil { viewer.image?.size.width == 12 }
         XCTAssertTrue(previewDisplayed)
         XCTAssertEqual(viewer.statusModel.status.short, "Large · Loading")
-        XCTAssertEqual(viewer.statusModel.status.help, "Showing the large preview; loading full resolution")
+        XCTAssertEqual(viewer.statusModel.status.help, "Showing the large preview; loading the original")
         let sizes = await transport.thumbnailSizes
         XCTAssertEqual(sizes.first, .m)
         XCTAssertTrue(sizes.contains(.xl))
@@ -317,7 +317,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         await transport.releaseOriginal()
         let originalDisplayed = await waitUntil { viewer.image?.size.width == 30 }
         XCTAssertTrue(originalDisplayed)
-        XCTAssertEqual(viewer.statusModel.status.short, "Full")
+        XCTAssertEqual(viewer.statusModel.status.short, "Original")
         XCTAssertNil(viewer.statusModel.status.progress)
         XCTAssertTrue(viewer.close())
         await viewer.session.close()

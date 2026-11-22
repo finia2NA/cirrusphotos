@@ -13,7 +13,7 @@ enum ViewerImageTier: Equatable, Sendable {
         case .thumbnail(.sm): "Small"
         case .thumbnail(.m): "Medium"
         case .thumbnail(.xl): "Large"
-        case .full: "Full"
+        case .full: "Original"
         }
     }
 
@@ -22,7 +22,7 @@ enum ViewerImageTier: Equatable, Sendable {
         case .thumbnail(.sm): "the small preview"
         case .thumbnail(.m): "the medium preview"
         case .thumbnail(.xl): "the large preview"
-        case .full: "full resolution"
+        case .full: "the original"
         }
     }
 }
@@ -106,7 +106,7 @@ struct ViewerStatus: Equatable {
             return status("Loading", "preparing the video")
         }
         if let failure = inputs.decodeFailure {
-            return status("Full couldn't be decoded", failure)
+            return status("Original couldn't be decoded", failure)
         }
         if let limit = inputs.fullImageLimit {
             if inputs.isLoadingLargePreview && shown != .thumbnail(.xl) {
@@ -115,22 +115,22 @@ struct ViewerStatus: Equatable {
             return limited(limit, shown: shown)
         }
         // After a network load the bar stays full while decoding; a cached original decodes without it.
-        let decoding = status("Decoding", "decoding full resolution", inputs.networkLoaded ? .determinate(1) : nil)
+        let decoding = status("Decoding", "decoding the original", inputs.networkLoaded ? .determinate(1) : nil)
         if inputs.isDecoding { return decoding }
         switch inputs.fullStatus {
         case .ready(let verified, let validationFailure):
             guard shown == .full else { return decoding }
             let source: String
             if let validationFailure {
-                source = "Showing full resolution from the cache; checking it against the NAS failed: \(validationFailure)"
+                source = "Showing the original from the cache; checking it against the NAS failed: \(validationFailure)"
             } else if verified {
-                source = "Showing full resolution"
+                source = "Showing the original"
             } else {
-                source = "Showing full resolution from the cache; not yet checked against the NAS"
+                source = "Showing the original from the cache; not yet checked against the NAS"
             }
-            return ViewerStatus(short: "Full", help: source, isComplete: true)
+            return ViewerStatus(short: "Original", help: source, isComplete: true)
         case .loading:
-            let what = inputs.isLoadingLargePreview ? "the large preview and full resolution" : "full resolution"
+            let what = inputs.isLoadingLargePreview ? "the large preview and the original" : "the original"
             // With large previews, the bar covers both: the preview's arrival fills the first
             // `largePreviewShare`, and full resolution the rest. Without one, full resolution is all of it.
             let hasPreview = shown == .thumbnail(.xl)
@@ -157,9 +157,9 @@ struct ViewerStatus: Equatable {
             }
             return status("Loading", "loading \(what): \(received) received", reached ?? .indeterminate)
         case .idle:
-            return status("Waiting", "waiting to load full resolution")
+            return status("Waiting", "waiting to load the original")
         case .failure(let message):
-            let unavailable = inputs.allowNetwork ? "Full unavailable" : "Full unavailable offline"
+            let unavailable = inputs.allowNetwork ? "Original unavailable" : "Original unavailable offline"
             return status(unavailable, message)
         case .unsupported(let message):
             return status(shown == nil ? "Unavailable" : nil, message)
@@ -177,13 +177,13 @@ struct ViewerStatus: Equatable {
             reason = "photo quality is set to Large in Settings"
         case .viewOnly:
             short = "Max permitted resolution"
-            reason = "your access only allows viewing, so the original isn't available. The owner can allow downloads to show full resolution"
+            reason = "your access only allows viewing, so the original isn't available. The owner can allow downloads to show it"
         case .refused:
             short = "Max permitted resolution"
             reason = "the NAS doesn't provide the original of this photo"
         case .sharedAlbum:
             short = "Max available resolution"
-            reason = "full resolution isn't available in albums shared with you"
+            reason = "originals aren't available in albums shared with you"
         }
         let line = [shown?.name, short].compactMap { $0 }.joined(separator: " · ")
         return ViewerStatus(short: line.isEmpty ? "Loading" : line,

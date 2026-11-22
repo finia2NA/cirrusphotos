@@ -159,7 +159,7 @@ struct PhotoViewerView: View {
                     .padding(16)
                     .glassEffect(.regular, in: .rect(cornerRadius: 16))
             } else if viewer.canRetry {
-                Button("Retry Full Resolution") { viewer.retry() }
+                Button("Retry Original") { viewer.retry() }
                     .buttonStyle(.glass)
                     .padding(.bottom, 24)
                     .frame(maxHeight: .infinity, alignment: .bottom)

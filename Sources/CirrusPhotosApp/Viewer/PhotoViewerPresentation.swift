@@ -404,7 +404,7 @@ final class PhotoViewerPresentation: ObservableObject {
               item.id != lastFullImageFailureItemID else { return }
         lastFullImageFailureItemID = item.id
         guard activity.connectionIsHealthy else { return }
-        activity.notice("Couldn't load full resolution of \(item.filename ?? "photo")", detail: message,
+        activity.notice("Couldn't load the original of \(item.filename ?? "photo")", detail: message,
                         key: "viewer:\(item.id)")
     }
 

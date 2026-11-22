@@ -18,7 +18,7 @@ enum ThumbnailOrientationMatchError: LocalizedError, Equatable, Sendable {
     var errorDescription: String? {
         switch self {
         case .undecodableOriginal:
-            "The full-size image could not be decoded by ImageIO."
+            "The original could not be decoded by ImageIO."
         case .undecodableThumbnail(let size):
             "The \(size.rawValue) thumbnail could not be decoded by ImageIO."
         case .ambiguous(let size):

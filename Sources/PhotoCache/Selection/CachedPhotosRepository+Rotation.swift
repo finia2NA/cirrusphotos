@@ -267,7 +267,7 @@ extension CachedPhotosRepository {
                                            estimate: ThumbnailRotationDownloadEstimate,
                                            reporter: ThumbnailRotationReporter) async throws -> Int {
         guard let resource = item.fullImageResource(in: .space(space)) else {
-            throw RepositoryError.unavailable("A full-size image is unavailable.")
+            throw RepositoryError.unavailable("The original is unavailable.")
         }
         reporter.report(.downloading, itemID: item.id, progress: estimate.thumbnailProgress, detail: "Downloading full photo")
         let original = try await comparisonOriginal(resource) { transfer in
@@ -360,7 +360,7 @@ extension CachedPhotosRepository {
             }
         }
         if let cached { return cached }
-        throw SynologyAPIError.transport(failure ?? "The full-size image is unavailable.")
+        throw SynologyAPIError.transport(failure ?? "The original is unavailable.")
     }
 
     func lookupAllRotationItems(_ ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] {

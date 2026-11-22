@@ -20,8 +20,8 @@ final class ViewerStatusTests: XCTestCase {
         XCTAssertEqual(photo(.thumbnail(.xl), .ready(verified: true, validationFailure: nil), decoding: true).short,
                        "Large · Decoding")
         let full = photo(.full, .ready(verified: true, validationFailure: nil))
-        XCTAssertEqual(full.short, "Full")
-        XCTAssertEqual(full.help, "Showing full resolution")
+        XCTAssertEqual(full.short, "Original")
+        XCTAssertEqual(full.help, "Showing the original")
         XCTAssertNil(full.progress)
         XCTAssertTrue(full.isComplete)
     }
@@ -40,7 +40,7 @@ final class ViewerStatusTests: XCTestCase {
                            transfer: TransferProgress(completedBytes: 4_300_000, totalBytes: 10_000_000))
         XCTAssertEqual(status.short, "Large · Loading 43%")
         XCTAssertEqual(status.progress, .determinate(0.43))
-        XCTAssertTrue(status.help.hasPrefix("Showing the large preview; loading full resolution: "))
+        XCTAssertTrue(status.help.hasPrefix("Showing the large preview; loading the original: "))
     }
 
     func testLargePreviewFillsTheFirstFifthAndFullResolutionTheRest() {
@@ -82,18 +82,18 @@ final class ViewerStatusTests: XCTestCase {
 
     func testCachedFullResolutionReadsFullWithDetailOnHover() {
         let cached = photo(.full, .ready(verified: false, validationFailure: nil))
-        XCTAssertEqual(cached.short, "Full")
-        XCTAssertEqual(cached.help, "Showing full resolution from the cache; not yet checked against the NAS")
+        XCTAssertEqual(cached.short, "Original")
+        XCTAssertEqual(cached.help, "Showing the original from the cache; not yet checked against the NAS")
         let unchecked = photo(.full, .ready(verified: false, validationFailure: "Timed out"))
-        XCTAssertEqual(unchecked.short, "Full")
+        XCTAssertEqual(unchecked.short, "Original")
         XCTAssertTrue(unchecked.help.hasSuffix("checking it against the NAS failed: Timed out"))
     }
 
     func testFullResolutionFailureNamesOfflineCase() {
-        XCTAssertEqual(photo(.thumbnail(.xl), .failure("The full-size image is not cached."), allowNetwork: false).short,
-                       "Large · Full unavailable offline")
+        XCTAssertEqual(photo(.thumbnail(.xl), .failure("The original is not cached."), allowNetwork: false).short,
+                       "Large · Original unavailable offline")
         let online = photo(.thumbnail(.m), .failure("Server error"))
-        XCTAssertEqual(online.short, "Medium · Full unavailable")
+        XCTAssertEqual(online.short, "Medium · Original unavailable")
         XCTAssertEqual(online.help, "Showing the medium preview; Server error")
     }
 
