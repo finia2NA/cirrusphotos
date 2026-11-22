@@ -6,6 +6,21 @@
     <description>Cirrus Photos updates</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.8a</title>
+      <pubDate>Sun, 22 Nov 2026 19:15:10 +0000</pubDate>
+      <sparkle:version>12</sparkle:version>
+      <sparkle:shortVersionString>0.1.8a</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<ul>
+<li>Shared Space folders are listed even when the NAS reports a folder's cover or permissions in an unexpected form; such folders are noted in History.</li>
+<li>A folder loading error is no longer hidden under the toolbar.</li>
+</ul>
+]]></description>
+      <enclosure url="https://github.com/finia2NA/cirrusphotos/releases/download/v0.1.8a/Cirrus-Photos-0.1.8a.dmg"
+                 type="application/octet-stream" sparkle:edSignature="SU+AXWVmj2nYPmtepTwAnmfcpcK6/GrZWFJVaLnHvIwWSGX5v80T4gGpp2BZbVnsgwrt8mOuGyxb6lGZg0wMBw==" length="11039832" />
+    </item>
+    <item>
       <title>Version 0.1.8</title>
       <pubDate>Sun, 22 Nov 2026 17:52:47 +0000</pubDate>
       <sparkle:version>11</sparkle:version>
