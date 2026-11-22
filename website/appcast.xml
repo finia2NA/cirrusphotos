@@ -6,6 +6,25 @@
     <description>Cirrus Photos updates</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.8</title>
+      <pubDate>Sun, 22 Nov 2026 17:52:47 +0000</pubDate>
+      <sparkle:version>11</sparkle:version>
+      <sparkle:shortVersionString>0.1.8</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<ul>
+<li>Live Photo motion and videos play in albums shared with you.</li>
+<li>Videos in your own albums play again.</li>
+<li>Photo quality in Settings chooses what the viewer loads: Large, Large then Original, or Original.</li>
+<li>Thumbnail, photo and video quality are together under Settings ▸ Viewing ▸ Quality, and several viewing settings explain their options with a help button.</li>
+<li>When a video can't play, the viewer says why.</li>
+<li>The viewer says Original instead of Full.</li>
+</ul>
+]]></description>
+      <enclosure url="https://github.com/finia2NA/cirrusphotos/releases/download/v0.1.8/Cirrus-Photos-0.1.8.dmg"
+                 type="application/octet-stream" sparkle:edSignature="8It72D4HzPzzB4MZdckzVt5qBLdwsiQ5mbK1aIzMqfb+LyCe0Qz7Edl/DWPNkXhTPiewVDYVzO8wrQeT6RF2Ag==" length="10986954" />
+    </item>
+    <item>
       <title>Version 0.1.7a</title>
       <pubDate>Sun, 22 Nov 2026 16:27:51 +0000</pubDate>
       <sparkle:version>10</sparkle:version>
