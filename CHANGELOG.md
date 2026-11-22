@@ -2,6 +2,15 @@
 
 Each version's section is its release notes on GitHub and in the in-app updater.
 
+## 0.1.8
+
+- Live Photo motion and videos play in albums shared with you.
+- Videos in your own albums play again.
+- Photo quality in Settings chooses what the viewer loads: Large, Large then Original, or Original.
+- Thumbnail, photo and video quality are together under Settings ▸ Viewing ▸ Quality, and several viewing settings explain their options with a help button.
+- When a video can't play, the viewer says why.
+- The viewer says Original instead of Full.
+
 ## 0.1.7a
 
 - Photos in Shared Space folders load for accounts that are allowed only some Shared Space folders.
