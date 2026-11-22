@@ -145,10 +145,10 @@ struct PhotoViewerView: View {
                 }
             }
 
-            if viewer.state?.item?.isVideo == true, viewer.state?.videoResource == nil {
+            if let message = viewer.unavailableVideoMessage {
                 VStack(spacing: 8) {
                     Image(systemName: "video.slash")
-                    Text("This video has no playable resource.")
+                    Text(message)
                 }
                 .font(.callout)
                 .padding(16)

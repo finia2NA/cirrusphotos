@@ -84,6 +84,8 @@ struct ViewerStatus: Equatable {
         var stalled = false
         var allowNetwork = true
         var video: Video?
+        /// The item is a video whose playable rendition is not known yet or is unavailable.
+        var isUnresolvedVideo = false
         /// Set when the original is not shown and the large preview is the best image.
         var fullImageLimit: FullImageLimit?
     }
@@ -96,6 +98,12 @@ struct ViewerStatus: Equatable {
             let showing = shown.map { "Showing \($0.description)" }
             let help = [showing, detail].compactMap { $0 }.joined(separator: "; ")
             return ViewerStatus(short: short.isEmpty ? "Loading" : short, help: capitalized(help), progress: progress)
+        }
+        if inputs.isUnresolvedVideo {
+            if case .unsupported(let message) = inputs.fullStatus {
+                return ViewerStatus(short: "Video unavailable", help: message, isComplete: true)
+            }
+            return status("Loading", "preparing the video")
         }
         if let failure = inputs.decodeFailure {
             return status("Full couldn't be decoded", failure)

@@ -40,6 +40,9 @@ public actor PhotoViewerSession {
     var playlistRevision: UInt64 = 0
     /// Shared Space folders whose originals the NAS refused this session; their items show the large preview.
     var refusedOriginalFolders: Set<Int64> = []
+    /// Verified origin spaces of owned-album video members, kept for this viewer only.
+    var albumVideoSpaces: [Int64: PhotoSpace] = [:]
+    var albumVideoTask: (itemID: Int64, task: Task<Void, Never>)?
 
     var observers: [UUID: AsyncStream<PhotoViewerState>.Continuation] = [:]
 
@@ -151,6 +154,7 @@ public actor PhotoViewerSession {
         itemMutationTask?.cancel()
         metadataResetTask?.cancel()
         metadataChangeTask?.cancel()
+        albumVideoTask?.task.cancel()
         publish()
         for observer in observers.values { observer.finish() }
         observers.removeAll()
@@ -224,6 +228,13 @@ public actor PhotoViewerSession {
         return mediaScope.contentScope.space != nil && !mediaScope.isLibraryFilter
     }
 
+    /// The scope a video streams in: the viewer's space, or an owned-album member's verified space.
+    func videoScope(for item: PhotoItem) -> PhotoContentScope? {
+        if supportsSpaceMedia { return mediaContentScope }
+        guard mediaScope?.albumID != nil, let space = albumVideoSpaces[item.id] else { return nil }
+        return .space(space)
+    }
+
     func select(_ location: PhotoViewerLocation) {
         let targetResource = metadata.pages[location.sectionIndex]
             .flatMap { $0.slot(at: location.pageOffset)?.item }?
@@ -256,7 +267,9 @@ public actor PhotoViewerSession {
             thumbnailData: images.thumbnailData,
             thumbnailIsLargePreview: images.bestThumbnailTier == .largePreview,
             fullImageData: images.fullImageData,
-            videoResource: supportsSpaceMedia ? currentItem?.videoPlaybackResource(scope: mediaContentScope, preference: videoQuality) : nil,
+            videoResource: currentItem.flatMap { item in
+                videoScope(for: item).flatMap { item.videoPlaybackResource(scope: $0, preference: videoQuality) }
+            },
             metadataStatus: metadataStatus,
             thumbnailStatus: images.thumbnailStatus,
             fullImageStatus: images.fullImageStatus,
