@@ -131,19 +131,14 @@ private struct ViewingSettingsView: View {
                     ForEach(ViewerImageQuality.allCases, id: \.self) { Text($0.displayName).tag($0) }
                 } label: {
                     SettingLabel("Photo quality", help: """
-                        Large shows a preview about 1920 pixels wide and never loads the original.
-                        Large, then Original shows that preview while the original loads.
-                        Original loads only the original.
-                        Downloads, drags and copies always use the original.
+                        Controls what the viewer loads. Large previews are about Full HD in resolution.
                         """)
                 }
                 Picker(selection: $preferences.videoQuality) {
                     ForEach(VideoQualityPreference.allCases, id: \.self) { Text($0.displayName).tag($0) }
                 } label: {
                     SettingLabel("Default video quality", help: """
-                        Automatic plays High.
-                        High, Medium, Low and Mobile play versions converted by the NAS; when one is missing, the closest available version plays.
-                        Original plays the stored file, which may be in a format this Mac can't play.
+                        Controls requested video quality. The NAS may not have all qualities available, this is done best-effort.
                         """)
                 }
             } header: {
@@ -159,9 +154,7 @@ private struct ViewingSettingsView: View {
                     ForEach(PixelInterpolationPreference.allCases, id: \.self) { Text($0.displayName).tag($0) }
                 } label: {
                     SettingLabel("Pixel interpolation", help: """
-                        Always smooths every image when it is scaled.
-                        Thumbnails Only smooths previews, then shows the original with sharp pixels when zoomed in.
-                        Off never smooths.
+                        Whether the viewer smooths pixels when zoomed in.
                         """)
                 }
                 Toggle("Show filmstrip and overlay buttons in toolbar", isOn: $preferences.showsViewerToolbarTools)
