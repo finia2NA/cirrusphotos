@@ -1170,15 +1170,20 @@ public actor SynologyClient: PhotosTransport {
                 URLQueryItem(name: "api", value: Self.api("Streaming", space)),
                 URLQueryItem(name: "version", value: "2"),
                 URLQueryItem(name: "method", value: "streaming"),
-                URLQueryItem(name: "id", value: String(resource.unitID)),
-                URLQueryItem(name: "type", value: "\"unit\""),
                 URLQueryItem(name: "quality", value: "\"\(quality.rawValue)\""),
             ]
             if let recipientReference {
-                // The web app's recipient form: the passphrase in place of a cache_key.
+                // The web app's recipient form: the passphrase in place of a cache_key. A video
+                // streams by its item ID; Live Photo motion, which has none, by its unit ID.
+                if let itemID = resource.itemID {
+                    items += [URLQueryItem(name: "id", value: String(itemID)), URLQueryItem(name: "type", value: "\"item\"")]
+                } else {
+                    items += [URLQueryItem(name: "id", value: String(resource.unitID)), URLQueryItem(name: "type", value: "\"unit\"")]
+                }
                 components.path = "/webapi/entry.cgi"
                 items.append(URLQueryItem(name: "passphrase", value: try Self.jsonString(recipientReference)))
             } else {
+                items += [URLQueryItem(name: "id", value: String(resource.unitID)), URLQueryItem(name: "type", value: "\"unit\"")]
                 components.path = "/webapi/entry.cgi/" + Self.api("Streaming", space)
                 items.append(URLQueryItem(name: "cache_key", value: resource.cacheKey))
             }

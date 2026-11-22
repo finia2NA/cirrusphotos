@@ -228,11 +228,23 @@ public actor PhotoViewerSession {
         return mediaScope.contentScope.space != nil && !mediaScope.isLibraryFilter
     }
 
-    /// The scope a video streams in: the viewer's space, or an owned-album member's verified space.
+    /// The scope a video streams in: the viewer's space, the album shared with the account, or
+    /// an owned-album member's verified space.
     func videoScope(for item: PhotoItem) -> PhotoContentScope? {
         if supportsSpaceMedia { return mediaContentScope }
+        if case .incomingAlbum = mediaContentScope { return mediaContentScope }
         guard mediaScope?.albumID != nil, let space = albumVideoSpaces[item.id] else { return nil }
         return .space(space)
+    }
+
+    /// The video's playback resource. An album shared with the account streams only converted
+    /// renditions, so Original there plays the High rendition, or the closest one available.
+    func videoPlaybackResource(for item: PhotoItem, preference: VideoQualityPreference) -> VideoPlaybackResource? {
+        guard let scope = videoScope(for: item) else { return nil }
+        guard case .incomingAlbum = scope else { return item.videoPlaybackResource(scope: scope, preference: preference) }
+        let resource = item.videoPlaybackResource(scope: scope, preference: preference == .original ? .automatic : preference)
+        guard case .converted = resource?.variant else { return nil }
+        return resource
     }
 
     func select(_ location: PhotoViewerLocation) {
@@ -268,7 +280,7 @@ public actor PhotoViewerSession {
             thumbnailIsLargePreview: images.bestThumbnailTier == .largePreview,
             fullImageData: images.fullImageData,
             videoResource: currentItem.flatMap { item in
-                videoScope(for: item).flatMap { item.videoPlaybackResource(scope: $0, preference: videoQuality) }
+                videoPlaybackResource(for: item, preference: videoQuality)
             },
             metadataStatus: metadataStatus,
             thumbnailStatus: images.thumbnailStatus,

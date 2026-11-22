@@ -51,6 +51,23 @@ final class IncomingAlbumTransportTests: XCTestCase {
         XCTAssertEqual(bytes, Data([1, 2, 3, 4]))
     }
 
+    func testVideoStreamsByItemIDWithTheRecipientForm() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [IncomingAlbumProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let client = SynologyClient(baseURL: URL(string: "https://example.test")!, session: session)
+        try await client.login(credentials: .init(username: "test", password: "test"))
+        let resource = VideoPlaybackResource(scope: .incomingAlbum(ownerID: 1, albumID: 42), unitID: 99, cacheKey: "99_1",
+                                             filename: "IMG.MOV", variant: .converted(.high), itemID: 5)
+        let received = IncomingVideoBytes()
+        try await client.streamVideoRange(resource, range: 0...3, reference: "video-reference") { event in
+            if case .bytes(_, let data) = event { await received.append(data) }
+        }
+        let bytes = await received.data
+        XCTAssertEqual(bytes, Data([1, 2, 3, 4]))
+    }
+
     func testIncomingVideoRequiresReferenceAndConvertedRendition() async throws {
         let client = SynologyClient(baseURL: URL(string: "https://example.invalid")!)
         let scope = PhotoContentScope.incomingAlbum(ownerID: 1, albumID: 42)
@@ -97,10 +114,17 @@ private final class IncomingAlbumProtocol: URLProtocol, @unchecked Sendable {
             XCTAssertEqual(values["api"], "SYNO.Foto.Streaming")
             XCTAssertEqual(values["version"], "2")
             XCTAssertEqual(values["method"], "streaming")
-            XCTAssertEqual(values["id"], "99")
-            XCTAssertEqual(values["type"], #""unit""#)
+            if values["passphrase"] == #""video-reference""# {
+                // A video streams by its item ID.
+                XCTAssertEqual(values["id"], "5")
+                XCTAssertEqual(values["type"], #""item""#)
+            } else {
+                // Live Photo motion streams by its unit ID.
+                XCTAssertEqual(values["id"], "99")
+                XCTAssertEqual(values["type"], #""unit""#)
+                XCTAssertEqual(values["passphrase"], #""stream-reference""#)
+            }
             XCTAssertEqual(values["quality"], #""high""#)
-            XCTAssertEqual(values["passphrase"], #""stream-reference""#)
             XCTAssertNil(values["cache_key"])
             XCTAssertEqual(request.value(forHTTPHeaderField: "Range"), "bytes=0-3")
             let headers = ["Content-Type": "video/mp4", "Content-Range": "bytes 0-3/4"]

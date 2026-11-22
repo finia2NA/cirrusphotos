@@ -21,18 +21,19 @@ final class AlbumVideoViewerTests: XCTestCase {
         return try JSONDecoder().decode(PhotoItem.self, from: Data(json.utf8))
     }
 
-    private func session(origins: Set<PhotoSpace>, root: URL) throws -> PhotoViewerSession {
-        let member = try video()
+    private func session(origins: Set<PhotoSpace>, root: URL, collection: PhotoCollectionDescriptor = .album(3),
+                         member: PhotoItem? = nil, videoQuality: VideoQualityPreference = .automatic) throws -> PhotoViewerSession {
+        let member = try member ?? video()
         let repository = try CachedPhotosRepository(credentials: SynologyCredentials(username: "fixture", password: "unused"),
                                                      baseURL: URL(string: "https://example.invalid")!, cacheRoot: root,
                                                      transport: AlbumVideoTransport(member: member, origins: origins))
         let snapshot = TimelineSnapshot(sections: [
             TimelineSection(offset: 0, limit: 1, list: [TimelineDay(year: 2024, month: 4, day: 1, itemCount: 1)])
         ])
-        return PhotoViewerSession(repository: repository, collection: .album(3), index: LibraryIndex(snapshot: snapshot),
+        return PhotoViewerSession(repository: repository, collection: collection, index: LibraryIndex(snapshot: snapshot),
                                   seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0, item: member, page: [member],
                                                         pageVerified: true),
-                                  allowNetwork: true)
+                                  videoQuality: videoQuality, allowNetwork: true)
     }
 
     func testOwnedAlbumVideoStreamsFromItsVerifiedSpace() async throws {
@@ -60,6 +61,30 @@ final class AlbumVideoViewerTests: XCTestCase {
         XCTAssertTrue(reported)
         let resource = await session.state().videoResource
         XCTAssertNil(resource)
+        await session.close()
+    }
+
+    func testIncomingAlbumVideoStreamsAConvertedRenditionEvenWhenOriginalIsPreferred() async throws {
+        let root = temporaryTestRoot("IncomingAlbumVideo")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let session = try session(origins: [], root: root, collection: .incomingAlbum(ownerID: 1, albumID: 3),
+                                  videoQuality: .original)
+        let resource = await session.state().videoResource
+        XCTAssertEqual(resource?.scope, .incomingAlbum(ownerID: 1, albumID: 3))
+        XCTAssertEqual(resource?.variant, .converted(.high))
+        XCTAssertEqual(resource?.itemID, 12)
+        await session.close()
+    }
+
+    func testIncomingAlbumVideoWithoutConvertedRenditionIsReportedUnavailable() async throws {
+        let root = temporaryTestRoot("IncomingAlbumVideoOriginal")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let json = #"{"id":12,"filename":"clip.mov","time":1711929600,"type":"video","additional":{"thumbnail":{"unit_id":12,"cache_key":"12_1","sm":"ready","m":"ready","xl":"ready"}}}"#
+        let member = try JSONDecoder().decode(PhotoItem.self, from: Data(json.utf8))
+        let session = try session(origins: [], root: root, collection: .incomingAlbum(ownerID: 1, albumID: 3), member: member)
+        let state = await session.state()
+        XCTAssertNil(state.videoResource)
+        guard case .unsupported = state.fullImageStatus else { return XCTFail("Expected an unavailable video") }
         await session.close()
     }
 }

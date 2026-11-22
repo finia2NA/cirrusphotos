@@ -76,10 +76,10 @@ extension PhotoViewerSession {
 
         let resource: FullImageResource?
         let isIncoming = if case .incomingAlbum = mediaContentScope { true } else { false }
-        if item.isVideo && isIncoming {
+        if item.isVideo && isIncoming && videoPlaybackResource(for: item, preference: videoQuality) == nil {
             resource = nil
-            images.fullImageStatus = .unsupported("Video playback is unavailable in albums shared with you.")
-        } else if !supportsSpaceMedia && mediaScope?.albumID == nil {
+            images.fullImageStatus = .unsupported("This video has no converted version, which albums shared with you require for playback.")
+        } else if !supportsSpaceMedia && mediaScope?.albumID == nil && !(item.isVideo && isIncoming) {
             resource = nil
             images.fullImageStatus = .unsupported("Full-size media is unavailable for this shared album.")
         } else if item.isVideo && videoScope(for: item) == nil {
@@ -102,7 +102,7 @@ extension PhotoViewerSession {
                 .sorted { $0.rank < $1.rank }
                 .map(\.rawValue)
                 .joined(separator: ",")
-            if let playback = videoScope(for: item).flatMap({ item.videoPlaybackResource(scope: $0, preference: requestedPreference) }) {
+            if let playback = videoPlaybackResource(for: item, preference: requestedPreference) {
                 let target = requestedPreference.targetQuality?.rawValue ?? "original"
                 let chosen = playback.variant.cacheComponent
                 let reason: String
