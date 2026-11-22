@@ -498,7 +498,9 @@ struct AppShellView: View {
                 SynologyDiagnostics.folders.info("directory folder=\(id, privacy: .public) children=\(directory.children.count, privacy: .public) verified=\(verified, privacy: .public) elapsed=\(String(describing: ContinuousClock.now - started), privacy: .public)")
                 folderDirectory = directory
                 model.ensureCollectionLoaded(PhotoCollectionDescriptor.folder(directory.folder.id, space: selectedSpace))
-            case .failure(let message): folderError = message.localizedDescription
+            case .failure(let message):
+                SynologyDiagnostics.folders.error("directory folder=\(id, privacy: .public) error=\(message.logSummary, privacy: .public)")
+                folderError = message.localizedDescription
             }
         }
     }

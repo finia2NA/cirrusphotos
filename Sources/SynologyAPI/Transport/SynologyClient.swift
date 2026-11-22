@@ -437,7 +437,11 @@ public actor SynologyClient: PhotosTransport {
     public func folder(id: Int64, space: PhotoSpace) async throws -> FolderSummary {
         struct Result: Decodable { let folder: FolderSummary }
         let data: Result = try await call(Self.api("Browse.Folder", space), version: 2, method: "get", ["id": String(id), "additional": "[\"access_permission\"]"])
-        guard data.folder.id > 0, id == 0 || data.folder.id == id else { throw SynologyAPIError.invalidResponse }
+        guard data.folder.id > 0, id == 0 || data.folder.id == id else {
+            SynologyDiagnostics.folders.error("get rejected requested=\(id, privacy: .public) returned=\(data.folder.id, privacy: .public)")
+            throw SynologyAPIError.invalidResponse
+        }
+        if id == 0 { SynologyDiagnostics.folders.info("get root space=\(String(describing: space), privacy: .public) id=\(data.folder.id, privacy: .public)") }
         return data.folder
     }
 
@@ -451,8 +455,14 @@ public actor SynologyClient: PhotosTransport {
                 "sort_by": "\"filename\"", "sort_direction": "\"asc\"",
                 "additional": space == .shared ? "[\"thumbnail\",\"access_permission\"]" : "[\"thumbnail\"]"])
             let rows = data.list
+            SynologyDiagnostics.folders.info("list parent=\(parentID, privacy: .public) space=\(String(describing: space), privacy: .public) page=\(page, privacy: .public) rows=\(rows.count, privacy: .public)")
             guard rows.count <= 200 else { throw SynologyAPIError.invalidResponse }
-            for row in rows { guard row.id > 0, row.id != parentID, row.parent == parentID, seen.insert(row.id).inserted else { throw SynologyAPIError.invalidResponse } }
+            for row in rows {
+                guard row.id > 0, row.id != parentID, row.parent == parentID, seen.insert(row.id).inserted else {
+                    SynologyDiagnostics.folders.error("list rejected parent=\(parentID, privacy: .public) row=\(row.id, privacy: .public) rowParent=\(row.parent, privacy: .public)")
+                    throw SynologyAPIError.invalidResponse
+                }
+            }
             result.append(contentsOf: rows)
             if rows.count < 200 { return result }
         }
