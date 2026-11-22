@@ -2,6 +2,11 @@
 
 Each version's section is its release notes on GitHub and in the in-app updater.
 
+## 0.1.8a
+
+- Shared Space folders are listed even when the NAS reports a folder's cover or permissions in an unexpected form; such folders are noted in History.
+- A folder loading error is no longer hidden under the toolbar.
+
 ## 0.1.8
 
 - Live Photo motion and videos play in albums shared with you.
