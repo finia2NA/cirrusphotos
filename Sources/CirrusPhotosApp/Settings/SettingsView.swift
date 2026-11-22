@@ -127,47 +127,101 @@ private struct ViewingSettingsView: View {
         Form {
             Section {
                 ThumbnailQualityPicker(size: $preferences.thumbnailSize)
+                Picker(selection: $preferences.viewerImageQuality) {
+                    ForEach(ViewerImageQuality.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                } label: {
+                    SettingLabel("Photo quality", help: """
+                        Large shows a preview about 1920 pixels wide and never loads the original.
+                        Large, then Original shows that preview while the original loads.
+                        Original loads only the original.
+                        Downloads, drags and copies always use the original.
+                        """)
+                }
+                Picker(selection: $preferences.videoQuality) {
+                    ForEach(VideoQualityPreference.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                } label: {
+                    SettingLabel("Default video quality", help: """
+                        Automatic plays High.
+                        High, Medium, Low and Mobile play versions converted by the NAS; when one is missing, the closest available version plays.
+                        Original plays the stored file, which may be in a format this Mac can't play.
+                        """)
+                }
             } header: {
-                Text("Thumbnails")
+                Text("Quality")
             } footer: {
-                Text("Larger thumbnails are sharper but load slower and use more space.")
+                Text("Higher qualities are sharper but load slower and use more data and space.")
             }
             Section("Timeline") {
                 Toggle("Always show timeline scrubber", isOn: $preferences.alwaysShowsTimeline)
             }
-            Section {
-                Picker("Photo quality", selection: $preferences.viewerImageQuality) {
-                    ForEach(ViewerImageQuality.allCases, id: \.self) { Text($0.displayName).tag($0) }
-                }
-                Picker("Pixel interpolation", selection: $preferences.pixelInterpolation) {
+            Section("Viewer") {
+                Picker(selection: $preferences.pixelInterpolation) {
                     ForEach(PixelInterpolationPreference.allCases, id: \.self) { Text($0.displayName).tag($0) }
-                }
-                Picker("Default video quality", selection: $preferences.videoQuality) {
-                    ForEach(VideoQualityPreference.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                } label: {
+                    SettingLabel("Pixel interpolation", help: """
+                        Always smooths every image when it is scaled.
+                        Thumbnails Only smooths previews, then shows the original with sharp pixels when zoomed in.
+                        Off never smooths.
+                        """)
                 }
                 Toggle("Show filmstrip and overlay buttons in toolbar", isOn: $preferences.showsViewerToolbarTools)
-            } header: {
-                Text("Viewer")
-            } footer: {
-                Text("Lower qualities start faster and use less data. Downloads always use originals. Original video may not play on this Mac.")
             }
             Section("Inspection overlays") {
-                LabeledContent("Highlight peaking") {
+                LabeledContent {
                     HStack {
                         Slider(value: $highlightThreshold, in: 80...100, step: 1)
                         Text("\(Int(highlightThreshold))%").monospacedDigit().frame(width: 44, alignment: .trailing)
                     }
+                } label: {
+                    SettingLabel("Highlight peaking", help: """
+                        Marks near-white areas in red once their brightest color channel reaches this level. Lower values mark more.
+                        It reads the displayed image, so it does not show clipping in the camera's raw data.
+                        """)
                 }
-                LabeledContent("Focus edge tolerance") {
+                LabeledContent {
                     HStack {
                         Slider(value: $focusEdgeTolerance, in: 1...2.5, step: 0.1)
                         Text(String(format: "%.1f×", focusEdgeTolerance)).monospacedDigit().frame(width: 44, alignment: .trailing)
                     }
+                } label: {
+                    SettingLabel("Focus edge tolerance", help: """
+                        Focus edges marks the photo's sharpest edges in green. Higher values also mark edges up to this many times softer.
+                        It shows where focus is best in this photo, not whether the photo is sharp. Noise, compression and sharpening can mislead it.
+                        """)
                 }
             }
         }
         .formStyle(.grouped)
         .scrollDisabled(true)
+    }
+}
+
+/// A setting's title with a help button that explains its options in a popover.
+private struct SettingLabel: View {
+    let title: String
+    let help: String
+    @State private var showsHelp = false
+
+    init(_ title: String, help: String) {
+        self.title = title
+        self.help = help
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(title)
+            Button { showsHelp.toggle() } label: {
+                Image(systemName: "questionmark.circle").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Help for \(title)")
+            .popover(isPresented: $showsHelp, arrowEdge: .trailing) {
+                Text(help)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: 300, alignment: .leading)
+                    .padding(12)
+            }
+        }
     }
 }
 

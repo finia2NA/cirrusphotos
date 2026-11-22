@@ -75,18 +75,18 @@ public enum PhotoViewerResourceStatus: Sendable, Equatable {
 
 /// The final image the viewer loads for a photo. Downloads, drags and edits always use originals.
 public enum ViewerImageQuality: String, CaseIterable, Sendable, Hashable {
-    /// Only the original; the configured thumbnail shows while it loads.
-    case original
-    /// The large preview while the original loads.
-    case largeThenOriginal
     /// The large preview is the final image; originals are not loaded.
     case large
+    /// The large preview while the original loads.
+    case largeThenOriginal
+    /// Only the original; the configured thumbnail shows while it loads.
+    case original
 
     public var displayName: String {
         switch self {
-        case .original: "Original"
-        case .largeThenOriginal: "Large, then Original"
         case .large: "Large"
+        case .largeThenOriginal: "Large, then Original"
+        case .original: "Original"
         }
     }
 }
