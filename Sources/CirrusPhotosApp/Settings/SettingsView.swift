@@ -136,8 +136,9 @@ private struct ViewingSettingsView: View {
                 Toggle("Always show timeline scrubber", isOn: $preferences.alwaysShowsTimeline)
             }
             Section {
-                Toggle("Load large previews", isOn: $preferences.loadsLargeViewerPreviews)
-                    .disabled(preferences.thumbnailSize == .xl)
+                Picker("Photo quality", selection: $preferences.viewerImageQuality) {
+                    ForEach(ViewerImageQuality.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                }
                 Picker("Pixel interpolation", selection: $preferences.pixelInterpolation) {
                     ForEach(PixelInterpolationPreference.allCases, id: \.self) { Text($0.displayName).tag($0) }
                 }
@@ -148,7 +149,7 @@ private struct ViewingSettingsView: View {
             } header: {
                 Text("Viewer")
             } footer: {
-                Text("Lower qualities start faster and use less data. Original may not play on this Mac.")
+                Text("Lower qualities start faster and use less data. Downloads always use originals. Original video may not play on this Mac.")
             }
             Section("Inspection overlays") {
                 LabeledContent("Highlight peaking") {

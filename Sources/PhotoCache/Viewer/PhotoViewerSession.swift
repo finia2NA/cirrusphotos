@@ -14,7 +14,7 @@ public actor PhotoViewerSession {
     var mediaScope: PhotoCollectionDescriptor?
     let index: LibraryIndex
     let thumbnailSize: ThumbnailSize
-    let loadsLargePreviews: Bool
+    let imageQuality: ViewerImageQuality
     let videoQuality: VideoQualityPreference
 
     var allowNetwork: Bool
@@ -46,7 +46,7 @@ public actor PhotoViewerSession {
     public init(repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor,
                 index: LibraryIndex,
                 seed: PhotoViewerSeed, thumbnailSize: ThumbnailSize = .xl,
-                loadsLargePreviews: Bool = false,
+                imageQuality: ViewerImageQuality = .original,
                 videoQuality: VideoQualityPreference = .automatic,
                 allowNetwork: Bool, maximumPages: Int = 3) {
         self.repository = repository
@@ -54,7 +54,7 @@ public actor PhotoViewerSession {
         self.mediaScope = collection.isLibraryFilter ? nil : collection
         self.index = index
         self.thumbnailSize = thumbnailSize
-        self.loadsLargePreviews = loadsLargePreviews
+        self.imageQuality = imageQuality
         self.videoQuality = videoQuality
         self.allowNetwork = allowNetwork
         metadata = ViewerMetadataWindow(index: index, maximumPages: maximumPages)

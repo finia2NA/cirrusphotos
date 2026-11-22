@@ -73,7 +73,7 @@ struct ViewerStatus: Equatable {
         var displayed: ViewerImageTier?
         var fullStatus: PhotoViewerResourceStatus
         var isLoadingLargePreview = false
-        /// Large previews are enabled and smaller than the configured library rendition.
+        /// Large previews load before originals and are larger than the configured library rendition.
         var largePreviews = false
         var isDecoding = false
         var decodeFailure: String?
@@ -159,11 +159,14 @@ struct ViewerStatus: Equatable {
     }
 
     /// The large preview (or, without one, the shown preview) is all there is: the status names
-    /// that limit, and the hover says why.
+    /// a permission limit, and the hover says why. The Large quality setting adds no label.
     private static func limited(_ limit: FullImageLimit, shown: ViewerImageTier?) -> ViewerStatus {
         let showing = "Showing \(shown?.description ?? "the preview")"
-        let short: String, reason: String
+        let short: String?, reason: String
         switch limit {
+        case .qualitySetting:
+            short = nil
+            reason = "photo quality is set to Large in Settings"
         case .viewOnly:
             short = "Max permitted resolution"
             reason = "your access only allows viewing, so the original isn't available. The owner can allow downloads to show full resolution"
@@ -174,7 +177,8 @@ struct ViewerStatus: Equatable {
             short = "Max available resolution"
             reason = "full resolution isn't available in albums shared with you"
         }
-        return ViewerStatus(short: [shown?.name, short].compactMap { $0 }.joined(separator: " · "),
+        let line = [shown?.name, short].compactMap { $0 }.joined(separator: " · ")
+        return ViewerStatus(short: line.isEmpty ? "Loading" : line,
                             help: "\(showing); \(reason).", isComplete: true)
     }
 

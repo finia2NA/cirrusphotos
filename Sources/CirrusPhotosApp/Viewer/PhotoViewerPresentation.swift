@@ -34,6 +34,7 @@ final class PhotoViewerPresentation: ObservableObject {
     let activity: ActivityCenter
     private let videoQuality: VideoQualityPreference
     private let thumbnailSize: ThumbnailSize
+    /// Large previews load before originals, so they share the progress bar.
     private let loadsLargePreviews: Bool
     /// The size of the image on screen.
     private(set) var displayedTier: ViewerImageTier? { didSet { updateStatus() } }
@@ -64,7 +65,7 @@ final class PhotoViewerPresentation: ObservableObject {
 
     init(repository: CachedPhotosRepository, collection: PhotoCollectionDescriptor,
          index: LibraryIndex, request: PhotoViewerOpenRequest,
-         thumbnailSize: ThumbnailSize, loadsLargePreviews: Bool = false,
+         thumbnailSize: ThumbnailSize, imageQuality: ViewerImageQuality = .original,
          videoQuality: VideoQualityPreference = .automatic,
          isIncoming: Bool = false, activity: ActivityCenter = ActivityCenter(),
          allowNetwork: Bool, snapshotRevision: Int) {
@@ -77,7 +78,7 @@ final class PhotoViewerPresentation: ObservableObject {
         self.collection = collection
         self.videoQuality = videoQuality
         self.thumbnailSize = thumbnailSize
-        self.loadsLargePreviews = loadsLargePreviews && thumbnailSize != .xl
+        loadsLargePreviews = imageQuality == .largeThenOriginal && thumbnailSize != .xl
         self.isIncoming = isIncoming
         self.snapshotRevision = snapshotRevision
         image = request.source.image
@@ -85,7 +86,7 @@ final class PhotoViewerPresentation: ObservableObject {
         session = PhotoViewerSession(repository: repository, collection: collection,
                                      index: index, seed: request.seed,
                                      thumbnailSize: thumbnailSize,
-                                     loadsLargePreviews: loadsLargePreviews,
+                                     imageQuality: imageQuality,
                                      videoQuality: videoQuality,
                                      allowNetwork: allowNetwork,
                                      maximumPages: 3)
@@ -253,6 +254,7 @@ final class PhotoViewerPresentation: ObservableObject {
         default: thumbnailFailure = nil
         }
         guard let thumbnailFailure else { return nil }
+        if state.fullImageLimit == .qualitySetting { return thumbnailFailure }
         switch state.fullImageStatus {
         case .failure(let message), .unsupported(let message): return message
         case .idle: return thumbnailFailure

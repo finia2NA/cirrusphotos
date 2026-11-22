@@ -715,7 +715,7 @@ struct AppShellView: View {
         viewer = PhotoViewerPresentation(repository: repository, collection: collection,
                                          index: LibraryIndex(snapshot: snapshot),
                                          request: request, thumbnailSize: preferences.thumbnailSize,
-                                         loadsLargePreviews: preferences.loadsLargeViewerPreviews,
+                                         imageQuality: preferences.viewerImageQuality,
                                          videoQuality: preferences.videoQuality,
                                          isIncoming: model.capabilities(for: collection).isIncoming,
                                          activity: model.activity,

@@ -325,7 +325,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1,
                                                                item: items[1], page: Array(items[0...1]),
                                                                pageVerified: true),
-                                         thumbnailSize: .sm, loadsLargePreviews: true,
+                                         thumbnailSize: .sm, imageQuality: .largeThenOriginal,
                                          allowNetwork: true)
         _ = await session.state()
         try await Task.sleep(for: .milliseconds(40))
@@ -409,7 +409,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
                                          seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                                                                item: items[0], page: Array(items[0...1]),
                                                                pageVerified: true),
-                                         thumbnailSize: .sm, loadsLargePreviews: true,
+                                         thumbnailSize: .sm, imageQuality: .largeThenOriginal,
                                          allowNetwork: true)
         _ = await session.state()
         await session.navigateNext()
@@ -433,7 +433,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         await session.close()
     }
 
-    func testLargePreviewSettingIsInactiveForXLAndOffPreservesConfiguredSize() async throws {
+    func testLargeThenOriginalIsInactiveForXLAndOriginalPreservesConfiguredSize() async throws {
         let xlRoot = root(); defer { try? FileManager.default.removeItem(at: xlRoot) }
         let selected = try item(8)
         let oneSection = TimelineSnapshot(sections: [
@@ -447,7 +447,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
             index: LibraryIndex(snapshot: oneSection),
             seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0, item: selected,
                                   page: [selected], pageVerified: true),
-            thumbnailSize: .xl, loadsLargePreviews: true, allowNetwork: true)
+            thumbnailSize: .xl, imageQuality: .largeThenOriginal, allowNetwork: true)
         _ = await xlSession.state()
         let xlLoaded = await waitUntil { await xlSession.state().thumbnailData != nil }
         XCTAssertTrue(xlLoaded)
@@ -466,7 +466,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
             index: LibraryIndex(snapshot: oneSection),
             seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0, item: selected,
                                   page: [selected], pageVerified: true),
-            thumbnailSize: .sm, loadsLargePreviews: false, allowNetwork: true)
+            thumbnailSize: .sm, imageQuality: .original, allowNetwork: true)
         _ = await offSession.state()
         let offLoaded = await waitUntil { await offSession.state().thumbnailData != nil }
         XCTAssertTrue(offLoaded)
@@ -486,7 +486,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.shared),
             index: LibraryIndex(snapshot: snapshot),
             seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0, item: first, page: [first, second], pageVerified: true),
-            thumbnailSize: .m, loadsLargePreviews: false, allowNetwork: true)
+            thumbnailSize: .m, imageQuality: .original, allowNetwork: true)
         _ = await session.state()
         let limited = await waitUntil {
             let state = await session.state()
@@ -509,6 +509,44 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
         await session.close()
     }
 
+    func testLargeQualityShowsLargePreviewsAndNeverLoadsOriginals() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let items = try [item(1), item(2), item(3)]
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: items])
+        let snapshot = TimelineSnapshot(sections: [TimelineSection(offset: 0, limit: 3,
+            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 3)])])
+        let session = PhotoViewerSession(repository: try repository(root: cacheRoot, transport: transport), collection: .library(.personal),
+            index: LibraryIndex(snapshot: snapshot),
+            seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1, item: items[1], page: items, pageVerified: true),
+            thumbnailSize: .sm, imageQuality: .large, allowNetwork: true)
+        _ = await session.state()
+        let shown = await waitUntil {
+            let state = await session.state()
+            return state.thumbnailIsLargePreview && state.thumbnailData == Data([2, 0x54]) &&
+                state.previousNeighbor?.largePreviewData == Data([1, 0x54]) &&
+                state.nextNeighbor?.largePreviewData == Data([3, 0x54])
+        }
+        XCTAssertTrue(shown)
+        let state = await session.state()
+        XCTAssertEqual(state.fullImageLimit, .qualitySetting)
+        XCTAssertFalse(state.isLoadingLargePreview)
+        if case .failure = state.fullImageStatus { XCTFail("Skipping originals by setting is not a failure") }
+
+        await session.navigateNext()
+        let next = await waitUntil {
+            let state = await session.state()
+            return state.item?.id == 3 && state.fullImageLimit == .qualitySetting && state.thumbnailIsLargePreview
+        }
+        XCTAssertTrue(next)
+        try await Task.sleep(for: .milliseconds(200))
+        let fullImageCalls = await transport.fullImageCalls
+        XCTAssertTrue(fullImageCalls.isEmpty)
+        let speculativeOriginals = await session.speculativeFullImageCount()
+        XCTAssertEqual(speculativeOriginals, 0)
+        await session.close()
+    }
+
     func testFullImageFailureRetainsLargePreview() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let selected = try item(9)
@@ -520,7 +558,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
             index: LibraryIndex(snapshot: snapshot),
             seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0, item: selected,
                                   page: [selected], pageVerified: true),
-            thumbnailSize: .sm, loadsLargePreviews: true, allowNetwork: true)
+            thumbnailSize: .sm, imageQuality: .largeThenOriginal, allowNetwork: true)
         _ = await session.state()
         let retained = await waitUntil {
             let state = await session.state()
@@ -545,7 +583,7 @@ final class PhotoViewerAssetLifecycleTests: PhotoViewerSessionTestCase {
             index: LibraryIndex(snapshot: snapshot),
             seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 1, item: items[1],
                                   page: items, pageVerified: true),
-            thumbnailSize: .sm, loadsLargePreviews: true, allowNetwork: true)
+            thumbnailSize: .sm, imageQuality: .largeThenOriginal, allowNetwork: true)
         _ = await session.state()
         let neighborsStarted = await waitUntil {
             let requests = await transport.thumbnailRequests
