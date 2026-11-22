@@ -1109,18 +1109,42 @@ public actor SynologyClient: PhotosTransport {
     }
 
     public func livePhotoMotion(itemID: Int64, space: PhotoSpace) async throws -> VideoPlaybackResource? {
-        let data: LivePhotoUnitData = try await call(Self.api("Browse.Unit", space), version: 1, method: "get", [
+        try await livePhotoMotion(itemID: itemID, api: Self.api("Browse.Unit", space), reference: nil, scope: .space(space))
+    }
+
+    /// The motion of a Live Photo in an album shared with the account, looked up with the album's sharing reference.
+    public func incomingLivePhotoMotion(itemID: Int64, ownerID: Int64, albumID: Int64,
+                                        reference: String) async throws -> VideoPlaybackResource? {
+        guard !reference.isEmpty else { throw SynologyAPIError.invalidResponse }
+        return try await livePhotoMotion(itemID: itemID, api: "SYNO.Foto.Browse.Unit", reference: reference,
+                                         scope: .incomingAlbum(ownerID: ownerID, albumID: albumID))
+    }
+
+    private func livePhotoMotion(itemID: Int64, api: String, reference: String?,
+                                 scope: PhotoContentScope) async throws -> VideoPlaybackResource? {
+        var parameters = [
             "id_item": Self.idArray([itemID]),
-            "additional": Self.additionalParameter(for: ["orientation", "resolution", "thumbnail", "video_meta", "video_convert"])])
+            "additional": Self.additionalParameter(for: ["orientation", "resolution", "thumbnail", "video_meta", "video_convert"])]
+        if let reference { parameters["passphrase"] = try Self.jsonString(reference) }
+        let data: LivePhotoUnitData = try await call(api, version: 1, method: "get", parameters)
         guard data.list.count == 1, let group = data.list.first, group.itemID == itemID else { throw SynologyAPIError.invalidResponse }
         let members = group.unit.filter { $0.liveType == "video" }
         guard members.count == 1 else { return nil }
-        return members[0].playbackResource(scope: .space(space))
+        return members[0].playbackResource(scope: scope)
     }
 
-    public func streamVideoRange(_ resource: VideoPlaybackResource, range: ClosedRange<Int64>,
+    /// Space media streams with the session alone. Media of an album shared with the account
+    /// streams only as a converted rendition, with that album's sharing `reference`.
+    public func streamVideoRange(_ resource: VideoPlaybackResource, range: ClosedRange<Int64>, reference: String? = nil,
                                  receive: @escaping @Sendable (VideoRangeEvent) async throws -> Void) async throws {
-        guard let space = resource.scope.space else {
+        let space: PhotoSpace
+        let recipientReference: String?
+        switch (resource.scope, resource.variant, reference) {
+        case (.space(let value), _, nil):
+            space = value; recipientReference = nil
+        case (.incomingAlbum, .converted, let reference?) where !reference.isEmpty:
+            space = .personal; recipientReference = reference
+        default:
             throw SynologyAPIError.unsupported("Media requests in this content context are unavailable.")
         }
         let sid = try sessionID()
@@ -1142,17 +1166,24 @@ public actor SynologyClient: PhotosTransport {
                 URLQueryItem(name: "_sid", value: sid),
             ]
         case .converted(let quality):
-            components.path = "/webapi/entry.cgi/" + Self.api("Streaming", space)
-            components.queryItems = [
+            var items = [
                 URLQueryItem(name: "api", value: Self.api("Streaming", space)),
                 URLQueryItem(name: "version", value: "2"),
                 URLQueryItem(name: "method", value: "streaming"),
                 URLQueryItem(name: "id", value: String(resource.unitID)),
                 URLQueryItem(name: "type", value: "\"unit\""),
                 URLQueryItem(name: "quality", value: "\"\(quality.rawValue)\""),
-                URLQueryItem(name: "cache_key", value: resource.cacheKey),
-                URLQueryItem(name: "_sid", value: sid),
             ]
+            if let recipientReference {
+                // The web app's recipient form: the passphrase in place of a cache_key.
+                components.path = "/webapi/entry.cgi"
+                items.append(URLQueryItem(name: "passphrase", value: try Self.jsonString(recipientReference)))
+            } else {
+                components.path = "/webapi/entry.cgi/" + Self.api("Streaming", space)
+                items.append(URLQueryItem(name: "cache_key", value: resource.cacheKey))
+            }
+            items.append(URLQueryItem(name: "_sid", value: sid))
+            components.queryItems = items
         }
         if let synoToken { components.queryItems?.append(URLQueryItem(name: "SynoToken", value: synoToken)) }
         guard let url = components.url else { throw SynologyAPIError.invalidResponse }
@@ -1163,7 +1194,14 @@ public actor SynologyClient: PhotosTransport {
         request.setValue("bytes=\(range.lowerBound)-\(range.upperBound)", forHTTPHeaderField: "Range")
         request.setValue("video/*,application/octet-stream;q=0.8", forHTTPHeaderField: "Accept")
         let started = ContinuousClock.now
-        let (bytes, response) = try await session.bytes(for: request)
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do { (bytes, response) = try await session.bytes(for: request) }
+        catch {
+            // URLSession errors may contain the request URL, including its sharing reference.
+            if reference != nil, !(error is CancellationError) { throw SynologyAPIError.transport("Shared video request failed.") }
+            throw error
+        }
         guard let http = response as? HTTPURLResponse,
               http.statusCode == 206,
               let contentRange = http.value(forHTTPHeaderField: "Content-Range"),

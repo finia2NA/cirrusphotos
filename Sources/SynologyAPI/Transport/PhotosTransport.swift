@@ -192,7 +192,8 @@ public protocol PhotosTransport: Sendable {
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> MediaResponse
 
-    func streamVideoRange(_ resource: VideoPlaybackResource, range: ClosedRange<Int64>,
+    /// `reference` is the sharing reference of an incoming-album resource and nil for space media.
+    func streamVideoRange(_ resource: VideoPlaybackResource, range: ClosedRange<Int64>, reference: String?,
                           receive: @escaping @Sendable (VideoRangeEvent) async throws -> Void) async throws
     func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws
     func rotate(itemIDs: [Int64], direction: PhotoRotationDirection, space: PhotoSpace) async throws
@@ -202,6 +203,7 @@ public protocol PhotosTransport: Sendable {
     func removeTags(_ tagIDs: [Int64], fromItems itemIDs: [Int64], space: PhotoSpace) async throws
     func deleteItems(_ itemIDs: [Int64], space: PhotoSpace) async throws
     func livePhotoMotion(itemID: Int64, space: PhotoSpace) async throws -> VideoPlaybackResource?
+    func incomingLivePhotoMotion(itemID: Int64, ownerID: Int64, albumID: Int64, reference: String) async throws -> VideoPlaybackResource?
     func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, space: PhotoSpace,
                         progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse
 

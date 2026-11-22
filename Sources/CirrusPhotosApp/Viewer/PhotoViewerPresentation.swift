@@ -148,6 +148,11 @@ final class PhotoViewerPresentation: ObservableObject {
             }, fullImageLimit: state.fullImageLimit))
     }
 
+    /// The final still is on screen: full resolution, or the large preview where the original is not shown.
+    var isDisplayingBestStill: Bool {
+        isDisplayingFullResolution || (state?.fullImageLimit != nil && displayedTier == .thumbnail(.xl))
+    }
+
     var decodedThumbnailIdentities: Set<String> { Set(decodedThumbnails.keys) }
 
     var previousNeighborImage: NSImage? { neighborImage(state?.previousNeighbor) }
