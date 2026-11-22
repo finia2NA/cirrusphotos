@@ -44,4 +44,4 @@ Keep the "Project overview" current when durable facts change; it is an orientat
 - `docs/ARCHITECTURE.md`: structure, invariants, data flow.
 - `docs/SYNOLOGY_PHOTOS_API.md`: request shapes and server facts; `docs/capturefindings/`: how they were established; `docs/decisions/`: significant decisions.
 - Document only what is true now; no per-feature history.
-- **Size budget:** `AGENTS.md` about 1,000 words, `docs/ARCHITECTURE.md` about 6,000 (sections short enough for one screen, no paragraph over about 150 words), `docs/PROJECT.md` about 4,600. When an edit would exceed a budget, condense existing text first.
+- **Size budget:** `AGENTS.md` about 1,000 words, `docs/ARCHITECTURE.md` about 8,000 (sections short enough for one screen, no paragraph over about 150 words), `docs/PROJECT.md` about 4,600. When an edit would exceed a budget, condense existing text first.
