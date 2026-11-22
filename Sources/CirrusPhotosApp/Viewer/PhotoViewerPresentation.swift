@@ -146,7 +146,8 @@ final class PhotoViewerPresentation: ObservableObject {
             allowNetwork: state.allowNetwork,
             video: state.videoResource.map {
                 ViewerStatus.Video(variant: $0.variant, preference: videoQuality, playback: videoPlayback)
-            }, fullImageLimit: state.fullImageLimit))
+            }, isUnresolvedVideo: state.item?.isVideo == true && state.videoResource == nil,
+            fullImageLimit: state.fullImageLimit))
     }
 
     /// The final still is on screen: full resolution, or the large preview where the original is not shown.
@@ -172,7 +173,12 @@ final class PhotoViewerPresentation: ObservableObject {
         invalidationMessage == nil && state != nil && decodeFailure != nil
     }
 
-    var showsUnsupportedVideo: Bool { state?.item?.isVideo == true && state?.videoResource == nil }
+    /// Why the current video cannot play, once that is known.
+    var unavailableVideoMessage: String? {
+        guard state?.item?.isVideo == true, state?.videoResource == nil,
+              case .unsupported(let message) = state?.fullImageStatus else { return nil }
+        return message
+    }
 
     var canToggleFavorite: Bool {
         !isIncoming && invalidationMessage == nil && !isClosing && state?.item != nil &&

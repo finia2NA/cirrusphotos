@@ -22,6 +22,14 @@ extension CachedPhotosRepository {
         return try await client.livePhotoMotion(itemID: itemID, space: space)
     }
 
+    /// The verified origin space of an owned-album video member, so it streams as space media.
+    func albumVideoSpace(itemID: Int64, collection: PhotoCollectionDescriptor) async throws -> PhotoSpace {
+        let source = mediaCollection(for: collection)
+        guard source.albumID != nil else { throw RepositoryError.unavailable("Video playback is unavailable in this album.") }
+        defer { cancelIdleLogin() }
+        return try await albumItemSpace(itemIDs: [itemID], collection: source)
+    }
+
     public static let videoSegmentSize: Int64 = 64 * 1_024
     public static let videoWindowSize: Int64 = 1 * 1_024 * 1_024
 

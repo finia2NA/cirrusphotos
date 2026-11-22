@@ -160,4 +160,15 @@ final class ViewerStatusTests: XCTestCase {
         XCTAssertEqual(video(.original, .automatic, playing: .paused).short, "Original · No converted quality available")
         XCTAssertEqual(video(.converted(.medium), .automatic, playing: .buffering).short, "Medium · Buffering")
     }
+
+    func testUnresolvedVideoWaitsThenNamesWhyItCannotPlay() {
+        let waiting = ViewerStatus.make(ViewerStatus.Inputs(displayed: .thumbnail(.m), fullStatus: .idle, isUnresolvedVideo: true))
+        XCTAssertEqual(waiting.short, "Medium · Loading")
+        XCTAssertFalse(waiting.isComplete)
+        let unavailable = ViewerStatus.make(ViewerStatus.Inputs(displayed: .thumbnail(.m),
+                                                                fullStatus: .unsupported("Reason."), isUnresolvedVideo: true))
+        XCTAssertEqual(unavailable.short, "Video unavailable")
+        XCTAssertEqual(unavailable.help, "Reason.")
+        XCTAssertTrue(unavailable.isComplete)
+    }
 }
