@@ -5,14 +5,6 @@ import SynologyAPI
 import TimelineCore
 
 struct PhotoViewerView: View {
-    /// Space scopes know their origin; owned-album members are resolved when motion is requested.
-    static func supportsLivePhotoMotion(_ scope: PhotoContentScope) -> Bool {
-        switch scope {
-        case .space, .album: true
-        case .incomingAlbum: false
-        }
-    }
-
     @Environment(LibraryModel.self) private var library
     @ObservedObject var viewer: PhotoViewerPresentation
     var pinnedAlbumIDs: [Int64] = []
@@ -79,14 +71,14 @@ struct PhotoViewerView: View {
                                 }
                               },
                               livePhotoConfiguration: viewer.state.flatMap { state in
-                                guard !viewer.isIncoming, Self.supportsLivePhotoMotion(state.contentScope), let item = state.item, item.mediaKind == .livePhoto,
+                                guard let item = state.item, item.mediaKind == .livePhoto,
                                       state.metadataVerified, state.allowNetwork,
-                                      viewer.isDisplayingFullResolution,
+                                      viewer.isDisplayingBestStill,
                                       item.additional?.orientation == item.additional?.orientationOriginal else { return nil }
                                 return LivePhotoConfiguration(repository: viewer.repository, itemID: item.id, collection: viewer.collection,
                                                               generation: state.selection.generation, isMuted: videoMuted)
                               },
-                              showsLivePhotoIndicator: !viewer.isIncoming && viewer.state.map { Self.supportsLivePhotoMotion($0.contentScope) } == true && viewer.state?.item?.mediaKind == .livePhoto,
+                              showsLivePhotoIndicator: viewer.state?.item?.mediaKind == .livePhoto,
                               controller: viewer.canvasController,
                               onPrevious: viewer.navigatePrevious,
                               onNext: viewer.navigateNext,

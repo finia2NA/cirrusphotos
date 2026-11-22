@@ -2,10 +2,21 @@ import Foundation
 import SynologyAPI
 
 extension CachedPhotosRepository {
-    /// Looks up an item's Live Photo motion. Album members have no known origin
-    /// space, so it is verified on demand; an ambiguous origin throws.
+    /// Looks up an item's Live Photo motion. Owned-album members have no known origin
+    /// space, so it is verified on demand; an ambiguous origin throws. Incoming-album
+    /// motion is looked up with the album's sharing reference.
     public func livePhotoMotion(itemID: Int64, collection: PhotoCollectionDescriptor) async throws -> VideoPlaybackResource? {
-        let space = try await itemActionSpace(itemIDs: [itemID], collection: mediaCollection(for: collection))
+        let source = mediaCollection(for: collection)
+        if let identity = source.incomingAlbumIdentity {
+            guard let reference = incomingReference(for: source) else {
+                throw RepositoryError.unavailable("Shared album access is unavailable.")
+            }
+            try await connect()
+            defer { cancelIdleLogin() }
+            return try await client.incomingLivePhotoMotion(itemID: itemID, ownerID: identity.ownerID,
+                                                            albumID: identity.albumID, reference: reference)
+        }
+        let space = try await itemActionSpace(itemIDs: [itemID], collection: source)
         try await connect()
         defer { cancelIdleLogin() }
         return try await client.livePhotoMotion(itemID: itemID, space: space)
@@ -165,13 +176,22 @@ extension CachedPhotosRepository {
     private func downloadVideoWindow(_ resource: VideoPlaybackResource, range: ClosedRange<Int64>,
                                      window: VideoWindow) async throws {
         try Task.checkCancellation()
+        let reference: String?
+        if case .incomingAlbum(let owner, let album) = resource.scope {
+            guard let value = incomingReference(for: .incomingAlbum(ownerID: owner, albumID: album)) else {
+                throw RepositoryError.unavailable("Shared album access is unavailable.")
+            }
+            reference = value
+        } else {
+            reference = nil
+        }
         let generation = await store.currentGeneration()
         try await connect()
         let gateID = UUID()
         do {
             try await videoTransferGate.acquire(gateID)
             try Task.checkCancellation()
-            try await client.streamVideoRange(resource, range: range) { event in
+            try await client.streamVideoRange(resource, range: range, reference: reference) { event in
                 try Task.checkCancellation()
                 try await window.append(event)
             }

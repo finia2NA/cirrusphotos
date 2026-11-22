@@ -149,7 +149,7 @@ public extension TestPhotosTransport {
     func fullImage(_ resource: FullImageResource, etag: String?, lastModified: String?, progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> MediaResponse {
         try await fullImage(resource, etag: etag, lastModified: lastModified)
     }
-    func streamVideoRange(_ resource: VideoPlaybackResource, range: ClosedRange<Int64>, receive: @escaping @Sendable (VideoRangeEvent) async throws -> Void) async throws {
+    func streamVideoRange(_ resource: VideoPlaybackResource, range: ClosedRange<Int64>, reference: String?, receive: @escaping @Sendable (VideoRangeEvent) async throws -> Void) async throws {
         throw UnexpectedTransportCall("streamVideoRange")
     }
     func setFavorite(itemIDs: [Int64], favorite: Bool, space: PhotoSpace) async throws {
@@ -175,6 +175,9 @@ public extension TestPhotosTransport {
     }
     func livePhotoMotion(itemID: Int64, space: PhotoSpace) async throws -> VideoPlaybackResource? {
         throw UnexpectedTransportCall("livePhotoMotion")
+    }
+    func incomingLivePhotoMotion(itemID: Int64, ownerID: Int64, albumID: Int64, reference: String) async throws -> VideoPlaybackResource? {
+        throw UnexpectedTransportCall("incomingLivePhotoMotion")
     }
     func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, space: PhotoSpace, progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
         throw UnexpectedTransportCall("downloadPhotos")

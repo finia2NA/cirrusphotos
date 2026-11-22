@@ -149,7 +149,7 @@ private actor VideoRangeTestTransport: TestPhotosTransport {
 
     func setETag(_ value: String) { etag = value }
 
-    func streamVideoRange(_ resource: VideoPlaybackResource, range: ClosedRange<Int64>,
+    func streamVideoRange(_ resource: VideoPlaybackResource, range: ClosedRange<Int64>, reference: String?,
                           receive: @escaping @Sendable (VideoRangeEvent) async throws -> Void) async throws {
         let upper = min(range.upperBound, totalLength - 1)
         let delivered = range.lowerBound...upper
@@ -175,7 +175,7 @@ private actor BlockingVideoTransport: TestPhotosTransport {
     private var continuation: CheckedContinuation<Void, Never>?
     private var released = false
 
-    func streamVideoRange(_ resource: VideoPlaybackResource, range: ClosedRange<Int64>,
+    func streamVideoRange(_ resource: VideoPlaybackResource, range: ClosedRange<Int64>, reference: String?,
                           receive: @escaping @Sendable (VideoRangeEvent) async throws -> Void) async throws {
         try await receive(.header(VideoRangeHeader(range: range, totalLength: range.upperBound + 1,
                                                   contentType: "video/mp4", etag: nil, lastModified: nil)))
