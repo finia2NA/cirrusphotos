@@ -131,7 +131,7 @@ extension PhotoViewerSession {
 
     func expensiveThumbnailRequest(for descriptor: ThumbnailInfo) -> ViewerImageWork.ThumbnailRequest? {
         if thumbnailSize == .xl { return configuredThumbnailRequest() }
-        if loadsLargePreviews || largePreviewIsBest, thumbnailSize != .xl, descriptor.isReady(.xl) {
+        if imageQuality == .largeThenOriginal || largePreviewIsBest, thumbnailSize != .xl, descriptor.isReady(.xl) {
             return ViewerImageWork.ThumbnailRequest(tier: .largePreview, size: .xl, purpose: .viewerPreview)
         }
         return nil
@@ -152,7 +152,8 @@ extension PhotoViewerSession {
     }
 
     func scheduleLoadedNeighbors() {
-        guard !closed, supportsSpaceMedia, images.prefetchEnabledGeneration == generation else { return }
+        guard !closed, supportsSpaceMedia, imageQuality != .large,
+              images.prefetchEnabledGeneration == generation else { return }
         let locations = [-1, 1].compactMap { metadata.location(for: desired.ordinal + $0) }
         let desiredSections = Set(locations.map(\.sectionIndex) + [desired.sectionIndex])
         for section in desiredSections where metadata.pages[section] == nil || (allowNetwork && metadata.pages[section]?.verified == false) {

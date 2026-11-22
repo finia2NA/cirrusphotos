@@ -73,8 +73,28 @@ public enum PhotoViewerResourceStatus: Sendable, Equatable {
     case unsupported(String)
 }
 
+/// The final image the viewer loads for a photo. Downloads, drags and edits always use originals.
+public enum ViewerImageQuality: String, CaseIterable, Sendable, Hashable {
+    /// Only the original; the configured thumbnail shows while it loads.
+    case original
+    /// The large preview while the original loads.
+    case largeThenOriginal
+    /// The large preview is the final image; originals are not loaded.
+    case large
+
+    public var displayName: String {
+        switch self {
+        case .original: "Original"
+        case .largeThenOriginal: "Large, then Original"
+        case .large: "Large"
+        }
+    }
+}
+
 /// Why the large preview is the best image the viewer shows for an item.
 public enum FullImageLimit: Sendable, Equatable {
+    /// Photo quality is set to Large, so originals are not loaded.
+    case qualitySetting
     /// The account may only view the photo, so the NAS withholds its original.
     case viewOnly
     /// The NAS refused the original without the folder or album saying why.

@@ -213,7 +213,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         let viewer = PhotoViewerPresentation(repository: repository, collection: .library(.personal), index: LibraryIndex(snapshot: snapshot),
             request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                 item: items[0], page: items, pageVerified: true), source: PhotoViewerSourceAnchor()),
-            thumbnailSize: .m, loadsLargePreviews: true, allowNetwork: true, snapshotRevision: 1)
+            thumbnailSize: .m, imageQuality: .largeThenOriginal, allowNetwork: true, snapshotRevision: 1)
         await transport.releaseConfiguredThumbnail()
         let thumbnailReady = await waitUntil { viewer.nextNeighborImage?.size.width == 6 }
         XCTAssertTrue(thumbnailReady)
@@ -287,7 +287,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         let viewer = PhotoViewerPresentation(repository: repository, collection: .library(.personal), index: LibraryIndex(snapshot: snapshot),
             request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                 item: selected, page: [selected], pageVerified: true), source: PhotoViewerSourceAnchor()),
-            thumbnailSize: .m, loadsLargePreviews: true,
+            thumbnailSize: .m, imageQuality: .largeThenOriginal,
             allowNetwork: true, snapshotRevision: 1)
 
         var bothStarted = false
@@ -340,7 +340,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         let viewer = PhotoViewerPresentation(repository: repository, collection: .library(.personal), index: LibraryIndex(snapshot: snapshot),
             request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                 item: selected, page: [selected], pageVerified: true), source: PhotoViewerSourceAnchor()),
-            thumbnailSize: .m, loadsLargePreviews: true,
+            thumbnailSize: .m, imageQuality: .largeThenOriginal,
             allowNetwork: true, snapshotRevision: 1)
 
         var bothStarted = false
@@ -376,7 +376,7 @@ final class PhotoViewerPresentationTests: PhotoViewerPresentationTestCase {
         let viewer = PhotoViewerPresentation(repository: repository, collection: .library(.personal), index: LibraryIndex(snapshot: snapshot),
             request: PhotoViewerOpenRequest(seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
                 item: selected, page: [selected], pageVerified: true), source: PhotoViewerSourceAnchor()),
-            thumbnailSize: .m, loadsLargePreviews: true,
+            thumbnailSize: .m, imageQuality: .largeThenOriginal,
             allowNetwork: true, snapshotRevision: 1)
 
         var bothStarted = false

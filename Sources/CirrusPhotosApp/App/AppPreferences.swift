@@ -8,7 +8,7 @@ import SynologyAPI
 final class AppPreferences: ObservableObject {
     enum Key {
         static let thumbnailSize = "thumbnailSize"
-        static let loadsLargeViewerPreviews = "loadsLargeViewerPreviews"
+        static let viewerImageQuality = "viewerImageQuality"
         static let pixelInterpolation = "pixelInterpolation"
         static let videoMuted = "videoMuted"
         static let videoQuality = "videoQuality"
@@ -38,7 +38,7 @@ final class AppPreferences: ObservableObject {
     }
 
     @Published var thumbnailSize: ThumbnailSize { didSet { defaults.set(thumbnailSize.rawValue, forKey: Key.thumbnailSize) } }
-    @Published var loadsLargeViewerPreviews: Bool { didSet { defaults.set(loadsLargeViewerPreviews, forKey: Key.loadsLargeViewerPreviews) } }
+    @Published var viewerImageQuality: ViewerImageQuality { didSet { defaults.set(viewerImageQuality.rawValue, forKey: Key.viewerImageQuality) } }
     @Published var pixelInterpolation: PixelInterpolationPreference { didSet { defaults.set(pixelInterpolation.rawValue, forKey: Key.pixelInterpolation) } }
     @Published var videoMuted: Bool { didSet { defaults.set(videoMuted, forKey: Key.videoMuted) } }
     @Published var videoQuality: VideoQualityPreference { didSet { defaults.set(videoQuality.rawValue, forKey: Key.videoQuality) } }
@@ -61,7 +61,7 @@ final class AppPreferences: ObservableObject {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         thumbnailSize = defaults.string(forKey: Key.thumbnailSize).flatMap(ThumbnailSize.init(rawValue:)) ?? .m
-        loadsLargeViewerPreviews = defaults.bool(forKey: Key.loadsLargeViewerPreviews)
+        viewerImageQuality = defaults.string(forKey: Key.viewerImageQuality).flatMap(ViewerImageQuality.init(rawValue:)) ?? .original
         pixelInterpolation = defaults.string(forKey: Key.pixelInterpolation).flatMap(PixelInterpolationPreference.init(rawValue:)) ?? .off
         videoMuted = defaults.bool(forKey: Key.videoMuted)
         videoQuality = defaults.string(forKey: Key.videoQuality).flatMap(VideoQualityPreference.init(rawValue:)) ?? .automatic

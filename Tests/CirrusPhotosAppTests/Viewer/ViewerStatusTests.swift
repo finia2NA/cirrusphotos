@@ -134,6 +134,21 @@ final class ViewerStatusTests: XCTestCase {
         XCTAssertEqual(limited(.viewOnly, shown: .thumbnail(.m)).short, "Medium · Max permitted resolution")
     }
 
+    func testLargeQualitySettingIsCompleteWithoutClaimingALimit() {
+        func chosen(shown: ViewerImageTier?, loadingPreview: Bool = false) -> ViewerStatus {
+            ViewerStatus.make(ViewerStatus.Inputs(displayed: shown, fullStatus: .unsupported("setting"),
+                                                  isLoadingLargePreview: loadingPreview, fullImageLimit: .qualitySetting))
+        }
+        let large = chosen(shown: .thumbnail(.xl))
+        XCTAssertEqual(large.short, "Large")
+        XCTAssertEqual(large.help, "Showing the large preview; photo quality is set to Large in Settings.")
+        XCTAssertTrue(large.isComplete)
+        XCTAssertNil(large.progress)
+        XCTAssertEqual(chosen(shown: .thumbnail(.sm), loadingPreview: true).short, "Small · Loading")
+        // Without a large preview on the NAS, the shown preview is final.
+        XCTAssertEqual(chosen(shown: .thumbnail(.m)).short, "Medium")
+    }
+
     func testVideoIsCompleteOncePlayingOrPaused() {
         XCTAssertFalse(video(.converted(.high), playing: .buffering).isComplete)
         XCTAssertTrue(video(.converted(.high), playing: .playing).isComplete)

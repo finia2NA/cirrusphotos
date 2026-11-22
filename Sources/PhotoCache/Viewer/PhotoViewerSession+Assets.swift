@@ -10,13 +10,15 @@ extension PhotoViewerSession {
 
     /// Whether originals are not shown in this viewer, so the large preview is loaded as the best image.
     var largePreviewIsBest: Bool {
+        if imageQuality == .large { return true }
         if case .incomingAlbum = mediaContentScope { return true }
         return images.fullImageLimit != nil || !refusedOriginalFolders.isEmpty
     }
 
-    /// The limit known before any request: albums shared with the account, and items of a
-    /// Shared Space folder that already refused an original this session.
+    /// The limit known before any request: the Large photo quality setting, albums shared with
+    /// the account, and items of a Shared Space folder that already refused an original this session.
     private func knownFullImageLimit(for item: PhotoItem) -> FullImageLimit? {
+        if imageQuality == .large, !item.isVideo { return .qualitySetting }
         if case .incomingAlbum = mediaContentScope, !item.isVideo { return .sharedAlbum }
         if mediaContentScope == .space(.shared), !item.isVideo, let folder = item.folderID,
            refusedOriginalFolders.contains(folder) { return .refused }
@@ -26,7 +28,7 @@ extension PhotoViewerSession {
     /// Refines `refused` and `sharedAlbum` to `viewOnly` when the folder or album reports
     /// that the account may not download.
     func refineFullImageLimit(for item: PhotoItem) {
-        guard let limit = images.fullImageLimit, limit != .viewOnly else { return }
+        guard let limit = images.fullImageLimit, limit == .refused || limit == .sharedAlbum else { return }
         let expectedGeneration = generation
         let repository = repository
         let scope = mediaScope ?? collection
@@ -38,7 +40,7 @@ extension PhotoViewerSession {
 
     func applyViewOnlyLimit(generation expectedGeneration: UInt64, itemID: Int64) {
         guard !closed, generation == expectedGeneration, currentItem?.id == itemID,
-              images.fullImageLimit != nil, images.fullImageLimit != .viewOnly else { return }
+              images.fullImageLimit == .refused || images.fullImageLimit == .sharedAlbum else { return }
         images.fullImageLimit = .viewOnly
         publish()
     }
@@ -79,9 +81,11 @@ extension PhotoViewerSession {
         } else if item.isVideo && !supportsSpaceMedia {
             resource = nil
             images.fullImageStatus = .unsupported("Video playback is unavailable in this album.")
-        } else if images.fullImageLimit != nil {
+        } else if let limit = images.fullImageLimit {
             resource = nil
-            images.fullImageStatus = .unsupported("The NAS does not provide the original of this photo.")
+            images.fullImageStatus = .unsupported(limit == .qualitySetting
+                ? "Photo quality is set to Large."
+                : "The NAS does not provide the original of this photo.")
         } else if item.isVideo {
             images.fullImageStatus = .idle
             resource = nil
