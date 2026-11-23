@@ -2,6 +2,17 @@
 
 Version sections supply the website changelog, cumulative updater notes and individual GitHub release notes.
 
+## 0.1.9a
+
+- Folder cards use Synology’s single-image, composite and custom covers in Personal and Shared Space. Folders without a supplied cover keep Cirrus’s derived thumbnails.
+- Refresh from NAS picks up changed folder covers while cached covers remain available offline.
+- Custom folder covers no longer produce unreadable-details warnings. Genuine warnings identify the affected detail.
+- Failed entries in Activity and History have a Copy Details icon, also available in the right-click menu.
+
+Fixes #120 and #121, following the original folder report in #116. Thanks to @timvdsm for reporting the problems, testing the fixes and providing detailed follow-up.
+
+The first launch after this update automatically rebuilds cached library metadata from the NAS. Cached photo and video files are retained. A connection to the NAS is needed to reload the library metadata.
+
 ## 0.1.9
 
 - Folder cards use Synology’s single-image, composite and custom covers in Personal and Shared Space. Folders without a supplied cover keep Cirrus’s derived thumbnails.
