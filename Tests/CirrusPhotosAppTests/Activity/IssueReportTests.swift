@@ -24,7 +24,7 @@ import Testing
         #expect(body.contains("App: 0.1 (7)"))
         #expect(body.contains("macOS: Version 27.0 (Build 1)"))
         #expect(body.contains("Mac: Mac15,6"))
-        #expect(body.contains("Export Logs"))
+        #expect(body.contains("Copy Details"))
         // The raw query has no unescaped separators from the body.
         let query = try #require(components.percentEncodedQuery)
         #expect(!query.contains(" ") && !query.contains("\n"))

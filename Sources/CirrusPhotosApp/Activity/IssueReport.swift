@@ -35,7 +35,7 @@ enum IssueReport {
 
         \(environment(bundle: bundle, osVersion: osVersion, model: model))
 
-        If it helps, attach the log file from Help > Export Logs. Check it for anything private first.
+        If the error appears in Activity or History (View > Show Activity), click its Copy Details button and paste the details here.
         """
     }
 
