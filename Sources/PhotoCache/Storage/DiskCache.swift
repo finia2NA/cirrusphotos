@@ -31,6 +31,8 @@ public enum CacheBudget {
 }
 
 public actor DiskCache {
+    var folderReadEpochs: [String: UInt64] = [:]
+    var folderCoverEpochs: [String: UInt64] = [:]
     /// Bumping this discards media files too. Metadata-only format changes bump
     /// `metadataFormatVersion`, which keeps downloaded media.
     private static let schemaVersion = 4

@@ -6,7 +6,13 @@ import SynologyAPI
 struct UnreadableFolderDetails: LocalizedError {
     let folderID: Int64
     let fields: [String]
-    var errorDescription: String? { "Its cover or download permission is not shown." }
+    var errorDescription: String? {
+        let cover = fields.contains { $0.hasPrefix("additional.thumbnail") || $0.hasPrefix("additional:") }
+        let permission = fields.contains { $0.hasPrefix("additional.access_permission") || $0.hasPrefix("additional:") }
+        if cover && permission { return "Some folder cover images and download permission could not be read." }
+        if cover { return "Some folder cover images could not be read." }
+        return "Download permission could not be read."
+    }
 }
 
 extension LibraryModel {

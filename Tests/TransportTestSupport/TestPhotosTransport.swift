@@ -131,6 +131,9 @@ public extension TestPhotosTransport {
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem] {
         throw UnexpectedTransportCall("items")
     }
+    func folderThumbnail(folderID: Int64, cacheKey: String, sequence: Int64, space: PhotoSpace) async throws -> Data {
+        throw UnexpectedTransportCall("folderThumbnail")
+    }
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace) async throws -> Data {
         throw UnexpectedTransportCall("thumbnail")
     }

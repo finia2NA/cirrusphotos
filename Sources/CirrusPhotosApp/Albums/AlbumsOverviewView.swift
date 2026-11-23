@@ -208,43 +208,111 @@ struct AlbumCoverView: View {
     }
 }
 
-/// Cover of a folder card: the folder's own cover, or a 2×2 tile of representative descendants.
+/// The NAS composition, with bounded representative covers when it supplies none.
 struct FolderCoverView: View {
     let folder: FolderSummary
     let repository: CachedPhotosRepository?
     let space: PhotoSpace
-    @State private var covers: [ThumbnailInfo] = []
+    let verified: Bool
+    let refreshRevision: UInt64
+    @State private var covers: [FolderCoverResource] = []
+
+    private struct Request: Hashable {
+        let folder: FolderSummary
+        let space: PhotoSpace
+        let namespace: String?
+        let verified: Bool
+        let refreshRevision: UInt64
+    }
 
     var body: some View {
-        let collection = PhotoCollectionDescriptor.library(space)
         Group {
             if covers.count < 2 {
-                AlbumCoverView(thumbnail: covers.first ?? folder.thumbnail, repository: repository, collection: collection, placeholderSymbol: "folder")
+                tile(0)
             } else {
                 Color.clear
                     .aspectRatio(1, contentMode: .fit)
                     .overlay {
                         Grid(horizontalSpacing: 2, verticalSpacing: 2) {
-                            GridRow { tile(0, collection); tile(1, collection) }
-                            GridRow { tile(2, collection); tile(3, collection) }
+                            GridRow { tile(0); tile(1) }
+                            GridRow { tile(2); tile(3) }
                         }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             }
         }
-        .task(id: folder) {
+        .task(id: Request(folder: folder, space: space, namespace: repository?.namespace,
+                          verified: verified, refreshRevision: refreshRevision)) {
             guard let repository else { return }
-            if covers.isEmpty, let cached = await repository.cachedFolderCovers(for: folder, space: space) { covers = cached }
-            let fresh = await repository.folderCovers(for: folder, space: space)
-            if !Task.isCancelled, fresh != covers { covers = fresh }
+            if let cached = await repository.cachedFolderCovers(for: folder, space: space),
+               !Task.isCancelled {
+                covers = cached.resources
+            }
+            guard verified else { return }
+            if let fresh = try? await repository.folderCovers(for: folder, space: space),
+               !Task.isCancelled { covers = fresh.resources }
         }
     }
 
-    @ViewBuilder private func tile(_ index: Int, _ collection: PhotoCollectionDescriptor) -> some View {
-        if index < covers.count {
-            AlbumCoverView(thumbnail: covers[index], repository: repository, collection: collection, cornerRadius: 0, maxPixel: 256)
-        } else {
-            Color.secondary.opacity(0.12).aspectRatio(1, contentMode: .fit)
-        }
+    @ViewBuilder private func tile(_ index: Int) -> some View {
+        FolderCoverImageView(resource: index < covers.count ? covers[index] : nil,
+                             repository: repository, space: space, allowNetwork: verified,
+                             cornerRadius: covers.count < 2 ? 8 : 0)
+    }
+}
+
+/// Retains the displayed image while a changed cover is fetched.
+private struct FolderCoverImageView: View {
+    let resource: FolderCoverResource?
+    let repository: CachedPhotosRepository?
+    let space: PhotoSpace
+    let allowNetwork: Bool
+    let cornerRadius: CGFloat
+    @State private var image: NSImage?
+
+    private struct Request: Hashable {
+        let resource: FolderCoverResource?
+        let namespace: String?
+        let space: PhotoSpace
+        let allowNetwork: Bool
+    }
+
+    var body: some View {
+        Color.clear.aspectRatio(1, contentMode: .fit)
+            .overlay {
+                if let image {
+                    Image(nsImage: image).resizable().scaledToFill()
+                } else {
+                    ZStack {
+                        Color.secondary.opacity(0.12)
+                        Image(systemName: "folder").font(.largeTitle).foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            .task(id: Request(resource: resource, namespace: repository?.namespace,
+                              space: space, allowNetwork: allowNetwork)) {
+                guard let resource, let repository else { image = nil; return }
+                switch resource {
+                case .photo(let thumbnail):
+                    for await event in await repository.thumbnailWithFallback(
+                        thumbnail, size: .m, allowNetwork: allowNetwork, collection: .library(space)) {
+                        if case .value(let value, _) = event { await show(value.data) }
+                    }
+                case .custom(let folderID, let key, let sequence):
+                    for await event in await repository.folderCoverImage(
+                        folderID: folderID, cacheKey: key, sequence: sequence,
+                        space: space, allowNetwork: allowNetwork) {
+                        if case .value(let data, _) = event { await show(data) }
+                    }
+                }
+            }
+    }
+
+    private func show(_ data: Data) async {
+        guard !Task.isCancelled,
+              let decoded = await DecodedImages.shared.image(from: data, maxPixel: 512),
+              !Task.isCancelled else { return }
+        image = decoded
     }
 }

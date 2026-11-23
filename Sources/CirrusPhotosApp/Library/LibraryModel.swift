@@ -81,6 +81,7 @@ final class LibraryModel {
     private(set) var metadataInvalidationRevision: UInt64 = 0
     private(set) var cacheResetInProgress = false
     private(set) var cacheResetError: String?
+    private(set) var folderRefreshRevision: UInt64 = 0
     private(set) var isRefreshing = false
     private(set) var refreshFailure: String? { didSet { noteConnectionState() } }
     /// The last state `noteConnectionState` saw, and whether a lost-connection notice is showing.
@@ -740,7 +741,10 @@ final class LibraryModel {
             return
         }
         isRefreshing = true
-        defer { isRefreshing = false }
+        defer {
+            isRefreshing = false
+            folderRefreshRevision &+= 1
+        }
         let handle = activity.begin(.refresh, retry: { [weak self] _ in
             guard let self else { return false }
             Task { await self.refresh() }

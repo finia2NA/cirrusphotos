@@ -133,6 +133,10 @@ final class SharedCollectionIndexesTests: XCTestCase {
             let thumbnail = cover.map { #", "additional": {"thumbnail": [{"unit_id": \#($0), "cache_key": "k\#($0)"}]}"# } ?? ""
             return try JSONDecoder().decode(FolderSummary.self, from: Data(#"{"id": \#(id), "name": "/f\#(id)", "parent": \#(parent)\#(thumbnail)}"#.utf8))
         }
+        func coverUnitID(_ resource: FolderCoverResource) -> Int64? {
+            if case .photo(let thumbnail) = resource { return thumbnail.unitID }
+            return nil
+        }
         let top = try folder(1, parent: 0)
         let directories: [Int64: [FolderSummary]] = [
             1: [try folder(2, parent: 1), try folder(3, parent: 1, cover: 30)],
@@ -143,33 +147,32 @@ final class SharedCollectionIndexesTests: XCTestCase {
             let admission = try await repository.store.metadataAdmission(namespace)
             try await repository.store.storeMetadataFolderDirectory(FolderDirectory(folder: parent, children: children), namespace: namespace, id: id, currentRun: repository.runID, admission: admission)
         }
-        let covers = await repository.folderCovers(for: top, space: .personal)
+        let covers = try await repository.folderCovers(for: top, space: .personal)
         // The shallow leaf comes first, then the leaves under the nested folder, capped at four.
-        XCTAssertEqual(covers.map(\.unitID), [30, 40, 50, 60])
-        let own = await repository.folderCovers(for: try folder(9, parent: 1, cover: 90), space: .personal)
-        XCTAssertEqual(own.map(\.unitID), [90])
-        // A folder with its own photo and a subfolder shows its own cover first, then the subfolder's.
+        XCTAssertEqual(covers.resources.compactMap(coverUnitID), [30, 40, 50, 60])
+        let own = try await repository.folderCovers(for: try folder(9, parent: 1, cover: 90), space: .personal)
+        XCTAssertEqual(own.resources.compactMap(coverUnitID), [90])
+        // A supplied server cover occupies the card without adding descendants.
         let mixed = try folder(8, parent: 0, cover: 10)
         let mixedAdmission = try await repository.store.metadataAdmission(namespace)
         try await repository.store.storeMetadataFolderDirectory(
             FolderDirectory(folder: mixed, children: [try folder(3, parent: 8, cover: 30), try folder(4, parent: 8, cover: 40)]),
             namespace: namespace, id: 8, currentRun: repository.runID, admission: mixedAdmission)
-        let withOwn = await repository.folderCovers(for: mixed, space: .personal)
-        XCTAssertEqual(withOwn.map(\.unitID), [10, 30, 40])
+        let withOwn = try await repository.folderCovers(for: mixed, space: .personal)
+        XCTAssertEqual(withOwn.resources.compactMap(coverUnitID), [10])
         // Results persist: they are readable without recomputing, and a changed listing withdraws them.
         let stored = await repository.cachedFolderCovers(for: top, space: .personal)
-        XCTAssertEqual(stored?.map(\.unitID), [30, 40, 50, 60])
+        XCTAssertEqual(stored?.resources.compactMap(coverUnitID), [30, 40, 50, 60])
         let admission = try await repository.store.metadataAdmission(namespace)
         try await repository.store.storeMetadataFolderDirectory(
             FolderDirectory(folder: top, children: [try folder(2, parent: 1), try folder(3, parent: 1, cover: 31)]),
             namespace: namespace, id: 1, currentRun: repository.runID, admission: admission)
-        // The unrelated folder keeps its result for this run; the changed folder's was withdrawn.
+        // Server covers need no derived record; the changed fallback's validation was withdrawn.
         let unrelated = try await repository.store.metadataFolderCovers(namespace, id: 8)
-        let run = await repository.runID
-        XCTAssertEqual(unrelated?.validatedRun, run)
+        XCTAssertNil(unrelated)
         let withdrawn = try await repository.store.metadataFolderCovers(namespace, id: 1)
         XCTAssertNil(withdrawn?.validatedRun)
-        let recomputed = await repository.folderCovers(for: top, space: .personal)
-        XCTAssertEqual(recomputed.map(\.unitID), [31, 40, 50, 60])
+        let recomputed = try await repository.folderCovers(for: top, space: .personal)
+        XCTAssertEqual(recomputed.resources.compactMap(coverUnitID), [31, 40, 50, 60])
     }
 }

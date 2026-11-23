@@ -46,12 +46,14 @@ public struct MetadataStoreAdmission: Sendable {
     public let metadataGeneration: Int
     public let revision: Int64
     public let resetEpoch: Int64
+    let folderReadEpoch: UInt64
+    let folderCoverEpoch: UInt64
 }
 
 /// Typed record access on the existing cache actor. No transaction suspends.
 /// The normalized format is initialized explicitly when the engine enrolls it.
 extension DiskCache {
-    static let metadataFormatVersion = 10
+    static let metadataFormatVersion = 11
 
     public func initializeMetadataStore() throws {
         try database.inTransaction(.immediate) { db in
@@ -89,7 +91,9 @@ extension DiskCache {
     public func metadataAdmission(_ namespace: MetadataNamespace) throws -> MetadataStoreAdmission {
         let state = try metadataState(namespace)
         return MetadataStoreAdmission(namespace: namespace, generation: generation, metadataGeneration: metadataGeneration,
-                                      revision: state.revision, resetEpoch: state.resetEpoch)
+                                      revision: state.revision, resetEpoch: state.resetEpoch,
+                                      folderReadEpoch: folderReadEpochs[namespace.key, default: 0],
+                                      folderCoverEpoch: folderCoverEpochs[namespace.key, default: 0])
     }
     private func admit(_ admission: MetadataStoreAdmission, namespace: MetadataNamespace, _ db: Database) throws {
         let state = try metadataState(db, namespace)
@@ -166,11 +170,15 @@ extension DiskCache {
     public func storeMetadataFolderDirectory(_ value: FolderDirectory, namespace: MetadataNamespace, id: Int64, currentRun: String, admission: MetadataStoreAdmission) throws {
         try metadataWrite { db in
             try admit(admission, namespace: namespace, db)
+            guard admission.folderReadEpoch == folderReadEpochs[namespace.key, default: 0] else {
+                throw MetadataAdmissionError.superseded
+            }
             let previous = try FolderDirectoryRecord.row(namespace, id).fetchOne(db)?.payload
             try FolderDirectoryRecord(namespace: namespace.key, folderID: id, payload: value, validatedRun: currentRun)
                 .insert(db, onConflict: .replace)
             // A changed listing can change the folder's cover and those of its ancestors, nothing else.
             if let previous, previous != value {
+                folderCoverEpochs[namespace.key, default: 0] &+= 1
                 var affected: Set<Int64> = [id]
                 var parent = value.folder.parent
                 while affected.count < 64, affected.insert(parent).inserted,
@@ -181,14 +189,17 @@ extension DiskCache {
         }
     }
 
-    public func metadataFolderCovers(_ namespace: MetadataNamespace, id: Int64) throws -> (covers: [ThumbnailInfo], validatedRun: String?)? {
+    public func metadataFolderCovers(_ namespace: MetadataNamespace, id: Int64) throws -> (covers: FolderCoverPresentation, validatedRun: String?)? {
         try database.read { try FolderCoverRecord.row(namespace, id).fetchOne($0) }.map { ($0.payload, $0.validatedRun) }
     }
-    public func storeMetadataFolderCovers(_ covers: [ThumbnailInfo], namespace: MetadataNamespace, id: Int64, currentRun: String,
+    public func storeMetadataFolderCovers(_ covers: FolderCoverPresentation, namespace: MetadataNamespace, id: Int64, currentRun: String,
                                           admission: MetadataStoreAdmission) throws {
-        // Derived display data: it needs reset fencing, not revision fencing, and holds no media to trim.
+        // Derived display data retains reset and folder-dependency fencing.
         try metadataWrite(enforceBudget: false) { db in
             try admitLifetime(admission, namespace: namespace)
+            guard admission.folderCoverEpoch == folderCoverEpochs[namespace.key, default: 0] else {
+                throw MetadataAdmissionError.superseded
+            }
             try FolderCoverRecord(namespace: namespace.key, folderID: id, payload: covers, validatedRun: currentRun)
                 .insert(db, onConflict: .replace)
         }
@@ -197,6 +208,7 @@ extension DiskCache {
         try metadataWrite(enforceBudget: false) { db in
             try admitLifetime(admission, namespace: namespace)
             try FolderCoverRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            folderCoverEpochs[namespace.key, default: 0] &+= 1
         }
     }
 
@@ -883,15 +895,27 @@ extension DiskCache {
                 .updateAll(db) { [$0.validatedRun.set(to: nil), $0.sourceVersion.set(to: nil)] }
             try AlbumSummariesRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
             try FolderDirectoryRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            folderReadEpochs[namespace.key, default: 0] &+= 1
             try FolderCoverRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            folderCoverEpochs[namespace.key, default: 0] &+= 1
             try CollectionSummaryRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
             try CollectionDayRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.membershipGeneration += 1 }
             try advanceMetadataLocalRevision(db, namespace)
         }
     }
 
-    /// Withdraws only this run's validation of catalogs and summary lists, so the next read
-    /// of each fetches it again. Stored rows, page membership and Diff proof are untouched.
+    /// Folder listings have no change feed, including in folder-only Shared Space.
+    public func withdrawFolderValidation(namespace: MetadataNamespace, admission: MetadataStoreAdmission) throws {
+        try metadataWrite { db in
+            try admitLifetime(admission, namespace: namespace)
+            try FolderDirectoryRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            try FolderCoverRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            folderReadEpochs[namespace.key, default: 0] &+= 1
+            folderCoverEpochs[namespace.key, default: 0] &+= 1
+        }
+    }
+
+    /// Withdraws current-run catalog and summary validation while keeping stored content.
     public func withdrawSummaryValidation(namespace: MetadataNamespace,
                                           admission: MetadataStoreAdmission) throws {
         try metadataWrite { db in
@@ -899,7 +923,9 @@ extension DiskCache {
             try CollectionStateRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
             try AlbumSummariesRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
             try FolderDirectoryRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            folderReadEpochs[namespace.key, default: 0] &+= 1
             try FolderCoverRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
+            folderCoverEpochs[namespace.key, default: 0] &+= 1
             try CollectionSummaryRecord.filter { $0.namespace == namespace.key }.updateAll(db) { $0.validatedRun.set(to: nil) }
         }
     }

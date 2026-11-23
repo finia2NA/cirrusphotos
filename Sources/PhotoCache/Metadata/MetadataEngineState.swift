@@ -46,6 +46,7 @@ struct MetadataEngineState {
     var collectionPageObservers: [UUID: CollectionPageObserver] = [:]
     var pendingPagePromotions: [String] = []
     var collectionIndexJobs: [CollectionIndexJobKey: SharedJob<[CollectionIndexEntry]>] = [:]
+    var folderRefreshRevision: UInt64 = 0
     var folderJobs: [PhotoCollectionDescriptor: SharedJob<FolderDirectory>] = [:]
     var albums = AlbumEngineState()
     var people = PeopleEngineState()

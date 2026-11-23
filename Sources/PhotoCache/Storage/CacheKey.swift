@@ -44,6 +44,11 @@ public enum CacheKey {
         )
     }
 
+    public static func folderCover(namespace: String, space: PhotoSpace, folderID: Int64,
+                                   cacheKey: String, sequence: Int64) -> String {
+        digest("\(namespace)|\(PhotoContentScope.space(space).cacheComponent)|folder-cover|v1|\(folderID)|\(cacheKey)|\(sequence)")
+    }
+
     public static func fullImage(namespace: String, resource: FullImageResource) -> String {
         digest("\(namespace)|\(resource.scope.cacheComponent)|download|v2|unit|\(resource.unitID)|\(resource.cacheKey)")
     }

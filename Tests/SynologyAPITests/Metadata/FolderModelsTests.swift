@@ -7,7 +7,7 @@ final class FolderModelsTests: XCTestCase {
         let json = #"{"id":7,"parent":2,"name":"/Camera/Trips","additional":{"thumbnail":[]}}"#
         let folder = try JSONDecoder().decode(FolderSummary.self, from: Data(json.utf8))
         XCTAssertEqual(folder.displayName, "Trips")
-        XCTAssertNil(folder.thumbnail)
+        XCTAssertEqual(folder.additional?.thumbnail, [])
         XCTAssertEqual(folder.parent, 2)
         XCTAssertEqual(try JSONDecoder().decode(FolderSummary.self, from: JSONEncoder().encode(folder)), folder)
     }
@@ -19,7 +19,10 @@ final class FolderModelsTests: XCTestCase {
           "access_permission":{"view":1,"download":true}}}
         """#
         let folder = try JSONDecoder().decode(FolderSummary.self, from: Data(json.utf8))
-        XCTAssertEqual(folder.additional?.thumbnail?.map(\.unitID), [1, 4])
+        XCTAssertEqual(folder.additional?.thumbnail?.compactMap { entry -> Int64? in
+            if case .photo(let thumbnail) = entry { return thumbnail.unitID }
+            return nil
+        }, [1, 4])
         XCTAssertNil(folder.additional?.accessPermission)
         XCTAssertEqual(folder.unreadableFields.count, 4)
         XCTAssertTrue(folder.unreadableFields[0].hasPrefix("additional.thumbnail[1]: null at"))
@@ -31,6 +34,48 @@ final class FolderModelsTests: XCTestCase {
         let stored = try JSONDecoder().decode(FolderSummary.self, from: JSONEncoder().encode(folder))
         XCTAssertEqual(stored, folder)
         XCTAssertEqual(stored.unreadableFields, [])
+    }
+
+    func testCustomFolderCoverDecodesAndSurvivesPersistence() throws {
+        // Shape captured after Set as folder cover in Synology Photos 1.9.1.
+        let json = #"""
+        {"id":950,"parent":175,"name":"/MyBook/2021","additional":{
+          "thumbnail":[{"cache_key":"cover_revision","folder_cover_seq":2}],
+          "access_permission":{"view":true,"download":false}}}
+        """#
+        let folder = try JSONDecoder().decode(FolderSummary.self, from: Data(json.utf8))
+        XCTAssertEqual(folder.additional?.thumbnail, [.custom(cacheKey: "cover_revision", sequence: 2)])
+        XCTAssertTrue(folder.unreadableFields.isEmpty)
+        XCTAssertEqual(folder.allowsDownload, false)
+        XCTAssertEqual(try JSONDecoder().decode(FolderSummary.self, from: JSONEncoder().encode(folder)), folder)
+    }
+
+    func testMalformedCustomCoverPreservesOtherCoversAndPermission() throws {
+        let json = #"""
+        {"id":7,"parent":2,"name":"/Trips","additional":{
+          "thumbnail":[{"cache_key":"bad","folder_cover_seq":null},
+                       {"unit_id":4,"cache_key":"4_1","m":"ready"},
+                       {"cache_key":"custom","folder_cover_seq":3}],
+          "access_permission":{"download":true}}}
+        """#
+        let folder = try JSONDecoder().decode(FolderSummary.self, from: Data(json.utf8))
+        XCTAssertEqual(folder.additional?.thumbnail?.count, 2)
+        XCTAssertEqual(folder.additional?.thumbnail?.first, .photo(.init(unitID: 4, cacheKey: "4_1", m: "ready")))
+        XCTAssertEqual(folder.allowsDownload, true)
+        XCTAssertEqual(folder.unreadableFields.count, 1)
+        XCTAssertTrue(folder.unreadableFields[0].contains("folder_cover_seq"))
+    }
+
+    func testCustomCoverDoesNotGrantUnreadableDownloadPermission() throws {
+        let json = #"""
+        {"id":7,"parent":2,"name":"/Trips","additional":{
+          "thumbnail":[{"cache_key":"custom","folder_cover_seq":3}],
+          "access_permission":{"download":1}}}
+        """#
+        let folder = try JSONDecoder().decode(FolderSummary.self, from: Data(json.utf8))
+        XCTAssertNil(folder.allowsDownload)
+        XCTAssertEqual(folder.unreadableFields.count, 1)
+        XCTAssertTrue(folder.unreadableFields[0].hasPrefix("additional.access_permission:"))
     }
 
     func testFolderWithoutNameStillFails() {

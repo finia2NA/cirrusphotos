@@ -178,6 +178,7 @@ public protocol PhotosTransport: Sendable {
 
     func items(ids: [Int64], space: PhotoSpace) async throws -> [PhotoItem]
     /// One rendition's image bytes. Renditions are versioned by `cache_key`, so no HTTP validators are sent.
+    func folderThumbnail(folderID: Int64, cacheKey: String, sequence: Int64, space: PhotoSpace) async throws -> Data
     func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, space: PhotoSpace) async throws -> Data
 
     func setRegenerating(itemIDs: [Int64], space: PhotoSpace) async throws -> [RegeneratingThumbnailUnit]

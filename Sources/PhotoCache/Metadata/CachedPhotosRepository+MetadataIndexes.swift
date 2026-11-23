@@ -5,7 +5,7 @@ extension CachedPhotosRepository {
     /// Finite index/directory reads share admission, cached delivery and subscriber
     /// ownership. Each caller retains its typed storage and NAS fetch contract.
     func metadataIndex<Key: Hashable & Sendable, Value: Sendable>(
-        key: Key, space: PhotoSpace, name: String, guardsPeopleMutations: Bool = false, priority: RequestPriority = .visible,
+        key: Key, space: PhotoSpace, name: String, guardsPeopleMutations: Bool = false, guardsFolderRefresh: Bool = false, priority: RequestPriority = .visible,
         jobs: (WritableKeyPath<MetadataEngineState, [Key: SharedJob<Value>]> & Sendable),
         cached: @escaping @Sendable (DiskCache, MetadataNamespace) async throws -> (Value, String?)?,
         fetch: @escaping @Sendable (any PhotosTransport) async throws -> Value,
@@ -19,9 +19,11 @@ extension CachedPhotosRepository {
                 do {
                     try await initializeMetadataEngine()
                     let epoch = metadata.admissionEpoch
+                    let folderRevision = metadata.folderRefreshRevision
                     let peopleEpoch = metadata.people.epoch[space, default: 0]
                     let validation = "\(runID):\(epoch):\(name)"
                     let previous = try await cached(store, namespace)
+                    guard !guardsFolderRefresh || folderRevision == metadata.folderRefreshRevision else { continuation.finish(); return }
                     guard !Task.isCancelled, isAdmitted(epoch) else { continuation.finish(); return }
                     let writing = guardsPeopleMutations && metadata.people.mutationSpaces.contains(space)
                     guard !guardsPeopleMutations || peopleEpoch == metadata.people.epoch[space, default: 0] else { continuation.finish(); return }
@@ -40,7 +42,7 @@ extension CachedPhotosRepository {
                             let admission = try await store.metadataAdmission(namespace)
                             let value = try await metadataReadRequest(priority: priority, id: id) { try await fetch(client) }
                             try Task.checkCancellation()
-                            guard isAdmitted(epoch), metadata[keyPath: jobs][key]?.id == id else { throw MetadataAdmissionError.superseded }
+                            guard (!guardsFolderRefresh || folderRevision == metadata.folderRefreshRevision), isAdmitted(epoch), metadata[keyPath: jobs][key]?.id == id else { throw MetadataAdmissionError.superseded }
                             try await persist(store, namespace, value, validation, admission)
                             guard epoch == metadata.admissionEpoch, metadata[keyPath: jobs][key]?.id == id else { throw MetadataAdmissionError.superseded }
                             return value
@@ -48,7 +50,7 @@ extension CachedPhotosRepository {
                         metadata[keyPath: jobs][key] = SharedJob(id: id, task: task, subscribers: [subscriber])
                     }
                     let value = try await task.value
-                    guard !Task.isCancelled, epoch == metadata.admissionEpoch, (!guardsPeopleMutations || (peopleEpoch == metadata.people.epoch[space, default: 0] && !metadata.people.mutationSpaces.contains(space))) else { continuation.finish(); return }
+                    guard !Task.isCancelled, (!guardsFolderRefresh || folderRevision == metadata.folderRefreshRevision), epoch == metadata.admissionEpoch, (!guardsPeopleMutations || (peopleEpoch == metadata.people.epoch[space, default: 0] && !metadata.people.mutationSpaces.contains(space))) else { continuation.finish(); return }
                     continuation.yield(.value(value, verified: true))
                 } catch {
                     if !Task.isCancelled && !(error is CancellationError) { continuation.yield(.failure(RepositoryError.record(error, operation: name))) }

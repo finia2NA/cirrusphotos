@@ -13,7 +13,7 @@ extension CachedPhotosRepository {
     public func folderDirectory(id: Int64, space: PhotoSpace, known: FolderSummary? = nil,
                                 priority: RequestPriority = .visible) -> AsyncStream<ResourceEvent<FolderDirectory>> {
         let known = id != 0 && known?.id == id ? known : nil
-        return metadataIndex(key: PhotoCollectionDescriptor.folder(id, space: space), space: space, name: "Folders", priority: priority, jobs: \.folderJobs,
+        return metadataIndex(key: PhotoCollectionDescriptor.folder(id, space: space), space: space, name: "Folders", guardsFolderRefresh: true, priority: priority, jobs: \.folderJobs,
             cached: { try await $0.metadataFolderDirectory($1, id: id) },
             fetch: { client in
                 let folder = if let known { known } else { try await client.folder(id: id, space: space) }
@@ -24,41 +24,61 @@ extension CachedPhotosRepository {
     }
 }
 
+/// A folder card's ordered image sources. Custom images are addressed by folder, not photo unit.
+public enum FolderCoverResource: Codable, Hashable, Sendable {
+    case photo(ThumbnailInfo)
+    case custom(folderID: Int64, cacheKey: String, sequence: Int64)
+}
+
+public struct FolderCoverPresentation: Codable, Equatable, Sendable {
+    public let folder: FolderSummary
+    public let resources: [FolderCoverResource]
+}
+
+extension FolderSummary {
+    /// A custom selection occupies the whole card. Ordinary server entries keep their order.
+    var serverCoverResources: [FolderCoverResource] {
+        let entries = additional?.thumbnail ?? []
+        for entry in entries {
+            if case .custom(let key, let sequence) = entry {
+                return [.custom(folderID: id, cacheKey: key, sequence: sequence)]
+            }
+        }
+        return entries.prefix(4).compactMap {
+            if case .photo(let thumbnail) = $0 { return .photo(thumbnail) }
+            return nil
+        }
+    }
+}
+
 extension CachedPhotosRepository {
-    /// Folders visited and uncached directory reads allowed per cover search.
     private static let coverVisitLimit = 30
     private static let coverFetchLimit = 6
 
-    /// Up to `limit` distinct thumbnails representing `folder`: its own cover, then the covers of
-    /// descendant folders found breadth-first, then the folder's direct photos from a cached
-    /// first page. Directories come from the cache; unread ones are fetched at prefetch priority,
-    /// a few for a folder without its own cover and only the folder's own listing otherwise.
-    /// Results persist per folder. A result computed in this run is reused as is; one from an
-    /// earlier run is shown by `cachedFolderCovers` and recomputed once. Listing changes and uploads
-    /// withdraw the current run's results.
-    public func folderCovers(for folder: FolderSummary, space: PhotoSpace, limit: Int = 4) async -> [ThumbnailInfo] {
-        let started = ContinuousClock.now
+    /// NAS covers take precedence. Only folders without them search their descendants.
+    public func folderCovers(for folder: FolderSummary, space: PhotoSpace) async throws -> FolderCoverPresentation {
+        let supplied = folder.serverCoverResources
+        if !supplied.isEmpty { return FolderCoverPresentation(folder: folder, resources: supplied) }
         let namespace = metadataNamespace(for: space)
-        if let stored = try? await store.metadataFolderCovers(namespace, id: folder.id), stored.validatedRun == runID {
+        if let stored = try? await store.metadataFolderCovers(namespace, id: folder.id),
+           stored.validatedRun == runID, stored.covers.folder == folder {
             return stored.covers
         }
-        var covers: [ThumbnailInfo] = []
-        func add(_ thumbnail: ThumbnailInfo) {
-            guard covers.count < limit,
-                  !covers.contains(where: { $0.unitID == thumbnail.unitID && $0.cacheKey == thumbnail.cacheKey }) else { return }
-            covers.append(thumbnail)
+        let admission = try? await store.metadataAdmission(namespace)
+        var covers: [FolderCoverResource] = []
+        func add(_ cover: FolderCoverResource) {
+            guard covers.count < 4, !covers.contains(cover) else { return }
+            covers.append(cover)
         }
-        if let own = folder.thumbnail { add(own) }
-        let fetchLimit = folder.thumbnail == nil ? Self.coverFetchLimit : 1
         var queue = [folder.id]
         var visited: Set<Int64> = [folder.id]
         var fetches = 0
         var index = 0
-        while index < queue.count, covers.count < limit, index < Self.coverVisitLimit, !Task.isCancelled {
+        while index < queue.count, covers.count < 4, index < Self.coverVisitLimit, !Task.isCancelled {
             let id = queue[index]
             index += 1
             var directory = (try? await store.metadataFolderDirectory(namespace, id: id))?.0
-            if directory == nil, fetches < fetchLimit {
+            if directory == nil, fetches < Self.coverFetchLimit {
                 fetches += 1
                 for await event in folderDirectory(id: id, space: space, priority: .prefetch) {
                     if case .value(let value, _) = event { directory = value }
@@ -66,23 +86,36 @@ extension CachedPhotosRepository {
                 }
             }
             for child in directory?.children ?? [] where visited.insert(child.id).inserted {
-                if let thumbnail = child.thumbnail { add(thumbnail) } else { queue.append(child.id) }
+                let resources = child.serverCoverResources
+                if resources.isEmpty { queue.append(child.id) }
+                else { resources.forEach(add) }
             }
         }
-        if covers.count < limit, !Task.isCancelled {
-            for thumbnail in await cachedFolderPhotoThumbnails(folderID: folder.id, space: space, limit: limit) { add(thumbnail) }
+        if covers.count < 4, !Task.isCancelled {
+            for thumbnail in await cachedFolderPhotoThumbnails(folderID: folder.id, space: space, limit: 4) {
+                add(.photo(thumbnail))
+            }
         }
-        guard !Task.isCancelled else { return covers }
-        if let admission = try? await store.metadataAdmission(namespace) {
-            try? await store.storeMetadataFolderCovers(covers, namespace: namespace, id: folder.id, currentRun: runID, admission: admission)
+        let result = FolderCoverPresentation(folder: folder, resources: covers)
+        try Task.checkCancellation()
+        if let admission {
+            do {
+                try await store.storeMetadataFolderCovers(result, namespace: namespace, id: folder.id,
+                                                          currentRun: runID, admission: admission)
+            } catch let error as MetadataAdmissionError {
+                throw error
+            } catch {
+                // A failed cache write does not prevent displaying the resolved images.
+            }
         }
-        SynologyDiagnostics.folders.info("covers folder=\(folder.id, privacy: .public) found=\(covers.count, privacy: .public) visited=\(index, privacy: .public) fetches=\(fetches, privacy: .public) elapsed=\(String(describing: ContinuousClock.now - started), privacy: .public)")
-        return covers
+        return result
     }
 
-    /// The covers last stored for `folder`, from this run or an earlier one; nothing is read from the network.
-    public func cachedFolderCovers(for folder: FolderSummary, space: PhotoSpace) async -> [ThumbnailInfo]? {
-        try? await store.metadataFolderCovers(metadataNamespace(for: space), id: folder.id)?.covers
+    /// Supplies the NAS composition immediately, or the previous locally derived composition.
+    public func cachedFolderCovers(for folder: FolderSummary, space: PhotoSpace) async -> FolderCoverPresentation? {
+        let supplied = folder.serverCoverResources
+        if !supplied.isEmpty { return FolderCoverPresentation(folder: folder, resources: supplied) }
+        return try? await store.metadataFolderCovers(metadataNamespace(for: space), id: folder.id)?.covers
     }
 
     /// Thumbnails of the first cached page of the folder's most recent day; nothing is fetched.

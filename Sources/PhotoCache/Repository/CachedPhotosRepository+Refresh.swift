@@ -6,10 +6,17 @@ extension CachedPhotosRepository {
     /// feeds do not cover (collection catalogs and album, folder and summary lists), so
     /// the next read of each fetches it again. Nothing is reset: feed changes reach open
     /// views through the usual per-day invalidation, and consumers re-subscribe to merge
-    /// the re-read lists over what they show. When no feed can be reached nothing is
-    /// withdrawn and the first failure is thrown.
+    /// re-read lists over what they show. Folder validation is always withdrawn because
+    /// folders have no feed and folder-only Shared Space may have no cursor.
     public func refreshMetadata() async throws {
         try await initializeMetadataEngine()
+        metadata.folderRefreshRevision &+= 1
+        for job in metadata.folderJobs.values { job.task.cancel() }
+        metadata.folderJobs.removeAll()
+        for space in PhotoSpace.allCases {
+            let namespace = metadataNamespace(for: space)
+            try await store.withdrawFolderValidation(namespace: namespace, admission: store.metadataAdmission(namespace))
+        }
         var reconciled: [PhotoSpace] = []
         var failure: (any Error)?
         for space in PhotoSpace.allCases {

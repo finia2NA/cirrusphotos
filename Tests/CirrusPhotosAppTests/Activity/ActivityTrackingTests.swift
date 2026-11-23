@@ -47,7 +47,33 @@ final class ActivityTrackingTests: XCTestCase {
         model.noteUnreadableFolderDetails(in: directory, space: .shared)
         XCTAssertEqual(activity.history.map(\.title), ["Some details of folder Trips could not be read"])
         XCTAssertEqual(activity.history.first?.failure?.underlying.last?.hasPrefix("additional.thumbnail[0]: missing key"), true)
+        XCTAssertEqual(activity.history.first?.detail, "Some folder cover images could not be read.")
         XCTAssertTrue(activity.attention.isEmpty)
+    }
+
+    func testValidCustomFolderCoverDoesNotRecordFailure() throws {
+        let activity = ActivityCenter()
+        let model = LibraryModel(activity: activity)
+        let json = #"""
+        {"folder":{"id":175,"name":"/MyBook","parent":1},"children":[
+          {"id":950,"name":"/MyBook/2021","parent":175,"additional":{
+            "thumbnail":[{"cache_key":"cover_revision","folder_cover_seq":2}]}}]}
+        """#
+        let directory = try JSONDecoder().decode(FolderDirectory.self, from: Data(json.utf8))
+        model.noteUnreadableFolderDetails(in: directory, space: .shared)
+        XCTAssertTrue(activity.history.isEmpty)
+    }
+
+    func testUnreadableFolderWarningNamesAffectedDetails() {
+        XCTAssertEqual(UnreadableFolderDetails(folderID: 1, fields: [
+            "additional.access_permission: type mismatch"
+        ]).errorDescription, "Download permission could not be read.")
+        XCTAssertEqual(UnreadableFolderDetails(folderID: 1, fields: [
+            "additional.thumbnail[0]: missing key", "additional.access_permission: type mismatch"
+        ]).errorDescription, "Some folder cover images and download permission could not be read.")
+        XCTAssertEqual(UnreadableFolderDetails(folderID: 1, fields: [
+            "additional: type mismatch"
+        ]).errorDescription, "Some folder cover images and download permission could not be read.")
     }
 
     func testFailedWriteDoesNotBlockTheQueue() async throws {

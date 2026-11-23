@@ -20,6 +20,7 @@ struct AppShellView: View {
     @State private var indexErrors: [CollectionIndexKind: String] = [:]
     @State private var personEdit: PersonEditRequest?
     @State private var peopleEditRevision: UInt64 = 0
+    @State private var folderDirectoryVerified = false
     @State private var folderDirectory: FolderDirectory?
     @State private var folderDirectoryRequest: Int64?
     @State private var folderError: String?
@@ -189,7 +190,7 @@ struct AppShellView: View {
         .onChange(of: folderPath) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
         .task(id: IndexLoadKey(namespace: model.presentationNamespace.map { $0 + ":" + selectedSpace.rawValue }, kind: selectedDestination.indexKind, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision, editRevision: peopleEditRevision)) { await loadIndex() }
         .onChange(of: openedIndexEntryIDs) { _, _ in updateBackHandler(); updateTimelineSectionLoadSource() }
-        .task(id: FolderLoadKey(namespace: model.presentationNamespace.map { $0 + ":" + selectedSpace.rawValue }, active: selectedDestination == .personalLibrary && showsFolders, id: folderPath.last ?? 0, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision)) { await loadFolder() }
+        .task(id: FolderLoadKey(namespace: model.presentationNamespace.map { $0 + ":" + selectedSpace.rawValue }, active: selectedDestination == .personalLibrary && showsFolders, id: folderPath.last ?? 0, resetRevision: model.metadataInvalidationRevision, retryRevision: model.retryRevision, refreshRevision: model.folderRefreshRevision)) { await loadFolder() }
         .onChange(of: openedAlbum) { _, _ in
             updateBackHandler(); updateTimelineSectionLoadSource()
         }
@@ -482,6 +483,7 @@ struct AppShellView: View {
         let id: Int64
         let resetRevision: UInt64
         let retryRevision: Int
+        let refreshRevision: UInt64
     }
 
     private func loadFolder() async {
@@ -489,7 +491,9 @@ struct AppShellView: View {
         let restoredPath = navigation.prepareFolders(namespace: repository.namespace)
         if restoredPath != folderPath { folderPath = restoredPath; return }
         let id = folderPath.last ?? 0
-        folderDirectory = nil; folderDirectoryRequest = id; folderError = nil
+        if folderDirectoryRequest != id { folderDirectory = nil }
+        folderDirectoryVerified = false
+        folderDirectoryRequest = id; folderError = nil
         let started = ContinuousClock.now
         for await event in await repository.folderDirectory(id: id, space: selectedSpace) {
             guard !Task.isCancelled, id == (folderPath.last ?? 0) else { return }
@@ -497,6 +501,7 @@ struct AppShellView: View {
             case .value(let directory, let verified):
                 SynologyDiagnostics.folders.info("directory folder=\(id, privacy: .public) children=\(directory.children.count, privacy: .public) verified=\(verified, privacy: .public) elapsed=\(String(describing: ContinuousClock.now - started), privacy: .public)")
                 folderDirectory = directory
+                folderDirectoryVerified = verified
                 if verified { model.noteUnreadableFolderDetails(in: directory, space: selectedSpace) }
                 model.ensureCollectionLoaded(PhotoCollectionDescriptor.folder(directory.folder.id, space: selectedSpace))
             case .failure(let message):
@@ -545,7 +550,7 @@ struct AppShellView: View {
     private func folderHeader(_ children: [FolderSummary]) -> BrowserHeaderConfiguration? {
         guard !children.isEmpty else { return nil }
         let count = preferences.itemsPerRow
-        return BrowserHeaderConfiguration(identity: AnyHashable(FolderHeaderIdentity(children: children, count: count)), height: { width in
+        return BrowserHeaderConfiguration(identity: AnyHashable(FolderHeaderIdentity(children: children, count: count, refreshRevision: model.folderRefreshRevision, verified: folderDirectoryVerified)), height: { width in
             let cardWidth = CardGrid.cardWidth(width: width, count: count)
             let rows = (children.count + count - 1) / count
             return 2 * CardGrid.padding + CGFloat(rows) * (cardWidth + 26) + CGFloat(rows - 1) * CardGrid.spacing
@@ -556,7 +561,7 @@ struct AppShellView: View {
                         folderPath.append(child.id)
                     } label: {
                         VStack(alignment: .leading, spacing: 6) {
-                            FolderCoverView(folder: child, repository: repository, space: selectedSpace)
+                            FolderCoverView(folder: child, repository: repository, space: selectedSpace, verified: folderDirectoryVerified, refreshRevision: model.folderRefreshRevision)
                             Text(child.displayName).font(.headline).lineLimit(1).frame(height: 20, alignment: .top)
                         }
                     }.buttonStyle(.plain)
@@ -568,6 +573,8 @@ struct AppShellView: View {
     private struct FolderHeaderIdentity: Hashable {
         let children: [FolderSummary]
         let count: Int
+        let refreshRevision: UInt64
+        let verified: Bool
     }
 
     private func configureAlbumPresentation() {

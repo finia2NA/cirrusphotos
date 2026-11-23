@@ -138,6 +138,46 @@ extension CachedPhotosRepository {
         }
     }
 
+    /// Custom covers have one server rendition and a folder-scoped revision identity.
+    public func folderCoverImage(folderID: Int64, cacheKey: String, sequence: Int64,
+                                 space: PhotoSpace, allowNetwork: Bool) -> AsyncStream<ResourceEvent<Data>> {
+        let key = CacheKey.folderCover(namespace: namespace, space: space, folderID: folderID,
+                                      cacheKey: cacheKey, sequence: sequence)
+        let subscriber = UUID()
+        let producer = StreamProducer()
+        return AsyncStream(bufferingPolicy: .bufferingNewest(2)) { continuation in
+            producer.task = Task {
+                var cached = try? await store.get(key)
+                if cached == nil, allowNetwork, imageWork.thumbnailJobs[key] == nil {
+                    // Match ordinary thumbnails when a preceding shared job just stored and released.
+                    cached = try? await store.get(key)
+                }
+                if let cached {
+                    if !Task.isCancelled { continuation.yield(.value(cached.data, verified: allowNetwork)) }
+                } else if allowNetwork, !Task.isCancelled {
+                    do {
+                        let task = registerImage(key: key, identity: nil, subscriber: subscriber,
+                                                 priority: .visible, cachePurpose: .library) { [self] in
+                            try await client.folderThumbnail(folderID: folderID, cacheKey: cacheKey,
+                                                             sequence: sequence, space: space)
+                        }
+                        let result = try await task.value
+                        if !Task.isCancelled { continuation.yield(.value(result.data, verified: true)) }
+                    } catch {
+                        if !Task.isCancelled {
+                            continuation.yield(.failure(RepositoryError.record(error, operation: "Folder cover")))
+                        }
+                    }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { @Sendable _ in
+                producer.task?.cancel()
+                Task { await self.releaseImage(key: key, subscriber: subscriber) }
+            }
+        }
+    }
+
     public func setConfiguredThumbnailSize(_ size: ThumbnailSize) async throws {
         try await store.setConfiguredThumbnailSize(size)
     }
@@ -207,6 +247,28 @@ extension CachedPhotosRepository {
                                collection: PhotoCollectionDescriptor,
                                subscriber: UUID, priority: RequestPriority,
                                cachePurpose: ThumbnailCachePurpose) -> Task<ImageResolution, Error> {
+        let identity = CacheKey.thumbnailIdentity(scope: collection.contentScope, namespace: namespace, descriptor: descriptor, size: size, collection: collection)
+        return registerImage(key: key, identity: identity, subscriber: subscriber, priority: priority, cachePurpose: cachePurpose) { [self] in
+            if collection.isSessionDerived {
+                throw RepositoryError.unexpected("Collection access is unavailable.")
+            }
+            if collection.incomingAlbumIdentity != nil {
+                guard let reference = await incomingReference(for: collection) else {
+                    throw RepositoryError.unavailable("Shared album access is unavailable.")
+                }
+                return try await client.incomingThumbnail(descriptor, size: size, reference: reference)
+            }
+            if let albumID = collection.albumID {
+                return try await client.albumThumbnail(descriptor, size: size, albumID: albumID)
+            }
+            guard let space = collection.space else { throw RepositoryError.unexpected("Collection space is unavailable.") }
+            return try await client.thumbnail(descriptor, size: size, space: space)
+        }
+    }
+
+    private func registerImage(key: String, identity: ThumbnailCacheIdentity?, subscriber: UUID, priority: RequestPriority,
+                               cachePurpose: ThumbnailCachePurpose,
+                               request: @escaping @Sendable () async throws -> Data) -> Task<ImageResolution, Error> {
         if var job = imageWork.thumbnailJobs[key] {
             job.subscribers.insert(subscriber)
             imageWork.thumbnailJobs[key] = job
@@ -214,7 +276,6 @@ extension CachedPhotosRepository {
             return job.task
         }
         let id = UUID()
-        let identity = CacheKey.thumbnailIdentity(scope: collection.contentScope, namespace: namespace, descriptor: descriptor, size: size, collection: collection)
         let task = Task<ImageResolution, Error> {
             defer { finishImageJob(key: key, id: id) }
             let generation = await store.currentGeneration()
@@ -222,22 +283,6 @@ extension CachedPhotosRepository {
             defer { Task { await gate.release(.thumbnail) } }
             try Task.checkCancellation()
             try await connect()
-            func request() async throws -> Data {
-                if collection.isSessionDerived {
-                    throw RepositoryError.unexpected("Collection access is unavailable.")
-                }
-                if collection.incomingAlbumIdentity != nil {
-                    guard let reference = incomingReference(for: collection) else {
-                        throw RepositoryError.unavailable("Shared album access is unavailable.")
-                    }
-                    return try await client.incomingThumbnail(descriptor, size: size, reference: reference)
-                }
-                if let albumID = collection.albumID {
-                    return try await client.albumThumbnail(descriptor, size: size, albumID: albumID)
-                }
-                guard let space = collection.space else { throw RepositoryError.unexpected("Collection space is unavailable.") }
-                return try await client.thumbnail(descriptor, size: size, space: space)
-            }
             let data = try await request()
             try Task.checkCancellation()
             do {

@@ -454,7 +454,7 @@ struct FolderCoverRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "folder_covers"
     var namespace: String
     var folderID: Int64
-    var payload: [ThumbnailInfo]
+    var payload: FolderCoverPresentation
     var validatedRun: String?
     enum CodingKeys: String, CodingKey, ColumnExpression { case namespace, payload, folderID = "folder_id", validatedRun = "validated_run" }
     typealias Columns = CodingKeys

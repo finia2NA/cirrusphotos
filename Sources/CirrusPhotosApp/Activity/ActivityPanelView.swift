@@ -231,15 +231,22 @@ private struct ActivityEntryRow: View {
         .contextMenu {
             if let failure = entry.failure {
                 Button("Copy Details") {
-                    ActivityReport.copy(ActivityReport.text(title: entry.title, failure: failure,
-                                                            items: entry.failedItems.isEmpty ? entry.items : entry.failedItems,
-                                                            connection: library.connectionState.label))
+                    copyDetails(failure)
                 }
             }
         }
     }
 
+    private func copyDetails(_ failure: ActivityFailure) {
+        ActivityReport.copy(ActivityReport.text(title: entry.title, failure: failure,
+                                                items: entry.failedItems.isEmpty ? entry.items : entry.failedItems,
+                                                connection: library.connectionState.label))
+    }
+
     @ViewBuilder private var controls: some View {
+        if let failure = entry.failure {
+            CopyDetailsButton { copyDetails(failure) }
+        }
         if !entry.phase.isSettled, let cancel = entry.cancel {
             Button("Cancel", action: cancel).controlSize(.small)
         }
@@ -330,6 +337,9 @@ private struct HistoryRow: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 6)
+                if let failure = record.failure {
+                    CopyDetailsButton { copyDetails(failure) }
+                }
                 DismissButton { activity.dismissHistory(record.id) }
             }
             if let detail = record.detail {
@@ -358,11 +368,28 @@ private struct HistoryRow: View {
         .contextMenu {
             if let failure = record.failure {
                 Button("Copy Details") {
-                    ActivityReport.copy(ActivityReport.text(title: record.title, failure: failure, items: record.items,
-                                                            connection: library.connectionState.label))
+                    copyDetails(failure)
                 }
             }
         }
+    }
+
+    private func copyDetails(_ failure: ActivityFailure) {
+        ActivityReport.copy(ActivityReport.text(title: record.title, failure: failure, items: record.items,
+                                                connection: library.connectionState.label))
+    }
+}
+
+private struct CopyDetailsButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "doc.on.doc")
+        }
+        .buttonStyle(.borderless)
+        .help("Copy Details")
+        .accessibilityLabel("Copy Details")
     }
 }
 

@@ -10,7 +10,7 @@ public struct FolderSummary: Codable, Hashable, Identifiable, Sendable {
     public let unreadableFields: [String]
 
     public struct Additional: Codable, Hashable, Sendable {
-        public let thumbnail: [ThumbnailInfo]?
+        public let thumbnail: [FolderThumbnail]?
         /// The account's rights in the folder; Shared Space listings report it.
         public let accessPermission: AlbumAccessPermission?
         enum CodingKeys: String, CodingKey { case thumbnail; case accessPermission = "access_permission" }
@@ -52,20 +52,15 @@ public struct FolderSummary: Codable, Hashable, Identifiable, Sendable {
     /// Whether the account may download originals from the folder; nil when the NAS did not say.
     public var allowsDownload: Bool? { additional?.accessPermission?.download }
     public var displayName: String { name.split(separator: "/").last.map(String.init) ?? "/" }
-    public var thumbnail: ThumbnailInfo? {
-        guard let thumbnails = additional?.thumbnail else { return nil }
-        return thumbnails.first(where: { $0.isReady(.m) || $0.isReady(.sm) || $0.isReady(.xl) }) ?? thumbnails.first
-    }
-
     private static func thumbnails(_ values: KeyedDecodingContainer<Additional.CodingKeys>,
-                                   unreadable: inout [String]) -> [ThumbnailInfo]? {
+                                   unreadable: inout [String]) -> [FolderThumbnail]? {
         guard values.contains(.thumbnail), !((try? values.decodeNil(forKey: .thumbnail)) ?? false) else { return nil }
         do {
             var list = try values.nestedUnkeyedContainer(forKey: .thumbnail)
-            var thumbnails: [ThumbnailInfo] = []
+            var thumbnails: [FolderThumbnail] = []
             while !list.isAtEnd {
                 let index = list.currentIndex
-                do { thumbnails.append(try list.decode(ThumbnailInfo.self)) }
+                do { thumbnails.append(try list.decode(FolderThumbnail.self)) }
                 catch {
                     unreadable.append("additional.thumbnail[\(index)]: \(error.decodingSummary)")
                     // Step past the entry; a failed decode leaves the container where it was.
@@ -85,6 +80,39 @@ public struct FolderSummary: Codable, Hashable, Identifiable, Sendable {
         catch {
             unreadable.append("additional.access_permission: \(error.decodingSummary)")
             return nil
+        }
+    }
+}
+
+/// Folder listings return ordinary photo thumbnails or a server-generated custom folder cover.
+/// A custom cover is identified by the folder and sequence, without a photo unit ID.
+public enum FolderThumbnail: Codable, Hashable, Sendable {
+    case photo(ThumbnailInfo)
+    case custom(cacheKey: String, sequence: Int64)
+
+    private enum CodingKeys: String, CodingKey {
+        case cacheKey = "cache_key"
+        case sequence = "folder_cover_seq"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        if values.contains(.sequence) {
+            self = .custom(cacheKey: try values.decode(String.self, forKey: .cacheKey),
+                           sequence: try values.decode(Int64.self, forKey: .sequence))
+        } else {
+            self = .photo(try ThumbnailInfo(from: decoder))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .photo(let thumbnail):
+            try thumbnail.encode(to: encoder)
+        case .custom(let cacheKey, let sequence):
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encode(cacheKey, forKey: .cacheKey)
+            try values.encode(sequence, forKey: .sequence)
         }
     }
 }

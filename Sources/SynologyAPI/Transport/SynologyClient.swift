@@ -977,18 +977,32 @@ public actor SynologyClient: PhotosTransport {
         return try await thumbnail(descriptor, size: size, albumID: nil, reference: reference, space: .personal)
     }
 
+    public func folderThumbnail(folderID: Int64, cacheKey: String, sequence: Int64, space: PhotoSpace) async throws -> Data {
+        guard folderID > 0, sequence >= 0, !cacheKey.isEmpty else { throw SynologyAPIError.invalidResponse }
+        return try await thumbnail(id: folderID, cacheKey: cacheKey, kind: "folder", size: nil,
+                                   albumID: nil, reference: nil, space: space, folderSequence: sequence)
+    }
+
     private func thumbnail(_ descriptor: ThumbnailInfo, size: ThumbnailSize, albumID: Int64?, reference: String?,
                            space: PhotoSpace) async throws -> Data {
+        try await thumbnail(id: descriptor.unitID, cacheKey: descriptor.cacheKey, kind: descriptor.kind ?? "unit",
+                            size: descriptor.kind == "person" ? nil : size,
+                            albumID: albumID, reference: reference, space: space, folderSequence: nil)
+    }
+
+    private func thumbnail(id: Int64, cacheKey: String, kind: String, size: ThumbnailSize?,
+                           albumID: Int64?, reference: String?, space: PhotoSpace, folderSequence: Int64?) async throws -> Data {
         let sid = try sessionID()
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
         components.path = space == .shared ? "/synofoto/api/v2/t/Thumbnail/get" : "/synofoto/api/v2/p/Thumbnail/get"
         var parameters = [
-            URLQueryItem(name: "id", value: String(descriptor.unitID)),
-            URLQueryItem(name: "cache_key", value: "\"\(descriptor.cacheKey)\""),
-            URLQueryItem(name: "type", value: "\"\(descriptor.kind ?? "unit")\""),
+            URLQueryItem(name: "id", value: String(id)),
+            URLQueryItem(name: "cache_key", value: "\"\(cacheKey)\""),
+            URLQueryItem(name: "type", value: "\"\(kind)\""),
             URLQueryItem(name: "_sid", value: sid)
         ]
-        if descriptor.kind != "person" { parameters.append(URLQueryItem(name: "size", value: "\"\(size.rawValue)\"")) }
+        if let size { parameters.append(URLQueryItem(name: "size", value: "\"\(size.rawValue)\"")) }
+        if let folderSequence { parameters.append(URLQueryItem(name: "folder_cover_seq", value: String(folderSequence))) }
         if let albumID { parameters.append(URLQueryItem(name: "album_id", value: String(albumID))) }
         if let reference {
             parameters.append(URLQueryItem(name: "passphrase", value: String(decoding: try JSONEncoder().encode(reference), as: UTF8.self)))
