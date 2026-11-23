@@ -74,18 +74,9 @@ write_release_notes() {
     [[ -s $notes_file ]] || fail "CHANGELOG.md has no section \"## $version\""
 }
 
-# Paragraphs and "- " lists of the notes as simple HTML.
+# Sparkle shows the offered version and every earlier entry from the same changelog.
 notes_html() {
-    sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$notes_file" | awk '
-        function close_block() {
-            if (list) print "</ul>"; if (para) print "</p>"; list = 0; para = 0 }
-        /^[[:space:]]*$/ { close_block(); next }
-        /^- / { if (para) { print "</p>"; para = 0 }
-                if (!list) { print "<ul>"; list = 1 }
-                print "<li>" substr($0, 3) "</li>"; next }
-        { if (list) { print "</ul>"; list = 0 }
-          if (!para) { printf "<p>"; para = 1; print $0 } else print $0 }
-        END { close_block() }'
+    python3 scripts/generate_changelog.py --fragment --version "$version" --repo "$GITHUB_REPO"
 }
 
 cmd_dmg() {
@@ -156,6 +147,7 @@ cmd_dmg() {
         echo "      <sparkle:version>$BUILD_NUMBER</sparkle:version>"
         echo "      <sparkle:shortVersionString>$MARKETING_VERSION</sparkle:shortVersionString>"
         echo "      <sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>"
+        echo "      <sparkle:fullReleaseNotesLink>$SITE_URL/changelog.html</sparkle:fullReleaseNotesLink>"
         echo "      <description><![CDATA["
         notes_html
         echo "]]></description>"
@@ -228,8 +220,9 @@ cmd_publish() {
         cat "$updated"
     else
         cp "$updated" "$appcast"
+        python3 scripts/generate_changelog.py --site-url "$SITE_URL" --repo "$GITHUB_REPO"
     fi
-    run git add "$appcast"
+    run git add "$appcast" website/changelog.html
     run git commit -m "Publish Cirrus Photos $version in the appcast"
 
     cmd_deploy_site
@@ -241,6 +234,9 @@ cmd_publish() {
 }
 
 cmd_deploy_site() {
+    if [[ -z $DRY_RUN ]]; then
+        python3 scripts/generate_changelog.py --site-url "$SITE_URL" --repo "$GITHUB_REPO"
+    fi
     step "Deploying website/ to $DEPLOY_HOST:$DEPLOY_PATH/"
     local options=(-av --delete --exclude 'deploy/' --exclude 'README.md' --exclude '.DS_Store')
     [[ -n $DRY_RUN ]] && options+=(--dry-run)

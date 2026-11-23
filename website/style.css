@@ -38,10 +38,12 @@ header.site {
   align-items: baseline;
   gap: 1rem;
   margin-bottom: 3rem;
+  flex-wrap: wrap;
   font-size: 0.95rem;
 }
 header.site a.brand { color: var(--fg); font-weight: 600; text-decoration: none; }
-header.site nav a { margin-left: 1.25rem; color: var(--muted); text-decoration: none; }
+header.site nav { display: flex; flex-wrap: wrap; gap: 0.4rem 1.25rem; }
+header.site nav a { color: var(--muted); text-decoration: none; }
 header.site nav a:hover, header.site nav a[aria-current] { color: var(--fg); }
 a { color: var(--accent); }
 a:focus-visible, .button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -142,3 +144,5 @@ dialog.lightbox::backdrop { background: transparent; }
   .lightbox .prev { left: calc(50% - 3.5rem); }
   .lightbox .next { right: calc(50% - 3.5rem); }
 }
+
+.changelog section + section { border-top: 1px solid var(--line); margin-top: 2rem; padding-top: 0.5rem; }

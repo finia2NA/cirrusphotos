@@ -109,6 +109,8 @@ This builds the public release bundle at `.build/distribution/Cirrus Photos.app`
 
 Releases are DMGs on GitHub Releases; installed apps find them through Sparkle's appcast at `website/appcast.xml`, served from the website. Development builds never update themselves.
 
+`CHANGELOG.md` supplies the website’s Changelog page, cumulative notes in Sparkle (the offered version and all earlier versions), and each GitHub release’s own notes. `make publish` and `make deploy-site` regenerate the website page. After editing older entries, run `python3 scripts/generate_changelog.py --update-appcast` to also refresh existing updater notes.
+
 One-time setup:
 
 - The EdDSA private key that signs updates is `secrets/sparkle_ed25519_private.key` in the main checkout (gitignored; also in the login Keychain under the Sparkle account `cirrus-photos`). Back it up: without it, installed apps reject every future update. Its public key is in `scripts/sparkle.env`.

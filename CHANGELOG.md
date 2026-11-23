@@ -1,6 +1,6 @@
 # Changelog
 
-Each version's section is its release notes on GitHub and in the in-app updater.
+Version sections supply the website changelog, cumulative updater notes and individual GitHub release notes.
 
 ## 0.1.9
 
