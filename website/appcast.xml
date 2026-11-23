@@ -6,6 +6,27 @@
     <description>Cirrus Photos updates</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.9</title>
+      <pubDate>Mon, 23 Nov 2026 00:52:47 +0000</pubDate>
+      <sparkle:version>13</sparkle:version>
+      <sparkle:shortVersionString>0.1.9</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+<ul>
+<li>Folder cards use Synology’s single-image, composite and custom covers in Personal and Shared Space. Folders without a supplied cover keep Cirrus’s derived thumbnails.</li>
+<li>Refresh from NAS picks up changed folder covers while cached covers remain available offline.</li>
+<li>Custom folder covers no longer produce unreadable-details warnings. Genuine warnings identify the affected detail.</li>
+<li>Failed entries in Activity and History have a Copy Details icon, also available in the right-click menu.</li>
+</ul>
+<p>Fixes #120 and #121, following the original folder report in #116. Thanks to @timvdsm for reporting the problems, testing the fixes and providing detailed follow-up.
+</p>
+<p>The first launch after this update automatically rebuilds cached library metadata from the NAS. Cached photo and video files are retained. A connection to the NAS is needed to reload the library metadata.
+</p>
+]]></description>
+      <enclosure url="https://github.com/finia2NA/cirrusphotos/releases/download/v0.1.9/Cirrus-Photos-0.1.9.dmg"
+                 type="application/octet-stream" sparkle:edSignature="C0Z0TsdO0cHtSNpG50rLvmA7avtxmakHh5qKKYw97HfTgMMSUnjpWmqf7ykR3loe+bDJ4mYipffFDqJ2ItRkBQ==" length="11086882" />
+    </item>
+    <item>
       <title>Version 0.1.8a</title>
       <pubDate>Sun, 22 Nov 2026 19:15:10 +0000</pubDate>
       <sparkle:version>12</sparkle:version>
