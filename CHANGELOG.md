@@ -2,6 +2,10 @@
 
 Version sections supply the website changelog, cumulative updater notes and individual GitHub release notes.
 
+## 0.1.11a
+
+- Photos opened in the viewer no longer stay at their preview, and videos play again, after the library metadata was cleared or rebuilt while the app was running.
+
 ## 0.1.11
 
 - Drag pinned albums in the sidebar to reorder them; the drop lands above or below the row you're over. With no pins, drop an album on the placeholder row to pin it.
