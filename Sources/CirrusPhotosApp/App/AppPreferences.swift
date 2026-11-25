@@ -23,6 +23,10 @@ final class AppPreferences: ObservableObject {
         static let viewerHistogramShowsColor = "viewerHistogramShowsColor"
         static let warmingIncludesSharedSpace = "warmingIncludesSharedSpace"
         static let showsViewerToolbarTools = "showsViewerToolbarTools"
+        static let showsFilmstrip = "showsFilmstrip"
+        static let showsHistogram = "showsHistogram"
+        static let showsHighlightPeaking = "showsHighlightPeaking"
+        static let showsFocusEdges = "showsFocusEdges"
         static let setupPreferencesConfirmed = "setupPreferencesConfirmed"
     }
 
@@ -53,6 +57,10 @@ final class AppPreferences: ObservableObject {
     @Published var groupsByDay: Bool { didSet { defaults.set(groupsByDay, forKey: Key.groupsByDay) } }
     @Published var alwaysShowsTimeline: Bool { didSet { defaults.set(alwaysShowsTimeline, forKey: Key.alwaysShowsTimeline) } }
     @Published var showsViewerToolbarTools: Bool { didSet { defaults.set(showsViewerToolbarTools, forKey: Key.showsViewerToolbarTools) } }
+    @Published var showsFilmstrip: Bool { didSet { defaults.set(showsFilmstrip, forKey: Key.showsFilmstrip) } }
+    @Published var showsHistogram: Bool { didSet { defaults.set(showsHistogram, forKey: Key.showsHistogram) } }
+    @Published var showsHighlightPeaking: Bool { didSet { defaults.set(showsHighlightPeaking, forKey: Key.showsHighlightPeaking) } }
+    @Published var showsFocusEdges: Bool { didSet { defaults.set(showsFocusEdges, forKey: Key.showsFocusEdges) } }
     /// The cache budget as a fraction of the slider range; the stored value is bytes.
     @Published var budgetFraction: Double { didSet { defaults.set(Int(budgetBytes), forKey: Key.cacheBudget) } }
 
@@ -70,6 +78,10 @@ final class AppPreferences: ObservableObject {
         groupsByDay = defaults.object(forKey: Key.groupsByDay) as? Bool ?? true
         alwaysShowsTimeline = defaults.bool(forKey: Key.alwaysShowsTimeline)
         showsViewerToolbarTools = defaults.bool(forKey: Key.showsViewerToolbarTools)
+        showsFilmstrip = defaults.bool(forKey: Key.showsFilmstrip)
+        showsHistogram = defaults.bool(forKey: Key.showsHistogram)
+        showsHighlightPeaking = defaults.bool(forKey: Key.showsHighlightPeaking)
+        showsFocusEdges = defaults.bool(forKey: Key.showsFocusEdges)
         budgetFraction = CacheBudget.fraction(for: Int64(defaults.object(forKey: Key.cacheBudget) as? Int ?? Int(CacheBudget.bytes(at: 0.5))))
     }
 

@@ -364,13 +364,13 @@ struct LibraryCommands: Commands {
             Toggle("Group by Day", isOn: $preferences.groupsByDay)
             Toggle("Always Show Timeline", isOn: $preferences.alwaysShowsTimeline)
             Divider()
-            Toggle("Show Filmstrip", isOn: $model.showsFilmstrip)
+            Toggle("Show Filmstrip", isOn: $preferences.showsFilmstrip)
                 .disabled(!model.canCloseViewer)
-            Toggle("Show Histogram", isOn: $model.showsHistogram)
+            Toggle("Show Histogram", isOn: $preferences.showsHistogram)
                 .disabled(!model.canCloseViewer)
-            Toggle("Show Highlight Peaking", isOn: $model.showsHighlightPeaking)
+            Toggle("Show Highlight Peaking", isOn: $preferences.showsHighlightPeaking)
                 .disabled(!model.canCloseViewer)
-            Toggle("Show Focus Edges", isOn: $model.showsFocusEdges)
+            Toggle("Show Focus Edges", isOn: $preferences.showsFocusEdges)
                 .disabled(!model.canCloseViewer)
         }
         CommandMenu("Photo") {
@@ -438,19 +438,19 @@ struct LibraryCommands: Commands {
 /// Filmstrip, histogram, highlight peaking and focus-edge overlays in their own glass pill,
 /// separate from the viewer's action buttons. State is shown by the symbol, never by colour.
 struct ViewerOverlayControls: View {
-    var model: LibraryModel
+    @ObservedObject var preferences: AppPreferences
 
     var body: some View {
         HStack(spacing: 0) {
-            overlayButton(isOn: model.showsFilmstrip, name: "Filmstrip",
-                          offSymbol: "film", onSymbol: "film.fill") { model.showsFilmstrip.toggle() }
-            overlayButton(isOn: model.showsHistogram, name: "Histogram",
-                          offSymbol: "chart.bar", onSymbol: "chart.bar.fill") { model.showsHistogram.toggle() }
-            overlayButton(isOn: model.showsHighlightPeaking, name: "Highlight Peaking",
+            overlayButton(isOn: preferences.showsFilmstrip, name: "Filmstrip",
+                          offSymbol: "film", onSymbol: "film.fill") { preferences.showsFilmstrip.toggle() }
+            overlayButton(isOn: preferences.showsHistogram, name: "Histogram",
+                          offSymbol: "chart.bar", onSymbol: "chart.bar.fill") { preferences.showsHistogram.toggle() }
+            overlayButton(isOn: preferences.showsHighlightPeaking, name: "Highlight Peaking",
                           offSymbol: "circle.lefthalf.striped.horizontal.inverse",
-                          onSymbol: "circle.lefthalf.striped.horizontal") { model.showsHighlightPeaking.toggle() }
-            overlayButton(isOn: model.showsFocusEdges, name: "Focus Edges",
-                          offSymbol: "scope", onSymbol: "dot.scope") { model.showsFocusEdges.toggle() }
+                          onSymbol: "circle.lefthalf.striped.horizontal") { preferences.showsHighlightPeaking.toggle() }
+            overlayButton(isOn: preferences.showsFocusEdges, name: "Focus Edges",
+                          offSymbol: "scope", onSymbol: "dot.scope") { preferences.showsFocusEdges.toggle() }
         }
         .buttonStyle(.plain)
         .foregroundStyle(Color.primary)

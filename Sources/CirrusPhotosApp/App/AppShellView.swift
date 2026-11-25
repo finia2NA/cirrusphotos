@@ -363,11 +363,11 @@ struct AppShellView: View {
                                     reduceMotion: reduceMotion,
                                     pixelInterpolation: preferences.pixelInterpolation,
                                     videoMuted: preferences.videoMuted,
-                                    showsFilmstrip: model.showsFilmstrip,
+                                    showsFilmstrip: preferences.showsFilmstrip,
                                     cropsThumbnailsToSquare: preferences.cropsThumbnailsToSquare,
-                                    showsHistogram: model.showsHistogram,
-                                    showsHighlightPeaking: model.showsHighlightPeaking,
-                                    showsFocusEdges: model.showsFocusEdges,
+                                    showsHistogram: preferences.showsHistogram,
+                                    showsHighlightPeaking: preferences.showsHighlightPeaking,
+                                    showsFocusEdges: preferences.showsFocusEdges,
                                     onVideoMuteChanged: { preferences.videoMuted = $0 },
                                     onSelectionChanged: followViewer,
                                     onClose: closeViewer,
@@ -907,7 +907,7 @@ struct AppShellView: View {
         if let viewer {
             if preferences.showsViewerToolbarTools {
                 ToolbarItem(id: "overlays", placement: .primaryAction) {
-                    ViewerOverlayControls(model: model)
+                    ViewerOverlayControls(preferences: preferences)
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarSpacer(.fixed, placement: .primaryAction)

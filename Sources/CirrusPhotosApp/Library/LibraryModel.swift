@@ -53,10 +53,6 @@ final class LibraryModel {
     private(set) var authenticationStatus: AuthenticationStatus = .notStarted { didSet { noteConnectionState() } }
     private(set) var retryRevision = 0
     private(set) var canToggleViewerFavorite = false
-    var showsFilmstrip = false
-    var showsHistogram = false
-    var showsHighlightPeaking = false
-    var showsFocusEdges = false
     private(set) var canCloseViewer = false
     private(set) var canNavigateBack = false
     private(set) var canOpenSelectedPhoto = false
