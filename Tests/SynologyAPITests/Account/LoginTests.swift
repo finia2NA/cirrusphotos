@@ -89,6 +89,36 @@ final class LoginTests: XCTestCase {
         XCTAssertEqual(RenewingProtocol.logins().count, 2)
     }
 
+    func testEveryMediaRequestRenewsAnExpiredSessionAndRetries() async throws {
+        let requests: [(String, (SynologyClient) async throws -> Void)] = [
+            ("original", { client in
+                let response = try await client.fullImage(FullImageResource(scope: .space(.personal), unitID: 7, cacheKey: "7_1"))
+                XCTAssertNotNil(response.data)
+            }),
+            ("video", { client in
+                let resource = VideoPlaybackResource(scope: .space(.personal), unitID: 7, cacheKey: "7_1",
+                                                     filename: nil, variant: .original)
+                try await client.streamVideoRange(resource, range: 0...3) { _ in }
+            }),
+            ("download", { client in
+                let download = try await client.downloadPhotos(itemIDs: [7], kind: .original, space: .personal, progress: { _ in })
+                try? FileManager.default.removeItem(at: download.temporaryURL.deletingLastPathComponent())
+            }),
+            ("profile photo", { client in
+                _ = try await client.profilePhoto(
+                    descriptor: "webapi/entry.cgi?api=SYNO.Personal.Profile.Photo&method=get&version=1&f=file.png")
+            }),
+        ]
+        for (name, perform) in requests {
+            RenewingProtocol.reset()
+            let (client, session) = client(RenewingProtocol.self)
+            defer { session.invalidateAndCancel() }
+            try await client.signIn(.init(username: "user", password: "test-password", secondFactor: .code("123456")))
+            do { try await perform(client) } catch { XCTFail("\(name): \(error)") }
+            XCTAssertEqual(RenewingProtocol.logins().count, 2, name)
+        }
+    }
+
     func testFailedRenewalIsReportedAndNotRetried() async throws {
         RenewingProtocol.reset(rejectRenewal: true)
         let (client, session) = client(RenewingProtocol.self)
@@ -202,6 +232,30 @@ private final class RenewingProtocol: LoginProtocol, @unchecked Sendable {
     static let pngPixel = Data(base64Encoded:
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")!
 
+    /// The successful reply of a renewed session, for each media endpoint.
+    private func mediaResponse(_ form: [String: String]) -> (status: Int, headers: [String: String], body: Data)? {
+        let query = Dictionary((URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? [])
+            .map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { _, last in last })
+        let png = ["Content-Type": "image/png"]
+        if request.url!.path.hasSuffix("/Thumbnail/get") { return (200, png, Self.pngPixel) }
+        if query["api"] == "SYNO.Personal.Profile.Photo" { return (200, png, Self.pngPixel) }
+        if query["api"] == "SYNO.Foto.Streaming" || request.value(forHTTPHeaderField: "Range") != nil {
+            return (206, ["Content-Type": "video/mp4", "Content-Range": "bytes 0-3/10", "Content-Length": "4"], Data([0, 1, 2, 3]))
+        }
+        if query["api"] == "SYNO.Foto.Download" { return (200, png, Self.pngPixel) }
+        if form["api"] == "SYNO.Foto.Download" {
+            return (200, ["Content-Type": "image/jpeg", "Content-Disposition": "attachment; filename=\"one.jpg\""], Data([0xFF, 0xD8, 0xFF]))
+        }
+        return nil
+    }
+
+    private func send(_ status: Int, _ headers: [String: String], _ body: Data) {
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil,
+                                                              headerFields: headers)!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
     override func startLoading() {
         let values = parameters()
         if values["api"] == "SYNO.API.Auth" {
@@ -214,15 +268,13 @@ private final class RenewingProtocol: LoginProtocol, @unchecked Sendable {
             } else {
                 respond("{\"success\":true,\"data\":{\"sid\":\"session-\(count)\",\"did\":\"issued-token\"}}")
             }
-        } else if request.url?.path.hasSuffix("/Thumbnail/get") == true {
-            let sid = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
-                .queryItems?.first { $0.name == "_sid" }?.value
-            guard sid == "session-2" else { return respond("{\"success\":false,\"error\":{\"code\":119}}") }
-            client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
-                                                                  headerFields: ["Content-Type": "image/png"])!,
-                                cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: Self.pngPixel)
-            client?.urlProtocolDidFinishLoading(self)
+        } else if let media = mediaResponse(values) {
+            // Media requests carry the session in the cookie; an expired one gets a JSON error body.
+            guard request.value(forHTTPHeaderField: "Cookie") == "id=session-2" else {
+                return send(200, ["Content-Type": "application/json; charset=\"UTF-8\""],
+                            Data("{\"success\":false,\"error\":{\"code\":119}}".utf8))
+            }
+            send(media.status, media.headers, media.body)
         } else if values["_sid"] == "session-2" {
             respond("{\"success\":true,\"data\":{\"list\":[]}}")
         } else {

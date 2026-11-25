@@ -48,7 +48,6 @@ public actor SynologyClient: PhotosTransport {
 
     public func uploadPhoto(at url: URL, destination: PhotoUploadDestination,
                             progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoUploadResult {
-        let sid = try sessionID()
         let name = url.lastPathComponent
         guard !name.isEmpty, !name.contains("\r"), !name.contains("\n"), !name.contains("\"") else {
             throw SynologyAPIError.unsupported("This filename cannot be uploaded.")
@@ -117,19 +116,22 @@ public actor SynologyClient: PhotosTransport {
         components.path = "/webapi/entry.cgi/\(api)"
         components.queryItems = [URLQueryItem(name: "api", value: api), URLQueryItem(name: "method", value: method), URLQueryItem(name: "version", value: "8")]
         guard let requestURL = components.url else { throw SynologyAPIError.invalidResponse }
-        var request = URLRequest(url: requestURL)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 120
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
-        if let synoToken { request.setValue(synoToken, forHTTPHeaderField: "X-SYNO-TOKEN") }
-        let (data, response) = try await session.upload(for: request, fromFile: temporary, delegate: UploadTransferDelegate(progress: progress))
-        guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
-        guard (200..<300).contains(http.statusCode) else { throw SynologyAPIError.http(http.statusCode) }
-        let envelope = try JSONDecoder().decode(APIEnvelope<PhotoUploadResult>.self, from: data)
-        guard envelope.success else { throw SynologyAPIError.api(envelope.error?.code ?? -1) }
-        guard let result = envelope.data, ["new", "ignore"].contains(result.action), result.id > 0, result.unitID > 0 else { throw SynologyAPIError.invalidResponse }
-        return result
+        // An expired session is refused before anything is stored, so the body can be sent again.
+        return try await renewingSession { sid in
+            var request = URLRequest(url: requestURL)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 120
+            request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+            request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
+            if let synoToken { request.setValue(synoToken, forHTTPHeaderField: "X-SYNO-TOKEN") }
+            let (data, response) = try await session.upload(for: request, fromFile: temporary, delegate: UploadTransferDelegate(progress: progress))
+            guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
+            guard (200..<300).contains(http.statusCode) else { throw SynologyAPIError.http(http.statusCode) }
+            let envelope = try JSONDecoder().decode(APIEnvelope<PhotoUploadResult>.self, from: data)
+            guard envelope.success else { throw SynologyAPIError.api(envelope.error?.code ?? -1) }
+            guard let result = envelope.data, ["new", "ignore"].contains(result.action), result.id > 0, result.unitID > 0 else { throw SynologyAPIError.invalidResponse }
+            return result
+        }
     }
 
     public init(credentials: SynologyCredentials) throws {
@@ -279,7 +281,13 @@ public actor SynologyClient: PhotosTransport {
 
     private func downloadPhotos(itemIDs: [Int64], kind: PhotoDownloadKind, reference: String?, space: PhotoSpace,
                                 progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
-        let sid = try sessionID()
+        try await renewingSession { sid in
+            try await fetchDownload(itemIDs: itemIDs, kind: kind, reference: reference, space: space, sid: sid, progress: progress)
+        }
+    }
+
+    private func fetchDownload(itemIDs: [Int64], kind: PhotoDownloadKind, reference: String?, space: PhotoSpace, sid: String,
+                               progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> PhotoDownloadResponse {
         guard !itemIDs.isEmpty else { throw SynologyAPIError.invalidResponse }
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
         components.path = "/webapi/entry.cgi"
@@ -299,6 +307,7 @@ public actor SynologyClient: PhotosTransport {
         guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
         guard http.statusCode == 200 else { throw SynologyAPIError.http(http.statusCode) }
         let contentType = http.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
+        if contentType.contains("json"), let code = try Self.apiErrorCode(inFile: temporary) { throw SynologyAPIError.api(code) }
         guard !contentType.contains("json"), !contentType.contains("text/html"),
               http.value(forHTTPHeaderField: "Content-Disposition")?.lowercased().contains("attachment") == true,
               let suggested = response.suggestedFilename else { throw SynologyAPIError.invalidResponse }
@@ -528,7 +537,6 @@ public actor SynologyClient: PhotosTransport {
     }
 
     public func profilePhoto(descriptor: String) async throws -> Data {
-        let sid = try sessionID()
         guard !descriptor.isEmpty, descriptor.utf8.count <= 1024 else { throw SynologyAPIError.invalidResponse }
         guard let source = URLComponents(string: descriptor), source.scheme == nil, source.host == nil,
               source.path == "webapi/entry.cgi" || source.path == "/webapi/entry.cgi" else { throw SynologyAPIError.invalidResponse }
@@ -546,14 +554,19 @@ public actor SynologyClient: PhotosTransport {
             URLQueryItem(name: "f", value: filename)]
         if let synoToken { components.queryItems?.append(URLQueryItem(name: "SynoToken", value: synoToken)) }
         guard let url = components.url else { throw SynologyAPIError.invalidResponse }
-        var request = URLRequest(url: url)
-        request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
-        if let synoToken { request.setValue(synoToken, forHTTPHeaderField: "X-SYNO-TOKEN") }
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-              http.value(forHTTPHeaderField: "Content-Type")?.lowercased().hasPrefix("image/png") == true,
-              data.count <= 2_000_000, !data.isEmpty else { throw SynologyAPIError.invalidResponse }
-        return data
+        return try await renewingSession { sid in
+            var request = URLRequest(url: url)
+            request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
+            if let synoToken { request.setValue(synoToken, forHTTPHeaderField: "X-SYNO-TOKEN") }
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                  http.value(forHTTPHeaderField: "Content-Type")?.lowercased().hasPrefix("image/png") == true,
+                  data.count <= 2_000_000, !data.isEmpty else {
+                if let code = PhotoDownloadValidation.apiErrorCode(in: data) { throw SynologyAPIError.api(code) }
+                throw SynologyAPIError.invalidResponse
+            }
+            return data
+        }
     }
 
     public func albums() async throws -> [AlbumSummary] {
@@ -860,7 +873,6 @@ public actor SynologyClient: PhotosTransport {
         unitID: Int64, files: ConvertedThumbnailFiles, space: PhotoSpace,
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws {
-        let sid = try sessionID()
         SynologyDiagnostics.rotationTransport.info(
             "Preparing converted thumbnail upload unit_id=\(unitID, privacy: .public) sm_bytes=\(files.sm.count, privacy: .public) m_bytes=\(files.m.count, privacy: .public) xl_bytes=\(files.xl.count, privacy: .public) api_version=3"
         )
@@ -872,57 +884,59 @@ public actor SynologyClient: PhotosTransport {
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
         components.path = "/webapi/entry.cgi"
         guard let url = components.url else { throw SynologyAPIError.invalidResponse }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 120
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
-        if let synoToken { request.setValue(synoToken, forHTTPHeaderField: "X-SYNO-TOKEN") }
-        let data: Data
-        let response: URLResponse
-        let delegate = UploadTransferDelegate(progress: progress)
-        do { (data, response) = try await session.upload(for: request, from: body, delegate: delegate) }
-        catch is CancellationError {
-            SynologyDiagnostics.rotationTransport.info(
-                "Converted thumbnail upload cancelled unit_id=\(unitID, privacy: .public)"
-            )
-            throw CancellationError()
-        }
-        catch {
-            SynologyDiagnostics.rotationTransport.error(
-                "Converted thumbnail upload transport failed unit_id=\(unitID, privacy: .public) error=\(error.logSummary, privacy: .public)"
-            )
-            throw SynologyAPIError.transport(error.localizedDescription)
-        }
-        guard let http = response as? HTTPURLResponse else {
-            SynologyDiagnostics.rotationTransport.error(
-                "Converted thumbnail upload missing HTTP response unit_id=\(unitID, privacy: .public) bytes=\(data.count, privacy: .public)"
-            )
-            throw SynologyAPIError.invalidResponse
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            SynologyDiagnostics.rotationTransport.error(
-                "Converted thumbnail upload HTTP failure unit_id=\(unitID, privacy: .public) status=\(http.statusCode, privacy: .public) bytes=\(data.count, privacy: .public)"
-            )
-            throw SynologyAPIError.http(http.statusCode)
-        }
-        guard let envelope = try? JSONDecoder().decode(APIEnvelope<EmptyData>.self, from: data),
-              envelope.success else {
-            if let envelope = try? JSONDecoder().decode(APIEnvelope<EmptyData>.self, from: data) {
-                SynologyDiagnostics.rotationTransport.error(
-                    "Converted thumbnail upload API rejected request unit_id=\(unitID, privacy: .public) status=\(http.statusCode, privacy: .public) api_code=\(envelope.error?.code ?? -1, privacy: .public) response_bytes=\(data.count, privacy: .public)"
+        try await renewingSession { sid in
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 120
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+            request.setValue("id=\(sid)", forHTTPHeaderField: "Cookie")
+            if let synoToken { request.setValue(synoToken, forHTTPHeaderField: "X-SYNO-TOKEN") }
+            let data: Data
+            let response: URLResponse
+            let delegate = UploadTransferDelegate(progress: progress)
+            do { (data, response) = try await session.upload(for: request, from: body, delegate: delegate) }
+            catch is CancellationError {
+                SynologyDiagnostics.rotationTransport.info(
+                    "Converted thumbnail upload cancelled unit_id=\(unitID, privacy: .public)"
                 )
-                throw SynologyAPIError.api(envelope.error?.code ?? -1)
+                throw CancellationError()
             }
-            SynologyDiagnostics.rotationTransport.error(
-                "Converted thumbnail upload returned invalid JSON unit_id=\(unitID, privacy: .public) status=\(http.statusCode, privacy: .public) response_bytes=\(data.count, privacy: .public)"
+            catch {
+                SynologyDiagnostics.rotationTransport.error(
+                    "Converted thumbnail upload transport failed unit_id=\(unitID, privacy: .public) error=\(error.logSummary, privacy: .public)"
+                )
+                throw SynologyAPIError.transport(error.localizedDescription)
+            }
+            guard let http = response as? HTTPURLResponse else {
+                SynologyDiagnostics.rotationTransport.error(
+                    "Converted thumbnail upload missing HTTP response unit_id=\(unitID, privacy: .public) bytes=\(data.count, privacy: .public)"
+                )
+                throw SynologyAPIError.invalidResponse
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                SynologyDiagnostics.rotationTransport.error(
+                    "Converted thumbnail upload HTTP failure unit_id=\(unitID, privacy: .public) status=\(http.statusCode, privacy: .public) bytes=\(data.count, privacy: .public)"
+                )
+                throw SynologyAPIError.http(http.statusCode)
+            }
+            guard let envelope = try? JSONDecoder().decode(APIEnvelope<EmptyData>.self, from: data),
+                  envelope.success else {
+                if let envelope = try? JSONDecoder().decode(APIEnvelope<EmptyData>.self, from: data) {
+                    SynologyDiagnostics.rotationTransport.error(
+                        "Converted thumbnail upload API rejected request unit_id=\(unitID, privacy: .public) status=\(http.statusCode, privacy: .public) api_code=\(envelope.error?.code ?? -1, privacy: .public) response_bytes=\(data.count, privacy: .public)"
+                    )
+                    throw SynologyAPIError.api(envelope.error?.code ?? -1)
+                }
+                SynologyDiagnostics.rotationTransport.error(
+                    "Converted thumbnail upload returned invalid JSON unit_id=\(unitID, privacy: .public) status=\(http.statusCode, privacy: .public) response_bytes=\(data.count, privacy: .public)"
+                )
+                throw SynologyAPIError.invalidResponse
+            }
+            SynologyDiagnostics.rotationTransport.info(
+                "Converted thumbnail upload accepted unit_id=\(unitID, privacy: .public) status=\(http.statusCode, privacy: .public) response_bytes=\(data.count, privacy: .public)"
             )
-            throw SynologyAPIError.invalidResponse
         }
-        SynologyDiagnostics.rotationTransport.info(
-            "Converted thumbnail upload accepted unit_id=\(unitID, privacy: .public) status=\(http.statusCode, privacy: .public) response_bytes=\(data.count, privacy: .public)"
-        )
     }
 
     static func convertedThumbnailMultipartBody(
@@ -992,15 +1006,15 @@ public actor SynologyClient: PhotosTransport {
 
     private func thumbnail(id: Int64, cacheKey: String, kind: String, size: ThumbnailSize?,
                            albumID: Int64?, reference: String?, space: PhotoSpace, folderSequence: Int64?) async throws -> Data {
-        try await renewingSession {
+        try await renewingSession { sid in
             try await fetchThumbnail(id: id, cacheKey: cacheKey, kind: kind, size: size, albumID: albumID,
-                                     reference: reference, space: space, folderSequence: folderSequence)
+                                     reference: reference, space: space, folderSequence: folderSequence, sid: sid)
         }
     }
 
     private func fetchThumbnail(id: Int64, cacheKey: String, kind: String, size: ThumbnailSize?,
-                                albumID: Int64?, reference: String?, space: PhotoSpace, folderSequence: Int64?) async throws -> Data {
-        let sid = try sessionID()
+                                albumID: Int64?, reference: String?, space: PhotoSpace, folderSequence: Int64?,
+                                sid: String) async throws -> Data {
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
         components.path = space == .shared ? "/synofoto/api/v2/t/Thumbnail/get" : "/synofoto/api/v2/p/Thumbnail/get"
         var parameters = [
@@ -1049,15 +1063,6 @@ public actor SynologyClient: PhotosTransport {
         _ resource: FullImageResource, etag: String? = nil, lastModified: String? = nil,
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> MediaResponse {
-        try await renewingSession {
-            try await fetchFullImage(resource, etag: etag, lastModified: lastModified, progress: progress)
-        }
-    }
-
-    private func fetchFullImage(
-        _ resource: FullImageResource, etag: String?, lastModified: String?,
-        progress: @escaping @Sendable (TransferProgress) -> Void
-    ) async throws -> MediaResponse {
         let space: PhotoSpace
         let albumID: Int64?
         switch resource.scope {
@@ -1065,7 +1070,16 @@ public actor SynologyClient: PhotosTransport {
         case .album(let id) where id > 0: space = .personal; albumID = id
         default: throw SynologyAPIError.unsupported("Media requests in this content context are unavailable.")
         }
-        let sid = try sessionID()
+        return try await renewingSession { sid in
+            try await fetchFullImage(resource, space: space, albumID: albumID, etag: etag, lastModified: lastModified,
+                                     sid: sid, progress: progress)
+        }
+    }
+
+    private func fetchFullImage(
+        _ resource: FullImageResource, space: PhotoSpace, albumID: Int64?, etag: String?, lastModified: String?, sid: String,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws -> MediaResponse {
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
         components.path = "/webapi/entry.cgi"
         var parameters = [
@@ -1181,11 +1195,20 @@ public actor SynologyClient: PhotosTransport {
         default:
             throw SynologyAPIError.unsupported("Media requests in this content context are unavailable.")
         }
-        let sid = try sessionID()
         guard range.lowerBound >= 0, range.upperBound >= range.lowerBound,
               range.upperBound - range.lowerBound < 8 * 1_024 * 1_024 else {
             throw SynologyAPIError.invalidResponse
         }
+        // An expired session fails before the header reaches `receive`, so a retry repeats nothing.
+        try await renewingSession { sid in
+            try await fetchVideoRange(resource, space: space, recipientReference: recipientReference, range: range,
+                                      reference: reference, sid: sid, receive: receive)
+        }
+    }
+
+    private func fetchVideoRange(_ resource: VideoPlaybackResource, space: PhotoSpace, recipientReference: String?,
+                                 range: ClosedRange<Int64>, reference: String?, sid: String,
+                                 receive: @escaping @Sendable (VideoRangeEvent) async throws -> Void) async throws {
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
         switch resource.variant {
         case .original:
@@ -1240,6 +1263,16 @@ public actor SynologyClient: PhotosTransport {
             // URLSession errors may contain the request URL, including its sharing reference.
             if reference != nil, !(error is CancellationError) { throw SynologyAPIError.transport("Shared video request failed.") }
             throw error
+        }
+        if let http = response as? HTTPURLResponse, http.statusCode == 200,
+           http.value(forHTTPHeaderField: "Content-Type")?.lowercased().contains("json") == true {
+            var body = Data()
+            for try await byte in bytes {
+                body.append(byte)
+                if body.count > 4_096 { break }
+            }
+            if let code = PhotoDownloadValidation.apiErrorCode(in: body) { throw SynologyAPIError.api(code) }
+            throw SynologyAPIError.invalidResponse
         }
         guard let http = response as? HTTPURLResponse,
               http.statusCode == 206,
@@ -1411,7 +1444,7 @@ public actor SynologyClient: PhotosTransport {
         return .transport(error.localizedDescription)
     }
 
-    /// The current session for transfers that cannot use `request`, such as uploads and media.
+    /// The current session. Read only by `renewingSession`.
     private func sessionID() throws -> String {
         guard let sid else { throw SynologyAPIError.api(119) }
         return sid
@@ -1421,29 +1454,38 @@ public actor SynologyClient: PhotosTransport {
     /// Every JSON Web API call passes through here, so session state has one owner.
     private func request<Value: Decodable>(_ api: String, version: Int, method: String, _ parameters: [String: String] = [:],
                                            decoder: JSONDecoder = JSONDecoder(), maximumBytes: Int? = nil) async throws -> APIEnvelope<Value> {
-        let generation = sessionGeneration
-        let response: APIEnvelope<Value> = try await send(api, version: version, method: method, parameters,
-                                                          decoder: decoder, maximumBytes: maximumBytes)
-        guard !response.success, let code = response.error?.code,
-              SynologyAPIError.sessionCodes.contains(code), renewal != nil else { return response }
-        try await renewSession(expiredGeneration: generation)
-        return try await send(api, version: version, method: method, parameters, decoder: decoder, maximumBytes: maximumBytes)
-    }
-
-    /// Runs a media request that reads the session itself. Like `request`, it renews an expired
-    /// session once and retries; concurrent expiries share the one renewal.
-    private func renewingSession<Value>(_ operation: () async throws -> Value) async throws -> Value {
-        let generation = sessionGeneration
-        do { return try await operation() }
-        catch let error as SynologyAPIError where error.isSessionExpired && renewal != nil {
-            try await renewSession(expiredGeneration: generation)
-            return try await operation()
+        try await renewingSession { sid in
+            let response: APIEnvelope<Value> = try await send(api, version: version, method: method, parameters, sid: sid,
+                                                              decoder: decoder, maximumBytes: maximumBytes)
+            if !response.success, let code = response.error?.code, SynologyAPIError.sessionCodes.contains(code) {
+                throw SynologyAPIError.api(code)
+            }
+            return response
         }
     }
 
-    private func send<Value: Decodable>(_ api: String, version: Int, method: String, _ parameters: [String: String],
+    /// The only source of the session ID for requests: `operation` receives it, and when it throws
+    /// an expired-session error the session is renewed once and `operation` runs again with the
+    /// new ID. Concurrent expiries share one renewal. An operation must detect an expired session
+    /// itself, usually from the JSON error body the NAS sends in place of media.
+    private func renewingSession<Value>(_ operation: (String) async throws -> Value) async throws -> Value {
+        let generation = sessionGeneration
+        do { return try await operation(try sessionID()) }
+        catch let error as SynologyAPIError where error.isSessionExpired && renewal != nil {
+            try await renewSession(expiredGeneration: generation)
+            return try await operation(try sessionID())
+        }
+    }
+
+    /// The API error code of a downloaded file holding a Synology error envelope.
+    private static func apiErrorCode(inFile url: URL) throws -> Int? {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        return PhotoDownloadValidation.apiErrorCode(in: try handle.read(upToCount: 4_097) ?? Data())
+    }
+
+    private func send<Value: Decodable>(_ api: String, version: Int, method: String, _ parameters: [String: String], sid: String,
                                         decoder: JSONDecoder, maximumBytes: Int?) async throws -> APIEnvelope<Value> {
-        let sid = try sessionID()
         let form = parameters.merging(["api": api, "version": String(version), "method": method, "_sid": sid]) { _, new in new }
         let path = "/webapi/entry.cgi/" + api
         if let maximumBytes {
