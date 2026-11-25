@@ -133,15 +133,14 @@ struct PhotoViewerView: View {
 
             if viewer.image == nil, viewer.state?.item?.isVideo != true,
                viewer.invalidationMessage == nil {
-                if let message = viewer.emptyStateMessage {
-                    Label(message, systemImage: "photo.badge.exclamationmark")
-                        .font(.callout)
-                        .padding(16)
-                        .glassEffect(.regular, in: .rect(cornerRadius: 16))
-                } else {
-                    ProgressView("Loading preview…")
-                        .padding(16)
-                        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+                let lines = [viewer.metadataFailure].compactMap { $0 } + viewer.problems
+                if !viewer.hasFinishedWithoutImage || !lines.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if !viewer.hasFinishedWithoutImage { ProgressView("Loading preview…") }
+                        ViewerProblemList(problems: lines)
+                    }
+                    .padding(16)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 16))
                 }
             }
 
@@ -158,11 +157,21 @@ struct PhotoViewerView: View {
                     .font(.callout)
                     .padding(16)
                     .glassEffect(.regular, in: .rect(cornerRadius: 16))
-            } else if viewer.canRetry {
-                Button("Retry Original") { viewer.retry() }
-                    .buttonStyle(.glass)
-                    .padding(.bottom, 24)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
+            } else {
+                VStack(spacing: 12) {
+                    if viewer.image != nil, !viewer.problems.isEmpty {
+                        ViewerProblemList(problems: viewer.problems)
+                            .padding(12)
+                            .glassEffect(.regular, in: .rect(cornerRadius: 12))
+                    }
+                    if viewer.canRetry {
+                        Button("Retry Original") { viewer.retry() }
+                            .buttonStyle(.glass)
+                    }
+                }
+                .padding(.bottom, 24)
+                .padding(.horizontal, 24)
+                .frame(maxHeight: .infinity, alignment: .bottom)
             }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -245,4 +254,22 @@ private struct InspectionRequest: Equatable {
     let generation: UInt64?
     let enabled: Bool
     let threshold: Double
+}
+
+/// One line per problem with the shown photo.
+private struct ViewerProblemList: View {
+    let problems: [String]
+
+    var body: some View {
+        if !problems.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(problems, id: \.self) { problem in
+                    Label(problem, systemImage: "exclamationmark.triangle")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .font(.callout)
+            .frame(maxWidth: 480, alignment: .leading)
+        }
+    }
 }
