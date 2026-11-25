@@ -72,6 +72,23 @@ final class LoginTests: XCTestCase {
         XCTAssertEqual(logins.last?["device_id"], "issued-token")
     }
 
+    func testConcurrentExpiredThumbnailsShareOneRenewalAndRetry() async throws {
+        RenewingProtocol.reset()
+        let (client, session) = client(RenewingProtocol.self)
+        defer { session.invalidateAndCancel() }
+        try await client.signIn(.init(username: "user", password: "test-password", secondFactor: .code("123456")))
+        let images = try await withThrowingTaskGroup(of: Data.self) { group in
+            for id in 1...20 {
+                group.addTask {
+                    try await client.thumbnail(ThumbnailInfo(unitID: Int64(id), cacheKey: "\(id)_1"), size: .m, space: .personal)
+                }
+            }
+            return try await group.reduce(into: [Data]()) { $0.append($1) }
+        }
+        XCTAssertEqual(images.count, 20)
+        XCTAssertEqual(RenewingProtocol.logins().count, 2)
+    }
+
     func testFailedRenewalIsReportedAndNotRetried() async throws {
         RenewingProtocol.reset(rejectRenewal: true)
         let (client, session) = client(RenewingProtocol.self)
@@ -182,6 +199,8 @@ private final class RenewingProtocol: LoginProtocol, @unchecked Sendable {
         state.withLock { $0 = State(rejectRenewal: rejectRenewal) }
     }
     static func logins() -> [[String: String]] { state.withLock { $0.logins } }
+    static let pngPixel = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")!
 
     override func startLoading() {
         let values = parameters()
@@ -195,6 +214,15 @@ private final class RenewingProtocol: LoginProtocol, @unchecked Sendable {
             } else {
                 respond("{\"success\":true,\"data\":{\"sid\":\"session-\(count)\",\"did\":\"issued-token\"}}")
             }
+        } else if request.url?.path.hasSuffix("/Thumbnail/get") == true {
+            let sid = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "_sid" }?.value
+            guard sid == "session-2" else { return respond("{\"success\":false,\"error\":{\"code\":119}}") }
+            client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                                                                  headerFields: ["Content-Type": "image/png"])!,
+                                cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Self.pngPixel)
+            client?.urlProtocolDidFinishLoading(self)
         } else if values["_sid"] == "session-2" {
             respond("{\"success\":true,\"data\":{\"list\":[]}}")
         } else {

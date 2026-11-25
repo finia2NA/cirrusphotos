@@ -992,6 +992,14 @@ public actor SynologyClient: PhotosTransport {
 
     private func thumbnail(id: Int64, cacheKey: String, kind: String, size: ThumbnailSize?,
                            albumID: Int64?, reference: String?, space: PhotoSpace, folderSequence: Int64?) async throws -> Data {
+        try await renewingSession {
+            try await fetchThumbnail(id: id, cacheKey: cacheKey, kind: kind, size: size, albumID: albumID,
+                                     reference: reference, space: space, folderSequence: folderSequence)
+        }
+    }
+
+    private func fetchThumbnail(id: Int64, cacheKey: String, kind: String, size: ThumbnailSize?,
+                                albumID: Int64?, reference: String?, space: PhotoSpace, folderSequence: Int64?) async throws -> Data {
         let sid = try sessionID()
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
         components.path = space == .shared ? "/synofoto/api/v2/t/Thumbnail/get" : "/synofoto/api/v2/p/Thumbnail/get"
@@ -1039,6 +1047,15 @@ public actor SynologyClient: PhotosTransport {
 
     public func fullImage(
         _ resource: FullImageResource, etag: String? = nil, lastModified: String? = nil,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws -> MediaResponse {
+        try await renewingSession {
+            try await fetchFullImage(resource, etag: etag, lastModified: lastModified, progress: progress)
+        }
+    }
+
+    private func fetchFullImage(
+        _ resource: FullImageResource, etag: String?, lastModified: String?,
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> MediaResponse {
         let space: PhotoSpace
@@ -1411,6 +1428,17 @@ public actor SynologyClient: PhotosTransport {
               SynologyAPIError.sessionCodes.contains(code), renewal != nil else { return response }
         try await renewSession(expiredGeneration: generation)
         return try await send(api, version: version, method: method, parameters, decoder: decoder, maximumBytes: maximumBytes)
+    }
+
+    /// Runs a media request that reads the session itself. Like `request`, it renews an expired
+    /// session once and retries; concurrent expiries share the one renewal.
+    private func renewingSession<Value>(_ operation: () async throws -> Value) async throws -> Value {
+        let generation = sessionGeneration
+        do { return try await operation() }
+        catch let error as SynologyAPIError where error.isSessionExpired && renewal != nil {
+            try await renewSession(expiredGeneration: generation)
+            return try await operation()
+        }
     }
 
     private func send<Value: Decodable>(_ api: String, version: Int, method: String, _ parameters: [String: String],
