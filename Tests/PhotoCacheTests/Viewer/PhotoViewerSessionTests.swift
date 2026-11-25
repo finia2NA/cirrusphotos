@@ -1004,6 +1004,44 @@ extension PhotoViewerAssetLifecycleTests {
         await session.close()
     }
 
+    func testMetadataResetBeforeOpeningDoesNotStopViewer() async throws {
+        let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let selected = try item(14)
+        let transport = ViewerTransport()
+        await transport.configure(pages: [0: [selected]])
+        let repository = try repository(root: cacheRoot, transport: transport)
+        try await repository.clearMetadataCache()
+        let snapshot = TimelineSnapshot(sections: [
+            TimelineSection(offset: 0, limit: 1,
+                            list: [TimelineDay(year: 2024, month: 4, day: 3, itemCount: 1)])
+        ])
+        let session = PhotoViewerSession(repository: repository, collection: .library(.personal),
+                                         index: LibraryIndex(snapshot: snapshot),
+                                         seed: PhotoViewerSeed(sectionIndex: 0, pageOffset: 0,
+                                                               item: selected, page: [selected],
+                                                               pageVerified: true),
+                                         allowNetwork: true)
+        let loaded = await waitUntil {
+            let state = await session.state()
+            return state.fullImageData != nil
+        }
+        XCTAssertTrue(loaded)
+        let state = await session.state()
+        XCTAssertTrue(state.allowNetwork)
+        XCTAssertEqual(state.metadataStatus, .ready(verified: true, validationFailure: nil))
+        let originals = await transport.fullImageCalls
+        XCTAssertEqual(originals, [14])
+
+        try await repository.clearMetadataCache()
+        let invalidated = await waitUntil {
+            let state = await session.state()
+            if case .failure = state.metadataStatus { return !state.allowNetwork }
+            return false
+        }
+        XCTAssertTrue(invalidated)
+        await session.close()
+    }
+
     func testCloseBeforeEnhancementDelayPreventsExpensiveTransfers() async throws {
         let cacheRoot = root(); defer { try? FileManager.default.removeItem(at: cacheRoot) }
         let selected = try item(14)

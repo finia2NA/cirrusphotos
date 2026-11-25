@@ -206,7 +206,11 @@ public actor PhotoViewerSession {
             }
         }
         metadataResetTask = Task { [weak self] in
-            for await revision in await repository.metadataCacheResets() {
+            var resets = await repository.metadataCacheResets().makeAsyncIterator()
+            // The first value replays the latest reset, which the viewer's seed already follows.
+            guard let baseline = await resets.next() else { return }
+            await self?.setMetadataResetBaseline(baseline)
+            while let revision = await resets.next() {
                 guard !Task.isCancelled else { return }
                 await self?.resetMetadata(revision: revision)
             }
@@ -355,6 +359,10 @@ public actor PhotoViewerSession {
     }
 
     func removeObserver(_ id: UUID) { observers.removeValue(forKey: id) }
+
+    func setMetadataResetBaseline(_ revision: UInt64) {
+        appliedMetadataResetRevision = max(appliedMetadataResetRevision, revision)
+    }
 
     func resetMetadata(revision: UInt64) {
         guard revision > appliedMetadataResetRevision else { return }
