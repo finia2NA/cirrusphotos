@@ -2,6 +2,20 @@
 
 Version sections supply the website changelog, cumulative updater notes and individual GitHub release notes.
 
+## 0.1.11
+
+- Drag pinned albums in the sidebar to reorder them; the drop lands above or below the row you're over. With no pins, drop an album on the placeholder row to pin it.
+- Photo ▸ Add to Sidebar Album (⌘1–⌘9) adds the viewer photo or the selection to one of the first nine pinned albums. Holding Command shows each pin's number, or a check when the album already holds the selection.
+- Pinned albums show a spinner while photos are being added to them, then a check or a red cross.
+- The filmstrip, histogram, highlight peaking and focus edges stay on or off across launches. Hiding their toolbar buttons turns them all off.
+- The viewer lists all of a photo's problems together, such as an empty file on the NAS, previews the NAS couldn't create, or an original that failed to load or can't be decoded. Videos show the NAS problems too.
+- Thumbnails and originals keep loading after the NAS session expires while the app sits idle. Videos, downloads, uploads and profile photos also recover from an expired session.
+- Photos that failed to load while the NAS was unreachable reload once it answers again.
+- WebP thumbnails load.
+- When the NAS couldn't make a thumbnail at the chosen size (as with some HEVC videos), the nearest smaller size shows, or else a larger one.
+
+Fixes #114, #127, #128, #129 and #130.
+
 ## 0.1.10
 
 - The Group by Day toggle in the toolbar is available in albums, filtered Map results and every other photo collection, not only the main timeline.
