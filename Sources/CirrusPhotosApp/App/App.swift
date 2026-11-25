@@ -40,7 +40,7 @@ struct CirrusPhotosApp: App {
         .defaultSize(width: 860, height: 820)
         .commands {
             if let context = accounts.context {
-                LibraryCommands(model: context.model, activity: context.model.activity, preferences: preferences,
+                LibraryCommands(model: context.model, albumPresentation: context.albumPresentation, activity: context.model.activity, preferences: preferences,
                                 infoPanel: context.infoPanel, filter: context.libraryFilter,
                                 timelineSectionLoad: context.timelineSectionLoad)
             }

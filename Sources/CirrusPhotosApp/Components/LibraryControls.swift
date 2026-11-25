@@ -289,6 +289,7 @@ struct ViewerToolbarTitle: View {
 
 struct LibraryCommands: Commands {
     @Bindable var model: LibraryModel
+    @ObservedObject var albumPresentation: AlbumPresentationStore
     @Bindable var activity: ActivityCenter
     @ObservedObject var preferences: AppPreferences
     @ObservedObject var infoPanel: InfoPanelModel
@@ -398,6 +399,19 @@ struct LibraryCommands: Commands {
             Divider()
             Button("Add to Album…") { model.beginAlbumOperation(.add) }
                 .disabled(!model.canManageAlbumSelection)
+            Menu("Add to Sidebar Album") {
+                let pins = Array(albumPresentation.pinnedCollections.prefix(9))
+                if pins.isEmpty {
+                    Button("No Sidebar Albums") {}.disabled(true)
+                }
+                ForEach(Array(pins.enumerated()), id: \.element) { index, collection in
+                    Button(model.albums.first { $0.collection == collection }?.name ?? "Unavailable Album") {
+                        model.addSelection(toPinned: collection)
+                    }
+                    .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
+                    .disabled(!model.canAddSelection(toPinned: collection))
+                }
+            }
             Button("Remove from Album…") { model.beginAlbumOperation(.remove) }
                 .disabled(!model.canRemoveAlbumSelection)
             Divider()

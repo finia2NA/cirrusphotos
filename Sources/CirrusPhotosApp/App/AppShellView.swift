@@ -28,6 +28,7 @@ struct AppShellView: View {
     @State private var openedMapFilter: PhotoCollectionDescriptor?
     @State private var mapFilterOpenGeneration: UInt64 = 0
     @State private var chrome = WindowChromeMetrics()
+    @State private var commandKey = CommandKeyHoldState()
     @State private var lastViewerFollowSelection: PhotoViewerSelection?
     @StateObject private var browserBridge = LibraryBrowserBridge()
     @StateObject private var mapModel = MapBrowserModel()
@@ -139,7 +140,8 @@ struct AppShellView: View {
                         .tag(SidebarSelection.destination(.map))
                 }
                 AlbumSidebarSection(presentation: albumPresentation, albums: model.albums,
-                                    repository: model.repository, showOverviewForDrag: showAlbumsOverviewForDrag)
+                                    repository: model.repository, commandKey: commandKey,
+                                    showOverviewForDrag: showAlbumsOverviewForDrag, select: select)
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 320)
@@ -153,6 +155,8 @@ struct AppShellView: View {
         .onExitCommand {
             model.navigateBack()
         }
+        .onAppear { commandKey.start() }
+        .onDisappear { commandKey.stop() }
         .onAppear {
             model.activity.revealHandler = { [browserBridge] item, _ in
                 browserBridge.reveal(BrowserRevealRequest(itemID: item.id, dayID: item.utcDayID,
@@ -168,6 +172,9 @@ struct AppShellView: View {
         }
         .onChange(of: activityRevealCollection, initial: true) { _, collection in
             model.activity.revealableCollection = collection
+        }
+        .onChange(of: selectedCollection, initial: true) { _, collection in
+            model.displayedBrowserCollection = collection
         }
         .onChange(of: selectedDestination) { _, _ in
             updateBackHandler(); updateTimelineSectionLoadSource()

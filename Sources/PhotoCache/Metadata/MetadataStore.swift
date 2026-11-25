@@ -624,6 +624,36 @@ extension DiskCache {
         }
     }
 
+    /// Which of `ids` cached pages of `collection` list as members, ignoring validation.
+    func metadataCachedMemberIDs(_ namespace: MetadataNamespace, collection: PhotoCollectionDescriptor, ids: [Int64]) throws -> Set<Int64> {
+        guard metadataInitialized, !ids.isEmpty else { return [] }
+        return try database.read { db in
+            var found = Set<Int64>()
+            for start in stride(from: 0, to: ids.count, by: 500) {
+                let batch = Array(ids[start..<min(start + 500, ids.count)])
+                let rows = try PageItemRecord.filter {
+                    $0.namespace == namespace.key && $0.collection == collection.rawValue && batch.contains($0.itemID)
+                }.fetchAll(db)
+                found.formUnion(rows.map(\.itemID))
+            }
+            return found
+        }
+    }
+
+    /// Cached facets of `ids`, ignoring validation; items without stored details are omitted.
+    func metadataCachedFacets(_ namespace: MetadataNamespace, ids: [Int64]) throws -> [Int64: ItemFacets] {
+        guard metadataInitialized, !ids.isEmpty else { return [:] }
+        return try database.read { db in
+            var facets: [Int64: ItemFacets] = [:]
+            let request = ItemFacetRecord.filter(ItemDetailRecord.Columns.namespace == namespace.key)
+            for start in stride(from: 0, to: ids.count, by: 500) {
+                let batch = Array(ids[start..<min(start + 500, ids.count)])
+                for record in try request.filter(batch.contains(ItemDetailRecord.Columns.itemID)).fetchAll(db) { facets[record.itemID] = record.facets }
+            }
+            return facets
+        }
+    }
+
     // MARK: Item index and locations
 
     /// The number of indexed items when the namespace holds a complete inventory, otherwise nil.

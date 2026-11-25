@@ -125,15 +125,10 @@ extension LibraryBrowserScrollView.Coordinator {
         let canToggleFavorite = active && !selection.indexes.isEmpty && allowNetwork
         let callback = onCommandStateChanged, owner = commandOwner
         let handler: ((BrowserSelectionCommand) -> Void)? = active ? { [weak self] in self?.perform($0) } : nil
-        let knownItemIDs: [Int: Int64]
-        if active {
-            var map: [Int: Int64] = [:]
-            for ordinal in selection.indexes {
-                if let item = loadedItem(ordinal) { map[ordinal] = item.photo.id }
-            }
-            knownItemIDs = map
-        } else {
-            knownItemIDs = [:]
+        // Also published while unfocused: the sidebar album shortcuts act on the shown selection.
+        var knownItemIDs: [Int: Int64] = [:]
+        for ordinal in selection.indexes {
+            if let item = loadedItem(ordinal) { knownItemIDs[ordinal] = item.photo.id }
         }
         let snapshot = BrowserCommandSnapshot(
             owner: owner, active: active, canOpen: canOpen,

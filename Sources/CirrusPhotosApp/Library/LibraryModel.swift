@@ -94,6 +94,24 @@ final class LibraryModel {
     @ObservationIgnored var browserCommandHandler: ((BrowserSelectionCommand) -> Void)?
     @ObservationIgnored var browserCommandOwner: UUID?
     @ObservationIgnored var browserCommandSnapshot: BrowserCommandSnapshot = .inactive
+    /// Changes when the browser command selection's collection, timeline or ordinals change,
+    /// for views that follow the selection without observing every snapshot.
+    private(set) var browserSelectionRevision: UInt64 = 0
+    /// The collection the shown browser displays, set by the shell; nil while none is shown.
+    var displayedBrowserCollection: PhotoCollectionDescriptor? {
+        didSet {
+            guard displayedBrowserCollection != oldValue else { return }
+            passiveBrowserSnapshots = passiveBrowserSnapshots.filter { $0.key == displayedBrowserCollection }
+            browserSelectionRevision &+= 1
+        }
+    }
+    /// The latest snapshot of each shown browser, focused or not, so the sidebar album
+    /// shortcuts still act on its selection while the sidebar has focus.
+    @ObservationIgnored var passiveBrowserSnapshots: [PhotoCollectionDescriptor: BrowserCommandSnapshot] = [:]
+    /// The viewer photo as a one-item album selection, recomputed when the photo changes.
+    @ObservationIgnored var viewerShortcutSnapshot: BrowserCommandSnapshot?
+    @ObservationIgnored var viewerShortcutKey: ViewerShortcutKey?
+    private(set) var viewerShortcutRevision: UInt64 = 0
     /// The last snapshot published while the browser was the key responder. Kept after the
     /// Info panel takes key so its rating control can still act on the selection.
     @ObservationIgnored var lastActiveBrowserSnapshot: BrowserCommandSnapshot?
@@ -430,13 +448,25 @@ final class LibraryModel {
     func installBrowserCommands(snapshot: BrowserCommandSnapshot, handler: ((BrowserSelectionCommand) -> Void)?) {
         let active = snapshot.active
         let owner = snapshot.owner
+        let passive = passiveBrowserSnapshots[snapshot.collection]
+        passiveBrowserSnapshots[snapshot.collection] = snapshot
+        if snapshot.collection == displayedBrowserCollection,
+           passive?.indexFingerprint != snapshot.indexFingerprint || passive?.selectedOrdinals != snapshot.selectedOrdinals
+            || passive?.knownItemIDsByOrdinal != snapshot.knownItemIDsByOrdinal {
+            browserSelectionRevision &+= 1
+        }
         if active { browserCommandOwner = owner }
         else if browserCommandOwner != nil && browserCommandOwner != owner { return }
         let canOpen = active && snapshot.canOpen
         if browserCommandsActive != active { browserCommandsActive = active }
         if canOpenSelectedPhoto != canOpen { canOpenSelectedPhoto = canOpen }
         browserCommandHandler = active ? handler : nil
+        let previous = browserCommandSnapshot
         browserCommandSnapshot = active ? snapshot : .inactive
+        if previous.collection != browserCommandSnapshot.collection || previous.indexFingerprint != browserCommandSnapshot.indexFingerprint
+            || previous.selectedOrdinals != browserCommandSnapshot.selectedOrdinals {
+            browserSelectionRevision &+= 1
+        }
         let hasSelection = active && !snapshot.selectedOrdinals.isEmpty
         if browserHasSelection != hasSelection { browserHasSelection = hasSelection }
         if active { lastActiveBrowserSnapshot = snapshot }
@@ -520,6 +550,31 @@ final class LibraryModel {
 
     func updateViewerCommands() {
         canToggleViewerFavorite = activeViewer.map { capabilities(for: $0.collection).allowsSpaceItemActions && $0.canToggleFavorite } ?? false
+        updateViewerShortcutSnapshot()
+    }
+
+    struct ViewerShortcutKey: Equatable {
+        let viewer: ObjectIdentifier
+        let fingerprint: String
+        let ordinal: Int
+        let itemID: Int64
+    }
+
+    /// Rebuilds the viewer's album selection only when the shown photo changes; the viewer's
+    /// state changes far more often (image loads).
+    private func updateViewerShortcutSnapshot() {
+        var key: ViewerShortcutKey?
+        if let viewer = activeViewer, let state = viewer.state, state.metadataVerified, state.allowNetwork, let item = state.item {
+            key = ViewerShortcutKey(viewer: ObjectIdentifier(viewer), fingerprint: viewer.index.fingerprint,
+                                    ordinal: state.desiredLocation.ordinal, itemID: item.id)
+        }
+        guard key != viewerShortcutKey else { return }
+        viewerShortcutKey = key
+        viewerShortcutSnapshot = key.flatMap { key in
+            activeViewer.flatMap { viewerAlbumSnapshot(collection: $0.collection, fingerprint: key.fingerprint,
+                                                      ordinal: key.ordinal, itemID: key.itemID) }
+        }
+        viewerShortcutRevision &+= 1
     }
 
     func toggleViewerFavorite() {

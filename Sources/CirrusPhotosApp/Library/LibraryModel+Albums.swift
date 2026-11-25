@@ -14,6 +14,52 @@ extension LibraryModel {
         canManageAlbumSelection && isNormalAlbum(browserCommandSnapshot.sourceAlbumID)
     }
 
+    /// Whether a drag or menu addition to this owned album, or Shared with me album with
+    /// Provider access, can start now. The addition still verifies when it runs.
+    func canAddDrop(to collection: PhotoCollectionDescriptor) -> Bool {
+        albumOperation == nil && albums.contains { $0.collection == collection && (!$0.isIncoming || $0.recipientCanUpload) }
+    }
+
+    /// The selection the sidebar album shortcuts act on: the viewer photo while the viewer is
+    /// open, otherwise the shown browser's selection, also while the sidebar has focus.
+    var albumShortcutSnapshot: BrowserCommandSnapshot? {
+        let snapshot: BrowserCommandSnapshot?
+        if canCloseViewer {
+            _ = viewerShortcutRevision
+            snapshot = viewerShortcutSnapshot
+        } else {
+            _ = browserSelectionRevision
+            snapshot = browserCommandsActive ? browserCommandSnapshot : displayedBrowserCollection.flatMap { passiveBrowserSnapshots[$0] }
+        }
+        guard let snapshot, albumOperation == nil, capabilities(for: snapshot.collection).allowsAlbumMembership,
+              !snapshot.selectedOrdinals.isEmpty, snapshot.timeline != nil, snapshot.authority != nil else { return nil }
+        return snapshot
+    }
+
+    /// Whether the shortcut selection can be added to this sidebar album (Photo ▸ Add to Sidebar Album).
+    func canAddSelection(toPinned collection: PhotoCollectionDescriptor) -> Bool {
+        guard let snapshot = albumShortcutSnapshot, canAddDrop(to: collection) else { return false }
+        if collection.incomingAlbumIdentity != nil {
+            return capabilities(for: snapshot.collection).allowsPersonalActions
+        }
+        return true
+    }
+
+    /// Adds the shortcut selection to a sidebar album without a sheet, like a drag.
+    func addSelection(toPinned collection: PhotoCollectionDescriptor) {
+        guard canAddSelection(toPinned: collection), let captured = albumShortcutSnapshot,
+              let selection = captured.captureSelection(timeline: captured.timeline) else { return }
+        addCapturedSelection(selection, sourceAlbumID: captured.sourceAlbumID, to: collection)
+    }
+
+    /// Albums among `targets` that cached metadata shows already contain the whole shortcut
+    /// selection. A hint only: it never reads the NAS, and additions still skip existing members.
+    func cachedSelectionContainment(in targets: [PhotoCollectionDescriptor]) async -> Set<PhotoCollectionDescriptor> {
+        guard let repository, let captured = albumShortcutSnapshot,
+              let selection = captured.captureSelection(timeline: captured.timeline) else { return [] }
+        return await repository.cachedContainment(of: selection, in: targets)
+    }
+
     func beginAlbumOperation(_ kind: AlbumOperation.Kind) {
         guard canManageAlbumSelection else { return }
         beginAlbumOperation(kind, captured: browserCommandSnapshot)
