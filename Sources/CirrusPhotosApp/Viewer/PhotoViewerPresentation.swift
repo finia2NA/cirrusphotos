@@ -6,7 +6,7 @@ import TimelineCore
 
 @MainActor
 final class PhotoViewerPresentation: ObservableObject {
-    @Published private(set) var state: PhotoViewerState? { didSet { updateStatus() } }
+    @Published private(set) var state: PhotoViewerState? { didSet { noteOriginalFailure(); updateStatus() } }
     @Published private(set) var image: NSImage?
     @Published private(set) var decodeFailure: String? { didSet { updateStatus() } }
     @Published private(set) var isDecodingFullImage = false { didSet { updateStatus() } }
@@ -49,6 +49,9 @@ final class PhotoViewerPresentation: ObservableObject {
     private var lastTransferActivity = ContinuousClock.now
 
     private var stateTask: Task<Void, Never>?
+    /// The current item's last original failure, kept while the original is retried so its
+    /// problem line does not blink with each attempt.
+    private var originalFailure: (generation: UInt64, message: String)?
     private var decodeTask: Task<Void, Never>?
     private var thumbnailDecodeTask: Task<Void, Never>?
     private var neighborDecodeTasks: [String: Task<Void, Never>] = [:]
@@ -255,22 +258,54 @@ final class PhotoViewerPresentation: ObservableObject {
         return index.sections[location.sectionIndex].offset
     }
 
-    var emptyStateMessage: String? {
-        guard image == nil, let state else { return nil }
-        if let decodeFailure { return decodeFailure }
-        if state.item == nil, case .failure(let message) = state.metadataStatus { return message }
-        let thumbnailFailure: String?
-        switch state.thumbnailStatus {
-        case .failure(let message), .unsupported(let message): thumbnailFailure = message
-        default: thumbnailFailure = nil
-        }
-        guard let thumbnailFailure else { return nil }
-        if state.fullImageLimit == .qualitySetting { return thumbnailFailure }
+    /// Problems with the current photo; empty for videos, which report their own.
+    var problems: [String] {
+        guard invalidationMessage == nil, let state, let item = state.item, !item.isVideo else { return [] }
+        return ViewerProblems.make(ViewerProblems.Inputs(
+            filesize: item.filesize, thumbnail: item.additional?.thumbnail,
+            thumbnailStatus: state.thumbnailStatus, fullStatus: shownFullStatus(state),
+            fullImageLimit: state.fullImageLimit, decodeFailure: decodeFailure,
+            hasImage: image != nil, allowNetwork: state.allowNetwork))
+    }
+
+    private func noteOriginalFailure() {
+        guard let state else { originalFailure = nil; return }
+        let generation = state.selection.generation
         switch state.fullImageStatus {
-        case .failure(let message), .unsupported(let message): return message
-        case .idle: return thumbnailFailure
-        case .loading, .ready: return nil
+        case .failure(let message): originalFailure = (generation, message)
+        case .loading where originalFailure?.generation == generation: break
+        default: originalFailure = nil
         }
+    }
+
+    private func shownFullStatus(_ state: PhotoViewerState) -> PhotoViewerResourceStatus {
+        if state.fullImageStatus == .loading, let originalFailure,
+           originalFailure.generation == state.selection.generation {
+            return .failure(originalFailure.message)
+        }
+        return state.fullImageStatus
+    }
+
+    /// With no image shown, nothing more is coming: the viewer stops showing progress.
+    var hasFinishedWithoutImage: Bool {
+        guard image == nil, let state else { return false }
+        if decodeFailure != nil { return true }
+        if state.item == nil, case .failure = state.metadataStatus { return true }
+        switch state.thumbnailStatus {
+        case .failure, .unsupported: break
+        default: return false
+        }
+        if state.fullImageLimit == .qualitySetting { return true }
+        switch state.fullImageStatus {
+        case .failure, .unsupported, .idle: return true
+        case .loading, .ready: return false
+        }
+    }
+
+    /// Why the viewer has no item to show, when its metadata failed.
+    var metadataFailure: String? {
+        guard let state, state.item == nil, case .failure(let message) = state.metadataStatus else { return nil }
+        return message
     }
 
     func setFilmstripEnabled(_ enabled: Bool) {
