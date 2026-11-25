@@ -1068,9 +1068,13 @@ public actor SynologyClient: PhotosTransport {
         }
         guard let http = response as? HTTPURLResponse else { throw SynologyAPIError.invalidResponse }
         guard http.statusCode == 200 else { throw SynologyAPIError.http(http.statusCode) }
-        guard http.value(forHTTPHeaderField: "Content-Type")?.lowercased().hasPrefix("image/") == true,
-              PhotoDownloadValidation.containsImage(data) else {
+        // The bytes decide, not Content-Type: for some formats (WebP) the NAS serves the original
+        // as application/octet-stream in place of every thumbnail size.
+        guard PhotoDownloadValidation.containsImage(data) else {
             if let code = PhotoDownloadValidation.apiErrorCode(in: data) { throw SynologyAPIError.api(code) }
+            SynologyDiagnostics.transport.error(
+                "Thumbnail response was not a decodable image id=\(id, privacy: .public) kind=\(kind, privacy: .public) content_type=\(http.value(forHTTPHeaderField: "Content-Type") ?? "nil", privacy: .public) bytes=\(data.count, privacy: .public)"
+            )
             throw SynologyAPIError.invalidResponse
         }
         return data
