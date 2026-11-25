@@ -201,8 +201,12 @@ extension LibraryModel {
               !selection.selectedOrdinals.isEmpty else { return false }
         let name = albumName(albumID)
         let handle = activity.begin(.addToAlbum(id: albumID, name: name), totalCount: selection.selectedOrdinals.count, queued: true)
+        let additions = albumAdditions, target = PhotoCollectionDescriptor.album(albumID)
+        let status = additions.begin(target)
         enqueueAlbumWrite(handle) { [weak self] in
             var attempted = false
+            var succeeded = false
+            defer { additions.finish(target, id: status, succeeded: succeeded) }
             do {
                 let addable = try await repository.addableAlbums()
                 guard addable.contains(where: { $0.id == albumID }) else {
@@ -214,12 +218,14 @@ extension LibraryModel {
                 }
                 if sourceAlbumID == albumID {
                     handle.discard()
+                    succeeded = true
                     return
                 }
                 handle.setItems(resolved.items.map { ActivityItem(photo: $0, collection: selection.collection) })
                 attempted = true
                 try await repository.addMissingItems(resolved, toAlbum: albumID)
                 handle.succeed()
+                succeeded = true
             } catch {
                 handle.fail(error, operation: "Album operation")
             }
@@ -238,7 +244,11 @@ extension LibraryModel {
         let name = receivedIncomingAlbums.first { $0.id == identity?.albumID && $0.ownerUserID == identity?.ownerID }?.name
             ?? "shared album"
         let handle = activity.begin(.addToIncomingAlbum(name: name), totalCount: selection.selectedOrdinals.count, queued: true)
+        let additions = albumAdditions
+        let status = additions.begin(collection)
         enqueueAlbumWrite(handle) { [weak self] in
+            var succeeded = false
+            defer { additions.finish(collection, id: status, succeeded: succeeded) }
             do {
                 guard let resolved = await SelectionItemResolver(repository: repository).resolveWithReceipt(selection),
                       !resolved.items.isEmpty else {
@@ -247,6 +257,7 @@ extension LibraryModel {
                 handle.setItems(resolved.items.map { ActivityItem(photo: $0, collection: selection.collection) })
                 try await repository.addItems(resolved, toIncomingAlbum: collection)
                 handle.succeed()
+                succeeded = true
             } catch {
                 handle.fail(error, operation: "Album operation")
                 return

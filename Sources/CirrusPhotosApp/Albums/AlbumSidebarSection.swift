@@ -72,19 +72,38 @@ struct AlbumSidebarSection: View {
     }
 }
 
-/// The digit of a sidebar album shortcut, or a check when cached metadata shows the album
-/// already holds the whole selection.
-private struct AlbumShortcutBadge: View {
-    let number: Int
-    let contained: Bool
+/// The trailing badge of a sidebar album: an addition's progress and result, or while
+/// Command is held the album's shortcut digit, or a check when cached metadata shows the
+/// album already holds the whole selection.
+enum AlbumRowBadge: Equatable {
+    case number(Int), contained, running, succeeded, failed
+
+    static func resolve(addition: AlbumAdditionStatusStore.Phase?, shortcutNumber: Int?, contained: Bool) -> AlbumRowBadge? {
+        switch addition {
+        case .running: return .running
+        case .succeeded: return .succeeded
+        case .failed: return .failed
+        case nil: return shortcutNumber.map { contained ? .contained : .number($0) }
+        }
+    }
+}
+
+private struct AlbumRowBadgeView: View {
+    let badge: AlbumRowBadge
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .fill(contained ? AnyShapeStyle(Color.green) : AnyShapeStyle(.quaternary))
-            if contained {
-                Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
-            } else {
+            switch badge {
+            case .running:
+                ProgressView().controlSize(.mini)
+            case .number(let number):
+                RoundedRectangle(cornerRadius: 4, style: .continuous).fill(.quaternary)
                 Text(verbatim: "\(number)").font(.caption.monospacedDigit().weight(.semibold)).foregroundStyle(.secondary)
+            case .contained, .succeeded:
+                RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.green)
+                Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
+            case .failed:
+                RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.red)
+                Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
             }
         }
         .frame(width: 16, height: 16)
@@ -105,7 +124,12 @@ private struct AlbumSidebarRow: View {
     @State private var dragPreview: NSImage?
     @State private var confirmDelete = false
     @State private var rename = false
+    private var badge: AlbumRowBadge? {
+        AlbumRowBadge.resolve(addition: model.albumAdditions.phase(for: id), shortcutNumber: shortcutNumber, contained: containsSelection)
+    }
+
     var body: some View {
+        let badge = badge
         HStack(spacing: 8) {
             AlbumCoverView(thumbnail: album?.thumbnail, repository: repository, collection: id,
                            cornerRadius: 3, placeholderFont: .caption, maxPixel: 96,
@@ -113,10 +137,11 @@ private struct AlbumSidebarRow: View {
                 .frame(width: 24, height: 24)
             Text(album?.name ?? "Unavailable Album").lineLimit(1)
             Spacer(minLength: 0)
-            if let shortcutNumber {
-                AlbumShortcutBadge(number: shortcutNumber, contained: containsSelection)
+            if let badge {
+                AlbumRowBadgeView(badge: badge).transition(.opacity)
             }
         }
+        .animation(.easeOut(duration: 0.25), value: badge)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .modifier(AlbumDragGesture(collection: id, name: album?.name ?? "Album",

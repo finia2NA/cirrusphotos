@@ -107,6 +107,8 @@ final class LibraryModel {
     }
     /// The latest snapshot of each shown browser, focused or not, so the sidebar album
     /// shortcuts still act on its selection while the sidebar has focus.
+    /// Running and just-finished album additions, observed only by the sidebar rows.
+    @ObservationIgnored let albumAdditions = AlbumAdditionStatusStore()
     @ObservationIgnored var passiveBrowserSnapshots: [PhotoCollectionDescriptor: BrowserCommandSnapshot] = [:]
     /// The viewer photo as a one-item album selection, recomputed when the photo changes.
     @ObservationIgnored var viewerShortcutSnapshot: BrowserCommandSnapshot?
