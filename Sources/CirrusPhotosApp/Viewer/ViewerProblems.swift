@@ -1,9 +1,9 @@
 import PhotoCache
 import SynologyAPI
 
-/// Problems with the photo the viewer shows, one line each, from the NAS's metadata and from the
-/// viewer's own loads. Several can apply at once, such as an empty file whose previews the NAS
-/// could not create and whose original then fails to load.
+/// Problems with the item the viewer shows, one line each, from the NAS's metadata and, for
+/// photos, from the viewer's own loads (videos report playback themselves). Several can apply at
+/// once, such as an empty file whose previews the NAS could not create and whose original then fails.
 enum ViewerProblems {
     struct Inputs: Equatable {
         /// The item's NAS file size, when reported.
@@ -16,6 +16,7 @@ enum ViewerProblems {
         /// An image is on screen. Load failures that leave a usable image show only while connected.
         var hasImage: Bool
         var allowNetwork: Bool
+        var isVideo = false
     }
 
     static func make(_ inputs: Inputs) -> [String] {
@@ -24,9 +25,11 @@ enum ViewerProblems {
         let broken = brokenSizes(inputs.thumbnail)
         if !broken.isEmpty {
             problems.append(broken.count == ThumbnailSize.allCases.count
-                ? "The NAS couldn't create previews of this photo."
+                ? "The NAS couldn't create previews of this \(inputs.isVideo ? "video" : "photo")."
                 : "The NAS couldn't create the \(list(broken.map(name))) preview\(broken.count == 1 ? "" : "s").")
-        } else if !inputs.hasImage || inputs.allowNetwork {
+        }
+        if inputs.isVideo { return problems }
+        if broken.isEmpty, !inputs.hasImage || inputs.allowNetwork {
             switch inputs.thumbnailStatus {
             case .failure(let message), .unsupported(let message): problems.append("Preview unavailable: \(message)")
             default: break
@@ -45,14 +48,18 @@ enum ViewerProblems {
         return problems
     }
 
+    /// Sizes with a status other than ready, such as `broken` or `ame_defect`. `converting` is
+    /// still in progress, and a missing status says nothing.
     private static func brokenSizes(_ thumbnail: ThumbnailInfo?) -> [ThumbnailSize] {
         guard let thumbnail else { return [] }
         return ThumbnailSize.allCases.filter { size in
-            switch size {
-            case .sm: thumbnail.sm == "broken"
-            case .m: thumbnail.m == "broken"
-            case .xl: thumbnail.xl == "broken"
+            let status = switch size {
+            case .sm: thumbnail.sm
+            case .m: thumbnail.m
+            case .xl: thumbnail.xl
             }
+            guard let status else { return false }
+            return status != "ready" && status != "converting"
         }
     }
 

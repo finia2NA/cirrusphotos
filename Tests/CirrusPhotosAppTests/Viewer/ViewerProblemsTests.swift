@@ -7,10 +7,12 @@ final class ViewerProblemsTests: XCTestCase {
     private func problems(filesize: Int64? = 1000, thumbnail: ThumbnailInfo? = nil,
                           thumbnailStatus: PhotoViewerResourceStatus = .ready(verified: true, validationFailure: nil),
                           full: PhotoViewerResourceStatus = .loading, limit: FullImageLimit? = nil,
-                          decodeFailure: String? = nil, hasImage: Bool = true, allowNetwork: Bool = true) -> [String] {
+                          decodeFailure: String? = nil, hasImage: Bool = true, allowNetwork: Bool = true,
+                          isVideo: Bool = false) -> [String] {
         ViewerProblems.make(ViewerProblems.Inputs(
             filesize: filesize, thumbnail: thumbnail, thumbnailStatus: thumbnailStatus, fullStatus: full,
-            fullImageLimit: limit, decodeFailure: decodeFailure, hasImage: hasImage, allowNetwork: allowNetwork))
+            fullImageLimit: limit, decodeFailure: decodeFailure, hasImage: hasImage, allowNetwork: allowNetwork,
+            isVideo: isVideo))
     }
 
     private func thumbnail(sm: String = "ready", m: String = "ready", xl: String = "ready") -> ThumbnailInfo {
@@ -37,6 +39,19 @@ final class ViewerProblemsTests: XCTestCase {
         XCTAssertEqual(problems(thumbnail: thumbnail(xl: "broken")), ["The NAS couldn't create the large preview."])
         XCTAssertEqual(problems(thumbnail: thumbnail(sm: "broken", xl: "broken")),
                        ["The NAS couldn't create the small and large previews."])
+    }
+
+    func testAnyStatusButReadyOrConvertingIsAPreviewTheNASCouldNotCreate() {
+        XCTAssertEqual(problems(thumbnail: thumbnail(m: "ame_defect")), ["The NAS couldn't create the medium preview."])
+        XCTAssertEqual(problems(thumbnail: thumbnail(m: "converting")), [])
+    }
+
+    func testVideosListOnlyWhatTheMetadataReports() {
+        XCTAssertEqual(problems(filesize: 0, thumbnail: thumbnail(sm: "broken", m: "broken", xl: "broken"),
+                                full: .failure("Not cached."), hasImage: false, isVideo: true),
+                       ["The file on the NAS is empty.", "The NAS couldn't create previews of this video."])
+        XCTAssertEqual(problems(thumbnail: thumbnail(m: "ame_defect"), thumbnailStatus: .failure("Timed out."), isVideo: true),
+                       ["The NAS couldn't create the medium preview."])
     }
 
     func testAPreviewFailureShowsWhileConnectedOrWithoutAnImage() {

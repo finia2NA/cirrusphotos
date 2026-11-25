@@ -86,7 +86,8 @@ extension CachedPhotosRepository {
     }
 
     /// Supplies the best already-cached compatible rendition before resolving the exact
-    /// configured size. Alternate sizes are never fetched or treated as exact completion.
+    /// configured size. When the NAS has not made that size (`ame_defect`, `broken`) and
+    /// nothing compatible is cached, the nearest ready size is fetched instead.
     public func thumbnailWithFallback(_ descriptor: ThumbnailInfo, size: ThumbnailSize,
                                       allowNetwork: Bool,
                                       collection: PhotoCollectionDescriptor,
@@ -108,8 +109,10 @@ extension CachedPhotosRepository {
                 let exactCached = try? await store.getThumbnail(exact)
                 signposter.endInterval("Cache lookup", lookup)
                 guard !Task.isCancelled else { continuation.finish(); return }
+                var cachedFallback = false
                 if exactCached == nil,
                    let fallback = await bestCachedFallback(descriptor, target: size, collection: scope) {
+                    cachedFallback = true
                     continuation.yield(.value(
                         ThumbnailRenditionValue(data: fallback.entry.data, size: fallback.size,
                                                 isExact: false),
@@ -117,15 +120,19 @@ extension CachedPhotosRepository {
                     ))
                 }
                 guard !Task.isCancelled else { continuation.finish(); return }
-                for await event in thumbnail(descriptor, size: size,
-                                             allowNetwork: allowNetwork && descriptor.isReady(size),
+                // A cached compatible rendition is enough when the exact size will never arrive.
+                let resolved = exactCached == nil && !descriptor.isReady(size)
+                    ? (cachedFallback ? nil : Self.readySubstitute(descriptor, for: size)) : size
+                guard let resolved else { continuation.finish(); return }
+                for await event in thumbnail(descriptor, size: resolved,
+                                             allowNetwork: allowNetwork && descriptor.isReady(resolved),
                                              collection: scope, priority: priority, cachePurpose: .library,
-                                             cachedLookup: .known(exactCached)) {
+                                             cachedLookup: resolved == size ? .known(exactCached) : .read) {
                     guard !Task.isCancelled else { continuation.finish(); return }
                     switch event {
                     case .value(let data, let verified):
                         continuation.yield(.value(
-                            ThumbnailRenditionValue(data: data, size: size, isExact: true),
+                            ThumbnailRenditionValue(data: data, size: resolved, isExact: resolved == size),
                             verified: verified
                         ))
                     case .failure(let message):
@@ -190,6 +197,17 @@ extension CachedPhotosRepository {
             if let entry = try? await store.getThumbnail(identity) { return (entry, candidate) }
         }
         return nil
+    }
+
+    /// The size to fetch when `target` is not ready: the next smaller ready size, else the next
+    /// larger one. With none ready, `target` itself, which then only reads the cache.
+    static func readySubstitute(_ descriptor: ThumbnailInfo, for target: ThumbnailSize) -> ThumbnailSize {
+        let order: [ThumbnailSize] = switch target {
+        case .sm: [.m, .xl]
+        case .m: [.sm, .xl]
+        case .xl: [.m, .sm]
+        }
+        return order.first(where: descriptor.isReady) ?? target
     }
 
     private static func fallbackSizes(for target: ThumbnailSize) -> [ThumbnailSize] {

@@ -258,14 +258,14 @@ final class PhotoViewerPresentation: ObservableObject {
         return index.sections[location.sectionIndex].offset
     }
 
-    /// Problems with the current photo; empty for videos, which report their own.
+    /// Problems with the current item; for videos only those the NAS's metadata reports.
     var problems: [String] {
-        guard invalidationMessage == nil, let state, let item = state.item, !item.isVideo else { return [] }
+        guard invalidationMessage == nil, let state, let item = state.item else { return [] }
         return ViewerProblems.make(ViewerProblems.Inputs(
             filesize: item.filesize, thumbnail: item.additional?.thumbnail,
             thumbnailStatus: state.thumbnailStatus, fullStatus: shownFullStatus(state),
             fullImageLimit: state.fullImageLimit, decodeFailure: decodeFailure,
-            hasImage: image != nil, allowNetwork: state.allowNetwork))
+            hasImage: image != nil, allowNetwork: state.allowNetwork, isVideo: item.isVideo))
     }
 
     private func noteOriginalFailure() {

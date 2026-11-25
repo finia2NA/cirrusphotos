@@ -26,10 +26,10 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
 
     private func root() -> URL { temporaryTestRoot("SynoFallbackCache") }
 
-    private func descriptor(unitID: Int64 = 42, revision: String = "revision",
-                            medium: String = "ready") throws -> ThumbnailInfo {
+    private func descriptor(unitID: Int64 = 42, revision: String = "revision", small: String = "ready",
+                            medium: String = "ready", large: String = "ready") throws -> ThumbnailInfo {
         try JSONDecoder().decode(ThumbnailInfo.self, from: Data("""
-        {"unit_id":\(unitID),"cache_key":"\(revision)","sm":"ready","m":"\(medium)","xl":"ready"}
+        {"unit_id":\(unitID),"cache_key":"\(revision)","sm":"\(small)","m":"\(medium)","xl":"\(large)"}
         """.utf8))
     }
 
@@ -94,6 +94,33 @@ final class ThumbnailFallbackCacheTests: XCTestCase {
         let requestedSizes = await transport.requestedSizes
         XCTAssertEqual(values.map(\.size), [.sm])
         XCTAssertTrue(requestedSizes.isEmpty)
+    }
+
+    /// Observed for HEVC videos: `m` is `ame_defect` (404 on request) while `sm` and `xl` are ready.
+    func testSizeTheNASDidNotMakeFetchesTheNextSmallerReadySize() async throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let transport = FallbackThumbnailTransport()
+        let repository = try repository(root: root, transport: transport)
+        let descriptor = try descriptor(medium: "ame_defect")
+
+        var values: [ThumbnailRenditionValue] = []
+        for await event in await repository.thumbnailWithFallback(descriptor, size: .m,
+                                                                   allowNetwork: true, collection: .library(.personal)) {
+            if case .value(let value, _) = event { values.append(value) }
+        }
+        let requestedSizes = await transport.requestedSizes
+        XCTAssertEqual(values.map(\.size), [.sm])
+        XCTAssertEqual(values.map(\.isExact), [false])
+        XCTAssertEqual(requestedSizes, [.sm])
+    }
+
+    func testSubstituteSizesPreferSmallerThenLarger() throws {
+        let substitute = CachedPhotosRepository.readySubstitute
+        XCTAssertEqual(substitute(try descriptor(medium: "ame_defect"), .m), .sm)
+        XCTAssertEqual(substitute(try descriptor(small: "broken", medium: "ame_defect"), .m), .xl)
+        XCTAssertEqual(substitute(try descriptor(large: "broken"), .xl), .m)
+        XCTAssertEqual(substitute(try descriptor(small: "broken"), .sm), .m)
+        XCTAssertEqual(substitute(try descriptor(small: "broken", medium: "broken", large: "broken"), .m), .m)
     }
 
     func testFailedExactRequestPreservesFallbackAndCanBeRetried() async throws {

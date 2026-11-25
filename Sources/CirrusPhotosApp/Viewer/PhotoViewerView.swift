@@ -157,6 +157,16 @@ struct PhotoViewerView: View {
                     .font(.callout)
                     .padding(16)
                     .glassEffect(.regular, in: .rect(cornerRadius: 16))
+            } else if viewer.state?.item?.isVideo == true {
+                // Above the video, clear of the playback controls.
+                if !viewer.problems.isEmpty {
+                    ViewerProblemList(problems: viewer.problems)
+                        .padding(12)
+                        .glassEffect(.regular, in: .rect(cornerRadius: 12))
+                        .padding(.top, toolbarInset + 12)
+                        .padding(.horizontal, 24)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                }
             } else {
                 VStack(spacing: 12) {
                     if viewer.image != nil, !viewer.problems.isEmpty {
