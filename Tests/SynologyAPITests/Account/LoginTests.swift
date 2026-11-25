@@ -119,6 +119,24 @@ final class LoginTests: XCTestCase {
         }
     }
 
+    func testReachabilityChangesAreReportedOnce() async throws {
+        RenewingProtocol.reset(offline: true)
+        let (client, session) = client(RenewingProtocol.self)
+        defer { session.invalidateAndCancel() }
+        try await client.signIn(.init(username: "user", password: "test-password", secondFactor: .code("123456")))
+        let changes = OSAllocatedUnfairLock(initialState: [Bool]())
+        await client.onReachabilityChange { reachable in changes.withLock { $0.append(reachable) } }
+        let descriptor = ThumbnailInfo(unitID: 1, cacheKey: "1_1")
+        for _ in 0..<2 {
+            do { _ = try await client.thumbnail(descriptor, size: .m, space: .personal); XCTFail("Expected offline") }
+            catch SynologyAPIError.transport {}
+        }
+        RenewingProtocol.setOffline(false)
+        _ = try await client.thumbnail(descriptor, size: .m, space: .personal)
+        _ = try await client.thumbnail(descriptor, size: .m, space: .personal)
+        XCTAssertEqual(changes.withLock { $0 }, [false, true])
+    }
+
     func testFailedRenewalIsReportedAndNotRetried() async throws {
         RenewingProtocol.reset(rejectRenewal: true)
         let (client, session) = client(RenewingProtocol.self)
@@ -222,12 +240,14 @@ private final class RenewingProtocol: LoginProtocol, @unchecked Sendable {
     private struct State {
         var logins: [[String: String]] = []
         var rejectRenewal = false
+        var offline = false
     }
     private static let state = OSAllocatedUnfairLock(initialState: State())
 
-    static func reset(rejectRenewal: Bool = false) {
-        state.withLock { $0 = State(rejectRenewal: rejectRenewal) }
+    static func reset(rejectRenewal: Bool = false, offline: Bool = false) {
+        state.withLock { $0 = State(rejectRenewal: rejectRenewal, offline: offline) }
     }
+    static func setOffline(_ offline: Bool) { state.withLock { $0.offline = offline } }
     static func logins() -> [[String: String]] { state.withLock { $0.logins } }
     static let pngPixel = Data(base64Encoded:
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")!
@@ -268,6 +288,8 @@ private final class RenewingProtocol: LoginProtocol, @unchecked Sendable {
             } else {
                 respond("{\"success\":true,\"data\":{\"sid\":\"session-\(count)\",\"did\":\"issued-token\"}}")
             }
+        } else if Self.state.withLock({ $0.offline }) {
+            client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
         } else if let media = mediaResponse(values) {
             // Media requests carry the session in the cookie; an expired one gets a JSON error body.
             guard request.value(forHTTPHeaderField: "Cookie") == "id=session-2" else {

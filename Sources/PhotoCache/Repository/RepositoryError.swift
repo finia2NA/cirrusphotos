@@ -48,6 +48,16 @@ public enum RepositoryError: LocalizedError, LogSummaryProviding, Sendable, Equa
         }
     }
 
+    /// Whether the same request may succeed unchanged once the NAS answers again: it was
+    /// unreachable, its session expired, or the request queue was full.
+    public var isTransient: Bool {
+        switch self {
+        case .server(let error): error.meansUnreachable || error.isSessionExpired
+        case .busy: true
+        case .stale, .unavailable, .invalidInput, .unconfirmed, .unexpected: false
+        }
+    }
+
     /// The kind plus, for server failures, the API error's case and code; never server text.
     public var safeLogSummary: String {
         if case .server(let error) = self { return "RepositoryError.server(\(error.logSummary))" }

@@ -68,6 +68,15 @@ public enum SynologyAPIError: LocalizedError, Sendable, Equatable {
     /// Codes meaning the session is gone: timed out, replaced by another login, or unknown.
     public static let sessionCodes = [106, 107, 119]
 
+    /// The NAS could not be reached or could not answer: a later attempt may succeed unchanged.
+    public var meansUnreachable: Bool {
+        switch self {
+        case .transport: true
+        case .http(let status): status >= 500
+        default: false
+        }
+    }
+
     public var isSessionExpired: Bool {
         if case .api(let code) = self { return Self.sessionCodes.contains(code) }
         return false

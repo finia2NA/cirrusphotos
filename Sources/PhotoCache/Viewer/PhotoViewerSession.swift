@@ -33,6 +33,7 @@ public actor PhotoViewerSession {
     var favoriteTask: Task<Void, Never>?
     var itemMutationTask: Task<Void, Never>?
     var metadataChangeTask: Task<Void, Never>?
+    var connectionTask: Task<Void, Never>?
     var metadataResetTask: Task<Void, Never>?
     var appliedMetadataResetRevision: UInt64 = 0
     var filmstripEnabled = false
@@ -145,6 +146,24 @@ public actor PhotoViewerSession {
         publish()
     }
 
+    /// The NAS answered again: a failed current photo loads again, and filmstrip neighbours
+    /// whose thumbnails failed are requested again. Loaded images are kept.
+    func connectionRestored() {
+        guard !closed else { return }
+        let currentFailed: Bool
+        switch (images.thumbnailStatus, images.fullImageStatus) {
+        case (.failure, _): currentFailed = true
+        case (_, .failure): currentFailed = images.fullImageData == nil
+        default: currentFailed = !images.thumbnailFailures.isEmpty
+        }
+        if currentFailed {
+            retry()
+        } else {
+            scheduleThumbnailNeighbors()
+            publish()
+        }
+    }
+
     public func close() {
         guard !closed else { return }
         closed = true
@@ -154,6 +173,7 @@ public actor PhotoViewerSession {
         itemMutationTask?.cancel()
         metadataResetTask?.cancel()
         metadataChangeTask?.cancel()
+        connectionTask?.cancel()
         albumVideoTask?.task.cancel()
         publish()
         for observer in observers.values { observer.finish() }
@@ -197,6 +217,12 @@ public actor PhotoViewerSession {
             for await _ in observation.changes {
                 guard !Task.isCancelled else { return }
                 if let change = await repository.takeMetadataChanges(observation.id) { await self?.invalidateMetadataPages(change) }
+            }
+        }
+        connectionTask = Task { [weak self] in
+            for await _ in await repository.connectionRestorations() {
+                guard !Task.isCancelled else { return }
+                await self?.connectionRestored()
             }
         }
         if mediaScope == nil {

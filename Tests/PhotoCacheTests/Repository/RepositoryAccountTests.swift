@@ -15,6 +15,10 @@ private actor SessionTransport: TestPhotosTransport {
         self.handler = handler
     }
     func failRenewal(_ error: SynologyAPIError) { handler?(error) }
+
+    private var reachabilityHandler: (@Sendable (Bool) -> Void)?
+    func onReachabilityChange(_ handler: @escaping @Sendable (Bool) -> Void) async { reachabilityHandler = handler }
+    func report(reachable: Bool) { reachabilityHandler?(reachable) }
 }
 
 final class RepositoryAccountTests: XCTestCase {
@@ -42,6 +46,34 @@ final class RepositoryAccountTests: XCTestCase {
         } catch {}
         let logins = await transport.logins
         XCTAssertEqual(logins, 1)
+    }
+
+    func testConnectionEpochRisesOnlyWhenTheNASAnswersAgainOrTheNetworkReturns() async throws {
+        let root = temporaryTestRoot("RepositoryAccount")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = SessionTransport()
+        let repository = try repository(transport, root: root)
+        try await repository.connect()
+        var epochs = await repository.connectionRestorations().makeAsyncIterator()
+
+        // Reachable while already reachable, and a network return while reachable, change nothing.
+        await repository.reachabilityChanged(true)
+        await repository.networkPathReturned()
+        await repository.reachabilityChanged(false)
+        await repository.reachabilityChanged(false)
+        await repository.networkPathReturned()
+        let afterNetwork = await epochs.next()
+        XCTAssertEqual(afterNetwork, 1)
+        await repository.reachabilityChanged(true)
+        await repository.reachabilityChanged(true)
+        let afterAnswer = await epochs.next()
+        XCTAssertEqual(afterAnswer, 2)
+
+        // The transport's report reaches the repository through the handler `connect` installs.
+        await transport.report(reachable: false)
+        await transport.report(reachable: true)
+        let reported = await epochs.next()
+        XCTAssertEqual(reported, 3)
     }
 
     func testShutdownEndsTheSessionAndAdmitsNoFurtherWork() async throws {

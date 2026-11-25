@@ -98,7 +98,10 @@ final class MetadataSyncModel: ObservableObject {
     deinit { pathMonitor.cancel() }
 
     private func receiveNetwork(available: Bool) {
-        if available && !networkAvailable { networkReturns += 1 }
+        if available && !networkAvailable {
+            networkReturns += 1
+            if let repository = library?.repository { Task { await repository.networkPathReturned() } }
+        }
         networkAvailable = available
     }
 

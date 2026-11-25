@@ -43,6 +43,8 @@ public actor SynologyClient: PhotosTransport {
     private var renewal: SynologyCredentials?
     private var renewalTask: Task<Void, Error>?
     private var renewalFailureHandler: (@Sendable (SynologyAPIError) -> Void)?
+    private var reachabilityHandler: (@Sendable (Bool) -> Void)?
+    private var reachable = true
     /// Increments with every new session, so concurrent expiries renew only once.
     private var sessionGeneration = 0
 
@@ -186,6 +188,25 @@ public actor SynologyClient: PhotosTransport {
         renewalFailureHandler = handler
     }
 
+    public func onReachabilityChange(_ handler: @escaping @Sendable (Bool) -> Void) async {
+        reachabilityHandler = handler
+    }
+
+    /// Any answer from the NAS, including an API error, proves it reachable; only transport
+    /// failures and server errors (5xx) mean it is not. Cancellation says nothing.
+    private func noteReachability(after error: Error?) {
+        let reachable: Bool
+        switch error {
+        case nil: reachable = true
+        case let error as SynologyAPIError: reachable = !error.meansUnreachable
+        case let error as URLError: guard error.code != .cancelled else { return }; reachable = false
+        default: return
+        }
+        guard reachable != self.reachable else { return }
+        self.reachable = reachable
+        reachabilityHandler?(reachable)
+    }
+
     /// Ends the DSM session. Failures are ignored: the session expires on its own.
     public func logout() async {
         renewal = nil
@@ -231,6 +252,7 @@ public actor SynologyClient: PhotosTransport {
                 sid = data.sid
                 synoToken = data.synoToken
                 sessionGeneration &+= 1
+                noteReachability(after: nil)
                 return SignInResult(deviceToken: data.did.flatMap { $0.isEmpty ? nil : $0 })
             }
             let code = response.error?.code ?? -1
@@ -1470,10 +1492,18 @@ public actor SynologyClient: PhotosTransport {
     /// itself, usually from the JSON error body the NAS sends in place of media.
     private func renewingSession<Value>(_ operation: (String) async throws -> Value) async throws -> Value {
         let generation = sessionGeneration
-        do { return try await operation(try sessionID()) }
-        catch let error as SynologyAPIError where error.isSessionExpired && renewal != nil {
-            try await renewSession(expiredGeneration: generation)
-            return try await operation(try sessionID())
+        do {
+            let value: Value
+            do { value = try await operation(try sessionID()) }
+            catch let error as SynologyAPIError where error.isSessionExpired && renewal != nil {
+                try await renewSession(expiredGeneration: generation)
+                value = try await operation(try sessionID())
+            }
+            noteReachability(after: nil)
+            return value
+        } catch {
+            noteReachability(after: error)
+            throw error
         }
     }
 

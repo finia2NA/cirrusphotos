@@ -13,6 +13,17 @@ struct RepositoryAuthenticationState {
     var renewalHandlerInstalled = false
     var status: AuthenticationStatus = .notStarted
     var observers: [UUID: AsyncStream<AuthenticationStatus>.Continuation] = [:]
+    /// False while authenticated requests find the NAS unreachable.
+    var reachable = true
+    /// Raised when the NAS answers again after being unreachable, or when the network path
+    /// returns while it is: media that failed in an earlier epoch is worth requesting again.
+    var connectionEpoch: UInt64 = 0
+    var connectionObservers: [UUID: AsyncStream<UInt64>.Continuation] = [:]
+
+    mutating func raiseConnectionEpoch() {
+        connectionEpoch &+= 1
+        for observer in connectionObservers.values { observer.yield(connectionEpoch) }
+    }
 
     mutating func setStatus(_ next: AuthenticationStatus) {
         guard status != next else { return }

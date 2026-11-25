@@ -9,18 +9,27 @@ import SynologyAPI
 /// storage avoids retaining an entry for every item in a large offline library.
 @MainActor
 final class ThumbnailFailureRegistry {
-    private var entries: Set<String> = []
+    /// The connection epoch of a failure that may pass once the NAS answers again, or nil
+    /// for one that will not (such as a missing rendition).
+    private var entries: [String: UInt64?] = [:]
     private var order: [String] = []
     private let limit = 1_024
+    /// The repository's latest connection epoch; failures from earlier epochs no longer count.
+    var epoch: UInt64 = 0
 
-    func contains(_ key: String) -> Bool { entries.contains(key) }
-    func record(_ key: String) {
-        guard entries.insert(key).inserted else { return }
-        order.append(key)
-        if order.count > limit { entries.remove(order.removeFirst()) }
+    func contains(_ key: String) -> Bool {
+        guard let entry = entries[key] else { return false }
+        guard let failedEpoch = entry else { return true }
+        return failedEpoch == epoch
+    }
+    func record(_ key: String, transient: Bool) {
+        if entries.updateValue(transient ? epoch : nil, forKey: key) == nil {
+            order.append(key)
+            if order.count > limit { entries.removeValue(forKey: order.removeFirst()) }
+        }
     }
     func clear(_ key: String) {
-        guard entries.remove(key) != nil else { return }
+        guard entries.removeValue(forKey: key) != nil else { return }
         order.removeAll { $0 == key }
     }
 }

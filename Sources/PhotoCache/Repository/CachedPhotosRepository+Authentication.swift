@@ -27,6 +27,36 @@ extension CachedPhotosRepository {
         authenticationState.observers.removeValue(forKey: id)
     }
 
+    /// Yields each new connection epoch: the NAS answered again after being unreachable, or
+    /// the network path returned while it was. Observers retry media that failed earlier.
+    public func connectionRestorations() -> AsyncStream<UInt64> {
+        let id = UUID()
+        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            authenticationState.connectionObservers[id] = continuation
+            continuation.onTermination = { @Sendable _ in
+                Task { await self.removeConnectionObserver(id) }
+            }
+        }
+    }
+
+    private func removeConnectionObserver(_ id: UUID) {
+        authenticationState.connectionObservers.removeValue(forKey: id)
+    }
+
+    func reachabilityChanged(_ reachable: Bool) {
+        guard !authenticationState.shutDown, reachable != authenticationState.reachable else { return }
+        authenticationState.reachable = reachable
+        SynologyDiagnostics.authentication.info("NAS reachability changed reachable=\(reachable, privacy: .public)")
+        if reachable { authenticationState.raiseConnectionEpoch() }
+    }
+
+    /// The network path returned. While the NAS is unreachable, a new epoch lets failed media
+    /// try once more; its result decides whether the NAS is reachable again.
+    public func networkPathReturned() {
+        guard !authenticationState.shutDown, !authenticationState.reachable else { return }
+        authenticationState.raiseConnectionEpoch()
+    }
+
     func connect() async throws {
         try Task.checkCancellation()
         if authenticationState.shutDown { throw CancellationError() }
@@ -43,6 +73,9 @@ extension CachedPhotosRepository {
             authenticationState.renewalHandlerInstalled = true
             await client.onSessionRenewalFailure { [weak self] error in
                 Task { await self?.sessionRenewalFailed(error) }
+            }
+            await client.onReachabilityChange { [weak self] reachable in
+                Task { await self?.reachabilityChanged(reachable) }
             }
         }
         if authenticationState.task == nil {
@@ -83,6 +116,8 @@ extension CachedPhotosRepository {
         authenticationState.connected = false
         for observer in authenticationState.observers.values { observer.finish() }
         authenticationState.observers.removeAll()
+        for observer in authenticationState.connectionObservers.values { observer.finish() }
+        authenticationState.connectionObservers.removeAll()
         await stopAllWork()
         await client.logout()
     }

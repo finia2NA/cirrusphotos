@@ -330,13 +330,25 @@ final class LibraryInputRoutingTests: XCTestCase {
     @MainActor
     func testThumbnailFailuresSurviveRowReuseAndExplicitRetryClearsThem() {
         let failures = ThumbnailFailureRegistry()
-        failures.record("item:medium")
+        failures.record("item:medium", transient: false)
         XCTAssertTrue(failures.contains("item:medium"))
         failures.clear("item:medium")
         XCTAssertFalse(failures.contains("item:medium"))
-        for index in 0..<1_025 { failures.record("item:\(index)") }
+        for index in 0..<1_025 { failures.record("item:\(index)", transient: false) }
         XCTAssertFalse(failures.contains("item:0"))
         XCTAssertTrue(failures.contains("item:1024"))
+    }
+
+    @MainActor
+    func testOnlyTransientThumbnailFailuresExpireWithTheConnectionEpoch() {
+        let failures = ThumbnailFailureRegistry()
+        failures.record("offline:m", transient: true)
+        failures.record("missing:m", transient: false)
+        failures.epoch = 1
+        XCTAssertFalse(failures.contains("offline:m"))
+        XCTAssertTrue(failures.contains("missing:m"))
+        failures.record("offline:m", transient: true)
+        XCTAssertTrue(failures.contains("offline:m"))
     }
 
     @MainActor

@@ -139,6 +139,7 @@ public protocol PhotosTransport: Sendable {
     func login(credentials: SynologyCredentials) async throws
     func logout() async
     func onSessionRenewalFailure(_ handler: @escaping @Sendable (SynologyAPIError) -> Void) async
+    func onReachabilityChange(_ handler: @escaping @Sendable (Bool) -> Void) async
     func collectionDayCatalog(collection: PhotoCollectionDescriptor, initial: Bool) async throws -> CollectionDayCatalog
     func readCollectionBatch(_ request: CollectionPageRequest, fields: ItemFieldProfile) async throws -> CollectionBatchResult
     func readAlbumCatalogBatch(albumID: Int64, offset: Int, limit: Int) async throws -> [DayTimelineEntry]
@@ -216,4 +217,7 @@ extension PhotosTransport {
     /// Called when renewing an expired session failed for a reason other than reachability,
     /// such as a changed password or a removed trusted device.
     public func onSessionRenewalFailure(_ handler: @escaping @Sendable (SynologyAPIError) -> Void) async {}
+    /// Called with `false` when an authenticated request finds the NAS unreachable, and with
+    /// `true` when the NAS answers again. Only changes are reported.
+    public func onReachabilityChange(_ handler: @escaping @Sendable (Bool) -> Void) async {}
 }

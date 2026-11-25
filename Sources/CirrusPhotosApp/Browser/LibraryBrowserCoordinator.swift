@@ -91,6 +91,8 @@ extension LibraryBrowserScrollView {
         }
         let presentation = BrowserThumbnailPresentation(cropsToSquare: false)
         let thumbnailFailures = ThumbnailFailureRegistry()
+        var connectionTask: Task<Void, Never>?
+        weak var connectionRepository: CachedPhotosRepository?
         var presentationRequest = 0
         var reduceMotion = false
         let commandOwner = UUID()
@@ -140,6 +142,7 @@ extension LibraryBrowserScrollView {
             }
             repository = input.repository
             session = input.session
+            observeConnectionRestorations()
             let insetAnchor = geometry?.anchor(at: visibleTop(in: scroll))
             let oldInsets = scroll.contentInsets
             let horizontalInset = CGFloat(FixedPhotoGrid.gap)
@@ -438,6 +441,26 @@ extension LibraryBrowserScrollView {
             hostRevisions.removeAll()
             removeAllCells(detach: true)
             presentationObserver = nil
+            connectionTask?.cancel()
+            connectionTask = nil
+            connectionRepository = nil
+        }
+
+        /// When the NAS answers again, failures from before stop counting and visible cells
+        /// that failed load again; cells scrolled to later load normally.
+        func observeConnectionRestorations() {
+            guard connectionRepository !== repository || connectionTask == nil else { return }
+            connectionTask?.cancel()
+            connectionTask = nil
+            connectionRepository = repository
+            guard let repository else { return }
+            connectionTask = Task { [weak self] in
+                for await epoch in await repository.connectionRestorations() {
+                    guard let self, !Task.isCancelled else { return }
+                    self.thumbnailFailures.epoch = epoch
+                    self.cells.values.forEach { $0.retryAfterConnectionRestored() }
+                }
+            }
         }
 
         func stopWindow() {

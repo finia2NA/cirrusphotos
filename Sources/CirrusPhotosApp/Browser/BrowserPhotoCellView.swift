@@ -337,8 +337,8 @@ final class BrowserPhotoCellView: NSView, PhotoViewerSourceActivating, PhotoView
                         key: key, data: value.data, verified: verified, maxPixel: BrowserPhotoCellView.maxPixel)
                     guard !Task.isCancelled else { return }
                     await self?.deliver(rendition, generation: generation)
-                case .failure:
-                    await self?.deliverFailure(generation: generation, identity: identity)
+                case .failure(let error):
+                    await self?.deliverFailure(generation: generation, identity: identity, transient: error.isTransient)
                 }
             }
         }
@@ -351,11 +351,18 @@ final class BrowserPhotoCellView: NSView, PhotoViewerSourceActivating, PhotoView
         endLoadInterval("displayed")
     }
 
-    private func deliverFailure(generation: UInt64, identity: String) {
+    private func deliverFailure(generation: UInt64, identity: String, transient: Bool) {
         guard generation == loadGeneration, let content else { return }
         failed = true
-        content.failures.record(identity)
+        content.failures.record(identity, transient: transient)
         updateRetry(content, identity: identity)
+    }
+
+    /// Loads a failed thumbnail again after the NAS answered again, unless its failure persists.
+    func retryAfterConnectionRestored() {
+        guard failed, let content, content.allowNetwork, let family = familyIdentity,
+              !content.failures.contains("\(family):\(content.size.rawValue)") else { return }
+        startLoad(content, family: family)
     }
 
     /// Mirrors the previous rule: a failed, network-eligible rendition offers a retry.
