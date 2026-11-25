@@ -551,6 +551,8 @@ GET /synofoto/api/v2/p/Thumbnail/get
 
 Shared Space changes `/p/` to `/t/`.
 
+`Content-Type` is not reliable. For a 1920 × 2688 WebP (2026-11-25, all sizes `ready`), every size returned the 134,080-byte original WebP as `application/octet-stream`. Validate thumbnails by decoding the bytes. An empty file (`filesize` 0) has every size `broken`, and its `Download` answers HTTP 200 `image/jpeg` with no body.
+
 The string parameters are JSON-string encoded, including their quotation marks. A robust URL builder should use `URLComponents`/`URLQueryItem` rather than manual escaping.
 
 ### Use `unit_id`, not item `id`
