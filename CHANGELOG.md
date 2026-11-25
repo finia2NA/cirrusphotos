@@ -2,6 +2,10 @@
 
 Version sections supply the website changelog, cumulative updater notes and individual GitHub release notes.
 
+## 0.1.10
+
+- The Group by Day toggle in the toolbar is available in albums, filtered Map results and every other photo collection, not only the main timeline.
+
 ## 0.1.9a
 
 - Folder cards use Synology’s single-image, composite and custom covers in Personal and Shared Space. Folders without a supplied cover keep Cirrus’s derived thumbnails.

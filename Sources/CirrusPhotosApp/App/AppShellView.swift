@@ -845,7 +845,7 @@ struct AppShellView: View {
             }
         }
         let showsFolderToggle = !inViewer && selectedDestination == .personalLibrary
-        let showsDayGrouping = collection != nil && selectedDestination != .albums
+        let showsDayGrouping = collection != nil
         if showsFolderToggle || showsDayGrouping {
             // One item so the folder toggle and day grouping share a single glass capsule.
             ToolbarItem(id: "viewMode", placement: .navigation) {
