@@ -56,7 +56,17 @@ final class AppPreferences: ObservableObject {
     @Published var cropsThumbnailsToSquare: Bool { didSet { defaults.set(cropsThumbnailsToSquare, forKey: Key.cropsThumbnailsToSquare) } }
     @Published var groupsByDay: Bool { didSet { defaults.set(groupsByDay, forKey: Key.groupsByDay) } }
     @Published var alwaysShowsTimeline: Bool { didSet { defaults.set(alwaysShowsTimeline, forKey: Key.alwaysShowsTimeline) } }
-    @Published var showsViewerToolbarTools: Bool { didSet { defaults.set(showsViewerToolbarTools, forKey: Key.showsViewerToolbarTools) } }
+    /// Hiding the toolbar buttons also turns their overlays off, so none stays on without a visible control.
+    @Published var showsViewerToolbarTools: Bool {
+        didSet {
+            defaults.set(showsViewerToolbarTools, forKey: Key.showsViewerToolbarTools)
+            guard oldValue, !showsViewerToolbarTools else { return }
+            showsFilmstrip = false
+            showsHistogram = false
+            showsHighlightPeaking = false
+            showsFocusEdges = false
+        }
+    }
     @Published var showsFilmstrip: Bool { didSet { defaults.set(showsFilmstrip, forKey: Key.showsFilmstrip) } }
     @Published var showsHistogram: Bool { didSet { defaults.set(showsHistogram, forKey: Key.showsHistogram) } }
     @Published var showsHighlightPeaking: Bool { didSet { defaults.set(showsHighlightPeaking, forKey: Key.showsHighlightPeaking) } }
